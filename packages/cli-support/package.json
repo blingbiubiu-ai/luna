@@ -1,0 +1,17 @@
+{
+  "name": "@luna/cli-support",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./types": "./src/types.ts",
+    "./options": "./src/options.ts",
+    "./help": "./src/help.ts",
+    "./env": "./src/env.ts",
+    "./service-client": "./src/service-client.ts"
+  },
+  "dependencies": {
+    "@luna/host-runtime": "workspace:*",
+    "@luna/service-client": "workspace:*"
+  }
+}

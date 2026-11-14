@@ -1,0 +1,35 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "baseUrl": ".",
+    "paths": {
+      "@/*": ["src/*"]
+    },
+    "jsx": "react-jsx",
+    "types": ["bun"],
+    "lib": ["ES2023", "DOM", "DOM.Iterable"],
+    "strict": false,
+    "exactOptionalPropertyTypes": false,
+    "noUncheckedIndexedAccess": false
+  },
+  "include": [
+    "src/app/tasks/**/*.tsx",
+    "src/app/sessions/**/*.tsx",
+    "src/app/users/**/*.tsx",
+    "src/app/knowledge/**/*.tsx",
+    "src/app/groups/**/*.tsx",
+    "src/routeTree.gen.ts",
+    "src/components/app-sidebar.tsx",
+    "src/components/ui/badge.tsx",
+    "src/components/ui/button.tsx",
+    "src/components/ui/empty.tsx",
+    "src/components/ui/input.tsx",
+    "src/components/ui/scroll-area.tsx",
+    "src/components/ui/skeleton.tsx",
+    "src/components/ui/table.tsx",
+    "src/components/ui/textarea.tsx",
+    "src/lib/**/*.ts",
+    "src/types/**/*.ts"
+  ],
+  "exclude": []
+}

@@ -1,0 +1,15 @@
+import {z} from "zod";
+import type {AgentExecutionSnapshot} from "./active-agent-config-service";
+
+/** Durable model selection contains references and fingerprints, never environment secrets. */
+export const executionReferenceSchema = z.object({
+  agentId:z.string().min(1), profileId:z.string().min(1), revisionId:z.string().min(1),
+  activationSequence:z.number().int().nonnegative(),
+  agentType:z.enum(["claude","codex"]), model:z.string(),
+  providerFingerprint:z.string(),modelFingerprint:z.string(),configFingerprint:z.string(),
+}).strict();
+export type AgentExecutionReference = z.infer<typeof executionReferenceSchema>;
+export function executionReference(snapshot:AgentExecutionSnapshot):AgentExecutionReference {
+  const {agentId,profileId,revisionId,activationSequence,agentType,model,providerFingerprint,modelFingerprint,configFingerprint}=snapshot;
+  return executionReferenceSchema.parse({agentId,profileId,revisionId,activationSequence,agentType,model,providerFingerprint,modelFingerprint,configFingerprint});
+}

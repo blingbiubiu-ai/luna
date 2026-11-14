@@ -1,0 +1,22 @@
+[Unit]
+Description=Luna Agent Runtime
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=luna
+Group=luna
+WorkingDirectory=/opt/luna
+Environment=HOME=/var/lib/luna
+Environment=LUNA_HOME=/var/lib/luna
+Environment=LUNA_WEB_DIST_PATH=/opt/luna/apps/dashboard/dist
+EnvironmentFile=/var/lib/luna/.env
+RuntimeDirectory=luna
+RuntimeDirectoryMode=0750
+ExecStart=/usr/local/bin/bun /opt/luna/dist/luna-service.js start --foreground
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

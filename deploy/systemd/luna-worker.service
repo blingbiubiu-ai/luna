@@ -1,0 +1,22 @@
+[Unit]
+Description=Luna Docker Worker
+After=network-online.target docker.service
+Wants=network-online.target
+Requires=docker.service
+
+[Service]
+Type=simple
+User=luna
+Group=luna
+SupplementaryGroups=docker
+WorkingDirectory=/opt/luna
+Environment=HOME=/var/lib/luna
+Environment=LUNA_WORKER_HOME=/var/lib/luna-worker
+EnvironmentFile=-/var/lib/luna-worker/.env
+ExecStart=/usr/local/bin/bun /opt/luna/dist/luna-worker.js start
+ExecStartPost=/bin/sh -c 'i=0; until /usr/local/bin/bun /opt/luna/dist/luna-worker.js status >/dev/null 2>&1; do i=$((i+1)); test "$i" -lt 30 || exit 1; sleep 1; done'
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

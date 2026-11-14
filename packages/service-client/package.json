@@ -1,0 +1,19 @@
+{
+  "name": "@luna/service-client",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./config": "./src/config.ts",
+    "./service-auth": "./src/service-auth.ts",
+    "./workspace-client": "./src/workspace-client.ts",
+    "./artifact-ref": "./src/artifact-ref.ts",
+    "./mime": "./src/mime.ts",
+    "./schedule-input": "./src/schedule-input.ts",
+    "./schedule-timing": "./src/schedule-timing.ts",
+    "./knowledge": "./src/knowledge.ts"
+  },
+  "dependencies": {
+    "zod": "^4.4.3"
+  }
+}

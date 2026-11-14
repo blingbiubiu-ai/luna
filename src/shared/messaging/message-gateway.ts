@@ -1,0 +1,61 @@
+import type EventEmitter from "eventemitter3";
+
+import type { MessageChannel } from "./message-channel";
+import type { AssistantMessage, UserMessage } from "./types";
+
+/** Event types emitted by a message gateway. */
+export interface MessageGatewayEventTypes {
+  // eslint-disable-next-line no-unused-vars
+  "message:inbound": (message: UserMessage) => void;
+  // eslint-disable-next-line no-unused-vars
+  "message:recalled": (messageId: string, channelId: string) => void;
+}
+
+/**
+ * A gateway that manages multiple message channels, routes outbound messages
+ * to the correct channel, and emits unified inbound events.
+ */
+export interface MessageGateway extends EventEmitter<MessageGatewayEventTypes> {
+  /** Register a message channel with the gateway. */
+  // eslint-disable-next-line no-unused-vars
+  registerChannel(channel: MessageChannel): void;
+
+  /** Start the gateway and all registered channels. */
+  start(): Promise<void>;
+
+  /**
+   * Post a new assistant message without replying to an existing message.
+   * @param message - The assistant message to post (without id).
+   * @returns The posted message with id assigned.
+   */
+  // eslint-disable-next-line no-unused-vars
+  postMessage(message: Omit<AssistantMessage, "id">): Promise<AssistantMessage>;
+
+  /**
+   * Reply to an existing message.
+   * @param messageId - ID of the message to reply to.
+   * @param message - The assistant message to send (without id).
+   * @param options - Optional settings (e.g. streaming mode).
+   * @returns The sent message with id assigned.
+   */
+  replyMessage(
+    // eslint-disable-next-line no-unused-vars
+    messageId: string,
+    // eslint-disable-next-line no-unused-vars
+    message: Omit<AssistantMessage, "id">,
+    // eslint-disable-next-line no-unused-vars
+    options?: { streaming?: boolean },
+  ): Promise<AssistantMessage>;
+
+  /**
+   * Update the content of an existing message.
+   * @param message - The assistant message with updated content.
+   * @param options - Optional settings (e.g. streaming mode).
+   */
+  updateMessageContent(
+    // eslint-disable-next-line no-unused-vars
+    message: AssistantMessage,
+    // eslint-disable-next-line no-unused-vars
+    options?: { streaming?: boolean },
+  ): Promise<void>;
+}

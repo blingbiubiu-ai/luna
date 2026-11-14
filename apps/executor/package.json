@@ -1,0 +1,46 @@
+{
+  "name": "@luna/executor",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./job-env": "./src/job-env.ts",
+    "./types": "./src/types.ts",
+    "./protocol": "./src/protocol.ts",
+    "./runner": "./src/runner.ts",
+    "./providers/failure-normalizer": "./src/providers/failure-normalizer.ts",
+    "./providers/types": "./src/providers/types.ts",
+    "./providers/claude": "./src/providers/claude.ts",
+    "./providers/codex": "./src/providers/codex.ts",
+    "./providers": "./src/providers/index.ts",
+    "./providers/tool-progress": "./src/providers/tool-progress.ts",
+    "./executor/schema": "./src/executor/schema.ts",
+    "./executor/event-reporter": "./src/executor/event-reporter.ts",
+    "./executor/main": "./src/executor/main.ts",
+    "./executor/contexts": "./src/executor/contexts.ts",
+    "./executor/file-operation": "./src/executor/file-operation.ts",
+    "./executor/processes": "./src/executor/processes.ts",
+    "./executor/runner-environment": "./src/executor/runner-environment.ts",
+    "./executor/job-main": "./src/executor/job-main.ts",
+    "./executor/process-cleanup": "./src/executor/process-cleanup.ts",
+    "./executor/job-process": "./src/executor/job-process.ts",
+    "./executor/retry-store": "./src/executor/retry-store.ts",
+    "./executor/server": "./src/executor/server.ts",
+    "./executor/files": "./src/executor/files.ts",
+    "./executor/store": "./src/executor/store.ts"
+  },
+  "scripts": {
+    "build": "bun build src/executor/main.ts --outfile dist/executor.js --target bun && bun build src/executor/job-main.ts --outfile dist/job-main.js --target bun && bun build src/executor/job-process.ts --outfile dist/job-process.js --target bun",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "@luna/runner-protocol": "workspace:*",
+    "@luna/execution-store": "workspace:*",
+    "@luna/execution-transport": "workspace:*",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "typescript": "^5.0.0"
+  }
+}

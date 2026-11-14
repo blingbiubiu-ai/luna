@@ -1,0 +1,35 @@
+{
+  "name": "@luna/worker",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "luna-worker": "dist/luna-worker.js"
+  },
+  "exports": {
+    "./cli": "./src/cli.ts",
+    "./config": "./src/config.ts",
+    "./context-store": "./src/context-store.ts",
+    "./docker-driver": "./src/docker-driver.ts",
+    "./environment-manager": "./src/environment-manager.ts",
+    "./environment-store": "./src/environment-store.ts",
+    "./project-mounts": "./src/project-mounts.ts",
+    "./server": "./src/server.ts",
+    "./service": "./src/service.ts"
+  },
+  "scripts": {
+    "build": "bun build src/main.ts --outfile dist/luna-worker.js --target bun",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "@luna/host-runtime": "workspace:*",
+    "@luna/runner-protocol": "workspace:*",
+    "@luna/execution-store": "workspace:*",
+    "@luna/execution-transport": "workspace:*",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "typescript": "^5.0.0"
+  }
+}

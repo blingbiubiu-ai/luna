@@ -1,0 +1,114 @@
+# ============================================================
+# Luna Shared Runner Base Image
+# Shared Executor, client, provider CLIs and general-purpose development tools.
+# ============================================================
+
+ARG NODE_IMAGE=node:22-slim
+
+# ---------- Stage 1: Build agent-runner ----------
+FROM ${NODE_IMAGE} AS builder
+
+ARG BUN_VERSION=1.3.14
+RUN npm install -g bun@${BUN_VERSION}
+WORKDIR /build
+COPY apps/executor/package.json ./apps/executor/package.json
+COPY packages/runner-protocol/package.json ./packages/runner-protocol/package.json
+COPY packages/execution-store/package.json ./packages/execution-store/package.json
+COPY packages/execution-transport/package.json ./packages/execution-transport/package.json
+RUN printf '%s\n' '{"private":true,"workspaces":["packages/*","apps/executor"]}' > package.json \
+    && bun install --production
+COPY apps/executor/src ./apps/executor/src
+COPY packages/runner-protocol/src ./packages/runner-protocol/src
+COPY packages/execution-store/src ./packages/execution-store/src
+COPY packages/execution-transport/src ./packages/execution-transport/src
+RUN bun run --cwd apps/executor build
+
+# ---------- Stage 2: Mutable runner runtime ----------
+FROM ${NODE_IMAGE} AS runtime
+
+# Utilities used by the runner and agent CLIs.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates \
+    curl \
+    build-essential \
+    python3 \
+    unzip \
+    file \
+    fswatch \
+    git \
+    jq \
+    less \
+    openssh-client \
+    procps \
+    python3-pip \
+    python3-venv \
+    ripgrep \
+    rsync \
+    sudo \
+    && rm -rf /var/lib/apt/lists/*
+
+# Agent CLIs
+ARG TARGETARCH
+ARG CLAUDE_CODE_VERSION=2.1.319
+ARG CODEX_VERSION=0.167.0
+# Claude's optional native dependency can fail without failing npm install.
+# Install exactly one native package explicitly and execute both CLIs as a gate.
+RUN case "${TARGETARCH:-$(dpkg --print-architecture)}" in amd64) CLAUDE_CPU=x64 ;; arm64) CLAUDE_CPU=arm64 ;; *) exit 1 ;; esac \
+    && npm install -g --omit=optional \
+      "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" \
+      "@anthropic-ai/claude-code-linux-${CLAUDE_CPU}@${CLAUDE_CODE_VERSION}" \
+    && node /usr/local/lib/node_modules/@anthropic-ai/claude-code/install.cjs \
+    && npm install -g --include=optional "@openai/codex@${CODEX_VERSION}" \
+    && claude --version && codex --version \
+    && npm cache clean --force
+
+RUN printf '%s\n' \
+    'export PATH="$HOME/.luna-resources/commands:$HOME/.local/bin:$PATH"' \
+    > /etc/profile.d/luna-path.sh
+
+# Install bun — needed to run the luna CLI (built with bun target)
+ARG BUN_VERSION=1.3.14
+RUN npm install -g bun@${BUN_VERSION} \
+    && bun --version
+
+# Official Chrome stable for the amd64 runner, including shared-library
+# dependencies and CJK fonts for headless screenshots/PDFs.
+RUN curl -fsSL --retry 3 \
+      https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb \
+      -o /tmp/google-chrome.deb \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends /tmp/google-chrome.deb fonts-noto-cjk fonts-noto-color-emoji \
+    && google-chrome --version \
+    && rm -f /tmp/google-chrome.deb \
+    && rm -rf /var/lib/apt/lists/*
+
+ENV CHROME_BIN=/usr/bin/google-chrome \
+    PUPPETEER_EXECUTABLE_PATH=/usr/bin/google-chrome
+
+# Reuse node user (UID 1000 already exists in node:22-slim). This passwd home
+# is only account metadata; Luna injects the shared HOME and the session/task working directory.
+RUN usermod -l runner -d /home/runner -m node 2>/dev/null || true \
+    && groupmod -n runner node 2>/dev/null || true \
+    && mkdir -p /home/runner \
+    && chown -R runner:runner /home/runner
+
+# Directory layout
+RUN mkdir -p /run/luna && chmod 0700 /run/luna
+
+RUN mkdir -p /tmp/agent-runner /app/luna-cli \
+    && chown -R runner:runner /tmp/agent-runner
+
+# Copy luna CLI wrapper script
+COPY container/luna /usr/local/bin/luna
+COPY dist/luna-client.js /app/luna-cli/cli.js
+
+# Copy built agent-runner from builder
+COPY --from=builder /build/apps/executor/dist /app/agent-runner/dist
+
+COPY container/npm-global.sh /etc/profile.d/luna-npm-global.sh
+RUN chmod +x /usr/local/bin/luna
+
+ENV LANG=C.UTF-8 LC_ALL=C.UTF-8
+
+USER runner
+ENTRYPOINT ["bun", "/app/agent-runner/dist/executor.js"]

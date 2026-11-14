@@ -1,0 +1,12 @@
+{
+  "name": "@luna/execution-transport",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@luna/execution-store": "workspace:*"
+  }
+}

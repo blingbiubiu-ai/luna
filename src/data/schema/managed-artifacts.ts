@@ -1,0 +1,41 @@
+import {lunaAgents, agentShadows} from "./luna-agents";
+import { index, integer, sqliteTable, text } from "drizzle-orm/sqlite-core";
+
+export const managedArtifacts = sqliteTable(
+  "managed_artifacts",
+  {
+    id: text("id").primaryKey(),
+    agent_id: text("agent_id").notNull().references(() => lunaAgents.id),
+    shadow_id: text("shadow_id").notNull().references(() => agentShadows.id),
+    scope_type: text("scope_type").notNull(),
+    scope_id: text("scope_id").notNull(),
+    related_user_id: text("related_user_id"),
+    producer: text("producer").notNull(),
+    kind: text("kind").notNull(),
+    name: text("name").notNull(),
+    mime_type: text("mime_type"),
+    size_bytes: integer("size_bytes").notNull().default(0),
+    sha256: text("sha256"),
+    storage_backend: text("storage_backend").notNull().default("local"),
+    storage_key: text("storage_key").notNull(),
+    plugin_id: text("plugin_id"),
+    operation_id: text("operation_id"),
+    invocation_id: text("invocation_id"),
+    invocation_source: text("invocation_source"),
+    invocation_subject_id: text("invocation_subject_id"),
+    message_id: text("message_id"),
+    status: text("status").notNull().default("active"),
+    retention_policy: text("retention_policy").notNull().default("task"),
+    retention_expires_at: integer("retention_expires_at"),
+    created_at: integer("created_at").notNull(),
+    deleted_at: integer("deleted_at"),
+  },
+  (table) => [
+    index("managed_artifacts_scope_idx").on(table.scope_type, table.scope_id),
+    index("managed_artifacts_related_user_idx").on(table.related_user_id),
+    index("managed_artifacts_plugin_idx").on(table.plugin_id),
+    index("managed_artifacts_operation_idx").on(table.operation_id),
+    index("managed_artifacts_invocation_idx").on(table.invocation_id),
+    index("managed_artifacts_status_idx").on(table.status),
+  ],
+);
