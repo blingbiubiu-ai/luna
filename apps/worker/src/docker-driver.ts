@@ -6,6 +6,7 @@ import { promisify } from "node:util";
 import { join } from "node:path";
 import { mkdirSync, rmSync } from "node:fs";
 import { randomBytes } from "node:crypto";
+import { availableParallelism } from "node:os";
 import { ExecutionError, contentHash, writePrivateJson, type SqlDatabase } from "@luna/execution-store";
 import type { WorkerConfig } from "./config";
 import type { EnvironmentRecord } from "./environment-store";
@@ -20,6 +21,7 @@ interface DockerInspection { Id: string; State: { Running: boolean }; Config: { 
 export class DockerEnvironmentDriver {
   readonly contexts: WorkerContextStore;
   private readonly layouts: WorkerShadowLayouts;
+  private hostCpus?: number;
   constructor(private readonly db: SqlDatabase, readonly config: WorkerConfig) {
     this.contexts = new WorkerContextStore(db);
     mkdirSync(config.dataRoot,{recursive:true});
@@ -101,7 +103,7 @@ export class DockerEnvironmentDriver {
       "--user", "0:0", "--cap-drop", "ALL", ...["CHOWN", "DAC_OVERRIDE", "KILL", "SETUID", "SETGID", "SETPCAP"].flatMap((cap) => ["--cap-add", cap]),
       "--security-opt", "no-new-privileges", "--read-only", "--tmpfs", "/tmp:rw,nosuid,nodev,mode=1777", "--network", this.config.network,
       "--add-host", "host.docker.internal:host-gateway", "--publish", `${this.config.publishHost}:${deployment.port}:8080`,
-      "--memory", environment.spec.resources.memory, "--cpus", String(environment.spec.resources.cpus), "--pids-limit", String(environment.spec.resources.pidsLimit),
+      "--memory", environment.spec.resources.memory, "--cpus", String(effectiveCpus(environment.spec.resources.cpus, await this.dockerHostCpus())), "--pids-limit", String(environment.spec.resources.pidsLimit),
       "--mount", `type=volume,src=${volume},dst=/data`, "--mount", `type=bind,src=${configFile},dst=/run/luna/executor.json,readonly`,
     ];
     for (const { source, destination, readonly } of mounts.sort((a, b) => a.destination.localeCompare(b.destination))) {
@@ -136,13 +138,29 @@ export class DockerEnvironmentDriver {
     return this.layouts.executorDirectory(environment.spec.scope, environment.id);
   }
   private name(environment: EnvironmentRecord): string { return `luna-exec-${environment.spec.mode}-${contentHash([this.config.workerId, environment.id]).slice(0, 16)}`; }
+  /** Docker rejects --cpus above the daemon's CPU count, so Service-wide defaults are capped per Worker host. */
+  private async dockerHostCpus(): Promise<number> {
+    if (this.hostCpus === undefined) {
+      const reported = Number((await this.docker(["info", "--format", "{{.NCPU}}"]).catch(() => "")).trim());
+      this.hostCpus = Number.isFinite(reported) && reported > 0 ? reported : availableParallelism();
+    }
+    return this.hostCpus;
+  }
   private async docker(args: string[]): Promise<string> {
     try { const result = await execute("docker", args, { timeout: 60000, maxBuffer: 4 * 1024 * 1024 }); return result.stdout; }
     catch (error) {
-      const stderr = String((error as { stderr?: unknown }).stderr ?? "");
-      throw new ExecutionError(503, /No such (object|container)/.test(stderr) ? "docker_object_missing" : "docker_operation_failed");
+      const stderr = String((error as { stderr?: unknown }).stderr ?? "").trim();
+      if (/No such (object|container)/.test(stderr)) throw new ExecutionError(503, "docker_object_missing");
+      const failure = new ExecutionError(503, "docker_operation_failed", { operation: args.slice(0, 2).join(" "), stderr: stderr.slice(0, 2000) });
+      console.error(JSON.stringify({ level: "error", msg: "Docker operation failed", ...failure.details }));
+      throw failure;
     }
   }
+}
+
+/** Cap the requested CPU quota at what the Docker host can grant. */
+export function effectiveCpus(requested: number, hostCpus: number): number {
+  return hostCpus > 0 ? Math.min(requested, hostCpus) : requested;
 }
 
 /** Docker Desktop may report its VM-side /host_mnt path after starting a bind mount. */

@@ -78,3 +78,28 @@ test("maintenance sweep completes an abandoned durable replacement without accep
  expect(f.store.require(f.held.environment.id).pendingSpec).toBeUndefined();
  expect(f.store.reservation("new-request")).toBeUndefined();
 });
+test("changed container limits replace the idle environment instead of conflicting",async()=>{
+ const f=fixture();
+ const old=f.store.require(f.held.environment.id).spec;
+ f.preparations.release({invocationId:"next",contextId:"ctx",scope:f.scope,resourceRevision:f.next.digest});
+ const input={protocolVersion:2 as const,invocationId:"limits",scope:f.scope,resources:old.resourceSelection,contextId:"ctx2",runnerId:"ctx2",scopeKey:old.scopeKey,runnerKind:"main" as const};
+ f.preparations.begin(input);f.preparations.complete("limits",{});
+ const request={requestId:"limits-request",spec:{...old,resources:{memory:"512m",cpus:2,pidsLimit:256}},occupant:{...f.request.occupant,contextId:"ctx2",invocationId:"limits",jobId:"limits-job",assignmentId:"limits-assignment"}};
+ await expect(f.manager.prepare(request)).rejects.toMatchObject({code:"environment_mount_pending"});expect(f.removed()).toBe(0);
+ f.store.release("old-request",f.held.reservation.reservationId);
+ await expect(f.manager.prepare(request)).rejects.toThrow("reached-context-preparation");
+ expect(f.removed()).toBe(1);expect(f.store.require(f.held.environment.id).spec.resources).toEqual({memory:"512m",cpus:2,pidsLimit:256});
+ expect(f.store.reservation("limits-request")?.state).toBe("preparing");
+});
+test("a reservation never sent to an Executor cancels without restarting a vanished container",async()=>{
+ const f=fixture();
+ const env=f.store.require(f.held.environment.id);env.containerId="vanished";f.store.saveEnvironment(env);
+ await expect(f.manager.cancelPreparation("old-request")).resolves.toEqual({state:"cancelled"});
+ expect(f.store.reservation("old-request")?.state).toBe("cancelled");
+});
+test("a reservation sent to an Executor still requires Executor-fenced cancellation",()=>{
+ const f=fixture();
+ const env=f.store.require(f.held.environment.id);env.containerId="vanished";f.store.saveEnvironment(env);
+ f.store.markExecutorBound("old-request");
+ expect(f.store.cancelPreparation("old-request",true).state).toBe("cancelling");
+});

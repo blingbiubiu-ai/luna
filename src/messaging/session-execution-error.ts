@@ -23,6 +23,14 @@ function failureText(error: unknown): string {
     case "worker_not_ready":
     case "worker_disconnected":
       return "消息已收到，但此会话的 Worker 当前不可用。请检查 Worker 的连接、执行环境和负载，恢复后重新发送。";
+    case "docker_operation_failed":
+    case "docker_object_missing":
+    case "prepare_conflict":
+    case "environment_configuration_conflict":
+    case "environment_mount_pending":
+    case "executor_ports_exhausted":
+    case "execution_connection_failed":
+      return "消息已收到，但 Worker 未能启动执行环境，本轮未能执行。请检查 Worker 的 Docker 状态和容器资源配置，恢复后重新发送。";
     case "agent_not_configured":
       return "消息已收到，但此 Agent 尚未启用模型。请在模型配置中测试连接并激活配置后重新发送。";
     case "runtime_draining":

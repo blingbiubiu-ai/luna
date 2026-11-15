@@ -31,7 +31,9 @@ export class EnvironmentManager {
       await this.resumeReplacement(id);
       const previous = this.store.find(id);
       const resourcesChanged = previous && contentHash(previous.spec.resourceSelection) !== contentHash(request.spec.resourceSelection);
-      if (previous && (previous.spec.imageDigest !== request.spec.imageDigest || resourcesChanged)) {
+      // Container limits (cpus/memory/pids) are launch arguments; an idle environment is rebuilt to apply them.
+      const limitsChanged = previous && contentHash(previous.spec.resources) !== contentHash(request.spec.resources);
+      if (previous && (previous.spec.imageDigest !== request.spec.imageDigest || resourcesChanged || limitsChanged)) {
         // A maintenance request cannot choose a new mounted snapshot. A live Job
         // preparation owns the target version and prevents old-version preparation.
         if (resourcesChanged && request.occupant.kind !== "job") throw new ExecutionError(503, "environment_mount_pending");
@@ -49,6 +51,7 @@ export class EnvironmentManager {
       this.store.saveEnvironment(environment);
       const health = await this.waitReady(id, environment.instanceId);
       const project = new ProjectMounts(this.store.db, this.driver.config).forContext(context.contextId);
+      this.store.markExecutorBound(request.requestId);
       await this.executor(id).call("PUT", `/v1/contexts/${context.contextId}`, { scope:request.spec.scope,cwd: this.driver.contextPath(context.contextId), ...(project ? { project: { projectId: project.projectId } } : {}) });
       if (reservation.occupant.kind === "job") {
         await this.executor(id).call("PUT", `/v1/reservations/${reservation.reservationId}`, this.binding(reservation));

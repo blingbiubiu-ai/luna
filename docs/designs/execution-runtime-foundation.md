@@ -183,6 +183,22 @@ prompt with an environment-reset notice; it does not invent missing history or
 assume old filesystem changes exist. Original submission hashes are retained for
 caller idempotency while effective dispatch hashes describe the rebuilt input.
 
+Placement before an Executor assignment is also bounded. When an unassigned
+job keeps failing (for example `docker_operation_failed`, `prepare_conflict`,
+`no_worker_available`) for `preparationFailureTimeoutMs` (default three
+minutes) since its first failure, Runtime records `failureReason`, requests
+cancellation through the normal preparation-cancel path, and settles the job as
+`failed` with that reason once the Worker confirms. Expected waits
+(`capacity_exhausted`, `context_busy`, pending cancellation) do not count.
+Nothing has executed at this point, so no external effect is abandoned. Service
+raises the reason as the error code, and the session reports it to the user as
+a normal error reply instead of leaving the turn running.
+
+Worker records whether a reservation was sent to an Executor (`executorBound`,
+persisted before the first Executor call). A reservation never sent can be
+cancelled without starting a container; one that was sent, or an older record
+without the flag, still requires Executor-fenced cancellation.
+
 Executor delivery reuses the same job/assignment IDs and durably counts at most
 two submission attempts, including across Service restart. A failed response is
 followed by a query; a reservation with sequence zero is not an accepted job.
@@ -261,11 +277,17 @@ reservation blocks preparation release.
 
 ### Container resource changes
 
-Worker checks the image and resource selection before reusing an environment.
+Worker checks the image, resource selection and container limits
+(Runtime `resources`: memory, CPUs, pids) before reusing an environment.
 A new version waits for old preparation references and reservations to drain,
 then replaces the container while preserving writable Shadow HOME. Other
 Shadows retain their environments. Snapshot cleanup and physical process
 shutdown are separate from invocation settlement.
+
+Runtime `resources` are Service-wide requests. Each Worker caps the CPU quota
+at the CPU count its Docker daemon reports, so a default larger than a small
+host still starts; memory and pids limits are passed through unchanged. Docker
+failures keep the daemon's stderr in the Worker log and error details.
 
 ## Worker-owned images
 

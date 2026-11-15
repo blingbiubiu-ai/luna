@@ -424,3 +424,46 @@ test("pre-Job provision returns Worker paths without a maintenance reservation o
   expect(calls).toBe(0);
  }finally{f.close();}
 });
+
+test("persistent environment failure before assignment settles as a reported failure instead of retrying forever", async () => {
+  const f = fixture();
+  try {
+    f.attach("old", () => prepared); await f.scheduler.preparation.prepare(input);
+    f.scheduler.submit({ ...job, resourceRevision: resources.digest });
+    let cancellations = 0;
+    f.attach("old", path => {
+      if (path === "/v2/context-prepare") return prepared;
+      if (path.endsWith("/cancel")) { cancellations++; return { state: "cancelled" }; }
+      throw new ExecutionError(503, "docker_operation_failed");
+    });
+    await f.scheduler.tick();
+    const failing = f.scheduler.jobs.require("job");
+    expect(failing).toMatchObject({ placementState: "reconnecting", lastError: { code: "docker_operation_failed" } });
+    expect(failing.preparationFailingSince).toBeNumber();
+    // Within the deadline, the job keeps retrying.
+    await f.scheduler.tick();
+    expect(f.scheduler.jobs.require("job").placementState).toBe("reconnecting");
+    // Past the deadline, Runtime cancels the Worker reservation and reports the failure code.
+    f.scheduler.jobs.save({ ...f.scheduler.jobs.require("job"), preparationFailingSince: Date.now() - f.config.preparationFailureTimeoutMs });
+    await f.scheduler.tick();
+    expect(f.scheduler.jobs.require("job").cancelRequested).toBe(true);
+    await f.scheduler.tick();
+    expect(cancellations).toBe(1);
+    expect(f.scheduler.jobs.require("job")).toMatchObject({ placementState: "terminal", terminalResult: { state: "failed", reason: "docker_operation_failed" } });
+  } finally { f.close(); }
+});
+
+test("waiting for capacity never counts toward the preparation failure deadline", async () => {
+  const f = fixture();
+  try {
+    f.attach("old", () => prepared); await f.scheduler.preparation.prepare(input);
+    f.scheduler.submit({ ...job, resourceRevision: resources.digest });
+    f.scheduler.jobs.save({ ...f.scheduler.jobs.require("job"), preparationFailingSince: Date.now() - 10 * f.config.preparationFailureTimeoutMs });
+    f.attach("old", path => {
+      if (path === "/v2/context-prepare") return prepared;
+      throw new ExecutionError(503, "context_busy");
+    });
+    await f.scheduler.tick();
+    expect(f.scheduler.jobs.require("job").placementState).not.toBe("terminal");
+  } finally { f.close(); }
+});

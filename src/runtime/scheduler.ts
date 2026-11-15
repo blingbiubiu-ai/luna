@@ -24,6 +24,9 @@ interface CancelPreparationReply { state: string; handle?: unknown; controlCrede
 export type AllowedWorkers = (scope: ResourceScope, options?: {includePaused?: boolean}) => readonly string[];
 
 /** Reconciles durable assignments; uncertain execution always stays on its original Worker. */
+/** Expected waits before execution; these never count toward the preparation failure deadline. */
+const PREPARATION_WAIT_CODES = new Set(["capacity_exhausted", "context_busy", "preparation_cancellation_pending"]);
+
 export class RuntimeScheduler {
   readonly jobs: SchedulerStore;
   readonly events: RuntimeEventStore;
@@ -101,6 +104,18 @@ export class RuntimeScheduler {
             current.placementState = "terminal"; current.terminalResult = { state: "failed", reason: code };
             this.jobs.save(current); this.events.append(job.jobId, "placement", current); return;
           }
+          if (!current.assignment && !current.cancelRequested && !PREPARATION_WAIT_CODES.has(code)) {
+            // Nothing has executed yet, so a persistent failure is settled instead of retried silently forever.
+            const since = current.preparationFailingSince ?? Date.now();
+            if (Date.now() - since >= this.config.preparationFailureTimeoutMs) {
+              current.failureReason = code; current.lastError = { code, at: Date.now() };
+              this.jobs.save(current);
+              const settled = this.jobs.cancel(job.jobId);
+              this.events.append(job.jobId, "placement", settled);
+              return;
+            }
+            if (current.preparationFailingSince === undefined) { current.preparationFailingSince = since; this.jobs.save(current); }
+          }
           if (current.lastError?.code === code) return;
           current.lastError = { code, at: Date.now() };
           if (current.workerId && current.placementState !== "terminal") current.placementState = "reconnecting";
@@ -176,7 +191,7 @@ export class RuntimeScheduler {
           this.jobs.save(current);
         }
         const reserved = this.jobs.reserve(id, route.workerId);
-        delete reserved.lastError;
+        delete reserved.lastError; delete reserved.preparationFailingSince;
         this.jobs.save(reserved);
         this.events.append(id, "placement", reserved);
         return reserved;
@@ -196,7 +211,7 @@ export class RuntimeScheduler {
           transaction(this.db, () => {
             const job = this.jobs.require(id);
             job.placementState = "terminal";
-            job.terminalResult = { state: "cancelled", reason: "cancelled_during_preparation" };
+            job.terminalResult = job.failureReason ? { state: "failed", reason: job.failureReason } : { state: "cancelled", reason: "cancelled_during_preparation" };
             delete job.lastError;
             this.jobs.save(job);
             this.events.append(id, "placement", job);

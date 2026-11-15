@@ -10,5 +10,7 @@ export const RuntimeConfig = z.object({
   environmentId: Id.default("luna"),
   resources: EnvironmentSpec.shape.resources.default({ memory: "32g", cpus: 8, pidsLimit: 2048 }),
   maxConcurrentJobs: z.number().int().min(1).max(10000).default(8),
+  /** Unassigned jobs failing placement this long are failed so the caller can report it. */
+  preparationFailureTimeoutMs: z.number().int().min(1000).max(86_400_000).default(180_000),
 }).strict();
 export type RuntimeConfig = z.infer<typeof RuntimeConfig>;

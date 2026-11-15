@@ -21,6 +21,8 @@ export interface ReservationRecord {
   reservationId: string;
   requestHash: string;
   state: "preparing" | "ready" | "cancelling" | "cancelled" | "released";
+  /** False until the reservation is sent to an Executor; absent on older records (treated as possibly sent). */
+  executorBound?: boolean;
 }
 
 /** Durable occupancy is independent of HTTP connections and process-local locks. */
@@ -68,7 +70,7 @@ export class EnvironmentStore {
         environment = { id: key, instanceId: randomUUID(), spec: request.spec, state: "creating", containerId: null, endpoint: null, bootId: null, idleSince: null };
         this.db.prepare("INSERT INTO worker_environments VALUES (?,?)").run(key, JSON.stringify(environment));
       }
-      const reservation: ReservationRecord = { requestId: request.requestId, environmentId: key, occupant: request.occupant, reservationId: randomUUID(), requestHash: hash, state: "preparing" };
+      const reservation: ReservationRecord = { requestId: request.requestId, environmentId: key, occupant: request.occupant, reservationId: randomUUID(), requestHash: hash, state: "preparing", executorBound: false };
       this.db.prepare("INSERT INTO worker_reservations VALUES (?,?,?,?)").run(reservation.requestId, key, occupantId(request.occupant), JSON.stringify(reservation));
       return { environment, reservation };
     });
@@ -110,10 +112,20 @@ export class EnvironmentStore {
       if (!reservation) throw new ExecutionError(404, "preparation_not_found");
       if (["cancelled", "released"].includes(reservation.state)) return reservation;
       const environment = this.require(reservation.environmentId);
-      reservation.state = creationDefinitelyStopped && environment.containerId === null ? "cancelled" : "cancelling";
+      // An Executor never told about this reservation holds no state to fence, so no container is needed to cancel it.
+      reservation.state = reservation.executorBound === false || (creationDefinitelyStopped && environment.containerId === null) ? "cancelled" : "cancelling";
       this.saveReservation(reservation);
       this.updateIdle(environment);
       return reservation;
+    });
+  }
+
+  /** Persist before the Executor call: after a crash the reservation is conservatively treated as sent. */
+  markExecutorBound(requestId: string): void {
+    transaction(this.db, () => {
+      const reservation = this.reservation(requestId);
+      if (!reservation) throw new ExecutionError(404, "preparation_not_found");
+      if (reservation.executorBound !== true) { reservation.executorBound = true; this.saveReservation(reservation); }
     });
   }
 

@@ -190,8 +190,11 @@ export class RuntimeAgentTransport implements AgentAttemptTransport {
         throw failure;
       }
       if (terminal?.state !== "succeeded") {
-        const reason = (await this.client.query(id)).terminalResult?.reason;
-        throw new Error(reason ?? terminal?.error?.message ?? `Runtime Job ended as ${terminal?.state ?? "cancelled"}`);
+        const record = await this.client.query(id);
+        const reason = record.terminalResult?.reason ?? record.failureReason;
+        const error = new Error(reason ?? terminal?.error?.message ?? `Runtime Job ended as ${terminal?.state ?? "cancelled"}`);
+        // The Runtime reason is a stable code; session error replies map it to user-facing text.
+        throw reason ? Object.assign(error, { code: reason }) : error;
       }
     } finally {
       options.signal?.removeEventListener("abort", cancel);

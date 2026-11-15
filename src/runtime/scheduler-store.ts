@@ -16,6 +16,10 @@ export interface ScheduledJob {
   terminalResult: { state: "cancelled" | "failed"; reason: string } | null;
   execution?: JobSnapshot;
   lastError?: { code: string; at: number };
+  /** First failure before an Executor assignment; bounds silent pre-execution retries. */
+  preparationFailingSince?: number;
+  /** Set when Runtime gives up before execution; the cancellation that follows settles as this failure. */
+  failureReason?: string;
   createdAt: number;
 }
 
@@ -101,7 +105,7 @@ export class SchedulerStore {
       job.cancelRequested = true;
       if (job.workerId === null) {
         job.placementState = "terminal";
-        job.terminalResult = { state: "cancelled", reason: "cancelled_before_dispatch" };
+        job.terminalResult = job.failureReason ? { state: "failed", reason: job.failureReason } : { state: "cancelled", reason: "cancelled_before_dispatch" };
       }
       this.save(job);
       return job;
