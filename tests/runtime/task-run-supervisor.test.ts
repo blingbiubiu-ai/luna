@@ -2482,3 +2482,68 @@ test("explicit cancellation aborts the existing process and revokes its authorit
     expect(database.db.select().from(lunaSchema.tasks).where(eq(lunaSchema.tasks.id, taskId)).get()?.status).toBe("cancelled");
   } finally {release(); await supervisor.waitForIdle();}
 });
+
+function _registerTaskInvocation(id: string, taskId: string, run: {id: string; runnerContextId: string | null}) {
+  return import("../../src/runners/invocation-store").then(({InvocationStore}) => {
+    const ledger = new InvocationStore(database.db);
+    ledger.register({id, runnerKind: "task", actorUserId: "user-1", runnerContextId: run.runnerContextId!, sessionId: null,
+      taskId, taskRunId: run.id, originId: run.id,
+      inputSnapshot: decodeInvocation({version: 1, kind: "task", input: {taskId, taskRunId: run.id, runnerContextId: run.runnerContextId!}}), contextPackIds: []});
+    const token = new AccessTokenService({db: database.db, signingSecret: "task-supervisor-fixture"}).issueToken({
+      userId: "user-1", source: "runner", role: "runner", name: "Task", runnerKind: "task",
+      sourceRunnerJobId: run.runnerContextId!, sourceTaskId: taskId, sourceTaskRunId: run.id, now: Date.now(),
+      ttlMs: 60_000, metadata: {invocationId: id},
+    });
+    ledger.bindToken(id, token.record.id);
+    return {ledger, tokenId: token.record.id};
+  });
+}
+
+test("restart revokes the superseded run's authority even before its transport attached an abort listener", async () => {
+  const taskId = _createTask("task-restart-revokes");
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => {release = resolve;});
+  // The fake executor never reaches the runtime transport, like a run aborted
+  // while still preparing runner files.
+  const supervisor = new TaskRunSupervisor({db: database.db, runnerType: "mock",
+    executeRun: async input => {
+      if (input.runIndex === 1) { await gate; throw new Error("aborted during preparation"); }
+      return await new Promise<ExecuteTaskRunResult>(() => {});
+    }});
+  const first = supervisor.startInitialRun({taskId, inputSnapshot: {}});
+  const {ledger, tokenId} = await _registerTaskInvocation("restart-old-invocation", taskId, first);
+  try {
+    supervisor.restartTaskRun({taskId, inputSnapshot: {}, updatedTaskSummary: "s", updateSummary: "new facts"});
+    expect(ledger.require("restart-old-invocation").state).toBe("revoked");
+    expect(database.db.select().from(lunaSchema.accessTokens).where(eq(lunaSchema.accessTokens.id, tokenId)).get()?.revokedAt).not.toBeNull();
+    release();
+    // The superseded run's settled cleanup can now finish its revoked invocation.
+    await new Promise(resolve => setTimeout(resolve, 10));
+    expect(ledger.require("restart-old-invocation").settledAt).not.toBeNull();
+    expect(store.listRunsForTask(taskId).map(run => run.status)).toEqual(["cancelled", "running"]);
+  } finally {
+    release();
+    supervisor.cancelTaskRun({taskId, runId: store.getActiveRunForTask(taskId)!.id, reason: "test cleanup"});
+  }
+});
+
+test("a run cancelled by another authority without aborting the process closes its status card", async () => {
+  const taskId = _createTask("task-external-cancel");
+  const cancelled: unknown[] = [];
+  const results: unknown[] = [];
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => {release = resolve;});
+  const supervisor = new TaskRunSupervisor({db: database.db, runnerType: "mock",
+    executeRun: async () => { await gate; throw new Error("Invocation is no longer active"); },
+    onTaskResult: result => {results.push(result);},
+    runNotifications: {onRunCancelled: event => {cancelled.push(event);}},
+  });
+  const run = supervisor.startInitialRun({taskId, inputSnapshot: {}});
+  // Same writes as JobReconciler.completeCancelledBusiness for a revoked Task invocation.
+  database.db.update(lunaSchema.taskRuns).set({status: "cancelled", cancel_reason: "actor_inactive", finished_at: Date.now()})
+    .where(eq(lunaSchema.taskRuns.id, run.id)).run();
+  release();
+  await supervisor.waitForIdle();
+  expect(cancelled).toEqual([{taskRunId: run.id, reason: "actor_inactive"}]);
+  expect(results).toHaveLength(0);
+});

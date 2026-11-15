@@ -113,52 +113,18 @@ export class TaskRunSupervisor {
   }
 
   startInitialRun(input: StartInitialTaskRunInput): TaskRun {
-    const duplicateRun = this._existingRunForSource({
-      taskId: input.taskId,
-      reason: "initial",
-      ...(input.sourceMessageId !== undefined
-        ? { sourceMessageId: input.sourceMessageId }
-        : {}),
-    });
+    const duplicateRun = this._existingRunForSource(input.taskId, "initial", input.sourceMessageId);
     if (duplicateRun !== undefined) {
       return duplicateRun;
     }
 
     const runnerType = this._runnerType(input.taskId);
-    const runnerContext = this._contexts.resolveForTask(
-      input.taskId,
-      runnerType,
-    );
-    const contextPackIds = this._contextPackIdsForRun(input.taskId, "initial");
-    const run = this._taskRuns.createRun({
-      taskId: input.taskId,
-      reason: "initial",
-      inputSnapshot: input.inputSnapshot,
-      ...(contextPackIds.length > 0 ? { contextPackIds } : {}),
-      runnerType,
-      runnerContextId: runnerContext.id,
-      ...(input.sourceMessageId !== undefined
-        ? { sourceMessageId: input.sourceMessageId }
-        : {}),
-    });
-    const controller = new AbortController();
-    this._controllers.set(run.id, controller);
-
-    _updateTaskStatus(this._options.db, input.taskId, "running");
-    this._track(this._notifyRunCreated(run));
-    this._track(
-      this._executeRun({
-        run,
-        runnerContext,
-        inputSnapshot: run.inputSnapshot,
-        signal: controller.signal,
-      }),
-    );
-    return run;
+    const runnerContext = this._contexts.resolveForTask(input.taskId, runnerType);
+    return this._launchRun({...input, reason: "initial", runnerType, runnerContext});
   }
 
   restartTaskRun(input: RestartTaskRunInput): TaskRun {
-    const duplicateRun = this._existingRestartRun(input);
+    const duplicateRun = this._existingRunForSource(input.taskId, "restart", input.sourceMessageId);
     if (duplicateRun !== undefined) {
       return duplicateRun;
     }
@@ -171,24 +137,9 @@ export class TaskRunSupervisor {
     });
 
     const activeRun = this._taskRuns.getActiveRunForTask(input.taskId);
-    let cancelledRun: TaskRun | undefined;
-    let cancelReason: string | undefined;
-    if (activeRun !== undefined) {
-      cancelReason = input.cancelReason ?? "Task Run superseded by restart.";
-      this._controllers.get(activeRun.id)?.abort(cancelReason);
-      cancelledRun = this._taskRuns.markCancelled(activeRun.id, {
-        cancelReason,
-      });
-      this._timeline.append({
-        taskId: input.taskId,
-        type: "runner.cancelled",
-        summary: `Cancelled obsolete Task Run ${cancelledRun.runIndex}.`,
-        data: {
-          ..._runMetadata(cancelledRun),
-          cancelReason,
-        },
-      });
-    }
+    const cancelReason = input.cancelReason ?? "Task Run superseded by restart.";
+    const cancelledRun = activeRun === undefined ? undefined
+      : this._cancelRun(activeRun, cancelReason, run => `Cancelled obsolete Task Run ${run.runIndex}.`);
 
     if (!input.preserveTaskContext) this._updateTaskContext({
       taskId: input.taskId,
@@ -202,40 +153,44 @@ export class TaskRunSupervisor {
         : {}),
     });
 
-    const contextPackIds = this._contextPackIdsForRun(input.taskId, "restart");
+    return this._launchRun({...input, reason: "restart", runnerType, runnerContext,
+      beforeCreatedNotification: run => {
+        if (cancelledRun !== undefined) this._track(this._notifyRunCancelled(cancelledRun, run, cancelReason));
+      }});
+  }
+
+  /** Shared tail of initial and restart runs: persist, mark the Task running, notify, execute. */
+  private _launchRun(input: {
+    readonly taskId: string;
+    readonly reason: "initial" | "restart";
+    readonly inputSnapshot: unknown;
+    readonly sourceMessageId?: string;
+    readonly runnerType: string;
+    readonly runnerContext: ResolvedRunnerContext;
+    readonly beforeCreatedNotification?: (run: TaskRun) => void;
+  }): TaskRun {
+    const contextPackIds = this._contextPackIdsForRun(input.taskId, input.reason);
     const run = this._taskRuns.createRun({
       taskId: input.taskId,
-      reason: "restart",
+      reason: input.reason,
       inputSnapshot: input.inputSnapshot,
       ...(contextPackIds.length > 0 ? { contextPackIds } : {}),
-      runnerType,
-      runnerContextId: runnerContext.id,
-      ...(input.sourceMessageId !== undefined
-        ? { sourceMessageId: input.sourceMessageId }
-        : {}),
+      runnerType: input.runnerType,
+      runnerContextId: input.runnerContext.id,
+      ...(input.sourceMessageId !== undefined ? { sourceMessageId: input.sourceMessageId } : {}),
     });
     const controller = new AbortController();
     this._controllers.set(run.id, controller);
 
     _updateTaskStatus(this._options.db, input.taskId, "running");
-    if (cancelledRun !== undefined) {
-      this._track(
-        this._notifyRunCancelled(
-          cancelledRun,
-          run,
-          cancelReason ?? "Task Run superseded by restart.",
-        ),
-      );
-    }
+    input.beforeCreatedNotification?.(run);
     this._track(this._notifyRunCreated(run));
-    this._track(
-      this._executeRun({
-        run,
-        runnerContext,
-        inputSnapshot: run.inputSnapshot,
-        signal: controller.signal,
-      }),
-    );
+    this._track(this._executeRun({
+      run,
+      runnerContext: input.runnerContext,
+      inputSnapshot: run.inputSnapshot,
+      signal: controller.signal,
+    }));
     return run;
   }
 
@@ -243,20 +198,29 @@ export class TaskRunSupervisor {
   cancelTaskRun(input: { taskId: string; runId: string; reason: string }): TaskRun | undefined {
     let run = this._taskRuns.listRunsForTask(input.taskId).find(run => run.id === input.runId);
     if (!run || !["running", "cancelled"].includes(run.status)) return run;
-    if (run.status === "running") {
-      this._options.db.transaction(() => {
-        run = this._taskRuns.markCancelled(input.runId, {cancelReason: input.reason});
-        _updateTaskStatus(this._options.db, input.taskId, "cancelled");
-        const authority = new InvocationService(this._options.db);
-        for (const invocation of authority.store.pending().filter(item => item.taskRunId === input.runId))
-          authority.revoke(invocation.id, input.reason);
-        this._timeline.append({taskId: input.taskId, type: "runner.cancelled", summary: input.reason,
-          data: {..._runMetadata(run!), cancelReason: input.reason}});
-      });
-    }
-    this._controllers.get(input.runId)?.abort(input.reason);
-    this._track(this._notifyRunCancelled(run!, undefined, run!.cancelReason ?? input.reason));
+    if (run.status === "running") run = this._cancelRun(run, input.reason, () => input.reason, "cancelled");
+    this._track(this._notifyRunCancelled(run, undefined, run.cancelReason ?? input.reason));
     return run;
+  }
+
+  /**
+   * The single cancellation rule shared by explicit cancel and restart
+   * supersession: run state, optional task status, invocation/token authority
+   * and timeline commit together, and only then is the local process aborted.
+   */
+  private _cancelRun(run: TaskRun, reason: string, summary: (run: TaskRun) => string, taskStatus?: TaskStatus): TaskRun {
+    const cancelled = this._options.db.transaction(() => {
+      const cancelled = this._taskRuns.markCancelled(run.id, {cancelReason: reason});
+      if (taskStatus) _updateTaskStatus(this._options.db, run.taskId, taskStatus);
+      const authority = new InvocationService(this._options.db);
+      for (const invocation of authority.store.pending().filter(item => item.taskRunId === run.id))
+        authority.revoke(invocation.id, reason);
+      this._timeline.append({taskId: run.taskId, type: "runner.cancelled", summary: summary(cancelled),
+        data: {..._runMetadata(cancelled), cancelReason: reason}});
+      return cancelled;
+    });
+    this._controllers.get(run.id)?.abort(reason);
+    return cancelled;
   }
 
   async waitForIdle(): Promise<void> {
@@ -367,6 +331,7 @@ export class TaskRunSupervisor {
       });
 
       if (input.signal.aborted || !this._isActiveRun(input.run)) {
+        await this._notifyExternalCancellation(input.run, input.signal);
         return;
       }
       if (result.finalReportArtifactId === undefined) {
@@ -379,6 +344,7 @@ export class TaskRunSupervisor {
     } catch (err) {
       if (err instanceof RuntimeDetachedError) return;
       if (input.signal.aborted || !this._isActiveRun(input.run)) {
+        await this._notifyExternalCancellation(input.run, input.signal);
         return;
       }
       const acceptedReport = taskReportForRun(this._options.db, input.run.id);
@@ -454,6 +420,20 @@ export class TaskRunSupervisor {
       );
       await this._notifyRunCompleted(completedRun, completedResult);
       await this._notifyTaskResult(() => completedResult);
+  }
+
+  /**
+   * Supervisor-owned cancellations (restart, explicit cancel, shutdown) always
+   * abort the signal and publish their own card update. A run cancelled while
+   * the signal is still live was settled by another authority, such as the
+   * JobReconciler revoking an invocation whose actor or session became
+   * unavailable; close its status card instead of leaving it "running".
+   */
+  private async _notifyExternalCancellation(run: TaskRun, signal: AbortSignal): Promise<void> {
+    if (signal.aborted) return;
+    const current = this._taskRuns.listRunsForTask(run.taskId).find(item => item.id === run.id);
+    if (current?.status !== "cancelled") return;
+    await this._notifyRunCancelled(current, undefined, current.cancelReason ?? "Task Run cancelled.");
   }
 
   private _settleRun(run: TaskRun, complete: () => void): void {
@@ -559,37 +539,10 @@ export class TaskRunSupervisor {
     return this._taskRuns.getActiveRunForTask(run.taskId)?.id === run.id;
   }
 
-  private _existingRestartRun(
-    input: RestartTaskRunInput,
-  ): TaskRun | undefined {
-    return this._existingRunForSource({
-      taskId: input.taskId,
-      reason: "restart",
-      ...(input.sourceMessageId !== undefined
-        ? { sourceMessageId: input.sourceMessageId }
-        : {}),
-    });
-  }
-
-  private _existingRunForSource(input: {
-    readonly taskId: string;
-    readonly sourceMessageId?: string;
-    readonly reason: "initial" | "restart";
-  }): TaskRun | undefined {
-    if (input.sourceMessageId === undefined) {
-      return undefined;
-    }
-
-    const existingRun = this._taskRuns.getRunForTaskSourceMessage({
-      taskId: input.taskId,
-      sourceMessageId: input.sourceMessageId,
-      reason: input.reason,
-    });
-    if (existingRun !== undefined) {
-      return existingRun;
-    }
-
-    return undefined;
+  /** A source message replay returns its existing run instead of starting another. */
+  private _existingRunForSource(taskId: string, reason: "initial" | "restart", sourceMessageId: string | undefined): TaskRun | undefined {
+    return sourceMessageId === undefined ? undefined
+      : this._taskRuns.getRunForTaskSourceMessage({taskId, sourceMessageId, reason});
   }
 
   private _appendContextUpdatedEvent(input: RestartTaskRunInput): void {

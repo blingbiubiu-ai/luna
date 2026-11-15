@@ -389,3 +389,22 @@ test("transport rejects missing or mismatched pinned model before contacting Run
   expect(calls).toBe(0);
  } finally {await transport.detach();f.close();}
 });
+
+test("reconciler cancels a revoked Task invocation through the guarded run transition and records it on the timeline", async () => {
+  const {JobReconciler} = await import("../../src/runners/job-reconciler");
+  const {timelineEvents} = await import("../../src/data/schema");
+  const f = fixture();
+  try {
+    f.db.insert(tasks).values({ id: "task-r", type: "execution", title: "T", status: "running", created_at: 0, updated_at: 0, last_activity_at: 0, ...fixtureTaskOwnership(f.db, "session1")}).run();
+    f.db.insert(runnerContexts).values(fixtureRunnerContext(f.db, {id: "task-ctx", owner_type: "task", owner_id: "task-r", runner_type: "claude", runner_root_path: "/unused", created_at: 0, updated_at: 0})).run();
+    f.db.insert(taskRuns).values({id: "run-r", task_id: "task-r", run_index: 1, status: "running", reason: "initial", input_snapshot: {}, runner_type: "claude", runner_context_id: "task-ctx", started_at: 0}).run();
+    f.store.register({id: "task-inv", runnerKind: "task", actorUserId: "user1", runnerContextId: "task-ctx", sessionId: null, taskId: "task-r", taskRunId: "run-r", originId: "run-r", contextPackIds: [],
+      inputSnapshot: {version: 1, kind: "task", input: {taskId: "task-r", taskRunId: "run-r", runnerContextId: "task-ctx"}} as never});
+    f.authority.revoke("task-inv", "actor_inactive");
+    await new JobReconciler(f.db, runtimeStub({}), AbortSignal.timeout(2000)).recover();
+    expect(f.db.select().from(taskRuns).where(eq(taskRuns.id, "run-r")).get()).toMatchObject({status: "cancelled", cancel_reason: "actor_inactive"});
+    expect(f.db.select().from(tasks).where(eq(tasks.id, "task-r")).get()?.status).toBe("cancelled");
+    expect(f.db.select().from(timelineEvents).where(eq(timelineEvents.task_id, "task-r")).all().map(e => e.type)).toEqual(["runner.cancelled"]);
+    expect(f.store.require("task-inv").settledAt).not.toBeNull();
+  } finally {f.close();}
+});

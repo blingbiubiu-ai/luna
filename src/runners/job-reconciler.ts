@@ -10,6 +10,8 @@ import { ExecutionError } from "@luna/execution-store";
 import { InvocationService } from "./invocation-service";
 import { InvocationStore, type InvocationRecord } from "./invocation-store";
 import { decodeInvocation } from "./invocation-codec";
+import { TaskRunStore } from "@/tasks/task-run-store";
+import { TimelineStore } from "@/timeline/timeline-store";
 
 /** Startup cancellation owns its original session lane until Runtime confirms termination. */
 export class JobReconciler {
@@ -67,7 +69,11 @@ export class JobReconciler {
     if (snapshot.kind === "task") {
       const run = this.db.select().from(taskRuns).where(eq(taskRuns.id, snapshot.input.taskRunId)).get();
       if (run?.status !== "running") return;
-      this.db.update(taskRuns).set({ status: "cancelled", cancel_reason: reason, finished_at: now }).where(eq(taskRuns.id, run.id)).run();
+      // Same guarded terminal transition and timeline event as TaskRunSupervisor;
+      // the supervisor closes the status card when it observes this cancellation.
+      const cancelled = new TaskRunStore(this.db).markCancelled(run.id, { cancelReason: reason, finishedAt: now });
+      new TimelineStore(this.db).append({ taskId: run.task_id, type: "runner.cancelled", summary: reason,
+        data: { taskRunId: cancelled.id, runIndex: cancelled.runIndex, runReason: cancelled.reason, runnerType: cancelled.runnerType, cancelReason: reason } });
       const latest = this.db.select().from(taskRuns).where(eq(taskRuns.task_id, run.task_id)).orderBy(desc(taskRuns.run_index)).get();
       if (latest?.id === run.id) this.db.update(tasks).set({ status: "cancelled", updated_at: now, last_activity_at: now }).where(eq(tasks.id, run.task_id)).run();
       return;

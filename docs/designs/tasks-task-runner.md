@@ -408,3 +408,17 @@ The existing progress card closes with cancellation text, without the restart
 phrase “New supplemental information received”. The command acknowledgment confirms cancellation requested;
 physical process shutdown may finish shortly afterward. Startup cancellation and
 notification recovery reuse the existing ledgers; no new persistence model is added.
+
+Restart supersession and explicit cancellation share one supervisor rule
+(`TaskRunSupervisor._cancelRun`): the Run state, invocation/token revocation and
+timeline event commit in one transaction before the local process is aborted.
+A superseded run's token is therefore inactive even if the process was aborted
+before its Runtime transport attached an abort listener.
+
+`JobReconciler` can also cancel a running Task Run when its invocation fails
+scope validation (for example an inactive actor or unavailable session). It uses
+the same guarded `TaskRunStore.markCancelled` transition and `runner.cancelled`
+timeline event, and updates `tasks.status` only when the run is the latest. That
+path does not abort the supervisor's signal; when the supervisor observes its
+run cancelled with a live signal it closes the status card through the normal
+`onRunCancelled` notification. No Task-result Main invocation is created.

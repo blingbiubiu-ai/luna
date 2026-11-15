@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
-import { desc, eq } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import type { DrizzleDB } from "@/data";
-import { accessTokens, taskReportCommands, taskRuns, tasks, taskSubscriptions, users } from "@/data/schema";
+import { accessTokens, taskReportCommands, taskRuns, tasks, taskSubscriptions } from "@/data/schema";
 import { ArtifactRegistry } from "@/artifacts/artifact-registry";
 import { scanArtifactRefs } from "@luna/service-client/artifact-ref";
 import { ArtifactStore } from "@/timeline/artifact-store";
@@ -22,19 +22,14 @@ export class TaskReportService {
   private active(claims: LunaAccessTokenClaims | undefined) {
     if (claims?.source !== "runner" || claims.role !== "runner" || claims.runnerKind !== "task")
       throw new GatewayError("task_runner_required", "Only a Task Runner can report", 403);
-    const token = this.db.select().from(accessTokens).where(eq(accessTokens.id, claims.tokenId)).get();
-    if (!token || token.revokedAt !== null || token.expiresAt <= Date.now() || token.userId !== claims.actorUserId)
-      throw new GatewayError("token_inactive", "Task token is inactive", 403);
-    const { snapshot } = new InvocationService(this.db).requireActive(claims, "task");
+    // requireActive is the single authority check: token liveness, invocation
+    // scope, current running Task Run with matching context, and active actor.
+    const { invocation, snapshot } = new InvocationService(this.db).requireActive(claims, "task");
     if (snapshot.kind !== "task") throw new GatewayError("task_runner_required", "Only a Task Runner can report", 403);
-    const active = snapshot.input;
-    const run = this.db.select().from(taskRuns).where(eq(taskRuns.id, active.taskRunId)).get();
-    const latest = this.db.select().from(taskRuns).where(eq(taskRuns.task_id, active.taskId)).orderBy(desc(taskRuns.run_index)).get();
-    if (!run || run.task_id !== active.taskId || run.runner_context_id !== active.runnerContextId || run.status !== "running" || latest?.id !== run.id)
-      throw new GatewayError("run_inactive", "Task run is no longer current", 409);
-    if (this.db.select().from(users).where(eq(users.id, claims.actorUserId)).get()?.status !== "active")
-      throw new GatewayError("actor_inactive", "Actor is inactive", 403);
-    return {run, token: token!, active, claims};
+    const run = this.db.select().from(taskRuns).where(eq(taskRuns.id, invocation.taskRunId!)).get();
+    if (!run) throw new GatewayError("run_inactive", "Task run is no longer current", 409);
+    const token = this.db.select().from(accessTokens).where(eq(accessTokens.id, claims.tokenId)).get()!;
+    return {run, token, claims};
   }
 
   submit(claims: LunaAccessTokenClaims | undefined, requestId: string, content: string) {
