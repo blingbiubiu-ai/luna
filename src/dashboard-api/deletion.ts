@@ -112,6 +112,7 @@ export function deleteDashboardSession(db: DrizzleDB, id: string): void {
     tx.run(sql`UPDATE sessions SET parent_session_id = NULL WHERE parent_session_id = ${id}`);
     tx.update(accessTokens).set({ revokedAt: Date.now(), sourceSessionId: null }).where(eq(accessTokens.sourceSessionId, id)).run();
     tx.run(sql`DELETE FROM deleted_task_references WHERE session_id = ${id}`);
+    tx.run(sql`DELETE FROM memory_reflection_checkpoints WHERE session_id = ${id}`);
     tx.delete(sessions).where(eq(sessions.id, id)).run();
   });
   // A failure is surfaced; the committed manifest makes a repeated DELETE resumable.

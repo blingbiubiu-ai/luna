@@ -7,6 +7,7 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { useAgentMemories, useAgentMemoryHistory } from "@/lib/api";
+import { ApiFetchError } from "@/lib/api/client";
 import type { DashboardMemoryChangeKind, DashboardMemoryFields, DashboardMemoryFilter, DashboardMemoryStatus, DashboardMemoryType } from "@/lib/api";
 
 export const Route = createFileRoute("/$agentId/memory/")({ component: MemoryPage });
@@ -25,18 +26,37 @@ function MemoryPage() {
 
 const TYPE_LABEL: Record<DashboardMemoryType, string> = { persona: "人格", person: "人物", feedback: "做法", project: "项目", procedure: "经验", reference: "资料" };
 const ORIGIN_LABEL: Record<DashboardMemoryChangeKind, string> = { inline: "对话中写入", reflection: "事后反思", consolidation: "定期整理", owner: "所有者", migration: "旧文档迁移", forgetting: "自动遗忘" };
-const STATUS_LABEL: Record<DashboardMemoryStatus, string> = { active: "有效", superseded: "已被取代", deleted: "已删除", archived: "已遗忘" };
+const STATUS_LABEL: Record<DashboardMemoryStatus, string> = { active: "有效", deleted: "已删除", archived: "已遗忘" };
 const EMPTY: DashboardMemoryFields = { type: "project", title: "", description: "", body: "", subjectUserId: null, core: false, expiresAt: null };
 const PAGE_SIZE = 50;
 const day = (time: number) => new Date(time).toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" });
 const dateInput = (time: number | null) => time === null ? "" : new Date(time).toISOString().slice(0, 10);
 const fieldsOf = ({ type, title, description, body, subjectUserId, core, expiresAt }: DashboardMemoryFields): DashboardMemoryFields => ({ type, title, description, body, subjectUserId, core, expiresAt });
 const selectClass = "h-9 rounded-md border bg-background px-2 text-sm";
+/** Service answers memory errors with a stable code and no prose. */
+const ERROR_TEXT: Record<string, string> = {
+  memory_revision_conflict: "这条记忆已在别处被修改，请重新选择它后再编辑。",
+  memory_core_full: "核心记忆名额已满，请先取消其他条目的核心标记。",
+  memory_persona_full: "这个分身的人格条目已达上限。",
+  memory_protected: "这条记忆受保护，不能这样修改。",
+  memory_not_active: "这条记忆不是有效状态，请先恢复。",
+  memory_not_archived: "这条记忆没有被遗忘，无需恢复。",
+  invalid_memory_title: "标题不能为空，且不超过 120 字。",
+  invalid_memory_description: "一行描述不能为空，且不超过 200 字。",
+  invalid_memory_body: "正文不能为空，且不超过 8 KB。",
+  invalid_memory_subject: "人物记忆需要填写关联用户 ID，其他类型不能填写。",
+  invalid_memory_core: "人物和人格记忆不能设为核心。",
+  invalid_memory_persona: "人格记忆需要选择所属分身，且不能设置有效期。",
+  invalid_memory_expiry: "有效期无效。",
+  memory_revision_not_found: "要恢复的版本不存在。",
+  memory_not_found: "这条记忆不存在或已不可见。",
+};
+const errorText = (error: Error) => (error instanceof ApiFetchError && error.code && ERROR_TEXT[error.code]) || error.message;
 
 /** Owner audit of Agent memory: who wrote what and when, with correction, deletion, restore and the core tier. */
 function MemoryEditor({ agentId }: { agentId: string }) {
-  const [filter, setFilter] = useState<DashboardMemoryFilter>({ query: "", type: "", originKind: "", originShadowId: "", status: "active", core: "", sort: "updatedAt", limit: PAGE_SIZE, offset: 0 });
-  const { list, save, remove, restore, unarchive } = useAgentMemories(agentId, filter);
+  const [filter, setFilter] = useState<DashboardMemoryFilter>({ query: "", type: "", originKind: "", originShadowId: "", status: "active", core: "", trusted: "", sort: "updatedAt", limit: PAGE_SIZE, offset: 0 });
+  const { list, save, remove, revert, restore, confirm } = useAgentMemories(agentId, filter);
   const shadows = useAgentShadows(agentId).data?.shadows ?? [];
   const base = useAgentBasePath();
   const [selectedId, setSelectedId] = useState<string | "new">();
@@ -48,9 +68,9 @@ function MemoryEditor({ agentId }: { agentId: string }) {
   const selected = selectedId === "new" ? undefined : memories.find(memory => memory.id === selectedId);
   const history = useAgentMemoryHistory(agentId, selected?.id, selected?.revision);
   const form = draft ?? (selected ? fieldsOf(selected) : EMPTY);
-  const pending = save.isPending || remove.isPending || restore.isPending || unarchive.isPending;
-  const error = list.error ?? save.error ?? remove.error ?? restore.error ?? unarchive.error;
-  const reset = () => { setDraft(undefined); save.reset(); remove.reset(); restore.reset(); unarchive.reset(); };
+  const pending = save.isPending || remove.isPending || revert.isPending || restore.isPending || confirm.isPending;
+  const error = list.error ?? save.error ?? remove.error ?? revert.error ?? restore.error ?? confirm.error;
+  const reset = () => { setDraft(undefined); save.reset(); remove.reset(); revert.reset(); restore.reset(); confirm.reset(); };
   const select = (id: string | "new") => { setSelectedId(id); reset(); };
   const edit = (change: Partial<DashboardMemoryFields>) => setDraft({ ...form, ...change });
   /** A changed filter starts again from the first page. */
@@ -82,6 +102,11 @@ function MemoryEditor({ agentId }: { agentId: string }) {
           <select aria-label="状态" className={selectClass} value={filter.status} onChange={event => narrow({ status: event.target.value })}>
             <option value="">全部状态</option>
             {Object.entries(STATUS_LABEL).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+          </select>
+          <select aria-label="信任" className={selectClass} value={filter.trusted} onChange={event => narrow({ trusted: event.target.value })}>
+            <option value="">全部来源</option>
+            <option value="false">待确认</option>
+            <option value="true">受信</option>
           </select>
           <select aria-label="层级" className={selectClass} value={filter.core} onChange={event => narrow({ core: event.target.value })}>
             <option value="">全部层级</option>
@@ -124,7 +149,7 @@ function MemoryEditor({ agentId }: { agentId: string }) {
         </div>
       </aside>
       <article className="flex min-h-0 min-w-0 flex-col gap-3 overflow-y-auto rounded-md border p-3">
-        {error && <p role="alert" className="text-sm text-destructive">{error.message}</p>}
+        {error && <p role="alert" className="text-sm text-destructive">{errorText(error)}</p>}
         {!selected && selectedId !== "new" && <p className="text-sm text-muted-foreground">选择一条记忆查看来源和修改历史，或新建一条。</p>}
         {(selected || selectedId === "new") && <>
           <div className="grid gap-3 sm:grid-cols-[10rem_1fr]">
@@ -168,7 +193,10 @@ function MemoryEditor({ agentId }: { agentId: string }) {
           <div className="flex flex-wrap justify-end gap-2">
             {draft && <Button type="button" variant="outline" disabled={pending} onClick={reset}>放弃修改</Button>}
             {selected?.status === "archived" && <Button type="button" disabled={pending}
-              onClick={() => unarchive.mutate({ id: selected.id, expectedRevision: selected.revision }, { onSuccess: reset })}>恢复为有效</Button>}
+              onClick={() => restore.mutate({ id: selected.id, expectedRevision: selected.revision }, { onSuccess: reset })}>恢复为有效</Button>}
+            {selected?.status === "active" && !selected.trusted && <Button type="button" variant="outline" disabled={pending || !!draft}
+              title="确认后这条记忆对所有分身、所有会话可见"
+              onClick={() => confirm.mutate({ id: selected.id, expectedRevision: selected.revision }, { onSuccess: reset })}>确认共享</Button>}
             {selected?.status === "active" && <Button type="button" variant="outline" disabled={pending}
               onClick={() => remove.mutate({ id: selected.id, expectedRevision: selected.revision }, { onSuccess: reset })}>删除</Button>}
             {editable && <Button type="button" disabled={!draft || pending || (persona && !selected && !personaShadow)} onClick={() => save.mutate(
@@ -179,9 +207,10 @@ function MemoryEditor({ agentId }: { agentId: string }) {
         {selected && <>
           <dl className="grid gap-x-4 gap-y-1 border-t pt-3 text-sm sm:grid-cols-[6rem_1fr]">
             <dt className="text-muted-foreground">状态</dt>
-            <dd>{STATUS_LABEL[selected.status]} · 第 {selected.revision} 版 · {selected.trusted ? "受信来源" : "未受信来源"} · {selected.visibility === "shadow" ? "仅来源分身可见" : "分身间共享"}</dd>
+            <dd>{STATUS_LABEL[selected.status]} · 第 {selected.revision} 版 · {selected.trusted ? "受信来源" : "未受信来源"} · {selected.visibility === "shadow" ? "仅来源分身可见" : selected.trusted ? "分身间共享" : "待确认，仅作者在场的会话可见"}</dd>
             <dt className="text-muted-foreground">来源</dt>
             <dd>{[ORIGIN_LABEL[selected.originKind], selected.originShadowName, selected.originUserName, day(selected.createdAt)].filter(Boolean).join(" · ")}</dd>
+            {selected.supersededBy && <><dt className="text-muted-foreground">被取代</dt><dd>合并时由 {selected.supersededBy} 取代</dd></>}
             <dt className="text-muted-foreground">最近使用</dt>
             <dd>{day(selected.lastUsedAt)}</dd>
             {selected.originSessionId && <><dt className="text-muted-foreground">来源会话</dt>
@@ -198,8 +227,8 @@ function MemoryEditor({ agentId }: { agentId: string }) {
                   <span>第 {entry.revision} 版</span>
                   <span className="text-muted-foreground">{[ORIGIN_LABEL[entry.changeKind], STATUS_LABEL[entry.snapshot.status], day(entry.createdAt)].join(" · ")}</span>
                   {entry.revision !== selected.revision && <Button type="button" size="sm" variant="outline" className="ml-auto" disabled={pending}
-                    onClick={event => { event.preventDefault(); restore.mutate({ id: selected.id, revision: entry.revision, expectedRevision: selected.revision }, { onSuccess: reset }); }}>
-                    恢复到此版本</Button>}
+                    onClick={event => { event.preventDefault(); revert.mutate({ id: selected.id, revision: entry.revision, expectedRevision: selected.revision }, { onSuccess: reset }); }}>
+                    回退到此版本</Button>}
                 </summary>
                 <p className="mt-2 font-medium">{entry.snapshot.title}</p>
                 <p className="text-muted-foreground">{entry.snapshot.description}</p>

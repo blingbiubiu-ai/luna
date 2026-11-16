@@ -21,10 +21,11 @@ function importLegacyDocuments() {
 
 test("legacy memory documents become one trusted reference entry per non-empty file, and the documents are kept", () => {
   const a = fixtureScope(db.db, "alice"), b = fixtureScope(db.db, "bob");
-  const files = {"用户/偏好.md": "只要结论", "notes/project.md": "11-20 前冻结发布", "empty.md": "  "};
+  const files = {"用户/偏好.md": "只要结论", "notes/project.md": "11-20 前冻结发布", "empty.md": "  ", "blank.md": "\n\t\r\n"};
   db.db.run(sql`INSERT INTO agent_document_revisions (id, agent_id, shadow_id, kind, files_json, author_user_id, parent_revision, created_at)
     VALUES ('legacy-revision', ${a.agentId}, NULL, 'memory', ${JSON.stringify(files)}, 'alice', NULL, 1000)`);
   db.db.run(sql`UPDATE luna_agents SET memory_revision = 'legacy-revision' WHERE id = ${a.agentId}`);
+  const before = Date.now();
   importLegacyDocuments();
 
   const store = new AgentMemoryStore(db.db);
@@ -35,7 +36,12 @@ test("legacy memory documents become one trusted reference entry per non-empty f
     expect(store.history(a.agentId, entry.id)).toMatchObject([{revision: 1, changeKind: "migration", snapshot: {title: entry.title, body: entry.body, trusted: true, status: "active"}}]);
   }
   expect(new Set(entries.map(entry => entry.changeSeq)).size).toBe(2);
-  for (const entry of entries) expect(entry).toMatchObject({core: false, expiresAt: null, lastUsedAt: 1000});
+  // The forgetting clock starts at the upgrade, so an old document is consolidated rather than forgotten at once.
+  for (const entry of entries) {
+    expect(entry).toMatchObject({core: false, expiresAt: null});
+    expect(entry.lastUsedAt).toBeGreaterThanOrEqual(before - 1000);
+  }
+  expect(store.forget(180 * 24 * 60 * 60 * 1000)).toBe(0);
   // Imported entries have no search terms until Service indexes them at startup.
   expect(store.search({agentId: a.agentId, all: true}, "冻结")).toEqual([]);
   expect(store.reindex()).toBe(2);
@@ -53,7 +59,7 @@ test("legacy USER/SOUL documents become persona entries of their Shadow; empty o
   const a = fixtureScope(db.db, "alice"), b = fixtureScope(db.db, "bob");
   db.db.run(sql`INSERT INTO agent_document_revisions (id, agent_id, shadow_id, kind, files_json, author_user_id, parent_revision, created_at)
     VALUES ('legacy-persona', ${a.agentId}, ${a.shadowId}, 'persona', ${JSON.stringify({"USER.md": "只要结论", "SOUL.md": "你叫小黑"})}, 'alice', NULL, 2000),
-           ('legacy-empty', ${b.agentId}, ${b.shadowId}, 'persona', ${JSON.stringify({"USER.md": "", "SOUL.md": " "})}, 'bob', NULL, 2000)`);
+           ('legacy-empty', ${b.agentId}, ${b.shadowId}, 'persona', ${JSON.stringify({"USER.md": "\n", "SOUL.md": " \r\n "})}, 'bob', NULL, 2000)`);
   db.db.run(sql`UPDATE agent_shadows SET config_revision = 'legacy-persona' WHERE id = ${a.shadowId}`);
   db.db.run(sql`UPDATE agent_shadows SET config_revision = 'legacy-empty' WHERE id = ${b.shadowId}`);
   const store = new AgentMemoryStore(db.db);

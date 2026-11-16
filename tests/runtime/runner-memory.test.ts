@@ -117,16 +117,14 @@ test("invalid input is rejected before it reaches storage", async () => {
   expect((await f.call("GET", "/search?q=")).status).toBe(400);
 });
 
-test("list pages through the whole index with nextOffset", async () => {
+test("list is capped and reports how many entries were left out", async () => {
   const f = fixture();
   for (let i = 0; i < 5; i++) expect((await f.call("POST", "", { ...project, title: `条目 ${i}`, force: true })).status).toBe(201);
   const first = (await f.call("GET", "?limit=2")).body;
-  expect(first).toMatchObject({ total: 5, omitted: 3, nextOffset: 2 });
-  const second = (await f.call("GET", "?limit=2&offset=2")).body;
-  const last = (await f.call("GET", "?limit=2&offset=4")).body;
-  expect(last).toMatchObject({ total: 5, omitted: 0, nextOffset: null });
-  expect(new Set([...first.memories, ...second.memories, ...last.memories].map((m: any) => m.id)).size).toBe(5);
-  expect((await f.call("GET", "?offset=-1")).status).toBe(400);
+  expect(first.omitted).toBe(3);
+  expect(first.memories).toHaveLength(2);
+  expect((await f.call("GET", "")).body).toMatchObject({ omitted: 0 });
+  expect((await f.call("GET", "?limit=0")).status).toBe(400);
 });
 
 test("a repeated fact is rejected with the existing candidates, and --force or an update gets through", async () => {

@@ -63,6 +63,9 @@ const TYPE_PRIORITY: Record<MemoryType, number> = {persona: -1, person: 0, feedb
 /** Share of title and description terms two entries have in common above which they count as the same fact. */
 const DUPLICATE_SIMILARITY = 0.6;
 const PERSON_STANDING_LIMIT = 20;
+const MATCH_TERM_LIMIT = 256;
+/** Statuses whose entries keep search terms: active ones and forgotten ones, which an archive search finds. */
+const SEARCHABLE: MemoryStatus[] = ["active", "archived"];
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 const CJK = "\\u3040-\\u30ff\\u3400-\\u9fff";
@@ -90,16 +93,15 @@ export class AgentMemoryStore {
     this.limits = {core: config.memory.core_limit, shadowCore: config.memory.shadow_core_limit, persona: config.memory.persona_limit, ...limits};
   }
 
-  /** One page of visible active entries in index order; `omitted` counts the entries after this page. */
-  index(viewer: MemoryViewer, options: Optional<{type: MemoryType; limit: number; offset: number}> = {}): {entries: MemoryRecord[]; omitted: number; total: number} {
+  /** Visible active entries in index order; `omitted` counts those the limit left out. */
+  index(viewer: MemoryViewer, options: Optional<{type: MemoryType; limit: number}> = {}): {entries: MemoryRecord[]; omitted: number} {
     const rows = this.db.select().from(agentMemories).where(and(
       this.visible(viewer),
       options.type ? eq(agentMemories.type, options.type) : undefined,
     )).orderBy(desc(agentMemories.updatedAt), agentMemories.id).all()
       .sort((a, b) => TYPE_PRIORITY[a.type] - TYPE_PRIORITY[b.type]);
-    const offset = options.offset ?? 0;
-    const entries = rows.slice(offset, offset + (options.limit ?? rows.length));
-    return {entries, omitted: Math.max(0, rows.length - offset - entries.length), total: rows.length};
+    const entries = rows.slice(0, options.limit ?? rows.length);
+    return {entries, omitted: rows.length - entries.length};
   }
 
   /** What every conversation is told at its start: the Shadow's persona, core entries, then entries about the people present. */
@@ -196,6 +198,14 @@ export class AgentMemoryStore {
     return {...row, lastUsedAt: now};
   }
 
+  /**
+   * Being recalled into a conversation by what was said there is use, like a
+   * read: it restarts the forgetting clock. Standing injection is not.
+   */
+  markUsed(ids: readonly string[], now = Date.now()): void {
+    if (ids.length) this.db.update(agentMemories).set({lastUsedAt: now}).where(and(inArray(agentMemories.id, [...ids]), eq(agentMemories.status, "active"))).run();
+  }
+
   /** With `duplicatesFor`, an entry that repeats one this viewer can see is rejected unless `force` is set. */
   add(writer: MemoryWriter, input: MemoryInput, options: {duplicatesFor?: MemoryViewer; force?: boolean | undefined} = {}): MemoryRecord {
     const fields = this.validate(writer, {
@@ -226,6 +236,8 @@ export class AgentMemoryStore {
 
   update(writer: MemoryWriter, viewer: MemoryViewer, id: string, input: Optional<MemoryFields> & {expectedRevision: number}): MemoryRecord {
     return this.change(writer, viewer, id, input.expectedRevision, current => {
+      // A forgotten entry is brought back with restore first; editing it in place would leave the edit archived.
+      if (current.status !== "active") throw new AgentError("memory_not_active", 409);
       // A persona entry is a different kind of thing; it is never made from, or turned into, an ordinary entry.
       if (input.type !== undefined && input.type !== current.type && (input.type === "persona" || current.type === "persona")) throw new AgentError("invalid_memory_type", 400);
       return this.validate(writer, {
@@ -241,15 +253,28 @@ export class AgentMemoryStore {
     });
   }
 
-  /** Soft delete; `supersededBy` records the entry that replaced this one. */
+  /** Soft delete; `supersededBy` records the entry that replaced this one, when a merge retired it. */
   remove(writer: MemoryWriter, viewer: MemoryViewer, id: string, expectedRevision: number, supersededBy?: string): MemoryRecord {
+    if (supersededBy === id) throw new AgentError("invalid_memory_superseded_by", 400);
     if (supersededBy !== undefined && this.get(viewer, supersededBy).status !== "active") throw new AgentError("memory_not_found", 404);
-    return this.change(writer, viewer, id, expectedRevision, () => supersededBy === undefined
-      ? {status: "deleted" as const} : {status: "superseded" as const, supersededBy});
+    return this.change(writer, viewer, id, expectedRevision, () => ({status: "deleted" as const, supersededBy: supersededBy ?? null}));
+  }
+
+  /**
+   * A trusted writer vouches for an untrusted entry as it stands, which makes
+   * it an ordinary shared entry. Consolidation cannot.
+   */
+  confirm(writer: MemoryWriter, viewer: MemoryViewer, id: string, expectedRevision: number): MemoryRecord {
+    if (!writer.trusted || writer.kind === "consolidation") throw new AgentError("memory_write_forbidden", 403);
+    return this.change(writer, viewer, id, expectedRevision, current => {
+      if (current.status !== "active") throw new AgentError("memory_not_active", 409);
+      if (current.trusted) throw new AgentError("memory_already_trusted", 409);
+      return {};
+    }, false, true);
   }
 
   /** Brings a forgotten entry back; an expiry that has passed is dropped so it is not forgotten again at once. */
-  unarchive(writer: MemoryWriter, viewer: MemoryViewer, id: string, expectedRevision: number): MemoryRecord {
+  restore(writer: MemoryWriter, viewer: MemoryViewer, id: string, expectedRevision: number): MemoryRecord {
     return this.change(writer, viewer, id, expectedRevision, current => {
       if (current.status !== "archived") throw new AgentError("memory_not_archived", 409);
       return {status: "active" as const, expiresAt: current.expiresAt !== null && current.expiresAt <= Date.now() ? null : current.expiresAt};
@@ -276,22 +301,22 @@ export class AgentMemoryStore {
     });
   }
 
-  /** Indexes entries that have no search terms yet, such as those imported by the migration. */
+  /** Indexes searchable entries that have no search terms yet, such as those imported by the migration. */
   reindex(): number {
     const missing = this.db.select().from(agentMemories)
-      .where(sql`${agentMemories.id} NOT IN (SELECT memory_id FROM agent_memory_terms)`).all();
+      .where(and(inArray(agentMemories.status, SEARCHABLE), sql`${agentMemories.id} NOT IN (SELECT memory_id FROM agent_memory_terms)`)).all();
     for (const row of missing) indexTerms(this.db, row);
     return missing.length;
   }
 
-  /** Owner view: every entry of the Agent, including superseded, deleted and archived ones. */
+  /** Owner view: every entry of the Agent, including deleted and archived ones. */
   listAll(agentId: string): MemoryRecord[] {
     return this.db.select().from(agentMemories).where(eq(agentMemories.agentId, agentId))
       .orderBy(desc(agentMemories.updatedAt), agentMemories.id).all();
   }
 
   /** Owner view, one filtered page at a time; `query` is a substring of title, description or body. */
-  page(agentId: string, options: Optional<{status: MemoryStatus; type: MemoryType; originKind: MemoryOriginKind; originShadowId: string; core: boolean;
+  page(agentId: string, options: Optional<{status: MemoryStatus; type: MemoryType; originKind: MemoryOriginKind; originShadowId: string; core: boolean; trusted: boolean;
     query: string; sort: "updatedAt" | "createdAt"; limit: number; offset: number}> = {}): {entries: MemoryRecord[]; total: number} {
     const pattern = options.query?.trim() ? `%${options.query.trim().replace(/[\\%_]/g, "\\$&")}%` : undefined;
     const where = and(
@@ -301,6 +326,7 @@ export class AgentMemoryStore {
       options.originKind ? eq(agentMemories.originKind, options.originKind) : undefined,
       options.originShadowId ? eq(agentMemories.originShadowId, options.originShadowId) : undefined,
       options.core === undefined ? undefined : eq(agentMemories.core, options.core),
+      options.trusted === undefined ? undefined : eq(agentMemories.trusted, options.trusted),
       pattern ? or(...[agentMemories.title, agentMemories.description, agentMemories.body].map(column => sql`${like(column, pattern)} ESCAPE '\\'`)) : undefined,
     );
     const total = this.db.select({n: sql<number>`count(*)`}).from(agentMemories).where(where).get()!.n;
@@ -317,38 +343,51 @@ export class AgentMemoryStore {
   }
 
   /** Writes a past state as a new revision; history is never rewritten. */
-  restore(writer: MemoryWriter, id: string, revision: number, expectedRevision: number): MemoryRecord {
+  revert(writer: MemoryWriter, id: string, revision: number, expectedRevision: number): MemoryRecord {
     this.owned(writer.agentId, id);
     const past = this.db.select().from(agentMemoryRevisions)
       .where(and(eq(agentMemoryRevisions.memoryId, id), eq(agentMemoryRevisions.revision, revision))).get();
     if (!past) throw new AgentError("memory_revision_not_found", 404);
     const snapshot = past.snapshot;
+    // Like restore, an active state whose expiry has passed would be forgotten again within a minute.
+    const expiresAt = snapshot.status === "active" && snapshot.expiresAt !== null && snapshot.expiresAt <= Date.now() ? null : snapshot.expiresAt;
     return this.change(writer, {agentId: writer.agentId, all: true}, id, expectedRevision, current => ({
       ...this.validate(writer, {
         type: snapshot.type, title: snapshot.title, description: snapshot.description, body: snapshot.body,
-        subjectUserId: snapshot.subjectUserId, visibility: snapshot.visibility, core: snapshot.core, expiresAt: snapshot.expiresAt,
+        subjectUserId: snapshot.subjectUserId, visibility: snapshot.visibility, core: snapshot.core, expiresAt,
       }, current.originShadowId),
       status: snapshot.status, supersededBy: snapshot.supersededBy,
     }), true);
   }
 
   private change(writer: MemoryWriter, viewer: MemoryViewer, id: string, expectedRevision: number,
-    next: (current: MemoryRecord) => Partial<MemoryRecord>, anyStatus = false): MemoryRecord {
+    next: (current: MemoryRecord) => Partial<MemoryRecord>, anyStatus = false, confirms = false): MemoryRecord {
     return this.db.transaction(tx => {
       const store = new AgentMemoryStore(tx, this.limits);
       const current = anyStatus ? store.owned(writer.agentId, id) : store.get(viewer, id);
       if (current.revision !== expectedRevision) throw new MemoryConflictError(current.revision);
       if ((current.trusted && !writer.trusted) || (current.type === "persona" && !writer.owner)) throw new AgentError("memory_protected", 403);
+      // An untrusted writer changes only what they wrote themselves; otherwise one member could rewrite or retire another's facts under the original attribution.
+      if (!writer.trusted && (current.originUserId === null || current.originUserId !== writer.userId)) throw new AgentError("memory_protected", 403);
       const now = Date.now();
-      const row: MemoryRecord = {...current, ...next(current), trusted: writer.trusted, updatedContextId: writer.contextId ?? null,
+      const row: MemoryRecord = {...current, ...next(current), updatedContextId: writer.contextId ?? null,
         revision: current.revision + 1, changeSeq: store.latestSeq() + 1, updatedAt: now};
+      // An untrusted entry becomes trusted only when a trusted writer vouches for it: by rewriting what it says, by
+      // making it a core rule, or explicitly. Maintenance never does: consolidation setting an expiry, or a restore
+      // from the archive, must not hand a member's claim to every conversation. (Untrusted writers cannot touch
+      // trusted entries, so trust is never lost here.)
+      const rewritten = row.type !== current.type || row.title !== current.title || row.description !== current.description
+        || row.body !== current.body || row.subjectUserId !== current.subjectUserId;
+      row.trusted = current.trusted || (writer.trusted && writer.kind !== "consolidation" && (confirms || rewritten || (row.core && !current.core)));
       // A change is a use: whatever is active after it starts a fresh forgetting clock.
       if (row.status === "active") row.lastUsedAt = now;
       // An entry needs room when it becomes an active core entry or moves between the shared and a Shadow's own allowance.
       if (row.core && row.status === "active" && !(current.core && current.status === "active" && corePool(current) === corePool(row))) store.requireCoreRoom(writer.agentId, corePool(row));
       if (row.type === "persona" && row.status === "active" && current.status !== "active") store.requirePersonaRoom(writer.agentId, row.originShadowId!);
       tx.update(agentMemories).set(row).where(eq(agentMemories.id, id)).run();
-      if (row.title !== current.title || row.description !== current.description || row.body !== current.body) indexTerms(tx, row);
+      // Deleted entries are never searched; their terms come back if a revision restores them.
+      if (!SEARCHABLE.includes(row.status)) deleteTerms(tx, row.id);
+      else if (!SEARCHABLE.includes(current.status) || row.title !== current.title || row.description !== current.description || row.body !== current.body) indexTerms(tx, row);
       record(tx, row, writer.kind, writer.userId, writer.shadowId, now);
       return row;
     });
@@ -356,7 +395,8 @@ export class AgentMemoryStore {
 
   /** Entries matching any term of a text, best first: term rarity and field weight, with a mild preference for recent entries. */
   private match(viewer: MemoryViewer, text: string, columns: string, statuses: readonly MemoryStatus[], filter: SQL | undefined): MemoryRecord[] {
-    const terms = [...new Set(memoryTerms(text))].slice(0, 64);
+    // Chinese text yields about one term per character, so a low cap would drop the end of a long message.
+    const terms = [...new Set(memoryTerms(text))].slice(0, MATCH_TERM_LIMIT);
     if (!terms.length) return [];
     const expression = `{${columns}}: (${terms.map(term => `"${term}"`).join(" OR ")})`;
     const now = Date.now();
@@ -403,6 +443,9 @@ export class AgentMemoryStore {
       or(eq(agentMemories.visibility, "agent"), eq(agentMemories.originShadowId, viewer.shadowId)),
       or(sql`${agentMemories.type} <> 'person'`,
         viewer.participants.length ? inArray(agentMemories.subjectUserId, [...viewer.participants]) : sql`0`),
+      // What an untrusted writer said reaches only conversations its author takes part in, so it cannot steer anyone else's.
+      or(eq(agentMemories.trusted, true),
+        viewer.participants.length ? inArray(agentMemories.originUserId, [...viewer.participants]) : sql`0`),
     )!;
   }
 
@@ -436,6 +479,10 @@ function indexTerms(tx: Pick<DrizzleDB, "run">, row: Pick<MemoryRecord, "id" | "
   const terms = (text: string) => memoryTerms(text).join(" ");
   tx.run(sql`DELETE FROM agent_memory_terms WHERE agent_memory_terms MATCH ${`memory_id:"${row.id}"`}`);
   tx.run(sql`INSERT INTO agent_memory_terms (memory_id, title, description, body) VALUES (${row.id}, ${terms(row.title)}, ${terms(row.description)}, ${terms(row.body)})`);
+}
+
+function deleteTerms(tx: Pick<DrizzleDB, "run">, id: string): void {
+  tx.run(sql`DELETE FROM agent_memory_terms WHERE agent_memory_terms MATCH ${`memory_id:"${id}"`}`);
 }
 
 function record(tx: Pick<DrizzleDB, "insert">, row: MemoryRecord, kind: MemoryChangeKind, userId: string | null, shadowId: string | null, now: number): void {

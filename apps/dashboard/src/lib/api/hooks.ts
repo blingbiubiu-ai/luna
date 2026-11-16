@@ -1579,7 +1579,7 @@ export function useSkill(slug: string | null) {
 export type DashboardMemoryType = "persona" | "person" | "feedback" | "project" | "procedure" | "reference";
 export type DashboardMemoryOriginKind = "inline" | "reflection" | "consolidation" | "owner" | "migration";
 export type DashboardMemoryChangeKind = DashboardMemoryOriginKind | "forgetting";
-export type DashboardMemoryStatus = "active" | "superseded" | "deleted" | "archived";
+export type DashboardMemoryStatus = "active" | "deleted" | "archived";
 
 export interface DashboardMemoryFields {
   type: DashboardMemoryType;
@@ -1627,6 +1627,8 @@ export interface DashboardMemoryFilter {
   originShadowId: string;
   status: string;
   core: string;
+  /** "false" lists entries waiting for the owner's confirmation. */
+  trusted: string;
   sort: "updatedAt" | "createdAt";
   limit: number;
   offset: number;
@@ -1658,16 +1660,23 @@ export function useAgentMemories(agentId: string, filter: DashboardMemoryFilter)
     mutationFn: (input: { id: string; expectedRevision: number }) => send(`/${encodeURIComponent(input.id)}?expectedRevision=${input.expectedRevision}`, "DELETE"),
     onSettled: refresh,
   });
-  const restore = useMutation({
+  /** Goes back to an earlier revision. */
+  const revert = useMutation({
     mutationFn: (input: { id: string; revision: number; expectedRevision: number }) =>
-      send(`/${encodeURIComponent(input.id)}/restore`, "POST", { revision: input.revision, expectedRevision: input.expectedRevision }),
+      send(`/${encodeURIComponent(input.id)}/revert`, "POST", { revision: input.revision, expectedRevision: input.expectedRevision }),
     onSettled: refresh,
   });
-  const unarchive = useMutation({
-    mutationFn: (input: { id: string; expectedRevision: number }) => send(`/${encodeURIComponent(input.id)}/unarchive`, "POST", { expectedRevision: input.expectedRevision }),
+  /** Brings a forgotten entry back. */
+  const restore = useMutation({
+    mutationFn: (input: { id: string; expectedRevision: number }) => send(`/${encodeURIComponent(input.id)}/restore`, "POST", { expectedRevision: input.expectedRevision }),
     onSettled: refresh,
   });
-  return { list, save, remove, restore, unarchive };
+  /** Vouches for an untrusted entry, which shares it with every conversation. */
+  const confirm = useMutation({
+    mutationFn: (input: { id: string; expectedRevision: number }) => send(`/${encodeURIComponent(input.id)}/confirm`, "POST", { expectedRevision: input.expectedRevision }),
+    onSettled: refresh,
+  });
+  return { list, save, remove, revert, restore, confirm };
 }
 
 export function useAgentMemoryHistory(agentId: string, memoryId: string | undefined, revision: number | undefined) {

@@ -59,6 +59,12 @@ export class SessionRunnerAttemptStore {
     return this.requireById(row.id);
   }
 
+  /** Records the prompt finally sent, when parts of it are only known after the attempt started. */
+  updateInputPrompt(id: string, inputPrompt: string): void {
+    this._db.update(sessionRunnerAttempts).set({ inputPrompt, updatedAt: Date.now() })
+      .where(eq(sessionRunnerAttempts.id, id)).run();
+  }
+
   markParsed(
     id: string,
     input: {

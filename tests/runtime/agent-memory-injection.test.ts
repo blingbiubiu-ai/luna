@@ -11,6 +11,7 @@ import {memoryInjection} from "@/agents/agent-memory-injection";
 import {RunnerContextStore} from "@/runners/runner-context-store";
 import {AuthorizationRuleStore} from "@/server/policy/authorization-rule-store";
 import {fixtureNamedSession} from "../helpers/platform-fixtures";
+import {MessageStore} from "@/sessions/message-store";
 
 let home: string, db: DataConnection<typeof schema>, store: AgentMemoryStore, contexts: RunnerContextStore;
 let scope: ReturnType<typeof fixtureNamedSession>, contextId: string, sibling: string;
@@ -133,4 +134,31 @@ test("a conversation is told who this Shadow is in full, and later only when the
   expect(delta).toContain(`This part of who you are changed:\n### 身份 [${soul.id}]\n你叫大黑。`);
   store.remove(ownerHere, all, soul.id, 2);
   expect(turn("继续")).toContain(`- removed [${soul.id}] 身份`);
+});
+
+test("a conversation is told about people who join it later, and that an entry it was shown is no longer visible", () => {
+  const shared = store.add(elsewhere(), weekly);
+  turn("帮我按周报格式写周报");
+  const bob = store.add(elsewhere(), {type: "person", title: "Bob", description: "喜欢先看结论", body: "b", subjectUserId: "bob"});
+  expect(turn("继续")).toBeUndefined();
+  // bob speaks in the session: what was known about him before is told now.
+  db.db.insert(schema.users).values({id: "bob", kind: "human", displayName: "Bob", status: "active", createdAt: "now", updatedAt: "now"}).run();
+  new MessageStore(db.db).appendOnce({sessionId: "session", channelMessageKey: "bob-1", role: "user", senderUserId: "bob",
+    content: [{type: "text", text: "我也在"}], channel: {type: "dashboard", id: "dashboard"}});
+  expect(turn("继续")).toContain(`[${bob.id}] (person) Bob`);
+  expect(turn("继续")).toBeUndefined();
+  // Made private to another Shadow: no longer visible here, so the conversation stops relying on it.
+  store.update(elsewhere(), all, shared.id, {expectedRevision: 1, visibility: "shadow"});
+  expect(turn("继续")).toContain(`- removed [${shared.id}] 周报格式`);
+});
+
+test("an entry recalled into a committed turn counts as used; standing entries do not", () => {
+  const core = store.add(elsewhere(), rule), entry = store.add(elsewhere(), weekly);
+  db.db.update(schema.agentMemories).set({lastUsedAt: 1}).run();
+  inject("帮我按周报格式写周报");
+  expect(store.listAll(scope.agentId).map(row => row.lastUsedAt)).toEqual([1, 1]);
+  turn("帮我按周报格式写周报");
+  const used = Object.fromEntries(store.listAll(scope.agentId).map(row => [row.id, row.lastUsedAt]));
+  expect(used[entry.id]).toBeGreaterThan(1);
+  expect(used[core.id]).toBe(1);
 });

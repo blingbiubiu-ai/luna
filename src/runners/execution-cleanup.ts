@@ -15,6 +15,9 @@ export function deleteOwnerExecution(db: Omit<DrizzleDB, "$client">, kind: "sess
   db.run(sql`UPDATE ${table} SET pending_execution=${JSON.stringify(pending)} WHERE ${owner}=${id}`);
   db.run(sql`DELETE FROM runner_jobs WHERE invocation_id IN (${invocations})`);
   db.run(sql`DELETE FROM runner_context_origins WHERE context_id IN (${contexts})`);
+  // What these contexts' provider sessions were told about memory ends with them.
+  db.run(sql`DELETE FROM memory_injected_entries WHERE runner_context_id IN (${contexts})`);
+  db.run(sql`DELETE FROM memory_injection_cursors WHERE runner_context_id IN (${contexts})`);
   db.run(sql`DELETE FROM invocation_resource_snapshots WHERE invocation_id IN (${invocations})`);
   db.run(sql`DELETE FROM runner_invocations WHERE invocation_id IN (${invocations})`);
 }

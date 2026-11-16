@@ -47,7 +47,7 @@ test("the owner sees every entry with its origin, corrects a poisoned one, and r
   const history = (await call("GET", `/${poisoned.id}/history`)).body.revisions;
   expect(history.map((row: any) => [row.revision, row.changeKind, row.snapshot.body, row.snapshot.status])).toEqual([
     [3, "owner", "不合并功能分支", "deleted"], [2, "owner", "不合并功能分支", "active"], [1, "reflection", "随时可以合并", "active"]]);
-  const restored = await call("POST", `/${poisoned.id}/restore`, {revision: 2, expectedRevision: 3});
+  const restored = await call("POST", `/${poisoned.id}/revert`, {revision: 2, expectedRevision: 3});
   expect(restored.body.memory).toMatchObject({status: "active", body: "不合并功能分支", revision: 4});
 
   const added = await call("POST", "", {...note, type: "feedback", title: "周报格式"});
@@ -64,7 +64,7 @@ test("only the Agent owner can use the memory surface, and input is validated", 
   const alice = dashboard("alice");
   expect((await alice("PUT", `/${entry.id}`, {body: "missing revision"})).status).toBe(400);
   expect((await alice("POST", "", {...note, type: "secret"})).status).toBe(400);
-  expect((await alice("POST", `/${entry.id}/restore`, {revision: 9, expectedRevision: 1})).status).toBe(404);
+  expect((await alice("POST", `/${entry.id}/revert`, {revision: 9, expectedRevision: 1})).status).toBe(404);
   const foreign = new AgentMemoryStore(db.db).add({agentId: b.agentId, kind: "owner", trusted: true, userId: "bob", shadowId: null}, note as any);
   expect((await alice("GET", `/${foreign.id}/history`)).status).toBe(404);
   expect((await alice("PUT", `/${foreign.id}`, {expectedRevision: 1, body: "x"})).status).toBe(404);
@@ -85,9 +85,9 @@ test("the owner list is filtered and paged on the server and reports core usage"
   expect((await call("PUT", `/${rule.id}`, {expectedRevision: 1, core: false, expiresAt: Date.now() - 1})).body.memory).toMatchObject({core: false});
   expect(store.forget(0)).toBe(1);
   expect((await call("GET", "?status=archived")).body.memories).toMatchObject([{id: rule.id, status: "archived"}]);
-  expect((await call("POST", `/${rule.id}/unarchive`, {expectedRevision: 3})).body.memory).toMatchObject({status: "active", expiresAt: null, revision: 4});
-  expect((await call("POST", `/${rule.id}/unarchive`, {expectedRevision: 4})).status).toBe(409);
-  expect((await dashboard("bob")("POST", `/${rule.id}/unarchive`, {expectedRevision: 4})).status).toBe(403);
+  expect((await call("POST", `/${rule.id}/restore`, {expectedRevision: 3})).body.memory).toMatchObject({status: "active", expiresAt: null, revision: 4});
+  expect((await call("POST", `/${rule.id}/restore`, {expectedRevision: 4})).status).toBe(409);
+  expect((await dashboard("bob")("POST", `/${rule.id}/restore`, {expectedRevision: 4})).status).toBe(403);
   expect((await call("GET", `/${rule.id}/history`)).body.revisions.map((row: any) => row.changeKind)).toEqual(["owner", "forgetting", "owner", "owner"]);
 });
 
@@ -108,4 +108,21 @@ test("the owner writes persona entries for a chosen Shadow of the Agent; the per
     (c as any).set("lunaRequestAuthKind", "dashboard-cookie"); await next();
   }).route("/agents", createPlatformAgentRoutes(db.db));
   expect((await app.request(`/agents/${a.agentId}/shadows/${a.shadowId}/config`)).status).toBe(404);
+});
+
+test("the owner lists entries waiting for confirmation and confirms one, which shares it", async () => {
+  const call = dashboard("alice"), store = new AgentMemoryStore(db.db);
+  db.db.insert(schema.users).values({id: "lisi", kind: "human", displayName: "李四", status: "active", createdAt: "now", updatedAt: "now"}).run();
+  const claim = store.add({agentId: a.agentId, kind: "inline", trusted: false, userId: "lisi", shadowId: a.shadowId}, note as any);
+  await call("POST", "", {...note, title: "所有者写的"});
+  expect((await call("GET", "?trusted=false")).body.memories.map((m: any) => m.id)).toEqual([claim.id]);
+  const outsider = {agentId: a.agentId, shadowId: a.shadowId, participants: ["zhangsan"]};
+  expect(store.index(outsider).entries.map(row => row.id)).not.toContain(claim.id);
+  expect((await call("POST", `/${claim.id}/confirm`, {expectedRevision: 9})).status).toBe(409);
+  expect((await call("POST", `/${claim.id}/confirm`, {expectedRevision: 1})).body.memory).toMatchObject({trusted: true, revision: 2, originUserName: "李四"});
+  expect(store.index(outsider).entries.map(row => row.id)).toContain(claim.id);
+  expect(await call("POST", `/${claim.id}/confirm`, {expectedRevision: 2})).toMatchObject({status: 409, body: {code: "memory_already_trusted"}});
+  expect((await call("GET", "?trusted=false")).body.total).toBe(0);
+  expect((await dashboard("bob")("POST", `/${claim.id}/confirm`, {expectedRevision: 2})).status).toBe(403);
+  expect((await call("GET", `/${claim.id}/history`)).body.revisions.map((row: any) => [row.changeKind, row.snapshot.trusted])).toEqual([["owner", true], ["inline", false]]);
 });

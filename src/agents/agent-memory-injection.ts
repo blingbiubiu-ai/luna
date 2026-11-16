@@ -38,9 +38,14 @@ export function memoryInjection(db: DrizzleDB, invocation: MemoryInvocation, mes
   const shown: MemoryRecord[] = [];
   const sections: string[] = [];
   if (resumed) {
-    const {changed, removed} = store.changes(viewer, cursor.injectedThrough, runnerContextId);
-    const updated = changed.filter(row => row.core || row.type === "person" || row.type === "persona" || seen.has(row.id));
-    const gone = removed.filter(row => seen.has(row.id));
+    const {changed} = store.changes(viewer, cursor.injectedThrough, runnerContextId);
+    const visibleIds = new Set(changed.map(row => row.id));
+    // People who joined after the conversation started: what is known about them was written earlier, so no change reports it.
+    const newcomers = store.standing(viewer).filter(row => row.type === "person" && !seen.has(row.id) && !visibleIds.has(row.id));
+    const updated = [...changed.filter(row => row.core || row.type === "person" || row.type === "persona" || seen.has(row.id)), ...newcomers];
+    // An entry it was shown is gone when it was removed or forgotten, or when it is no longer visible here (e.g. made Shadow-private).
+    const everywhere = store.changes({agentId: invocation.agentId, all: true}, cursor.injectedThrough, runnerContextId);
+    const gone = [...everywhere.changed, ...everywhere.removed].filter(row => seen.has(row.id) && !visibleIds.has(row.id));
     if (updated.length || gone.length) sections.push([
       "## Agent memory updates",
       "Long-term memory you were shown changed since your last turn in this conversation. These lines replace what you were told before.",
@@ -79,6 +84,7 @@ export function memoryInjection(db: DrizzleDB, invocation: MemoryInvocation, mes
       // Without a provider session id nothing can be resumed, so the next turn starts over.
       if (current === null || !resumed) db.delete(memoryInjectedEntries).where(mine).run();
       if (current === null) { db.delete(memoryInjectionCursors).where(eq(memoryInjectionCursors.runnerContextId, runnerContextId)).run(); return; }
+      store.markUsed(recalled.map(row => row.id));
       if (shown.length) db.insert(memoryInjectedEntries).values(shown.map(row => ({runnerContextId, memoryId: row.id}))).onConflictDoNothing().run();
       db.insert(memoryInjectionCursors).values({runnerContextId, runnerSessionId: current, injectedThrough: through})
         .onConflictDoUpdate({target: memoryInjectionCursors.runnerContextId, set: {runnerSessionId: current, injectedThrough: through}}).run();

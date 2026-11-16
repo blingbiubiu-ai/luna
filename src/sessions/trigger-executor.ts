@@ -6,6 +6,8 @@ import type { DrizzleDB } from "@/data";
 import type { MainRunner } from "@/main-runner/main-runner";
 import { MainRunnerContextBuilder } from "@/main-runner/context-builder";
 import { RunnerContextStore } from "@/runners/runner-context-store";
+import { InvocationStore } from "@/runners/invocation-store";
+import { prepareMemoryConsolidationRun } from "@/agents/agent-memory-maintenance";
 import type { SessionCommand } from "@/messaging/session-command-service";
 export function createSessionTriggerExecutor(db: DrizzleDB, main: () => MainRunner, runnerType: (sessionId: string) => string) {
     return async (command: SessionCommand, signal: AbortSignal) => {
@@ -21,6 +23,7 @@ export function createSessionTriggerExecutor(db: DrizzleDB, main: () => MainRunn
         db.insert(sessionTurns).values({ id: command.id, session_id: command.sessionId, turn_kind: "execution", status: "running", runner_invoked: true, reason: "session_trigger", started_at: now, created_at: now, updated_at: now }).onConflictDoUpdate({ target: sessionTurns.id, set: { status: "running", error: null, completed_at: null, updated_at: now } }).run();
         let detached = false;
         try {
+            prepareMemoryConsolidationRun(db, command, Boolean(new InvocationStore(db).findActive({ runnerKind: "main", originId: command.id, sessionId: command.sessionId })));
             const runnerContext = new RunnerContextStore(db).resolveForSession(command.sessionId, runnerType(command.sessionId));
             await main().run({ signal, turnId: command.id, runnerContext, input: { type: "session_trigger", triggerId: command.id,
                     instruction: String(command.payload.content), requesterUserId: command.actorUserId, context,

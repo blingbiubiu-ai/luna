@@ -1,5 +1,5 @@
 import {sql} from "drizzle-orm";
-import {check, index, integer, primaryKey, sqliteTable, text} from "drizzle-orm/sqlite-core";
+import {check, index, integer, primaryKey, sqliteTable, text, uniqueIndex} from "drizzle-orm/sqlite-core";
 import {lunaAgents} from "./luna-agents";
 
 /** `persona` is one Shadow's identity and principles: private to it, always told in full, changed only for the Agent owner. */
@@ -8,7 +8,7 @@ export const MEMORY_ORIGIN_KINDS = ["inline", "reflection", "consolidation", "ow
 export type MemoryType = typeof MEMORY_TYPES[number];
 /** A change is made by one of the writers above, or by Service forgetting an entry. */
 export const MEMORY_CHANGE_KINDS = [...MEMORY_ORIGIN_KINDS, "forgetting"] as const;
-export const MEMORY_STATUSES = ["active", "superseded", "deleted", "archived"] as const;
+export const MEMORY_STATUSES = ["active", "deleted", "archived"] as const;
 export type MemoryOriginKind = typeof MEMORY_ORIGIN_KINDS[number];
 export type MemoryChangeKind = typeof MEMORY_CHANGE_KINDS[number];
 export type MemoryStatus = typeof MEMORY_STATUSES[number];
@@ -47,8 +47,10 @@ export const agentMemories = sqliteTable("agent_memories", {
   updatedAt: integer("updated_at").notNull(),
 }, t => [
   index("agent_memories_agent_status_idx").on(t.agentId, t.status, t.updatedAt),
+  uniqueIndex("agent_memories_change_seq_idx").on(t.changeSeq),
   check("agent_memories_person_subject", sql`(${t.type}='person') = (${t.subjectUserId} IS NOT NULL)`),
   check("agent_memories_shadow_origin", sql`${t.visibility}='agent' OR ${t.originShadowId} IS NOT NULL`),
+  check("agent_memories_core_type", sql`${t.core}=0 OR ${t.type} NOT IN ('person','persona')`),
   check("agent_memories_persona_private", sql`${t.type}<>'persona' OR ${t.visibility}='shadow'`),
 ]);
 
@@ -101,6 +103,11 @@ export const memoryReflectionCheckpoints = sqliteTable("memory_reflection_checkp
 export const memoryConsolidations = sqliteTable("memory_consolidations", {
   agentId: text("agent_id").primaryKey().references(() => lunaAgents.id),
   sessionId: text("session_id").notNull(),
+  /** Last change handed to the latest run. */
   changeSeq: integer("change_seq").notNull(),
+  /** Where the latest run started; a run that did not complete is handed its changes again from here. */
+  coveredFrom: integer("covered_from").notNull().default(0),
+  /** Session command of the latest run. */
+  commandId: text("command_id"),
   ranAt: integer("ran_at").notNull(),
 });

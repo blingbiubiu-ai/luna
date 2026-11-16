@@ -51,9 +51,9 @@ export function createRunnerMemoryRoutes(options: {db?: DrizzleDB} = {}) {
       throw error;
     })
     .get("/memory", c => {
-      const query = z.object({type: type.optional(), limit: z.coerce.number().int().min(1).max(200).default(150), offset: z.coerce.number().int().min(0).default(0)}).parse(c.req.query());
-      const {entries, omitted, total} = new AgentMemoryStore(db()).index(access(c.get("lunaAccessTokenClaims")).viewer, query);
-      return c.json({memories: summaries(entries), omitted, total, nextOffset: omitted ? query.offset + entries.length : null});
+      const query = z.object({type: type.optional(), limit: z.coerce.number().int().min(1).max(200).default(150)}).parse(c.req.query());
+      const {entries, omitted} = new AgentMemoryStore(db()).index(access(c.get("lunaAccessTokenClaims")).viewer, query);
+      return c.json({memories: summaries(entries), omitted});
     })
     .get("/memory/search", c => {
       const query = z.object({q: z.string().max(200), type: type.optional(), subject: z.string().optional(), archived: z.enum(["true", "false"]).optional(),
@@ -79,7 +79,7 @@ export function createRunnerMemoryRoutes(options: {db?: DrizzleDB} = {}) {
       const {viewer, writer} = access(c.get("lunaAccessTokenClaims"));
       const author = writer();
       const input = z.object({expectedRevision: z.number().int().positive()}).strict().parse(await c.req.json().catch(() => null));
-      return c.json({memory: detail(new AgentMemoryStore(db()).unarchive(author, viewer, c.req.param("id"), input.expectedRevision))});
+      return c.json({memory: detail(new AgentMemoryStore(db()).restore(author, viewer, c.req.param("id"), input.expectedRevision))});
     })
     .delete("/memory/:id", c => {
       const {viewer, writer} = access(c.get("lunaAccessTokenClaims"));

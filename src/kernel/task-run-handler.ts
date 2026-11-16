@@ -462,9 +462,10 @@ async function _runAgentTask(input: {
   }
   // The artifact allowlist above is derived from the Task prompt alone; memory text must not widen it.
   const actor = new InvocationStore(input.db).require(invocationId).actorUserId;
+  // The newest input is what the Run is about; title and summary stand in only when there is none.
   const memory = memoryInjection(input.db, {agentId: runnerContext.agent_id, shadowId: runnerContext.shadow_id, actorUserId: actor,
     sessionId: taskRow?.primary_session_id ?? null, taskId: input.taskId, runnerContextId: runnerContext.id},
-    [taskRow?.title, taskRow?.summary, input.pendingText].filter(Boolean).join("\n"));
+    input.pendingText.trim() || [taskRow?.title, taskRow?.summary].filter(Boolean).join("\n"));
   const turnMessage: UserMessage = memory.text
     ? {...userMessage, content: [{type: "text", text: `${input.materializedPrompt}\n\n${memory.text}`}]} : userMessage;
   for await (const event of runner.stream(turnMessage, {

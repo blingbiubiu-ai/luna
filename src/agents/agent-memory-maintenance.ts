@@ -1,9 +1,9 @@
-import {and, eq, gt, isNull, sql} from "drizzle-orm";
+import {and, eq, sql} from "drizzle-orm";
 import type {DrizzleDB} from "@/data";
-import {lunaAgents, memoryConsolidations, memoryReflectionCheckpoints, messages, runnerContexts, sessionCommands, sessions, users} from "@/data/schema";
+import {lunaAgents, memoryConsolidations, memoryReflectionCheckpoints, runnerContexts, sessionCommands, sessions} from "@/data/schema";
 import {AgentMemoryStore, type MemoryRecord} from "./agent-memory-store";
 import {SessionStore} from "@/sessions/session-store";
-import type {SessionCommandService} from "@/messaging/session-command-service";
+import type {SessionCommand, SessionCommandService} from "@/messaging/session-command-service";
 import type {MemoryOriginKind} from "@/data/schema";
 
 const REFLECTION_ORIGIN = "memory-reflection:";
@@ -30,10 +30,31 @@ export function memoryOriginOfTrigger(db: DrizzleDB, triggerId: string): MemoryO
   return origin?.startsWith(REFLECTION_ORIGIN) ? "reflection" : origin?.startsWith(CONSOLIDATION_ORIGIN) ? "consolidation" : "inline";
 }
 
+/** Queued or running work in a session: inbound messages not yet handled, a running turn or a pending Service-queued turn. */
+function sessionBusy(db: DrizzleDB, sessionId: string): boolean {
+  return Boolean(db.get(sql`SELECT 1 WHERE
+    EXISTS (SELECT 1 FROM session_inbox WHERE session_id = ${sessionId} AND status IN ('pending', 'claimed', 'processing'))
+    OR EXISTS (SELECT 1 FROM session_turns WHERE session_id = ${sessionId} AND status = 'running')
+    OR EXISTS (SELECT 1 FROM session_commands WHERE session_id = ${sessionId} AND kind = 'session.invoke' AND status IN ('pending', 'running'))`));
+}
+
 /**
- * Queues one silent reflection turn for each Main session whose latest human
- * message is older than `idleMs` and has not been reflected on. The turn runs
- * in the session's own provider context, so the conversation is not re-read.
+ * Memory text is shown to a Runner inside a Service-queued instruction. A
+ * Service instruction's `artifact:` references are authorized as context and
+ * allowlisted for download, so memory text must never form one: an untrusted
+ * entry could otherwise hand its reader an Artifact or stop the turn from
+ * being queued at all.
+ */
+const inert = (text: string) => text.replace(/artifact:/g, "artifact\u2236");
+
+/**
+ * Queues one silent reflection turn for each Main session whose latest
+ * reflectable human message is older than `idleMs` and has not been reflected
+ * on. A message is reflectable only when a completed Main Runner turn took it
+ * in, as its input or as context; group chatter nobody addressed to the bot,
+ * history backfill and memory maintenance turns never start a reflection. The
+ * turn runs in the session's own provider context, so the conversation is not
+ * re-read. A session with queued or running work waits for the next pass.
  *
  * It runs as the Agent owner only when the owner is the only human who spoke;
  * otherwise as the latest other speaker, so what a member said never becomes a
@@ -41,24 +62,37 @@ export function memoryOriginOfTrigger(db: DrizzleDB, triggerId: string): MemoryO
  */
 export function scheduleMemoryReflections(db: DrizzleDB, commands: Pick<SessionCommandService, "accept">, idleMs: number, now = Date.now()): string[] {
   if (idleMs <= 0) return [];
-  const rows = db.select({sessionId: sessions.id, ownerUserId: lunaAgents.ownerUserId, messageId: messages.id, senderUserId: messages.senderUserId, createdAt: messages.createdAt})
-    .from(messages)
-    .innerJoin(sessions, eq(sessions.id, messages.ownerSessionId))
-    .innerJoin(lunaAgents, eq(lunaAgents.id, sessions.agent_id))
-    .innerJoin(users, eq(users.id, messages.senderUserId))
-    .leftJoin(memoryReflectionCheckpoints, eq(memoryReflectionCheckpoints.sessionId, sessions.id))
-    .where(and(
-      eq(sessions.status, "active"), eq(sessions.kind, "main"), eq(lunaAgents.status, "active"),
-      eq(messages.role, "user"), isNull(messages.deletedAt), eq(users.kind, "human"), eq(users.status, "active"),
-      gt(messages.createdAt, now - REFLECTION_LOOKBACK_MS),
-      sql`${messages.createdAt} > coalesce(${memoryReflectionCheckpoints.reflectedThrough}, 0)`,
-    )).orderBy(messages.createdAt).all();
+  const rows = db.all<{sessionId: string; ownerUserId: string; messageId: string; senderUserId: string; createdAt: number}>(sql`
+    SELECT m.id AS messageId, s.id AS sessionId, m.sender_user_id AS senderUserId, m.created_at AS createdAt, a.owner_user_id AS ownerUserId
+    FROM messages m
+    JOIN sessions s ON s.id = m.owner_session_id
+    JOIN luna_agents a ON a.id = s.agent_id
+    JOIN users u ON u.id = m.sender_user_id
+    LEFT JOIN memory_reflection_checkpoints c ON c.session_id = s.id
+    WHERE s.status = 'active' AND s.kind = 'main' AND a.status = 'active'
+      AND m.role = 'user' AND m.deleted_at IS NULL AND u.kind = 'human' AND u.status = 'active'
+      AND m.created_at > ${now - REFLECTION_LOOKBACK_MS} AND m.created_at > coalesce(c.reflected_through, 0)
+      AND (
+        EXISTS (SELECT 1 FROM session_timeline_entries te
+          JOIN session_turn_entries ste ON ste.entry_id = te.id
+          JOIN session_turns t ON t.id = ste.turn_id
+          WHERE te.message_id = m.id AND t.session_id = s.id AND t.turn_kind = 'execution' AND t.status = 'completed'
+            AND ste.role IN ('trigger', 'coalesced_input', 'context', 'launch_context'))
+        OR EXISTS (SELECT 1 FROM context_pack_items i
+          JOIN context_packs p ON p.id = i.context_pack_id
+          JOIN session_turns t ON t.id = p.created_for_invocation_id
+          LEFT JOIN session_commands sc ON sc.id = t.id
+          WHERE i.source_message_id = m.id AND p.owner_type = 'session' AND p.owner_id = s.id
+            AND t.session_id = s.id AND t.status = 'completed'
+            AND (sc.origin_id IS NULL OR (sc.origin_id NOT LIKE ${`${REFLECTION_ORIGIN}%`} AND sc.origin_id NOT LIKE ${`${CONSOLIDATION_ORIGIN}%`})))
+      )
+    ORDER BY m.created_at`);
   const bySession = new Map<string, typeof rows>();
   for (const row of rows) bySession.set(row.sessionId, [...bySession.get(row.sessionId) ?? [], row]);
   const queued: string[] = [];
   for (const [sessionId, unreflected] of bySession) {
     const latest = unreflected.at(-1)!;
-    if (now - latest.createdAt < idleMs) continue;
+    if (now - latest.createdAt < idleMs || sessionBusy(db, sessionId)) continue;
     const actor = unreflected.findLast(row => row.senderUserId !== latest.ownerUserId)?.senderUserId ?? latest.ownerUserId;
     try {
       const command = commands.accept({userId: actor, sourceSessionId: sessionId, originId: `${REFLECTION_ORIGIN}${latest.messageId}`},
@@ -88,7 +122,7 @@ const RELATED_LIMIT = 4;
 const day = (time: number) => new Date(time).toISOString().slice(0, 10);
 const describe = (row: MemoryRecord) => `[${row.id}] (${[row.type, row.trusted ? "trusted" : "untrusted", `origin ${row.originKind}`, `revision ${row.revision}`,
   `updated ${day(row.updatedAt)}`, ...(row.core ? ["core"] : []), ...(row.visibility === "shadow" ? ["Shadow-private"] : []),
-  ...(row.expiresAt ? [`expires ${day(row.expiresAt)}`] : [])].join(", ")}) ${row.title}: ${row.description}`;
+  ...(row.expiresAt ? [`expires ${day(row.expiresAt)}`] : [])].join(", ")}) ${inert(row.title)}: ${inert(row.description)}`;
 
 const consolidationInstruction = (today: string, groups: readonly {entry: MemoryRecord; related: readonly MemoryRecord[]}[]) => `Memory consolidation. This is an internal Luna maintenance turn, not a message from a user. Today is ${today}.
 
@@ -98,6 +132,7 @@ ${groups.map(({entry, related}, index) => [`${index + 1}. ${describe(entry)}`, .
 
 For each numbered entry:
 - Duplicate of another entry: two entries are duplicates when they state the same fact, even under different titles, wording or types, and even when one also carries extra context. Read both bodies. Keep the one whose type fits the fact best and that is most complete; with \`luna memory update\` make its title, description and body say everything either entry said, so nothing is lost; then retire the other with \`luna memory delete <id> --expected-revision N --superseded-by <kept id>\`. If an entry holds this fact plus a separate fact that lives in a third entry, remove the repeated part from it instead of retiring it.
+- Never fold what an untrusted entry says into a trusted one, and do not rewrite an untrusted entry: untrusted entries are one member's unconfirmed claim and only the Agent owner confirms them. An untrusted entry that adds nothing to a trusted one may be retired in favour of it; otherwise leave both.
 - Contradicts a similar entry: a trusted entry wins over an untrusted one; between equals the newer wins. Retire the loser the same way.
 - A \`project\` entry that states when it stops mattering but has no expiry: set it with \`luna memory update <id> --expected-revision N --expires YYYY-MM-DD\`. Luna forgets expired entries by itself.
 - An entry of origin \`migration\` that holds several facts: add one correctly typed entry per fact, then delete the original.
@@ -114,6 +149,10 @@ Do not send any message and do not create or change tasks. End with LUNA_NOTHING
  * existing entries it resembles, so its size follows the day's changes rather
  * than the size of the memory. It runs as the Agent owner in a dedicated
  * Dashboard session of the default Shadow, with a fresh provider context.
+ *
+ * Only one run of an Agent is outstanding at a time. A run that did not
+ * complete (failed, expired, cancelled or interrupted) is handed the same
+ * changes again on its next turn instead of skipping them.
  */
 export function scheduleMemoryConsolidations(db: DrizzleDB, commands: Pick<SessionCommandService, "accept">, intervalMs: number, now = Date.now()): string[] {
   if (intervalMs <= 0) return [];
@@ -123,7 +162,10 @@ export function scheduleMemoryConsolidations(db: DrizzleDB, commands: Pick<Sessi
   const store = new AgentMemoryStore(db);
   const queued: string[] = [];
   for (const {agent, state} of due) {
-    const changed = store.changedSince(agent.id, state?.changeSeq ?? 0, CONSOLIDATION_BATCH + 1);
+    const previous = state?.commandId ? db.select({status: sessionCommands.status}).from(sessionCommands).where(eq(sessionCommands.id, state.commandId)).get()?.status : undefined;
+    if (previous === "pending" || previous === "running") continue;
+    const after = previous !== undefined && previous !== "completed" ? state!.coveredFrom : state?.changeSeq ?? 0;
+    const changed = store.changedSince(agent.id, after, CONSOLIDATION_BATCH + 1);
     if (!changed.length) continue;
     const batch = changed.slice(0, CONSOLIDATION_BATCH);
     const viewer = {agentId: agent.id, all: true as const};
@@ -134,22 +176,34 @@ export function scheduleMemoryConsolidations(db: DrizzleDB, commands: Pick<Sessi
       if (session?.status !== "active") {
         session = sessionStore.createLocalSession(agent.ownerUserId, {agentId: agent.id, shadowId: agent.defaultShadowId});
         db.update(sessions).set({title: "记忆整理"}).where(eq(sessions.id, session.id)).run();
+        // Record the session before queueing, so a turn that cannot be queued does not leave a new session behind on every pass.
+        db.insert(memoryConsolidations).values({agentId: agent.id, sessionId: session.id, changeSeq: state?.changeSeq ?? 0, coveredFrom: state?.coveredFrom ?? 0, commandId: state?.commandId ?? null, ranAt: state?.ranAt ?? 0})
+          .onConflictDoUpdate({target: memoryConsolidations.agentId, set: {sessionId: session.id}}).run();
       }
-      // Each run starts from an empty provider context; earlier runs' entries must not pile up in it.
-      db.update(runnerContexts).set({runner_session_id: null}).where(and(eq(runnerContexts.owner_type, "session"), eq(runnerContexts.owner_id, session.id))).run();
       const command = commands.accept({userId: agent.ownerUserId, sourceSessionId: session.id, originId: `${CONSOLIDATION_ORIGIN}${agent.id}:${now}`},
         session.id, "session.invoke", "consolidate", {content: consolidationInstruction(day(now), groups), purpose: "notification"}, {expiresAt: now + RUN_EXPIRES_MS});
       queued.push(command.id);
       // With a backlog left, the next batch does not wait a whole interval.
       const ranAt = changed.length > batch.length ? now - intervalMs + CONSOLIDATION_BACKLOG_RETRY_MS : now;
       const covered = batch.at(-1)!.changeSeq;
-      db.insert(memoryConsolidations).values({agentId: agent.id, sessionId: session.id, changeSeq: covered, ranAt})
-        .onConflictDoUpdate({target: memoryConsolidations.agentId, set: {sessionId: session.id, changeSeq: covered, ranAt}}).run();
+      db.insert(memoryConsolidations).values({agentId: agent.id, sessionId: session.id, changeSeq: covered, coveredFrom: after, commandId: command.id, ranAt})
+        .onConflictDoUpdate({target: memoryConsolidations.agentId, set: {sessionId: session.id, changeSeq: covered, coveredFrom: after, commandId: command.id, ranAt}}).run();
     } catch (error) {
       console.warn("memory consolidation was not queued", {agentId: agent.id, error: String(error)});
     }
   }
   return queued;
+}
+
+/**
+ * Each consolidation run starts from an empty provider context, so earlier
+ * runs' entries do not pile up in it. Cleared when the run starts rather than
+ * when it is queued, so a run waiting in the queue cannot hand its context to
+ * the next one. A recovered run keeps its provider session.
+ */
+export function prepareMemoryConsolidationRun(db: DrizzleDB, command: Pick<SessionCommand, "id" | "sessionId">, recovering: boolean): void {
+  if (recovering || memoryOriginOfTrigger(db, command.id) !== "consolidation") return;
+  db.update(runnerContexts).set({runner_session_id: null}).where(and(eq(runnerContexts.owner_type, "session"), eq(runnerContexts.owner_id, command.sessionId))).run();
 }
 
 export interface MemoryMaintenanceSettings {

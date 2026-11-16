@@ -16,7 +16,7 @@ CREATE TABLE agent_memories (
  trusted INTEGER NOT NULL,
  revision INTEGER NOT NULL,
  change_seq INTEGER NOT NULL,
- status TEXT NOT NULL CHECK(status IN ('active','superseded','deleted','archived')),
+ status TEXT NOT NULL CHECK(status IN ('active','deleted','archived')),
  superseded_by TEXT,
  core INTEGER NOT NULL,
  expires_at INTEGER,
@@ -31,6 +31,9 @@ CREATE TABLE agent_memories (
 
 --> statement-breakpoint
 CREATE INDEX agent_memories_agent_status_idx ON agent_memories (agent_id, status, updated_at);
+
+--> statement-breakpoint
+CREATE UNIQUE INDEX agent_memories_change_seq_idx ON agent_memories (change_seq);
 
 --> statement-breakpoint
 CREATE TABLE agent_memory_revisions (
@@ -74,19 +77,22 @@ CREATE TABLE memory_consolidations (
  agent_id TEXT PRIMARY KEY NOT NULL REFERENCES luna_agents(id),
  session_id TEXT NOT NULL,
  change_seq INTEGER NOT NULL,
+ covered_from INTEGER NOT NULL DEFAULT 0,
+ command_id TEXT,
  ran_at INTEGER NOT NULL
 );
 
 --> statement-breakpoint
 -- Import each legacy Markdown memory document as one entry. The documents stay in agent_document_revisions.
+-- The forgetting clock starts at the upgrade: the documents were in every conversation until now, however old the revision.
 INSERT INTO agent_memories (id, agent_id, type, title, description, body, subject_user_id, visibility, origin_kind,
  origin_shadow_id, origin_session_id, origin_task_id, origin_user_id, updated_context_id, trusted, revision, change_seq,
  status, superseded_by, core, expires_at, last_used_at, created_at, updated_at)
 SELECT lower(hex(randomblob(16))), a.id, 'reference', substr(f.key, 1, 120), substr('Imported memory document ' || f.key, 1, 200), f.value,
  NULL, 'agent', 'migration', NULL, NULL, NULL, r.author_user_id, NULL, 1, 1, row_number() OVER (ORDER BY a.id, f.key),
- 'active', NULL, 0, NULL, r.created_at, r.created_at, r.created_at
+ 'active', NULL, 0, NULL, CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER), r.created_at, r.created_at
 FROM luna_agents a JOIN agent_document_revisions r ON r.id = a.memory_revision AND r.kind = 'memory', json_each(r.files_json) f
-WHERE trim(f.value) <> '';
+WHERE trim(f.value, ' ' || char(9, 10, 13)) <> '';
 
 --> statement-breakpoint
 -- Import each Shadow's non-empty legacy USER/SOUL document as a persona entry of that Shadow.
@@ -98,7 +104,7 @@ SELECT lower(hex(randomblob(16))), s.agent_id, 'persona', substr(f.key, 1, 120),
  (SELECT coalesce(max(change_seq), 0) FROM agent_memories) + row_number() OVER (ORDER BY s.id, f.key),
  'active', NULL, 0, NULL, r.created_at, r.created_at, r.created_at
 FROM agent_shadows s JOIN agent_document_revisions r ON r.id = s.config_revision AND r.kind = 'persona', json_each(r.files_json) f
-WHERE trim(f.value) <> '' AND s.status <> 'deleted';
+WHERE trim(f.value, ' ' || char(9, 10, 13)) <> '' AND s.status <> 'deleted';
 
 --> statement-breakpoint
 INSERT INTO agent_memory_revisions (memory_id, revision, snapshot_json, change_kind, changed_by_user_id, changed_by_shadow_id, created_at)

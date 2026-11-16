@@ -17,14 +17,14 @@ const fields = {
 };
 const listQuery = z.object({
   status: z.enum(MEMORY_STATUSES).optional(), type: z.enum(MEMORY_TYPES).optional(), originKind: z.enum(MEMORY_ORIGIN_KINDS).optional(),
-  originShadowId: z.string().min(1).optional(), core: z.enum(["true", "false"]).optional(), query: z.string().max(200).optional(),
+  originShadowId: z.string().min(1).optional(), core: z.enum(["true", "false"]).optional(), trusted: z.enum(["true", "false"]).optional(), query: z.string().max(200).optional(),
   sort: z.enum(["updatedAt", "createdAt"]).optional(), limit: z.coerce.number().int().min(1).max(200).default(50), offset: z.coerce.number().int().min(0).default(0),
 });
 /** `shadowId` names the Shadow a new persona entry belongs to. */
 const addBody = z.object({...fields, shadowId: z.string().min(1).max(128).optional()}).strict();
 const revision = z.number().int().positive();
 const updateBody = z.object(fields).partial().extend({expectedRevision: revision}).strict();
-const restoreBody = z.object({revision, expectedRevision: revision}).strict();
+const revertBody = z.object({revision, expectedRevision: revision}).strict();
 
 /** Mounted under /api/agents. The Agent owner reviews, corrects and restores every memory entry. */
 export function createAgentMemoryRoutes(db: DrizzleDB) {
@@ -32,7 +32,7 @@ export function createAgentMemoryRoutes(db: DrizzleDB) {
   /** Owner edits are trusted and are not tied to a Shadow or session. */
   const owner = (c: Context): {viewer: MemoryViewer; writer: MemoryWriter} => {
     const auth = requireDashboardOnly(c);
-    if (isGuardResponse(auth)) throw new HTTPException(401);
+    if (isGuardResponse(auth)) throw new HTTPException(auth.status as 401 | 403, {res: auth});
     const agentId = c.req.param("agentId")!;
     const agents = new AgentStore(db);
     agents.requireOwner(auth.user.id, agentId);
@@ -52,7 +52,9 @@ export function createAgentMemoryRoutes(db: DrizzleDB) {
       originShadowName: row.originShadowId ? shadowNames.get(row.originShadowId) ?? null : null,
     }));
   };
-  return new Hono().use("/:agentId/memories/*", async (c, next) => {
+  return new Hono().use("/:agentId/memories", async (c, next) => {
+    const auth = requireDashboardOnly(c); if (isGuardResponse(auth)) return auth; await next();
+  }).use("/:agentId/memories/*", async (c, next) => {
     const auth = requireDashboardOnly(c); if (isGuardResponse(auth)) return auth; await next();
   }).onError((error, c) => {
     if (error instanceof MemoryConflictError) return c.json({status: "error", code: error.code, currentRevision: error.currentRevision}, 409);
@@ -63,15 +65,21 @@ export function createAgentMemoryRoutes(db: DrizzleDB) {
   })
     .get("/:agentId/memories", c => {
       const {viewer} = owner(c);
-      const {core, ...filters} = listQuery.parse(c.req.query());
-      const {entries, total} = store.page(viewer.agentId, {...filters, core: core === undefined ? undefined : core === "true"});
+      const {core, trusted, ...filters} = listQuery.parse(c.req.query());
+      const flag = (value: string | undefined) => value === undefined ? undefined : value === "true";
+      const {entries, total} = store.page(viewer.agentId, {...filters, core: flag(core), trusted: flag(trusted)});
       return c.json({memories: named(entries), total,
         core: {used: store.coreUsed(viewer.agentId, null), limit: config.memory.core_limit, shadowLimit: config.memory.shadow_core_limit}});
     })
-    .post("/:agentId/memories/:id/unarchive", async c => {
+    .post("/:agentId/memories/:id/restore", async c => {
       const {viewer, writer} = owner(c);
       const input = z.object({expectedRevision: revision}).strict().parse(await c.req.json());
-      return c.json({memory: named([store.unarchive(writer, viewer, c.req.param("id"), input.expectedRevision)])[0]});
+      return c.json({memory: named([store.restore(writer, viewer, c.req.param("id"), input.expectedRevision)])[0]});
+    })
+    .post("/:agentId/memories/:id/confirm", async c => {
+      const {viewer, writer} = owner(c);
+      const input = z.object({expectedRevision: revision}).strict().parse(await c.req.json());
+      return c.json({memory: named([store.confirm(writer, viewer, c.req.param("id"), input.expectedRevision)])[0]});
     })
     .get("/:agentId/memories/:id/history", c => { const {viewer} = owner(c); return c.json({revisions: store.history(viewer.agentId, c.req.param("id"))}); })
     .post("/:agentId/memories", async c => {
@@ -91,9 +99,9 @@ export function createAgentMemoryRoutes(db: DrizzleDB) {
       const expectedRevision = z.coerce.number().int().positive().parse(c.req.query("expectedRevision"));
       return c.json({memory: named([store.remove(writer, viewer, c.req.param("id"), expectedRevision)])[0]});
     })
-    .post("/:agentId/memories/:id/restore", async c => {
+    .post("/:agentId/memories/:id/revert", async c => {
       const {writer} = owner(c);
-      const input = restoreBody.parse(await c.req.json());
-      return c.json({memory: named([store.restore(writer, c.req.param("id"), input.revision, input.expectedRevision)])[0]});
+      const input = revertBody.parse(await c.req.json());
+      return c.json({memory: named([store.revert(writer, c.req.param("id"), input.revision, input.expectedRevision)])[0]});
     });
 }

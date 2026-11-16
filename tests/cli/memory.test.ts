@@ -12,7 +12,7 @@ test("memory CLI maps commands to Runner memory routes and rejects invalid input
   const run = (args: string[], stdin = "") => runMemoryCli(args, env, async () => stdin);
   try {
     for (const [args, stdin] of [
-      [["list", "--type", "feedback", "--limit", "50", "--offset", "150"]],
+      [["list", "--type", "feedback", "--limit", "50"]],
       [["search", "周报", "格式", "--subject", "u1", "--archived"]],
       [["get", "m 1"]],
       [["add", "--type", "person", "--title", "张三", "--description", "只要结论", "--subject", "u1", "--visibility", "shadow", "--force", "--stdin"], "不要过程\n"],
@@ -21,9 +21,11 @@ test("memory CLI maps commands to Runner memory routes and rejects invalid input
       [["restore", "m1", "--expected-revision", "4"]],
       [["update", "m1", "--expected-revision", "2", "--body", "v2"]],
       [["delete", "m1", "--expected-revision", "3", "--superseded-by", "m2"]],
+      [["search", "--type", "feedback", "周报", "--archived", "格式"]],
+      [["update", "m1", "--expected-revision", "2", "--type", "project", "--subject", "none"]],
     ] as [string[], string?][]) expect((await run(args, stdin)).status).toBe("ok");
     expect(requests).toEqual([
-      {method: "GET", path: "/api/runner/memory?type=feedback&limit=50&offset=150", body: undefined},
+      {method: "GET", path: "/api/runner/memory?type=feedback&limit=50", body: undefined},
       {method: "GET", path: `/api/runner/memory/search?q=${encodeURIComponent("周报 格式").replace(/%20/g, "+")}&subject=u1&archived=true`, body: undefined},
       {method: "GET", path: "/api/runner/memory/m%201", body: undefined},
       {method: "POST", path: "/api/runner/memory", body: {type: "person", title: "张三", description: "只要结论", subjectUserId: "u1", visibility: "shadow", body: "不要过程\n", force: true}},
@@ -32,13 +34,15 @@ test("memory CLI maps commands to Runner memory routes and rejects invalid input
       {method: "POST", path: "/api/runner/memory/m1/restore", body: {expectedRevision: 4}},
       {method: "PUT", path: "/api/runner/memory/m1", body: {body: "v2", expectedRevision: 2}},
       {method: "DELETE", path: "/api/runner/memory/m1?expectedRevision=3&supersededBy=m2", body: undefined},
+      {method: "GET", path: `/api/runner/memory/search?q=${encodeURIComponent("周报 格式").replace(/%20/g, "+")}&type=feedback&archived=true`, body: undefined},
+      {method: "PUT", path: "/api/runner/memory/m1", body: {type: "project", subjectUserId: null, expectedRevision: 2}},
     ]);
     for (const args of [
       ["search"], ["search", "--type", "feedback"], ["get"], ["update", "m1", "--body", "x"], ["update", "m1", "--expected-revision", "0"],
       ["delete", "m1"], ["add", "--body", "a", "--stdin"], ["unknown"], ["restore", "m1"],
       ["update", "m1", "--expected-revision", "1", "--expires", "soon"], ["update", "m1", "--expected-revision", "1", "--core", "yes"],
     ]) expect(await run(args)).toMatchObject({status: "error", code: "invalid_memory_command"});
-    expect(requests).toHaveLength(9);
+    expect(requests).toHaveLength(11);
     expect((await run(["help"])).output).toContain("luna memory search");
   } finally { server.stop(true); }
 });

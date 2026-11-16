@@ -65,8 +65,7 @@ session, task, user and `inline` / `reflection` / `consolidation` / `owner` /
 | --- | --- |
 | `active` | Injected, recalled and searched |
 | `archived` | Forgotten: found only by an archive search, can be restored |
-| `superseded` | Replaced by another entry during a merge |
-| `deleted` | Removed by a writer |
+| `deleted` | Removed by a writer; `superseded_by` names the entry that replaced it when a merge retired it |
 
 Every change appends the resulting state to `agent_memory_revisions` and takes
 the next `change_seq`, which orders changes without relying on clocks.
@@ -122,6 +121,11 @@ Service applies these rules to every Runner read, search, recall and injection:
    current session. Participants are the invocation actor plus the users who
    have sent messages in the session; a Task also includes its creator and the
    participants of its primary session.
+4. Untrusted entries are visible only when their author (`origin_user_id`)
+   participates in the current session. What an untrusted writer said can
+   help that writer's own conversations but never reaches, and so never
+   steers, anyone else's. It becomes an ordinary shared entry only when a
+   trusted writer vouches for it (see Trust below).
 
 The Agent owner (Dashboard) and Service-launched consolidation see all entries.
 
@@ -130,7 +134,9 @@ The Agent owner (Dashboard) and Service-launched consolidation see all entries.
 Writes take effect immediately. Authority comes from the invocation, never from
 caller-supplied identity. The writer is *trusted* when the invocation actor is
 the Agent owner or holds an allow rule for `memory.write`; Dashboard edits by
-the owner are trusted.
+the owner are trusted. Only explicit rules matter: without any rule an actor
+reads memory and writes untrusted entries; a deny rule for `memory.read` or
+`memory.write` takes that away.
 
 | Type | Accepted from |
 | --- | --- |
@@ -139,9 +145,21 @@ the owner are trusted.
 | `person` | Anyone, but an untrusted writer may only describe themselves |
 | `project`, `reference` | Anyone; results carry who said it and when |
 
-An untrusted writer cannot update, delete or restore an entry last written by a
-trusted writer. Changes require `expectedRevision`; a stale value returns 409
-with the current revision. Deletes are soft.
+**Trust.** An entry is trusted when a trusted writer wrote it or later vouched
+for it: by rewriting what it says (type, title, description, body or subject),
+by making it a core rule, or by confirming it as it stands (the owner's
+"confirm" on the Dashboard). Maintenance never vouches: consolidation, whatever
+it changes, a restore from the archive, and an expiry-only edit leave trust as
+it was. Otherwise a routine pass would hand one member's claim to every
+conversation. Trust is never lost, since untrusted writers cannot touch trusted
+entries. To share what colleagues contribute without reviewing each entry,
+grant them `memory.write`.
+
+An untrusted writer can update, delete or restore only entries they wrote
+themselves, never a trusted entry or another member's. Changes require
+`expectedRevision`; a stale value returns 409 with the current revision.
+Deletes are soft and an entry cannot supersede itself. A forgotten entry is
+restored before it is edited (`memory_not_active`).
 
 **Duplicates.** A Runner `add` is compared with the active entries of the same
 type (and person) the writer can see. When the title and description share 60%
@@ -161,8 +179,9 @@ two-character pieces for Chinese and Japanese, where most words are two
 characters and sentences have no spaces. The terms of each entry's title,
 description and body are kept in the FTS5 table `agent_memory_terms`, written by
 `AgentMemoryStore`. Ranking is BM25 with title over description over body and a
-mild preference for recently updated entries. Entries imported by a migration
-are indexed when Service starts.
+mild preference for recently updated entries. A query uses up to 256 distinct
+terms, enough for a long Chinese message. Deleted entries have
+no terms. Entries imported by a migration are indexed when Service starts.
 
 No vector store is used, so two entries that say the same thing in different
 words are not matched. Revisit when measured recall is poor; the interfaces do
@@ -176,12 +195,14 @@ Service appends memory to the turn prompt of Main, Work and Task Runners:
 | --- | --- |
 | First turn of a provider session | The Shadow's persona entries in full, then core entries and up to 20 `person` entries about the participants |
 | Every turn that carries a message | Up to `memory.recall_limit` (8) active entries whose title or description shares at least two terms with the message, and that this session has not been shown |
-| Later turns | Changes made by other Runner contexts to entries this session was shown, and to persona, core and `person` entries; removals of entries it was shown |
+| Later turns | Changes made by other Runner contexts to entries this session was shown, and to persona, core and `person` entries; `person` entries about people who joined since; removals of entries it was shown, including ones no longer visible to it |
 
-The message is the user messages of a Main turn, the inbound text of a Work
-turn, or a Task's title, summary and new input. Maintenance turns recall
-nothing. Only id, type, title, description and attribution are injected; bodies
-are fetched with `luna memory get`.
+The message is the user messages of a Main turn, the messages of a Work turn,
+or a Task Run's new input (its title and summary when there is none).
+Maintenance turns recall nothing. Only id, type, title, description and
+attribution are injected; bodies are fetched with `luna memory get`. Work
+computes the injection after the instruction fingerprint sync, so a provider
+session reset by it is told persona and standing memory again.
 
 `memory_injection_cursors` records, per Runner context, the provider session and
 the last `change_seq` it was told about; `memory_injected_entries` records which
@@ -198,8 +219,9 @@ Once a minute Service archives active entries that
 - are not core and were not used for `memory.forget_unused_ms` (180 days; 0
   turns this rule off).
 
-An entry is *used* when a Runner reads its body (`luna memory get`) or anyone
-changes it. Appearing in an index, a search result or an injection is not use.
+An entry is *used* when a Runner reads its body (`luna memory get`), when a
+message recalls it into a turn the provider accepted, or when anyone changes
+it. Standing injection, an index and a search result are not use.
 Archiving is recorded as a revision with change kind `forgetting` and does not
 alter trust. An archived entry stays readable, is found by
 `luna memory search --archived`, and returns with `luna memory restore` or from
@@ -208,49 +230,66 @@ the Dashboard; restoring clears an expiry that has passed.
 ## Commands
 
 ```text
-luna memory list [--type T] [--limit N] [--offset N]
+luna memory list [--type T] [--limit N]
 luna memory search <keywords> [--type T] [--subject USER_ID] [--archived]
 luna memory get <id>
 luna memory add --type T --title TITLE --description DESC [--subject USER_ID] [--visibility agent|shadow] [--expires YYYY-MM-DD] [--core true] [--force] (--body TEXT | --stdin)
-luna memory update <id> --expected-revision N [--title ...] [--description ...] [--type ...] [--visibility ...] [--expires YYYY-MM-DD|none] [--core true|false] [--body TEXT | --stdin]
+luna memory update <id> --expected-revision N [--title ...] [--description ...] [--type ...] [--subject USER_ID|none] [--visibility ...] [--expires YYYY-MM-DD|none] [--core true|false] [--body TEXT | --stdin]
 luna memory restore <id> --expected-revision N
 luna memory delete <id> --expected-revision N [--superseded-by ID]
 ```
 
 Runner routes live under `/api/runner/memory`. The owner surface is
 `/api/agents/:agentId/memories` with server-side filtering and paging, edit,
-history, restore to a revision and unarchive.
+history, confirm, revert to a revision and restore from the archive. "Restore"
+always means bringing a forgotten entry back; going back to an earlier revision
+is "revert".
 
 ## When memory is written
 
 | Moment | Trigger | Mechanism |
 | --- | --- | --- |
 | Inline | The user asks to remember, corrects the Agent, or states a durable fact | The Runner searches first, then updates an existing entry or adds one |
-| Reflection | The latest human message of a Main session is older than `memory.reflection_idle_ms` (30 minutes) and has not been reflected on | Service queues a silent `session.invoke` turn in the same session, so the provider context already holds the conversation |
+| Reflection | The latest reflectable human message of a Main session is older than `memory.reflection_idle_ms` (30 minutes) and has not been reflected on | Service queues a silent `session.invoke` turn in the same session, so the provider context already holds the conversation |
 | Consolidation | An Agent's memory was changed by something other than consolidation, at most once per `memory.consolidation_interval_ms` (24 hours) | Silent turn in a dedicated Dashboard session of the default Shadow |
 
 The session command worker runs one maintenance pass a minute: forget, then
 queue reflection and consolidation. Setting an interval to 0 turns that run off.
 
-Reflection runs as the Agent owner only when the owner is the only human who
-spoke since the last reflection; otherwise it runs as the latest other speaker,
-so nothing a member said becomes a trusted entry. Sessions whose last human
-message is older than 24 hours are skipped, so enabling memory does not replay
-history. `memory_reflection_checkpoints` records how far each session has been
-reflected on. Work sessions are not reflected on, and a Task Run ending does not
-by itself start a reflection; both save memory inline.
+A human message is *reflectable* only when a completed Main Runner turn took it
+in: as its trigger or coalesced input, as turn context or launch context
+(`session_turn_entries`), or as context of a Service-queued turn
+(`context_pack_items` of a pack created for that turn). Group chatter nobody
+addressed to the bot, history backfill and the context of memory maintenance
+turns never start a reflection. A session with pending inbound messages, a
+running turn or a pending Service-queued turn waits for the next pass.
+
+Reflection runs as the Agent owner only when the owner is the only human whose
+reflectable messages arrived since the last reflection; otherwise it runs as
+the latest other such speaker, so nothing a member said becomes a trusted
+entry. Sessions whose last reflectable message is older than 24 hours are
+skipped, so enabling memory does not replay history.
+`memory_reflection_checkpoints` records how far each session has been
+reflected on; it advances when the turn is queued, so reflection is best
+effort. Work sessions are not reflected on, and a Task Run ending does not by
+itself start a reflection; both save memory inline.
 
 Consolidation is incremental. Service hands the turn the entries changed since
 the last run (up to 100; a backlog continues ten minutes later), each with up to
 four existing entries of any type that resemble it: at least 40% of the shorter
 entry's title and description terms appear in the other. The threshold is loose
 on purpose, because a candidate that is not shown can never be merged. `person`
-entries are only compared with entries about the same person.
-The model merges duplicates, resolves contradictions by trust then recency,
+entries are only compared with entries about the same person. Memory text in
+the instruction is made inert so it never forms an `artifact:` reference.
+The model merges duplicates of equal trust (it never folds an untrusted entry
+into a trusted one or rewrites an untrusted entry), resolves contradictions by
+trust then recency,
 gives dated `project` entries an expiry and splits imported documents. The turn
 runs as the Agent owner, is the only Runner turn that sees every entry, and
-starts from an empty provider context each time. `memory_consolidations`
-records its session and the last change it covered.
+starts from an empty provider context, cleared when the run starts.
+`memory_consolidations` records its session, the latest run's command and the
+range of changes it covered. Only one run of an Agent is outstanding at a time,
+and a run that did not complete is handed the same changes again.
 
 ## Dashboard
 
@@ -258,7 +297,8 @@ The memory page lists entries one server-filtered page at a time, with filters
 for type, origin kind, origin Shadow, status and tier, and shows core usage. An
 entry shows its body, origin, last use, a link to the originating session or
 task, and its revision history. The owner can edit, mark core, set an expiry,
-delete, restore a revision or bring back a forgotten entry.
+delete, revert to a revision or restore a forgotten entry. A "waiting for
+confirmation" filter lists untrusted entries; confirming one shares it.
 
 ## Configuration
 
@@ -282,7 +322,9 @@ the digest of an empty file set, like `agentMemoryRevision`.
 
 Migration `0002_agent_memories.sql` imports each non-empty legacy memory file as
 one trusted `reference` entry with origin `migration`; consolidation then splits
-and classifies it. The import does not enforce the 8 KB body limit, so an
+and classifies it. Files holding only whitespace are skipped. The forgetting
+clock of an imported entry starts at the upgrade, since the document was in
+every conversation until then. The import does not enforce the 8 KB body limit, so an
 oversized imported entry must be split before it can be edited. The document
 memory API and snapshot publication are removed. The legacy revisions stay in
 `agent_document_revisions` and `luna_agents.memory_revision` is left as is.
@@ -294,8 +336,14 @@ empty file set so the Worker protocol stays compatible.
 - Recall and duplicate detection match terms, not meaning.
 - Common two-character pieces can make an unrelated entry pass the two-term
   recall threshold; rarity only affects ranking.
-- The forgetting clock relies on Runners reading bodies before relying on an
-  entry; an entry acted on from its one-line description alone ages.
+- In a session where anyone but the owner spoke, reflection writes untrusted
+  entries only, so it cannot save `feedback` or `procedure` there. What the
+  owner says in such a session is saved inline, in the turn the owner triggers.
+- Trust follows the actor of a turn, not the author of each sentence in its
+  context. Only prompt rules keep a Runner from saving someone else's words in
+  an owner-triggered turn.
+- Untrusted entries wait for the owner: nothing notifies the owner that entries
+  are waiting for confirmation.
 
 ## Related contracts
 
