@@ -2,8 +2,9 @@
 
 Service stores its business database at `$LUNA_HOME/data/luna.db`.
 `src/data/schema/` contains domain-specific TypeScript ORM definitions.
-`src/data/drizzle/0001_luna_baseline.sql` defines the initial SQLite schema;
-`meta/_journal.json` records that baseline.
+`src/data/drizzle/0001_luna_baseline.sql` defines the initial SQLite schema.
+Later files such as `0002_agent_memories.sql` are applied by the migrator to new
+and existing databases; `meta/_journal.json` records them in order.
 
 ## Initialization contract
 

@@ -61,7 +61,7 @@ export function ensureRunnerWorkspaceInstructionFiles(
   const promptsRoot = input.promptsRoot;
   const entryPath = join(promptsRoot, RUNNER_ENTRY_FILE[input.runnerKind]);
   const resources = join(input.home, ".luna-resources");
-  const paths = { memory: join(resources, "memory"), commands: join(resources, "commands") };
+  const paths = { commands: join(resources, "commands") };
   const source = [
     readFileSync(entryPath, "utf-8").trimEnd(),
     readFileSync(join(promptsRoot, "runtime-confidentiality.md"), "utf-8").trimEnd(),
@@ -71,8 +71,7 @@ export function ensureRunnerWorkspaceInstructionFiles(
       `Your starting working directory is \`${input.runnerRootPath}\`.`,
       `Read your execution context from \`${join(input.runnerRootPath, ".luna", "runner-context.json")}\`.`,
       `Store working files in \`${join(input.runnerRootPath, "workspace")}\`.`,
-      `Agent memory is at \`${paths.memory}\`.`,
-      `Shadow USER/SOUL are at \`${join(resources, "config")}\`. Persona and Agent memory are read-only execution snapshots.`,
+      "Agent memory and this Shadow's persona live in Luna Service, not in files; use `luna memory`.",
       `Luna Skills are loaded through the provider’s Luna plugin.`,
       `Shared commands in \`${paths.commands}\` and user tools in \`${join(input.home, ".local", "bin")}\` are on PATH.`,
     ].join("\n"),

@@ -93,7 +93,7 @@ describe("Main Runner instruction policy", () => {
   });
 
   test("preserves addressing, artifact and memory boundaries", () => {
-    for (const rule of ["activationSourceMessage", "strongly related", "mentions a non-Luna person or bot", "luna artifacts register <path> --json", "internal protocol details", "read-only snapshots", "$HOME/.luna-resources/memory/", "$HOME/.luna-resources/config/SOUL.md", "$HOME/.luna-resources/config/USER.md", "30-60 seconds", "blocking", "assumptions"])
+    for (const rule of ["activationSourceMessage", "strongly related", "mentions a non-Luna person or bot", "luna artifacts register <path> --json", "internal protocol details", "luna memory get <id>", "luna memory add --type persona", "30-60 seconds", "blocking", "assumptions"])
       expect(prompt).toContain(rule);
     expect(prompt).toContain("status questions and unrelated messages must not restart a task");
   });

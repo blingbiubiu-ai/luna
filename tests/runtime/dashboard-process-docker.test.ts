@@ -4,7 +4,7 @@ import { expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import { execFileSync } from "node:child_process";
 import { createServer } from "node:net";
-import { existsSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomBytes } from "node:crypto";
@@ -18,7 +18,7 @@ import { AgentProfileStore } from "../../src/agent-config/agent-profile-store";
 import { AgentSecretCipher } from "../../src/agent-config/secret-cipher";
 import { ActiveAgentConfigService } from "../../src/agent-config/active-agent-config-service";
 import { RuntimeConfig } from "../../src/runtime/config";
-import { WorkerConfig } from "@luna/worker/config";
+import { WorkerBindingConfig, WorkerLocalConfig } from "@luna/worker/config";
 import type { ScheduledJob } from "../../src/runtime/scheduler-store";
 
 const docker = (...args: string[]) => execFileSync("docker", args, {
@@ -50,6 +50,17 @@ test.skipIf(process.env.LUNA_DASHBOARD_DOCKER !== "1")("Built local Service reat
   const workerUrl = "http://127.0.0.1:" + workerPort;
   const dashboard = "http://127.0.0.1:" + servicePort;
   const runtimeFile = join(root, "runtime.json"), workerFile = join(root, "worker.json");
+  // Service runs from a private copy of the build so the test can change a platform asset while Jobs run:
+  // rewriting this bundled skill is what gives later invocations a different resource snapshot.
+  const repoRoot = join(import.meta.dir, "../.."), appRoot = join(root, "app");
+  const stampFile = join(appRoot, "skills", "snapshot-stamp", "SKILL.md");
+  const stampPath = (resources: string) => join(resources, "skills", "skills", "snapshot-stamp", "SKILL.md");
+  mkdirSync(join(appRoot, "dist"), {recursive: true});
+  cpSync(join(repoRoot, "dist", "luna-service.js"), join(appRoot, "dist", "luna-service.js"));
+  cpSync(join(repoRoot, "skills"), join(appRoot, "skills"), {recursive: true});
+  for (const entry of ["src", "apps", "packages", "extensions", "node_modules", "package.json"]) symlinkSync(join(repoRoot, entry), join(appRoot, entry));
+  mkdirSync(join(appRoot, "skills", "snapshot-stamp"));
+  writeFileSync(stampFile, "Initial platform skill.");
   let runtimeDb: Database | undefined;
   const queryJob = (id: string): ScheduledJob | undefined => {
     const row = runtimeDb!.query("SELECT record_json FROM scheduled_jobs WHERE job_id=?").get(id) as { record_json: string } | null;
@@ -60,7 +71,7 @@ test.skipIf(process.env.LUNA_DASHBOARD_DOCKER !== "1")("Built local Service reat
   const worker = new ExecutionClient(workerUrl, workerToken);
   const start = async (kind: "service" | "worker", args: string[], ready: () => Promise<unknown>) => {
     const log = join(root, kind + ".log");
-    const child = Bun.spawn([process.execPath, join(import.meta.dir, "../../dist/luna-" + kind + ".js"), "start", ...args], {
+    const child = Bun.spawn([process.execPath, kind === "service" ? join(appRoot, "dist", "luna-service.js") : join(import.meta.dir, "../../dist/luna-worker.js"), "start", ...args], {
       env: { PATH: process.env.PATH, LUNA_HOME: root, LUNA_DASHBOARD_TOKEN: dashboardToken,
         LUNA_ACCESS_TOKEN_SECRET: accessSecret, LUNA_DASHBOARD_SESSION_SECRET: dashboardSessionSecret, LUNA_AGENT_CONFIG_MASTER_KEY: masterKey,
         LUNA_SERVICE_URL: "http://host.docker.internal:" + servicePort },
@@ -90,7 +101,7 @@ const env = {...process.env,...input.env};
 if (env.LUNA_RUNNER_KIND === 'task') {
   if (env.OPENAI_API_KEY !== 'independent-fixture-key') throw Error('Task received the wrong Agent credential');
   fs.writeFileSync('sdd-task-context', process.cwd());
-  const report = Bun.spawn(['bun','/app/luna-cli/cli.js','tasks','report','--request-id','fixture-report','--text','Docker Shadow task report'], {env, stdout:'ignore', stderr:'ignore'});
+  const report = Bun.spawn(['bun','/app/luna-cli/cli.js','task','report','--request-id','fixture-report','--text','Docker Shadow task report'], {env, stdout:'ignore', stderr:'ignore'});
   if (await report.exited !== 0) throw Error('Fixture Task report failed');
   emit({status:'success',result:'LUNA_NOTHING_TO_SEND'});
   process.exit(0);
@@ -107,7 +118,7 @@ fs.writeFileSync(marker + '.pid', String(process.pid));
 while (!fs.existsSync(marker + '.release')) await Bun.sleep(50);
 if (input.prompt.includes('SDD_CREATE_TASK')) {
   const payload = {title:'SDD Shadow task', summary:'Verify Task shares the Shadow container', facts:['Docker fixture']};
-  const created = Bun.spawn(['bun','/app/luna-cli/cli.js','tasks','create','--json',JSON.stringify(payload),'--request-id',marker], {env, stdout:'ignore', stderr:'ignore'});
+  const created = Bun.spawn(['bun','/app/luna-cli/cli.js','task','create','--json',JSON.stringify(payload),'--request-id',marker], {env, stdout:'ignore', stderr:'ignore'});
   if (await created.exited !== 0) throw Error('Fixture Task creation failed');
 }
 for (let attempt = 0; attempt < 2; attempt++) {
@@ -132,10 +143,12 @@ emit({status:'success',result:'LUNA_NOTHING_TO_SEND'});
       listenHost: "0.0.0.0", port: runtimePort, homeWorkerId: workerId,
       serviceToken, adminToken, mode: "shared", maxConcurrentJobs: 1, resources: { memory: "1g", cpus: 1, pidsLimit: 128 },
     }));
-    writePrivateJson(workerFile, WorkerConfig.parse({
-      workerId, runtimeId: "runtime", dataRoot: join(root, "worker"), port: workerPort, network,
-      runtimeEndpoint: "http://host.docker.internal:" + runtimePort, serviceUrl: dashboard, controlToken: workerToken,
-      imageDigest, executorPortStart: 43700, executorPortEnd: 43709,
+    writePrivateJson(workerFile, WorkerLocalConfig.parse({
+      dataRoot: join(root, "worker"), port: workerPort, network, imageDigest, executorPortStart: 43700, executorPortEnd: 43709,
+    }));
+    // Connection identity lives next to the local configuration.
+    writePrivateJson(join(root, "binding.json"), WorkerBindingConfig.parse({
+      workerId, runtimeId: "runtime", serviceUrl: dashboard, controlToken: workerToken,
     }));
     writeFileSync(join(root, "config.yaml"), [
       "sandbox:", "  runtimeConfigFile: " + JSON.stringify(runtimeFile),
@@ -208,21 +221,17 @@ emit({status:'success',result:'LUNA_NOTHING_TO_SEND'});
     });
     foreignProfiles.recordValidation(foreignProfile.latestRevision.id, {success: true, message: "fixture"});
     new ActiveAgentConfigService(db, cipher).activate(foreignAgent.id, foreignProfile.latestRevision.id, ownerId);
-    const memoryPath = `${dashboard}/api/agents/${scope.agentId}/memory`;
-    const memory = "Shared memory for the Dashboard fixture.";
-    const savedMemory = await fetch(memoryPath, {
-      method: "PUT", headers: {cookie, "content-type": "application/json"},
-      body: JSON.stringify({expectedRevision: null, path: "MEMORY.md", content: memory}),
+    const savedMemory = await fetch(`${dashboard}/api/agents/${scope.agentId}/memories`, {
+      method: "POST", headers: {cookie, "content-type": "application/json"},
+      body: JSON.stringify({type: "project", title: "Fixture memory", description: "Shared memory for the Dashboard fixture.", body: "Agent memory lives in Service."}),
     });
-    expect(savedMemory.status).toBe(200);
-    const memorySnapshot = await savedMemory.json() as {files: Record<string, string>};
-    expect(memorySnapshot.files).toEqual({"MEMORY.md": memory});
+    expect(savedMemory.status).toBe(201);
     const homes = new Map<string, string>();
     let selected: {sessionId: string; marker: string; contextId: string} | undefined;
-    let queuedOld: {sessionId: string; marker: string; messageId: string; soul: string} | undefined;
+    let queuedOld: {sessionId: string; marker: string; messageId: string; stamp: string} | undefined;
     let waiting: {sessionId: string; marker: string; messageId: string} | undefined;
     let cleanup: {jobId: string; invocationId: string} | undefined;
-    const newSoul = "Use the refreshed Shadow instructions.";
+    const newStamp = "Refreshed platform skill.";
     for (const [variant, shadowId] of [["default", scope.shadowId], ["selected", sibling.id], ["queued-old", sibling.id], ["waiting", sibling.id], ["updated", sibling.id], ["independent", foreignAgent.defaultShadowId], ["cancelled", scope.shadowId], ["agent-stopped", foreignAgent.defaultShadowId]] as const) {
       const agentId = variant === "independent" || variant === "agent-stopped" ? foreignAgent.id : scope.agentId;
       const shadowHome = join(root, "worker", "agents", agentId, "shadows", shadowId);
@@ -299,13 +308,9 @@ emit({status:'success',result:'LUNA_NOTHING_TO_SEND'});
       }
       expect(active.job.scope).toMatchObject({agentId, shadowId});
       const resources = join(shadowHome, ".luna-resources");
-      const memoryFile = join(resources, "memory", "MEMORY.md");
-      if (agentId === foreignAgent.id) {
-        expect(docker("exec", container, "sh", "-c", 'test ! -e "$1" && echo isolated', "sh", memoryFile)).toBe("isolated");
-        if (variant === "independent") expect(docker("ps", "-q", "--filter", workerLabel).split("\n").filter(Boolean)).toHaveLength(3);
-      } else {
-        expect(docker("exec", container, "cat", memoryFile)).toBe(memory);
-      }
+      // Agent memory is served by Service; no memory file is published into any container.
+      expect(docker("exec", container, "sh", "-c", 'test -z "$(find "$1" -type f 2>/dev/null)" && echo empty', "sh", join(resources, "memory"))).toBe("empty");
+      if (agentId === foreignAgent.id && variant === "independent") expect(docker("ps", "-q", "--filter", workerLabel).split("\n").filter(Boolean)).toHaveLength(3);
       const privateConfig = join(shadowHome, ".config");
       docker("exec", container, "mkdir", "-p", privateConfig);
       const sentinel = join(privateConfig, "sdd-private-sentinel");
@@ -419,19 +424,19 @@ emit({status:'success',result:'LUNA_NOTHING_TO_SEND'});
         continue;
       }
       if (variant === "queued-old") {
-        expect(docker("exec", container, "cat", join(resources, "config", "SOUL.md"))).toBe(queuedOld!.soul);
+        expect(docker("exec", container, "cat", stampPath(resources))).toBe(queuedOld!.stamp);
         expect(homes.get(container)).toBe(shadowHome);
       }
       if (variant === "waiting" || variant === "updated") {
         homes.delete([...homes].find(([, home]) => home === shadowHome)?.[0] ?? "");
         homes.set(container, shadowHome);
-        expect(docker("exec", container, "cat", join(resources, "config", "SOUL.md"))).toBe(newSoul);
+        expect(docker("exec", container, "cat", stampPath(resources))).toBe(newStamp);
       }
       if (variant === "updated") {
         expect(active.job.runnerContextId).toBe(selected!.contextId);
         expect(active.job.input.sessionId).toBeUndefined();
         expect(active.job.input.prompt).toContain(selected!.marker);
-        expect(docker("exec", container, "cat", join(resources, "config", "SOUL.md"))).toBe(newSoul);
+        expect(docker("exec", container, "cat", stampPath(resources))).toBe(newStamp);
       } else if (variant !== "waiting" && variant !== "queued-old") {
         homes.set(container, shadowHome);
         if (variant === "selected") selected = {sessionId, marker, contextId: active.job.runnerContextId};
@@ -449,12 +454,7 @@ emit({status:'success',result:'LUNA_NOTHING_TO_SEND'});
         expect(containerHealth).toBe("200");
       }
       if (variant === "selected") {
-        const configPath = `${dashboard}/api/agents/${scope.agentId}/shadows/${shadowId}/config`;
-        const config = await fetch(configPath, {headers: {cookie}});
-        expect(config.status).toBe(200);
-        const {revision} = await config.json() as {revision: string};
-        const soulPath = join(resources, "config", "SOUL.md");
-        const oldSoul = docker("exec", container, "cat", soulPath);
+        const oldStamp = docker("exec", container, "cat", stampPath(resources));
         const queueSession = async () => {
           const created = await fetch(dashboard + "/api/sessions/dashboard", {
             method: "POST", headers: {cookie, "content-type": "application/json"},
@@ -472,7 +472,7 @@ emit({status:'success',result:'LUNA_NOTHING_TO_SEND'});
           return {sessionId: nextSessionId, marker: nextMarker, messageId: nextMessageId};
         };
         const oldSession = await queueSession();
-        queuedOld = {...oldSession, soul: oldSoul};
+        queuedOld = {...oldSession, stamp: oldStamp};
         const jobForSession = sqlite.query<{active_job_id: string | null}, [string]>(
           "SELECT active_job_id FROM runner_invocations WHERE session_id=?");
         const queueDeadline = Date.now() + 15000;
@@ -486,14 +486,10 @@ emit({status:'success',result:'LUNA_NOTHING_TO_SEND'});
         expect(oldJob?.lastError?.code).toBe("capacity_exhausted");
         expect(oldJob?.job.resources).toEqual(active.job.resources);
         expect(oldJob?.workerId).toBeFalsy();
-        const saved = await fetch(configPath, {
-          method: "PUT", headers: {cookie, "content-type": "application/json"},
-          body: JSON.stringify({expectedRevision: revision, user: "Fixture user", soul: newSoul}),
-        });
-        expect(saved.status).toBe(200);
+        writeFileSync(stampFile, newStamp);
         expect(queryJob(active.jobId)?.execution?.state).toBe("running");
-        expect(docker("exec", container, "cat", soulPath)).toBe(oldSoul);
-        expect(oldSoul).not.toBe(newSoul);
+        expect(docker("exec", container, "cat", stampPath(resources))).toBe(oldStamp);
+        expect(oldStamp).not.toBe(newStamp);
         waiting = await queueSession();
         const nextSessionId = waiting.sessionId;
         const revisionQuery = sqlite.query<{digest: string}, [string]>(
@@ -504,7 +500,7 @@ emit({status:'success',result:'LUNA_NOTHING_TO_SEND'});
         expect(revisionQuery.get(nextSessionId)?.digest).not.toBe(revisionQuery.get(sessionId)?.digest);
         expect(queryJob(active.jobId)?.execution?.state).toBe("running");
         expect(docker("ps", "-q", "--filter", workerLabel, "--filter", "label=luna.shadow=" + shadowId)).toBe(container);
-        expect(docker("exec", container, "cat", soulPath)).toBe(oldSoul);
+        expect(docker("exec", container, "cat", stampPath(resources))).toBe(oldStamp);
         console.log(JSON.stringify({variant: "resource-wait", accepted: true, pinnedDifferentRevision: true, activeContainerUnchanged: true}));
       }
       docker("exec", container, "touch", releaseFile);

@@ -1,3 +1,4 @@
+import { maintainMemory, type MemoryMaintenanceSettings } from "@/agents/agent-memory-maintenance";
 import {AgentStore} from "@/agents/agent-store";
 import {TaskScopeResolver} from "@/agents/task-scope";
 import {ContextPackScope} from "@/context/context-pack-scope";
@@ -25,6 +26,8 @@ import { GatewayError } from "@/server/gateway-error";
 import type { WorkReplyChannel } from "@/work/types";
 import type { NormalizedInboundMessage } from "@/channels";
 import { scanArtifactRefs } from "@luna/service-client/artifact-ref";
+/** Memory is maintained at most this often; the worker itself ticks every 250 ms. */
+const MEMORY_SCAN_INTERVAL_MS = 60_000;
 export interface CommandActor {
     userId: string;
     sourceSessionId: string;
@@ -50,6 +53,8 @@ export interface CommandRuntimeOptions {
     db: DrizzleDB;
     channelFor: (id: string) => WorkReplyChannel | undefined;
     executeTrigger?: (command: SessionCommand, signal: AbortSignal) => Promise<void>;
+    /** Forgetting, reflection and consolidation of Agent memory; unset leaves memory unmaintained. */
+    memory?: MemoryMaintenanceSettings;
 }
 /** Durable command acceptance and source-independent delivery/execution lifecycle. */
 export class SessionCommandService {
@@ -58,6 +63,7 @@ export class SessionCommandService {
     private readonly inFlight = new Map<string, Promise<void>>();
     private readonly running = new Map<string, AbortController>();
     private stopped = false;
+    private memoryScannedAt = 0;
     private readonly deliveryDispatcher = new SessionDispatcher();
     constructor(readonly options: CommandRuntimeOptions) { }
     private mentionAddress(target: typeof sessions.$inferSelect, userId: string, botOnly = false): string {
@@ -216,6 +222,10 @@ export class SessionCommandService {
         if (this.stopped)
             return;
         this.materializeSchedules(now);
+        if (this.options.memory && now - this.memoryScannedAt >= MEMORY_SCAN_INTERVAL_MS) {
+            this.memoryScannedAt = now;
+            maintainMemory(this.options.db, this, this.options.memory, now);
+        }
         const pending = this.options.db.select().from(sessionCommands).where(and(eq(sessionCommands.status, "pending"), lte(sessionCommands.availableAt, Math.max(now, Date.now())))).orderBy(asc(sessionCommands.createdAt), sql`session_commands.rowid`).all();
         let triggerSlots = 8 - [...this.inFlight.keys()].filter(id => this.get(id)?.kind === "session.invoke").length;
         let deliverySlots = 32 - [...this.inFlight.keys()].filter(id => this.get(id)?.kind !== "session.invoke").length;

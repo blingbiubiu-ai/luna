@@ -152,6 +152,24 @@ export const GitConfig = z.object({
 }).strict();
 export interface GitConfig extends z.infer<typeof GitConfig> {}
 
+/** Agent memory maintenance. A value of 0 turns the corresponding run off. */
+export const MemoryConfig = z.object({
+  /** A session is reflected on after its last human message is this old. */
+  reflection_idle_ms: z.number().int().nonnegative().default(30 * 60 * 1000),
+  /** Minimum time between consolidation runs of one Agent. */
+  consolidation_interval_ms: z.number().int().nonnegative().default(24 * 60 * 60 * 1000),
+  /** A non-core entry nobody read or changed for this long is archived. */
+  forget_unused_ms: z.number().int().nonnegative().default(180 * 24 * 60 * 60 * 1000),
+  /** Most entries recalled into one turn. */
+  recall_limit: z.number().int().nonnegative().default(8),
+  /** Most active core entries shared by all Shadows of one Agent. */
+  core_limit: z.number().int().positive().default(30),
+  /** Most active core entries private to one Shadow. */
+  shadow_core_limit: z.number().int().nonnegative().default(10),
+  /** Most active persona entries of one Shadow; each is told in full to every conversation. */
+  persona_limit: z.number().int().positive().default(5),
+});
+
 /**
  * Top-level application configuration loaded from config.yaml.
  */
@@ -166,6 +184,7 @@ export const AppConfig = z.object({
   plugins: PluginsConfig.default(() => PluginsConfig.parse({})),
   messaging: MessagingConfig.default({default_channel_id:"",channels:[],max_visible_steps:32}),
   session: SessionConfig.default(() => SessionConfig.parse({})),
+  memory: MemoryConfig.default(() => MemoryConfig.parse({})),
   sandbox: SandboxConfig.default(() => SandboxConfig.parse({})),
   runner: RunnerConfig.default(() => RunnerConfig.parse({})),
   git: GitConfig.optional(),

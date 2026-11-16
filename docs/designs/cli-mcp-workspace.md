@@ -10,6 +10,7 @@ CLI owns:
 - artifact register, materialize, download, and cat.
 - plugin-contributed operation commands such as `luna diagnosis ...`.
 - knowledge workspace reads and writes.
+- Agent memory reads and writes for the active invocation (`luna memory`, see [Agent memory](agent-memory.md)).
 - MCP bridge.
 - local Service management through `luna service ...` and Worker management through `luna worker ...`.
 

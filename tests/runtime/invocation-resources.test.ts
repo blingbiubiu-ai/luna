@@ -13,7 +13,6 @@ import {InvocationStore} from "@/runners/invocation-store";
 import {InvocationResources} from "@/runners/invocation-resources";
 import {AgentResourceBuilder} from "@/runners/agent-resource-builder";
 import {PluginRegistry} from "@/plugins/registry";
-import {AgentDocumentStore} from "@/agents/agent-document-store";
 import {buildLunaServiceRunnerEnv} from "@/runners/luna-service-env";
 import {workInvocations} from "@/runners/main-invocation-registry";
 import {ActiveAgentConfigService} from "@/agent-config";
@@ -32,10 +31,9 @@ function register(id:string){return store.register({id,runnerKind:"work",actorUs
  inputSnapshot:{version:1,kind:"work",input:{sessionId:"session",runnerContextId:"context",turnId:id}} as never,contextPackIds:[]});}
 function job(id:string){const selection=resources.read(id).selection;return {version: 2,scope:{agentId:scope.agentId,shadowId:scope.shadowId,placementGeneration:1},resources:selection,resourceRevision:selection.digest, jobId:`job-${id}`,invocationId:id,environmentId:"luna",runnerContextId:"context",scopeKey:"session:context",runnerKind:"work",sessionId:"session",input:{runnerType:"claude",prompt:"test"},credentialsRevision:1,timeoutMs:10000} as const;}
 
-test("pins once, survives DB reopen, and ignores subsequent memory changes",()=>{
+test("pins once, survives DB reopen, and ignores subsequent resource changes",()=>{
  register("first");const first=resources.pin("first",builder);
- const documents=new AgentDocumentStore(connection.db,home);
- documents.writeMemory("alice",scope.agentId,{expectedRevision:null,path:"new.md",content:"new-memory"});
+ writeFileSync(join(home,"prompts","MAIN.md"),"platform v2");
  expect(resources.pin("first",builder)).toEqual(first);
  register("second");const second=resources.pin("second",builder);
  expect(second.selection.digest).not.toBe(first.selection.digest);
@@ -80,7 +78,7 @@ test("production service env pins resources before issuing model-configured toke
  const input={runnerKind:"work" as const,invocationId:"first",runnerContextId:"context",sessionId:"session",requestedByUserId:"alice",db:connection.db,agentConfig:snapshot,resourceBuilder:builder,accessTokenSigningSecret:"test-secret"};
  const env=buildLunaServiceRunnerEnv(input),first=resources.read("first");
  expect(env.LUNA_ACCESS_TOKEN).toBeTruthy();expect(resources.retainedReferences(first.selection.digest)).toBe(1);
- new AgentDocumentStore(connection.db,home).writeMemory("alice",scope.agentId,{expectedRevision:null,path:"a",content:"updated"});
+ writeFileSync(join(home,"prompts","MAIN.md"),"updated");
  buildLunaServiceRunnerEnv(input);expect(resources.read("first")).toEqual(first);
 });
 

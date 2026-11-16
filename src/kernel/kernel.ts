@@ -1,3 +1,4 @@
+import { AgentMemoryStore } from "@/agents/agent-memory-store";
 import {InvocationResources} from "@/runners/invocation-resources";
 import {AgentWorkerAccessStore} from "@/agents/agent-worker-access-store";
 import {ShadowWorkerRoutingStore} from "@/agents/shadow-worker-routing-store";
@@ -253,7 +254,10 @@ class Kernel {
     this._agentRunnerKey = undefined;
     this._database = new DataConnection(lunaSchema);
     this._sessionCommands = new SessionCommandService({ db: this._database.db, channelFor: id => this.replyChannel(id),
-      executeTrigger: createSessionTriggerExecutor(this._database.db, () => this._createMainRunner(), (sessionId) => this._runnerTypeForSession(sessionId)) });
+      executeTrigger: createSessionTriggerExecutor(this._database.db, () => this._createMainRunner(), (sessionId) => this._runnerTypeForSession(sessionId)),
+      memory: {reflectionIdleMs: config.memory.reflection_idle_ms, consolidationIntervalMs: config.memory.consolidation_interval_ms, forgetUnusedMs: config.memory.forget_unused_ms} });
+    // Entries imported by a migration have no search terms until they are indexed here.
+    new AgentMemoryStore(this._database.db).reindex();
     registerSessionCommands(this._database.db, this._sessionCommands);
     this._activeAgentConfig = new ActiveAgentConfigService(
       this._database.db,

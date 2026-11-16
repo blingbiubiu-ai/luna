@@ -58,8 +58,9 @@ private Agent ownership checks.
 Dashboard authentication, a valid name and an idempotency key. Agent owners manage
 their business authorization rules; platform rules use the administrator surface.
 Lists return only the signed-in owner's Agents. Memory and knowledge are Agent
-scoped; personality documents such as USER and SOUL are Shadow scoped. Updates
-use revisions to reject stale writes.
+scoped; a Shadow's persona is a set of Shadow-private memory entries. Updates
+use revisions to reject stale writes. Shared memory is entry-level and written
+by Shadows as they work; see [Agent memory](agent-memory.md).
 
 ## Channel bindings and replies
 

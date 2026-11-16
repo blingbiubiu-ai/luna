@@ -11,6 +11,7 @@ import { hasFlag } from "@luna/cli-support/options";
 import { runSchedulesCli } from "./commands/schedules";
 import { runRunnerOperationsCli } from "./commands/runner-operations";
 import { runMessagesCli } from "./commands/messages";
+import { runMemoryCli } from "./commands/memory";
 import { runAuthCli } from "./commands/auth";
 import { runKnowledgeCli } from "./commands/knowledge";
 import { runWorkspaceCli } from "./commands/workspace";
@@ -61,6 +62,7 @@ export async function runClientCli(
   if (command === "task" && rest[0] === "report") return runTaskReportCli(rest.slice(1), env);
   if (command === "task" || command === "session") return runRunnerOperationsCli(command, rest, env);
   if (command === "messages") return runMessagesCli(rest, env);
+  if (command === "memory") return runMemoryCli(rest, env);
   if (command === "auth") {
     return runAuthCli(rest, env);
   }
@@ -109,6 +111,7 @@ function clientHelpText(): string {
     "  luna session create-thread [--json '<object>' | --stdin] [--request-id <id>]",
     "  luna users search --query <name> [--kind user|bot] | get <user-id> | lookup --channel-id <id> --feishu-user-id <id>",
     "  luna messages send (--text <text> | --stdin) [--json] [--request-id <id>] [--purpose progress|answer|notification] [--session-id <id> | --user-id <id> | --feishu-user-id <id> --channel-id <id>]",
+    "  luna memory list|search|get|add|update|delete (see `luna memory help`)",
     "  luna task create|update|restart|cancel (--stdin | --json <JSON>) --request-id <id>",
     "  luna task status <command-id>",
     "  luna task status-card --task-id <id> --request-id <id> [--resend] [--style card|native]",
@@ -127,6 +130,7 @@ function clientHelpText(): string {
     "  task               Query and manage Agent tasks",
     "  session            Query and manage Agent sessions",
     "  artifacts          Register, materialize, and download Luna artifacts",
+    "  memory             Read and write the Agent's long-term memory",
     "  version            Print CLI version",
     "",
     "Run `luna auth login` before using protected Luna Service commands.",

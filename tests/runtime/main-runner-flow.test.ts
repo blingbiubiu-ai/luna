@@ -1,3 +1,4 @@
+import { AgentMemoryStore } from "../../src/agents/agent-memory-store";
 import {fixtureTaskOwnership} from "../helpers/platform-fixtures";
 import {fixtureSessionOwnership} from "../helpers/platform-fixtures";
 import { AgentLifecycleStore } from "../../src/agents/agent-lifecycle-store";
@@ -1253,6 +1254,10 @@ test("Main Runner accepts sentinel completion and injects runtime context", asyn
   const requester = materializeTestRequester("main-runner-structured-action");
   seedMainSession("session-1", requester.id);
   const runnerContext = new RunnerContextStore(database.db).resolveForSession("session-1", "fake");
+  new AgentMemoryStore(database.db).add(
+    {agentId: runnerContext.agent_id, kind: "owner", trusted: true, userId: null, shadowId: null},
+    {type: "project", title: "发布冻结", description: "11-20 前冻结发布", body: "memory body is fetched on demand", core: true},
+  );
   const pack = new ContextPackStore(database.db).createPack({ownerType: "session", ownerId: "session-1", kind: "session_launch", selectionStrategy: "manual"});
   const baseMessage = fakeNormalizedInbound({
       id: "incoming-message-1",
@@ -1368,6 +1373,9 @@ test("Main Runner accepts sentinel completion and injects runtime context", asyn
   expect(prompt).toContain("播放页竖屏");
   expect(prompt).toContain("uid");
   expect(prompt).toContain("# Luna Main Runner Turn Input");
+  expect(prompt).toContain("## Agent memory: always in effect");
+  expect(prompt).toContain("(project) 发布冻结: 11-20 前冻结发布");
+  expect(prompt).not.toContain("memory body is fetched on demand");
   expect(prompt).not.toContain("Allowed Action Contract");
   expect(prompt).toContain("JSON Input");
   expect(prompt).not.toContain("# Luna Main Runner Prompt");

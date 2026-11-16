@@ -1,3 +1,4 @@
+import { memoryInjection } from "@/agents/agent-memory-injection";
 import type {AgentExecutionSnapshot} from "@/agent-config";
 import { prepareRunnerFiles } from "@/runners/prepare-runner-files";
 import { RuntimeDetachedError } from "@/runners/runtime-detach";
@@ -288,6 +289,10 @@ export class WorkRunner {
           throw new Error("Work runner context was not resolved.");
         }
         const attemptContextId=runnerContext.id;
+        const memoryActor = this._requestedByUserIdForWorkRunner(latestMessageRow, session);
+        const memory = memoryActor === undefined ? undefined : memoryInjection(this._options.db,
+          {agentId: session.agent_id, shadowId: session.shadow_id, actorUserId: memoryActor, sessionId: session.id, taskId: null, runnerContextId: runnerContext.id}, inbound.text);
+        const turnPrompt = memory?.text ? `${prompt}\n\n${memory.text}` : prompt;
         attempt = this._attemptStore.listForTurn(input.turn.id).find(row => row.status === "running" && row.runnerContextId === attemptContextId) ?? this._attemptStore.createRunning({
           sessionId: session.id,
           turnId: input.turn.id,
@@ -295,7 +300,7 @@ export class WorkRunner {
           runnerType: currentRunnerType,
           runnerSessionId: runnerContext.runner_session_id,
           attemptKind: "primary",
-          inputPrompt: prompt,
+          inputPrompt: turnPrompt,
         });
         const runner = this._options.createRunner?.() ??
           createAgentRunnerForConfig(
@@ -322,7 +327,7 @@ export class WorkRunner {
           runnerContextStore: this._runnerContexts,
           runnerKind: "work",
           messageId: `work-${session.id}-${input.turn.id}`,
-          prompt,
+          prompt: turnPrompt,
           env: {
             ...(snapshot?.env ?? {}),
             ...(serviceEnv ?? {}),
@@ -339,6 +344,7 @@ export class WorkRunner {
             }
           },
         });
+        memory?.commit();
         rawOutput = invocation.text;
         runnerSessionId = invocation.runnerSessionId;
       }

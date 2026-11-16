@@ -8,6 +8,13 @@
       "when": 1794614400000,
       "tag": "0001_luna_baseline",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1794787200000,
+      "tag": "0002_agent_memories",
+      "breakpoints": true
     }
   ]
 }

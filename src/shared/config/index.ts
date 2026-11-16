@@ -101,6 +101,9 @@ export const config = {
     }
     return _appConfig.session;
   },
+  get memory() {
+    return (_appConfig ?? defaultAppConfig()).memory;
+  },
   get service() {
     if (!_appConfig) {
       return defaultAppConfig().service;

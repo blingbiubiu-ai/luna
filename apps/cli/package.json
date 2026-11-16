@@ -11,6 +11,7 @@
     "./commands/artifacts": "./src/commands/artifacts.ts",
     "./commands/task-report": "./src/commands/task-report.ts",
     "./commands/messages": "./src/commands/messages.ts",
+    "./commands/memory": "./src/commands/memory.ts",
     "./commands/groups": "./src/commands/groups.ts",
     "./commands/runner-operations": "./src/commands/runner-operations.ts",
     "./commands/users": "./src/commands/users.ts",

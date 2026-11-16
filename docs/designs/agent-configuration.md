@@ -134,7 +134,8 @@ The existing `/api/agent-config` routes now require an explicit `agentId` query 
 
 All configuration requests require explicit Agent scope. Runtime overview reports service health rather than a global model.
 
-Dashboard memory pages read Agent-scoped shared memory; personality pages edit
-Shadow-scoped USER and SOUL. Saves use the revision captured when opening the
-draft. Stale writes require reloading. Scope changes reset editor state and
+Dashboard memory pages list Agent-scoped memory entries with their origin and
+revision history ([Agent memory](agent-memory.md)). A Shadow's persona is edited
+there as `persona` entries of that Shadow. Saves use the revision captured when
+opening the draft. Stale writes require reloading. Scope changes reset editor state and
 Agent-scoped knowledge directory, file, search and Git caches.

@@ -39,7 +39,7 @@ import type { AuthorizationSubjectOption } from "../src/components/subject-picke
 import { AgentStore } from "../../../src/agents/agent-store";
 import { BotBindingStore } from "../../../src/agents/bot-binding-store";
 import { SessionStore } from "../../../src/sessions/session-store";
-import { AgentDocumentStore } from "../../../src/agents/agent-document-store";
+import { AgentMemoryStore } from "../../../src/agents/agent-memory-store";
 import { DataConnection } from "../../../src/data";
 import * as schema from "../../../src/data/schema";
 import { HonoServer } from "../../../src/server/server";
@@ -3103,14 +3103,15 @@ describe("luna dashboard api", () => {
     );
   });
 
-  test("Agent memory returns its document path without the host directory", async () => {
-    new AgentDocumentStore(connection.db, fixtureHome).writeMemory(fixtureOwnerId, fixtureAgentId, {
-      expectedRevision: null, path: "MEMORY.md", content: "Fixture memory",
-    });
-    const memory = await getJson<{ files: Record<string, string> }>(
-      `/api/agents/${fixtureAgentId}/memory`,
+  test("Agent memory lists entries with their origin for the owner", async () => {
+    new AgentMemoryStore(connection.db).add(
+      { agentId: fixtureAgentId, kind: "owner", trusted: true, userId: fixtureOwnerId, shadowId: null },
+      { type: "project", title: "Fixture memory", description: "Fixture description", body: "Fixture body" },
     );
-    expect(memory.files).toEqual({ "MEMORY.md": "Fixture memory" });
+    const memory = await getJson<{ memories: Array<Record<string, unknown>> }>(
+      `/api/agents/${fixtureAgentId}/memories`,
+    );
+    expect(memory.memories).toMatchObject([{ title: "Fixture memory", body: "Fixture body", originKind: "owner", status: "active", revision: 1 }]);
     expect(JSON.stringify(memory)).not.toContain(fixtureHome);
   });
 

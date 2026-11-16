@@ -1,6 +1,6 @@
 import {dirname,resolve} from "node:path";
 import type {DrizzleDB} from "@/data";
-import {AgentDocumentStore} from "@/agents/agent-document-store";
+import {TaskScopeResolver} from "@/agents/task-scope";
 import {AgentStore,type AgentScope} from "@/agents/agent-store";
 import {AgentPluginStore} from "@/plugins/agent-plugin-store";
 import type {PluginRegistry} from "@/plugins/registry";
@@ -15,7 +15,7 @@ export interface AgentResourceSources {
  promptAssetsDirectory:string;
  repoRoot:string;
 }
-/** Captures documents and enabled plugin contributions together; secrets/config remain in Service. */
+/** Captures platform assets and enabled plugin contributions; memory, persona, secrets and config remain in Service. */
 export class AgentResourceBuilder {
  constructor(private readonly db:DrizzleDB,private readonly home:string,private readonly registry:PluginRegistry,
   private readonly sources:AgentResourceSources={bundledSkillsDirectory:resolveBundledSkillsRoot(),promptAssetsDirectory:resolvePromptAssetsRoot(),repoRoot:process.cwd()}){}
@@ -23,13 +23,11 @@ export class AgentResourceBuilder {
  capture(actorUserId:string,scope:AgentScope):ScopedResourceBundle {
   return this.db.transaction(()=>{
    new AgentStore(this.db).requireScope(actorUserId,scope);
-   const documents=new AgentDocumentStore(this.db,this.home).execution(scope);
+   new TaskScopeResolver(this.db).active(scope);
    const plugins=new AgentPluginStore(this.db,this.registry).enabledResources(scope.agentId);
    const files=new ResourceFiles();
    files.tree(this.sources.bundledSkillsDirectory,"public/skills");
    files.tree(this.sources.promptAssetsDirectory,"public/prompts");
-   for(const [path,content] of Object.entries(documents.memory.files))files.add(`agent/memory/${path}`,content);
-   for(const [path,content] of Object.entries(documents.persona.files))files.add(`shadow/config/${path}`,content);
    const catalog=plugins.map(({manifest,configRevision})=>{
     for(const skill of manifest.skills??[]){
      const id=directoryName(skill.id);

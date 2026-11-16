@@ -779,9 +779,8 @@ describe("work session lifecycle", () => {
     expect(readFileSync(agentsPath, "utf-8")).not.toContain(
       "Do not output anything outside the JSON object",
     );
-    expect(readFileSync(agentsPath, "utf-8")).toContain("$HOME/.luna-resources/memory/");
-    expect(readFileSync(agentsPath, "utf-8")).toContain("$HOME/.luna-resources/config/SOUL.md");
-    expect(readFileSync(agentsPath, "utf-8")).toContain("$HOME/.luna-resources/config/USER.md");
+    expect(readFileSync(agentsPath, "utf-8")).toContain("luna memory get <id>");
+    expect(readFileSync(agentsPath, "utf-8")).toContain("luna memory add --type persona");
     expect(readFileSync(agentsPath, "utf-8")).toContain(
       "Stable Runner Context",
     );

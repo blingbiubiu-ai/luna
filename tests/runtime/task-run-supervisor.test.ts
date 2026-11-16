@@ -2238,10 +2238,8 @@ describe("executeTaskRun", () => {
       "reference the file only through that ref",
     );
     const agentsMd = readFileSync(agentsMdPath, "utf-8");
-    expect(agentsMd).toContain("$HOME/.luna-resources/config/USER.md");
-    expect(agentsMd).toContain("$HOME/.luna-resources/config/SOUL.md");
-    expect(agentsMd).toContain("$HOME/.luna-resources/memory/");
-    expect(agentsMd).toContain("read-only snapshots");
+    expect(agentsMd).toContain("luna memory add --type persona");
+    expect(agentsMd).toContain("luna memory get <id>");
     expect(agentsMd).toContain("Stable Runner Context");
     expect(agentsMd).toContain(".luna/runner-context.json");
     expect(agentsMd).toContain("Per-turn or per-run user input");

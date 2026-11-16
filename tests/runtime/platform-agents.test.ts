@@ -124,7 +124,7 @@ test("self-service API rejects missing keys, forged ownership and unauthenticate
     expect((await grantRequest("workspace.knowledge.read", "guest")).status).toBe(201);
     const guestHeaders = {"Test-Actor": "guest"};
     expect(await (await app.request("/agents", {headers:guestHeaders})).json()).toMatchObject({agents: []});
-    for (const path of ["", "/shadows", "/memory", "/authorization-rules"]) {
+    for (const path of ["", "/shadows", "/memories", "/authorization-rules"]) {
       expect((await app.request(`/agents/${agent.id}${path}`, {headers:guestHeaders})).status).toBe(403);
     }
     const transition = await app.request(`/agents/${agent.id}/status`, {

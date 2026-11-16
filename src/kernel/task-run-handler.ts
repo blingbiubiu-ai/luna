@@ -1,3 +1,4 @@
+import { memoryInjection } from "@/agents/agent-memory-injection";
 import type {AgentExecutionSnapshot} from "@/agent-config";
 import {TaskScopeResolver} from "@/agents/task-scope";
 import { prepareRunnerFiles } from "@/runners/prepare-runner-files";
@@ -459,7 +460,14 @@ async function _runAgentTask(input: {
     const prepared=await prepareRunnerFiles(runnerContext,_buildTaskRunnerContextFile(input.taskId,taskRow,subscriptions),input.signal,invocationId);
     runnerContext=new RunnerContextStore(input.db).syncInstructionFingerprint(runnerContext.id,prepared.instructionFingerprint).runnerContext;
   }
-  for await (const event of runner.stream(userMessage, {
+  // The artifact allowlist above is derived from the Task prompt alone; memory text must not widen it.
+  const actor = new InvocationStore(input.db).require(invocationId).actorUserId;
+  const memory = memoryInjection(input.db, {agentId: runnerContext.agent_id, shadowId: runnerContext.shadow_id, actorUserId: actor,
+    sessionId: taskRow?.primary_session_id ?? null, taskId: input.taskId, runnerContextId: runnerContext.id},
+    [taskRow?.title, taskRow?.summary, input.pendingText].filter(Boolean).join("\n"));
+  const turnMessage: UserMessage = memory.text
+    ? {...userMessage, content: [{type: "text", text: `${input.materializedPrompt}\n\n${memory.text}`}]} : userMessage;
+  for await (const event of runner.stream(turnMessage, {
     cwd: runnerContext.runner_root_path,
     isNewSession: runnerContext.runner_session_id === null,
     runnerContextId: runnerContext.id,
@@ -519,6 +527,7 @@ async function _runAgentTask(input: {
     }
   }
 
+  memory.commit();
   _throwIfAborted(input.signal);
   return requireTaskReportCompletion(input.db, input.taskRunId, finalText);
   } finally {

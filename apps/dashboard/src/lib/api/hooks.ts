@@ -1574,37 +1574,109 @@ export function useSkill(slug: string | null) {
   });
 }
 
-// --- Agent documents ---
+// --- Agent memory ---
 
-export interface DashboardDocumentSnapshot {
-  revision: string | null;
-  files: Record<string, string>;
-  updatedAt: number | null;
+export type DashboardMemoryType = "persona" | "person" | "feedback" | "project" | "procedure" | "reference";
+export type DashboardMemoryOriginKind = "inline" | "reflection" | "consolidation" | "owner" | "migration";
+export type DashboardMemoryChangeKind = DashboardMemoryOriginKind | "forgetting";
+export type DashboardMemoryStatus = "active" | "superseded" | "deleted" | "archived";
+
+export interface DashboardMemoryFields {
+  type: DashboardMemoryType;
+  title: string;
+  description: string;
+  body: string;
+  subjectUserId: string | null;
+  core: boolean;
+  expiresAt: number | null;
 }
 
-function useAgentDocument<T>(agentId: string, shadowId?: string) {
-  const path = `/agents/${encodeURIComponent(agentId)}` + (shadowId
-    ? `/shadows/${encodeURIComponent(shadowId)}/config`
-    : "/memory");
-  const queryKey = ["luna", "agent-document", agentId, shadowId ?? null];
+export interface DashboardMemory extends DashboardMemoryFields {
+  id: string;
+  visibility: "agent" | "shadow";
+  originKind: DashboardMemoryOriginKind;
+  originShadowId: string | null;
+  originShadowName: string | null;
+  originSessionId: string | null;
+  originTaskId: string | null;
+  originUserId: string | null;
+  originUserName: string | null;
+  subjectUserName: string | null;
+  trusted: boolean;
+  revision: number;
+  status: DashboardMemoryStatus;
+  supersededBy: string | null;
+  lastUsedAt: number;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface DashboardMemoryRevision {
+  revision: number;
+  changeKind: DashboardMemoryChangeKind;
+  changedByUserId: string | null;
+  changedByShadowId: string | null;
+  createdAt: number;
+  snapshot: DashboardMemoryFields & { status: DashboardMemoryStatus; trusted: boolean };
+}
+
+export interface DashboardMemoryFilter {
+  query: string;
+  type: string;
+  originKind: string;
+  originShadowId: string;
+  status: string;
+  core: string;
+  sort: "updatedAt" | "createdAt";
+  limit: number;
+  offset: number;
+}
+
+/** Owner view of an Agent's memory, one server-filtered page at a time, with its edit, delete and restore operations. */
+export function useAgentMemories(agentId: string, filter: DashboardMemoryFilter) {
+  const base = `/agents/${encodeURIComponent(agentId)}/memories`;
+  const scopeKey = ["luna", "agent-memories", agentId];
   const client = useQueryClient();
-  const snapshot = useQuery({
-    queryKey,
-    queryFn: ({ signal }) => apiFetch<DashboardDocumentSnapshot>(path, { signal }),
+  const refresh = () => client.invalidateQueries({ queryKey: scopeKey });
+  const send = (path: string, method: string, body?: unknown) =>
+    apiFetch<{ memory: DashboardMemory }>(`${base}${path}`, { method, ...(body === undefined ? {} : { body: JSON.stringify(body) }) }).then(result => result.memory);
+  const params = new URLSearchParams(Object.entries(filter).filter(([, value]) => value !== "").map(([key, value]) => [key, String(value)]));
+  const list = useQuery({
+    queryKey: [...scopeKey, "list", params.toString()],
+    queryFn: ({ signal }) => apiFetch<{ memories: DashboardMemory[]; total: number; core: { used: number; limit: number } }>(`${base}?${params}`, { signal }),
+    placeholderData: previous => previous,
   });
-  const update = useMutation({
-    mutationFn: (input: T) => apiFetch<DashboardDocumentSnapshot>(path, { method: "PUT", body: JSON.stringify(input) }),
-    onSuccess: data => client.setQueryData(queryKey, data),
+  const save = useMutation({
+    mutationFn: (input: DashboardMemoryFields & { id?: string; expectedRevision?: number; shadowId?: string }) => {
+      // `shadowId` names the Shadow a new persona entry belongs to; it is not part of an update.
+      const { id, expectedRevision, shadowId, ...fields } = input;
+      return id ? send(`/${encodeURIComponent(id)}`, "PUT", { ...fields, expectedRevision }) : send("", "POST", { ...fields, ...(shadowId ? { shadowId } : {}) });
+    },
+    onSettled: refresh,
   });
-  return { snapshot, update };
+  const remove = useMutation({
+    mutationFn: (input: { id: string; expectedRevision: number }) => send(`/${encodeURIComponent(input.id)}?expectedRevision=${input.expectedRevision}`, "DELETE"),
+    onSettled: refresh,
+  });
+  const restore = useMutation({
+    mutationFn: (input: { id: string; revision: number; expectedRevision: number }) =>
+      send(`/${encodeURIComponent(input.id)}/restore`, "POST", { revision: input.revision, expectedRevision: input.expectedRevision }),
+    onSettled: refresh,
+  });
+  const unarchive = useMutation({
+    mutationFn: (input: { id: string; expectedRevision: number }) => send(`/${encodeURIComponent(input.id)}/unarchive`, "POST", { expectedRevision: input.expectedRevision }),
+    onSettled: refresh,
+  });
+  return { list, save, remove, restore, unarchive };
 }
 
-export function useAgentMemory(agentId: string) {
-  return useAgentDocument<{ path: string; content: string; expectedRevision: string | null }>(agentId);
-}
-
-export function useShadowPersona(agentId: string, shadowId: string) {
-  return useAgentDocument<{ user: string; soul: string; expectedRevision: string }>(agentId, shadowId);
+export function useAgentMemoryHistory(agentId: string, memoryId: string | undefined, revision: number | undefined) {
+  return useQuery({
+    queryKey: ["luna", "agent-memories", agentId, memoryId, "history", revision],
+    queryFn: ({ signal }) => apiFetch<{ revisions: DashboardMemoryRevision[] }>(
+      `/agents/${encodeURIComponent(agentId)}/memories/${encodeURIComponent(memoryId ?? "")}/history`, { signal }).then(result => result.revisions),
+    enabled: memoryId !== undefined,
+  });
 }
 
 // --- Agent configuration ---

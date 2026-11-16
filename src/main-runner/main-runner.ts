@@ -1,3 +1,4 @@
+import { memoryInjection } from "@/agents/agent-memory-injection";
 import {RunnerContextStore as ExecutionContextStore} from "@/runners/runner-context-store";
 import {TaskScopeResolver} from "@/agents/task-scope";
 import type {AgentScope} from "@/agents/agent-store";
@@ -148,7 +149,11 @@ export class MainRunner {
       }
     }
 
-    const prompt = buildPrompt(input.input);
+    const memory = this._options.serviceAuthDb && invocation
+      ? memoryInjection(this._options.serviceAuthDb, {...scope, actorUserId: invocation.actorUserId, sessionId: input.input.context.sessionId, taskId: null, runnerContextId: runnerContext.id},
+        input.input.type === "user_messages" ? input.input.messages.map(message => message.text).join("\n") : undefined)
+      : undefined;
+    const prompt = buildPrompt(input.input) + (memory?.text ? `\n\n${memory.text}` : "");
     const primaryAttempt = this._createAttempt(input, {
       attemptKind: "primary",
       inputPrompt: prompt,
@@ -188,6 +193,7 @@ export class MainRunner {
       throw err;
     }
 
+    memory?.commit();
     const db = this._options.serviceAuthDb;
     if (input.signal?.aborted) throw new Error("Runner was cancelled before final reply");
     try {

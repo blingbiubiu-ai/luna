@@ -7,6 +7,7 @@ import { createRunnerOperationRoutes } from "./routes/runner-operations";
 import { createChannelConfigRoutes } from "./routes/channel-config";
 import { createRunnerGroupRoutes } from "./routes/runner-groups";
 import { createRunnerUserRoutes } from "./routes/runner-users";
+import { createRunnerMemoryRoutes } from "./routes/runner-memory";
 import { createSessionCommandAdminRoutes } from "./routes/session-commands";
 import { createRunnerMessageRoutes } from "./routes/runner-messages";
 import { loginDotMatrixScript } from "./login-dot-matrix";
@@ -97,6 +98,7 @@ function createApp(
       .route("/api/runtime", runtimeRoutes)
       .route("/api/runner", createRunnerGroupRoutes(db === undefined ? {} : { db }))
       .route("/api/runner", createRunnerUserRoutes(db === undefined ? {} : { db }))
+      .route("/api/runner", createRunnerMemoryRoutes(db === undefined ? {} : { db }))
       .route("/api/runner", createRunnerOperationRoutes())
       .route("/api/runner/task-reports", createTaskReportRoutes())
       .route("/api/runner", createRunnerMessageRoutes(db === undefined ? {} : { db }))

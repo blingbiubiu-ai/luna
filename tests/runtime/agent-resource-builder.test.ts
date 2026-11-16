@@ -1,3 +1,4 @@
+import {AgentMemoryStore} from "@/agents/agent-memory-store";
 import {afterEach,beforeEach,expect,test} from "bun:test";
 import {mkdtempSync,mkdirSync,writeFileSync,rmSync,symlinkSync} from "node:fs";
 import {tmpdir} from "node:os";
@@ -7,7 +8,6 @@ import * as schema from "@/data/schema";
 import {setLunaHome} from "@/shared";
 import {fixtureScope} from "../helpers/platform-fixtures";
 import {AgentStore} from "@/agents/agent-store";
-import {AgentDocumentStore} from "@/agents/agent-document-store";
 import {PluginRegistry} from "@/plugins/registry";
 import {AgentPluginStore} from "@/plugins/agent-plugin-store";
 import {AgentSecretCipher} from "@/agent-config/secret-cipher";
@@ -41,21 +41,25 @@ test("captures only enabled Agent tools, without global or Agent config and secr
  expect(Object.keys(contents(builder.capture("alice",a)))).not.toContain("agent/tools/commands/alpha");
  expect(Object.keys(contents(first))).toContain("agent/tools/commands/alpha");
 });
-test("same Agent shares memory while Shadow persona and snapshots remain independent",()=>{
+test("Agent memory and Shadow persona entries never enter a snapshot",()=>{
  const shadows=new AgentStore(connection.db),other=shadows.createShadow("alice",a.agentId,{name:"Other"},"other-shadow");
- const scope={agentId:a.agentId,shadowId:other.id},documents=new AgentDocumentStore(connection.db,home);
+ const scope={agentId:a.agentId,shadowId:other.id};
  const initial=builder.capture("alice",a);
- expect(contents(initial)["shadow/config/USER.md"]).toBe("");expect(contents(initial)["shadow/config/SOUL.md"]).toBe("");
- documents.writeMemory("alice",a.agentId,{expectedRevision:null,path:"remember.md",content:"shared-memory"});
- documents.writePersona("alice",scope,{expectedRevision:documents.persona("alice",scope).revision!,user:"other-user",soul:"other-soul"});
+ new AgentMemoryStore(connection.db).add({agentId:a.agentId,kind:"owner",trusted:true,userId:"alice",shadowId:null},
+  {type:"project",title:"remember",description:"shared",body:"shared-memory"});
+ new AgentMemoryStore(connection.db).add({agentId:a.agentId,kind:"owner",trusted:true,owner:true,userId:"alice",shadowId:other.id},
+  {type:"persona",title:"SOUL",description:"identity",body:"other-soul"});
  const first=builder.capture("alice",a),second=builder.capture("alice",scope);
  expect(first.selection.agentMemoryRevision).toBe(second.selection.agentMemoryRevision);
  expect(first.selection.agentToolsRevision).toBe(second.selection.agentToolsRevision);
- expect(contents(first)["agent/memory/remember.md"]).toBe("shared-memory");
- expect(contents(second)["shadow/config/SOUL.md"]).toBe("other-soul");
- expect(contents(first)["shadow/config/SOUL.md"]).toBe("");
- expect(contents(initial)["agent/memory/remember.md"]).toBeUndefined();
- expect(contents(builder.capture("bob",b))["agent/memory/remember.md"]).toBeUndefined();
+ expect(first.selection.agentMemoryRevision).toBe(initial.selection.agentMemoryRevision);
+ expect(Object.keys(contents(first)).filter(path=>path.startsWith("agent/memory/"))).toEqual([]);
+ expect(JSON.stringify(contents(first))).not.toContain("shared-memory");
+ expect(second.selection.shadowConfigRevision).not.toBe(first.selection.shadowConfigRevision);
+ expect(second.selection.digest).not.toBe(first.selection.digest);
+ expect(Object.keys(contents(second)).filter(path=>path.startsWith("shadow/config/"))).toEqual([]);
+ expect(JSON.stringify(contents(second))).not.toContain("other-soul");
+ expect(builder.capture("alice",scope).selection).toEqual(second.selection);
 });
 test("accepts a Feishu participant and requires valid Shadow scope and rejects forged Shadow scope",()=>{
  expect(()=>builder.capture("bob",a)).not.toThrow();

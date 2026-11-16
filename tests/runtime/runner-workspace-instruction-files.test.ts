@@ -144,9 +144,9 @@ test("all generated Runner entrypoints use the current command/report protocol",
       expect(content).toContain(`Your starting working directory is \`${runnerRootPath}\``);
       expect(content).toContain(join(runnerRootPath, ".luna", "runner-context.json"));
       expect(content).toContain(join(config.paths.home, ".luna-resources", "commands"));
-      expect(content).toContain("$HOME/.luna-resources/config/SOUL.md");
-      expect(content).toContain("$HOME/.luna-resources/config/USER.md");
-      expect(content).toContain("$HOME/.luna-resources/memory/");
+      expect(content).toContain("luna memory add --type persona");
+      expect(content).not.toContain(".luna-resources/config/");
+      expect(content).toContain("luna memory get <id>");
       expect(content).not.toMatch(/\$HOME\/\.luna-resources\/memory\/(SOUL|USER|MAIN|TASK|WORK)\.md/);
       expect(content).not.toContain("$HOME/projects/");
       expect(content).not.toContain("/data/contexts/");

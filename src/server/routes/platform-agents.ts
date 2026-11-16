@@ -1,7 +1,7 @@
 import {createAgentWorkerAccessRoutes} from "./agent-worker-access";
 import {createAgentPluginRoutes} from "./agent-plugins";
 import type {PluginRegistry} from "@/plugins/registry";
-import {createAgentDocumentRoutes} from "./agent-documents";
+import {createAgentMemoryRoutes} from "./agent-memories";
 import {config} from "@/shared";
 import {AgentLifecycleStore, type AgentLifecycleJob} from "@/agents/agent-lifecycle-store";
 import { HTTPException } from "hono/http-exception";
@@ -38,7 +38,7 @@ export function createPlatformAgentRoutes(db: DrizzleDB, registry?:PluginRegistr
     return auth.user.id;
   };
   return new Hono()
-    .route("/",createAgentDocumentRoutes(db,config.paths.home))
+    .route("/",createAgentMemoryRoutes(db))
     .route("/",createAgentWorkerAccessRoutes(db))
     .route("/",registry ? createAgentPluginRoutes(db,registry) : new Hono())
     .use("*", async (c, next) => {
