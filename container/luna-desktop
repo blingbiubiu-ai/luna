@@ -2,6 +2,7 @@
 # On-demand desktop for Dashboard VNC access.
 #   luna-desktop start   Start Xvfb, openbox, the tint2 panel and x11vnc once per container (idempotent).
 #   luna-desktop bridge  Relay stdin/stdout to the container-local VNC port.
+#   luna-desktop stop    Stop the desktop and X11 apps on :99 so memory and Chrome profile locks are released.
 # Worker runs both as the Runner UID, so files and logins made on the desktop stay usable
 # by Jobs. Applications such as Chrome are opened from the desktop, not started here.
 set -eu
@@ -27,9 +28,28 @@ start() {
   # and later image updates would never reach that Shadow.
   running "^tint2" || spawn tint2 tint2 -c /etc/xdg/tint2/tint2rc
   if ! running "^x11vnc"; then
-    spawn x11vnc x11vnc -display :99 -localhost -rfbport "$VNC_PORT" -nopw -forever -shared -quiet
+    spawn x11vnc x11vnc -display :99 -localhost -rfbport "$VNC_PORT" -nopw -forever -shared -xkb -quiet
     for _ in $(seq 100); do (exec 3<>"/dev/tcp/127.0.0.1/$VNC_PORT") 2>/dev/null && break; sleep 0.1; done
   fi
+}
+
+stop_desktop() {
+  local uid
+  uid=$(id -u)
+  # Stop X11 clients attached to :99 (such as desktop Chrome holding SingletonLock) before Xvfb exits.
+  for pid in $(pgrep -u "$uid" 2>/dev/null || true); do
+    [ "$pid" = "$$" ] && continue
+    if tr '\0' '\n' <"/proc/$pid/environ" 2>/dev/null | grep -qx "DISPLAY=:99"; then
+      kill -TERM "$pid" 2>/dev/null || true
+    fi
+  done
+  pkill -u "$uid" -f "^(x11vnc -display :99|tint2 -c /etc/xdg/tint2/tint2rc|openbox --startup|Xvfb :99)" 2>/dev/null || true
+  for _ in $(seq 30); do
+    running "^(x11vnc -display :99|Xvfb :99)" || break
+    sleep 0.1
+  done
+  pkill -9 -u "$uid" -f "^(x11vnc -display :99|Xvfb :99)" 2>/dev/null || true
+  rm -f /tmp/.X99-lock /tmp/.X11-unix/X99
 }
 
 bridge() {
@@ -57,5 +77,6 @@ while True:
 case "${1:-}" in
   start) start ;;
   bridge) bridge ;;
-  *) echo "usage: luna-desktop start|bridge" >&2; exit 2 ;;
+  stop) stop_desktop ;;
+  *) echo "usage: luna-desktop start|bridge|stop" >&2; exit 2 ;;
 esac

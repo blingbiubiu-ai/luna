@@ -25,25 +25,39 @@ beforeEach(() => {
 });
 afterEach(() => { connection.close(); rmSync(home, { recursive: true, force: true }); });
 
-const summary = (environmentId: string, shadow: string) => ({ environmentId, shadowId: shadow, mode: "shared", state: "ready", running: true, activeJobs: 1,
-  idleSince: null, resources: { memory: "2g", cpus: 2, pidsLimit: 512 } });
+const summary = (environmentId: string, shadow: string, hostAllowed = true) => ({ environmentId, shadowId: shadow, mode: "shared", state: "ready", running: true, activeJobs: 1,
+  idleSince: null, resources: { memory: "2g", cpus: 2, pidsLimit: 512 },
+  root: { requested: false, effective: false, hostAllowed, ...(hostAllowed ? {} : { reason: "home_requires_nosuid" }) } });
 
 /** Workers: worker-1 is assigned to alice's Agent, worker-2 is connected but not assigned. */
-function fakeGateway() {
+function fakeGateway(hostAllowed = true) {
   const calls: string[] = [];
   const opened: { workerId: string; request: ContainerStreamRequest; handlers: ContainerStreamHandlers; closed: boolean }[] = [];
   const gateway = {
     list: () => ["worker-1", "worker-2"].map(workerId => ({ workerId, connected: true, revoked: false, health: { capabilities: ["container-streams-v1"] } })),
     resetError: undefined as ExecutionError | undefined,
-    scheduler: { workers: { client: (workerId: string) => ({ call: async (method: string, path: string, body?: unknown) => {
-      if (method === "POST") {
-        calls.push(`${workerId} POST ${path} ${JSON.stringify(body)}`);
-        if (gateway.resetError) throw gateway.resetError;
-        return undefined;
-      }
-      calls.push(`${workerId} ${path}`);
-      return { containers: workerId === "worker-1" ? [summary("env_shadow", shadowId), summary("env_default", alice.shadowId)] : [summary("env_other", "x")] };
-    } }) } },
+    scheduler: {
+      config: { environmentId: "luna", mode: "shared" as const, runtimeId: "runtime", resources: { memory: "2g", cpus: 2, pidsLimit: 512 }, sharedProject: undefined },
+      placements: {
+        route: (_scope: unknown, allowed: readonly string[]) => {
+          if (!allowed.length) throw new ExecutionError(409, "agent_workers_not_configured");
+          return { workerId: allowed[0]!, generation: 1 };
+        },
+      },
+      workers: {
+        imageDigest: () => `sha256:${"a".repeat(64)}`,
+        client: (workerId: string) => ({ call: async (method: string, path: string, body?: unknown) => {
+          if (method === "POST") {
+            calls.push(`${workerId} POST ${path} ${JSON.stringify(body)}`);
+            if (gateway.resetError) throw gateway.resetError;
+            if (path === "/v1/containers/provision") return { container: summary("env_provisioned", (body as { spec: { scope: { shadowId: string } } }).spec.scope.shadowId, hostAllowed) };
+            return undefined;
+          }
+          calls.push(`${workerId} ${path}`);
+          return { containers: workerId === "worker-1" ? [summary("env_shadow", shadowId, hostAllowed), summary("env_default", alice.shadowId, hostAllowed)] : [summary("env_other", "x", hostAllowed)] };
+        } }),
+      },
+    },
     openStream: (workerId: string, request: ContainerStreamRequest, handlers: ContainerStreamHandlers) => {
       const record = { workerId, request, handlers, closed: false };
       opened.push(record);
@@ -58,11 +72,18 @@ function fakeGateway() {
   return { gateway: gateway as unknown as WorkerGateway, calls, opened, fail: (error: ExecutionError) => { gateway.resetError = error; } };
 }
 
+const fakeBuilder = {
+  capture: (_actor: string, scope: { agentId: string; shadowId: string }) => ({
+    protocolVersion: 2 as const, scope, files: [],
+    selection: { protocolVersion: 2 as const, publicRevision: "a".repeat(64), agentToolsRevision: "b".repeat(64), digest: "c".repeat(64) },
+  }),
+};
+
 function app(actor: string, gateway: WorkerGateway) {
   return new Hono().use("*", async (c, next) => {
     (c as any).set("dashboardAuthSession", { authenticated: true, user: { id: actor, name: actor, provider: "test" } });
     (c as any).set("lunaRequestAuthKind", "dashboard-cookie"); (c as any).set("lunaAuthorizationDb", connection.db); await next();
-  }).route("/", createAgentContainerRoutes(connection.db, () => gateway));
+  }).route("/", createAgentContainerRoutes(connection.db, () => gateway, () => fakeBuilder as never));
 }
 
 test("lists only the owner's assigned Workers, scoped to the Agent, with Shadow names", async () => {
@@ -146,4 +167,33 @@ test("system disk reset is owner-only, scoped to assigned Workers and reports bu
   fake.fail(undefined as unknown as ExecutionError);
   expect((await reset("alice", "worker-1/env_shadow")).status).toBe(200);
   expect(fake.calls.at(-1)).toBe(`worker-1 POST /v1/environments/env_shadow/reset ${JSON.stringify({ agentId: alice.agentId })}`);
+});
+
+test("cold-start provision, desktop stop, and host nosuid root-terminal gate enforce owner and host boundaries", async () => {
+  const deniedHost = fakeGateway(false);
+  const listed = await (await app("alice", deniedHost.gateway).request(`/${alice.agentId}/containers`)).json() as { shadows: { shadowId: string }[] };
+  expect(listed.shadows.map(item => item.shadowId)).toContain(shadowId);
+
+  // When hostAllowed is false (Linux without nosuid), root terminal is rejected with 403 while runner terminal proceeds to WS check (426).
+  const headers = { origin: "http://luna.test", host: "luna.test" };
+  const rootAttempt = await app("alice", deniedHost.gateway).request(new Request(`http://luna.test/${alice.agentId}/containers/worker-1/env_shadow/stream?kind=terminal&user=root`, { headers }));
+  expect(rootAttempt.status).toBe(403);
+  expect(await rootAttempt.json()).toMatchObject({ code: "home_requires_nosuid" });
+  const runnerAttempt = await app("alice", deniedHost.gateway).request(new Request(`http://luna.test/${alice.agentId}/containers/worker-1/env_shadow/stream?kind=terminal&user=runner`, { headers }));
+  expect(runnerAttempt.status).toBe(426);
+
+  // Provisioning a cold Shadow container requires ownership and an assigned Worker.
+  const fake = fakeGateway(true);
+  const json = { "content-type": "application/json" };
+  expect((await app("bob", fake.gateway).request(`/${alice.agentId}/containers`, { method: "POST", headers: json, body: JSON.stringify({ shadowId }) })).status).toBe(403);
+  expect((await app("alice", fake.gateway).request(`/${alice.agentId}/containers`, { method: "POST", headers: json, body: JSON.stringify({ shadowId, workerId: "worker-2" }) })).status).toBe(404);
+  const provisioned = await app("alice", fake.gateway).request(`/${alice.agentId}/containers`, { method: "POST", headers: json, body: JSON.stringify({ shadowId }) });
+  expect(provisioned.status).toBe(200);
+  expect(await provisioned.json()).toMatchObject({ container: { environmentId: "env_provisioned", shadowId, workerId: "worker-1", shadowName: "研究员" } });
+
+  // Stopping desktop background processes is owner-only and scoped to assigned Workers.
+  expect((await app("bob", fake.gateway).request(`/${alice.agentId}/containers/worker-1/env_shadow/desktop/stop`, { method: "POST" })).status).toBe(403);
+  expect((await app("alice", fake.gateway).request(`/${alice.agentId}/containers/worker-2/env_other/desktop/stop`, { method: "POST" })).status).toBe(404);
+  expect((await app("alice", fake.gateway).request(`/${alice.agentId}/containers/worker-1/env_shadow/desktop/stop`, { method: "POST" })).status).toBe(200);
+  expect(fake.calls.at(-1)).toBe(`worker-1 POST /v1/environments/env_shadow/desktop-stop ${JSON.stringify({ agentId: alice.agentId })}`);
 });

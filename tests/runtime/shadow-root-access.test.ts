@@ -93,3 +93,43 @@ test("luna root status answers for the runner token's own Shadow only", async ()
   const other = fixtureScope(connection.db, "dave");
   expect((await status("?user=alice", { ...claims, agentId: other.agentId, shadowId: other.shadowId })).body).toEqual({ rootAccess: false, user: "alice", trusted: false });
 });
+
+test("invocationPrivileged gates kernel-level sudo to invocations with a trusted requester", () => {
+  const base = { agentId: alice.agentId, shadowId: alice.shadowId };
+  expect(store.invocationPrivileged({ ...base, actorUserId: "alice" })).toEqual({ rootAccess: false, privileged: false });
+
+  store.setEnabled("alice", alice, true);
+  grant("user", bobId);
+
+  // Untrusted DM or turn: container keeps rootAccess, but Runner subprocess stays restricted (privileged: false).
+  expect(store.invocationPrivileged({ ...base, actorUserId: carolId })).toEqual({ rootAccess: true, privileged: false });
+  // Owner and agent.root grantee get privileged: true.
+  expect(store.invocationPrivileged({ ...base, actorUserId: "alice" })).toEqual({ rootAccess: true, privileged: true });
+  expect(store.invocationPrivileged({ ...base, actorUserId: bobId })).toEqual({ rootAccess: true, privileged: true });
+
+  // Group turn batch: if at least one user message in the batch comes from a trusted sender, privileged is true.
+  const inbound = {
+    id: "m1", channel: { type: "feishu", id: "ch1" }, surface: { externalId: "chat1", kind: "group" },
+    sender: { externalId: "ext", kind: "user" as const }, text: "ok", mentions: [], addressing: { addressedToBot: true, reason: "mention" },
+  };
+  const runnerContext = {
+    id: "ctx1", agent_id: alice.agentId, shadow_id: alice.shadowId, owner_type: "session", owner_id: "s1",
+    runner_type: "claude", runner_session_id: null, instruction_fingerprint: null, runner_root_path: "/r", workspacePath: "/r/w", ipcPath: "/r/i",
+    last_run_id: null, created_at: 1, updated_at: 1,
+  };
+  const batchSnapshot = (senders: string[]) => ({
+    version: 1, kind: "main", input: {
+      runnerContext,
+      input: {
+        type: "user_messages", latestMessage: inbound, context: { sessionId: "s1", candidateOpenTasks: [] },
+        messages: senders.map((senderUserId, idx) => ({
+          messageId: `msg_${idx}`, channelMessageKey: null, role: "user", senderUserId,
+          sender: { id: senderUserId, externalId: senderUserId, kind: "user", displayName: senderUserId },
+          text: "install", createdAt: idx, rawMessage: inbound,
+        })),
+      },
+    },
+  });
+  expect(store.invocationPrivileged({ ...base, actorUserId: carolId, inputSnapshot: batchSnapshot([carolId]) })).toEqual({ rootAccess: true, privileged: false });
+  expect(store.invocationPrivileged({ ...base, actorUserId: carolId, inputSnapshot: batchSnapshot([carolId, bobId]) })).toEqual({ rootAccess: true, privileged: true });
+});

@@ -1,12 +1,15 @@
 import {ShadowPreparationStore} from "./shadow-preparation-store";
 import { randomUUID } from "node:crypto";
+import { z } from "zod";
 import { FileRequest } from "@luna/runner-protocol";
 import { EnvironmentSpec } from "@luna/runner-protocol";
-import { contentHash } from "@luna/execution-store";
+import { contentHash, transaction } from "@luna/execution-store";
 import { setTimeout as delay } from "node:timers/promises";
 import { Assignment, EnvironmentHandle, PrepareRequest, ReleaseProof, isTerminal, type JobSnapshot } from "@luna/runner-protocol";
 import { ExecutionError } from "@luna/execution-store";
 import { ExecutionClient } from "@luna/execution-transport";
+import { ScopedResourceStore } from "@luna/host-runtime/scoped-resource-store";
+import { validateScopedResources } from "@luna/host-runtime/scoped-runner-resources";
 import { EnvironmentStore, environmentKey, type ReservationRecord, type EnvironmentRecord } from "./environment-store";
 import { DockerEnvironmentDriver } from "./docker-driver";
 import { ProjectMounts } from "./project-mounts";
@@ -15,15 +18,32 @@ interface ExecutorHealth { instanceId: string; bootId: string; activeJobs: numbe
 export interface PreparedEnvironment { handle: EnvironmentHandle; controlCredential: { credentialId: string; token: string }; }
 export interface ContainerSummary {
   environmentId: string; shadowId: string; mode: EnvironmentSpec["mode"]; state: EnvironmentRecord["state"]; running: boolean;
-  activeJobs: number; idleSince: number | null; resources: EnvironmentSpec["resources"]; imageDigest: string;
-  /** Root as the container runs it: off, on, or requested but refused by this host. */
-  root: { requested: boolean; effective: boolean; reason?: string };
+  activeJobs: number; activeStreams: number; idleSince: number | null; resources: EnvironmentSpec["resources"]; imageDigest: string;
+  /** Root as the container runs it: off, on, or requested/refused by this host. */
+  root: { requested: boolean; effective: boolean; hostAllowed: boolean; reason?: string };
 }
 
 /** Serializes the lifecycle of each persistent Shadow environment. */
 export class EnvironmentManager {
   private readonly locks = new Map<string, Promise<unknown>>();
+  private readonly streamCounts = new Map<string, number>();
+  private streamCloser?: (environmentId: string, reason: string) => void;
   constructor(readonly store: EnvironmentStore, readonly driver: DockerEnvironmentDriver) {}
+
+  setStreamCloser(closer: (environmentId: string, reason: string) => void): void { this.streamCloser = closer; }
+  activeStreams(id: string): number { return this.streamCounts.get(id) ?? 0; }
+  acquireStream(id: string): void {
+    this.streamCounts.set(id, this.activeStreams(id) + 1);
+    const env = this.store.find(id);
+    if (env && env.idleSince !== null) { env.idleSince = null; this.store.saveEnvironment(env); }
+  }
+  releaseStream(id: string): void {
+    const next = this.activeStreams(id) - 1;
+    if (next > 0) { this.streamCounts.set(id, next); return; }
+    this.streamCounts.delete(id);
+    const env = this.store.find(id);
+    if (env && !this.store.active(id).length) { env.idleSince = Date.now(); this.store.saveEnvironment(env); }
+  }
 
   async prepare(input: unknown): Promise<PreparedEnvironment> {
     const request = PrepareRequest.parse(input);
@@ -83,7 +103,7 @@ export class EnvironmentManager {
   private async resumeReplacement(id: string): Promise<void> {
     const previous = this.store.find(id);
     if (!previous?.pendingSpec) return;
-    if (this.store.active(id).length) throw new ExecutionError(503, "environment_mount_pending");
+    if (this.store.active(id).length || this.activeStreams(id) > 0) throw new ExecutionError(503, "environment_mount_pending");
     const actual = await this.driver.inspect(previous);
     if (actual?.State.Running) {
       const health = await this.executor(id).call<ExecutorHealth>("GET", "/v1/health");
@@ -189,7 +209,7 @@ export class EnvironmentManager {
     const actual = await this.driver.inspect(environment);
     if (actual?.State.Running) await this.executor(environment.id).call("DELETE", `/v1/file-leases/${reservation.requestId}`);
     this.store.db.prepare("DELETE FROM worker_reservations WHERE request_id=?").run(reservation.requestId);
-    environment.idleSince = this.store.active(environment.id).length ? null : Date.now();
+    environment.idleSince = this.store.active(environment.id).length || this.activeStreams(environment.id) > 0 ? null : Date.now();
     this.store.saveEnvironment(environment);
   }
 
@@ -206,20 +226,71 @@ export class EnvironmentManager {
   /** Dashboard view of one Agent's environments on this Worker. */
   async containers(agentId: string): Promise<ContainerSummary[]> {
     const states = await this.driver.containerStates();
-    return this.store.list().filter(environment => environment.spec.scope.agentId === agentId).map(environment => ({
-      environmentId: environment.id, shadowId: environment.spec.scope.shadowId, mode: environment.spec.mode, state: environment.state,
-      running: states.get(this.driver.name(environment)) === true,
-      activeJobs: this.store.active(environment.id).filter(item => item.occupant.kind === "job").length,
-      idleSince: environment.idleSince, resources: environment.spec.resources, imageDigest: environment.spec.imageDigest, root: rootSummary(this.driver.rootStatus(environment)),
-    }));
+    return this.store.list().filter(environment => environment.spec.scope.agentId === agentId)
+      .map(environment => this.summarize(environment, states.get(this.driver.name(environment)) === true));
+  }
+
+  /**
+   * Create or start a Shadow's container on demand from the Dashboard before its first Job.
+   * Publishes the verified snapshot so Jobs arriving later reuse the same environment.
+   */
+  async provision(raw: unknown): Promise<ContainerSummary> {
+    const { bundle, spec } = z.object({ bundle: z.unknown(), spec: EnvironmentSpec }).strict().parse(raw);
+    const verified = validateScopedResources(bundle, spec.scope, spec.resourceSelection);
+    new ScopedResourceStore(this.driver.config.dataRoot).publish(verified, spec.scope, spec.resourceSelection);
+    const id = environmentKey(spec);
+    return this.lock(id, async () => {
+      await this.resumeReplacement(id);
+      let environment = this.store.find(id);
+      if (environment) {
+        if (environment.pendingSpec || ["draining", "reaping"].includes(environment.state)) throw new ExecutionError(409, "environment_draining");
+        const rootChanged = (environment.spec.rootAccess === true) !== (spec.rootAccess === true);
+        const resourcesChanged = contentHash(environment.spec.resourceSelection) !== contentHash(spec.resourceSelection);
+        const limitsChanged = contentHash(environment.spec.resources) !== contentHash(spec.resources);
+        if (environment.spec.imageDigest !== spec.imageDigest || rootChanged) {
+          this.store.beginReplacement(id, spec);
+          await this.resumeReplacement(id);
+          environment = this.store.require(id);
+        } else if ((resourcesChanged || limitsChanged) && !this.store.active(id).length) {
+          if (limitsChanged) await this.driver.updateLimits(environment, spec.resources);
+          this.store.retarget(id, spec);
+          environment = this.store.require(id);
+        }
+      } else {
+        environment = transaction(this.store.db, () => {
+          for (const other of this.store.list()) {
+            if (other.id !== id && other.spec.scope.agentId === spec.scope.agentId && other.spec.scope.shadowId === spec.scope.shadowId
+              && (other.state !== "stopped" || this.store.active(other.id).length)) throw new ExecutionError(409, "shadow_environment_occupied");
+          }
+          const created: EnvironmentRecord = { id, instanceId: randomUUID(), spec, state: "creating", containerId: null, endpoint: null, bootId: null, idleSince: Date.now() };
+          this.store.db.prepare("INSERT INTO worker_environments VALUES (?,?)").run(id, JSON.stringify(created));
+          return created;
+        });
+      }
+      const actual = await this.driver.inspect(environment);
+      if (!actual?.State.Running) {
+        environment.containerId = await this.driver.ensure(environment);
+        environment.endpoint = this.driver.endpoint(id);
+        environment.bootId = (await this.waitReady(id, environment.instanceId)).bootId;
+        environment.state = "ready";
+        environment.idleSince = this.store.active(id).length || this.activeStreams(id) > 0 ? null : Date.now();
+        this.store.saveEnvironment(environment);
+      }
+      return this.summarize(environment, true);
+    });
   }
 
   /** Start a stopped container for an interactive stream; retiring or replacing environments are refused. */
-  async streamTarget(id: string, agentId: string): Promise<{ containerId: string; home: string }> {
+  async streamTarget(id: string, agentId: string, options?: { root?: boolean }): Promise<{ containerId: string; home: string }> {
     return this.lock(id, async () => {
       let environment = this.store.require(id);
       if (environment.spec.scope.agentId !== agentId) throw new ExecutionError(403, "environment_agent_mismatch");
       if (environment.pendingSpec || ["draining", "reaping"].includes(environment.state)) throw new ExecutionError(409, "environment_draining");
+      if (options?.root) {
+        // Root terminals face the same host setuid risk as sudo Jobs: enforce the same host check.
+        const hostRoot = this.driver.hostRootStatus(environment);
+        if (!hostRoot.allowed) throw new ExecutionError(403, hostRoot.reason);
+      }
       const actual = await this.driver.inspect(environment);
       if (actual?.State.Running) return { containerId: actual.Id, home: this.driver.home(environment) };
       // The Worker moved to another image while this container was stopped: like a Job would,
@@ -240,12 +311,22 @@ export class EnvironmentManager {
     });
   }
 
+  /** Stop the container's on-demand VNC desktop and desktop Chrome so Jobs can reuse the profile. */
+  async stopDesktop(id: string, agentId: string): Promise<void> {
+    await this.lock(id, async () => {
+      const environment = this.store.require(id);
+      if (environment.spec.scope.agentId !== agentId) throw new ExecutionError(403, "environment_agent_mismatch");
+      await this.driver.stopDesktop(environment);
+    });
+  }
+
   /**
    * Reset the system disk: remove the container (its writable layer) while HOME stays.
    * The next Job or console recreates it from the image. Refused while work is running.
    */
   async reset(id: string, agentId: string): Promise<void> {
     if (this.store.require(id).spec.scope.agentId !== agentId) throw new ExecutionError(403, "environment_agent_mismatch");
+    this.streamCloser?.(id, "system_disk_reset");
     await this.destroy(id);
   }
 
@@ -263,6 +344,16 @@ export class EnvironmentManager {
     });
   }
 
+  private summarize(environment: EnvironmentRecord, running: boolean): ContainerSummary {
+    const activeStreams = this.activeStreams(environment.id);
+    return {
+      environmentId: environment.id, shadowId: environment.spec.scope.shadowId, mode: environment.spec.mode, state: environment.state,
+      running, activeJobs: this.store.active(environment.id).filter(item => item.occupant.kind === "job").length,
+      activeStreams, idleSince: activeStreams > 0 ? null : environment.idleSince,
+      resources: environment.spec.resources, imageDigest: environment.spec.imageDigest,
+      root: rootSummary(Boolean(environment.spec.rootAccess), this.driver.hostRootStatus(environment)),
+    };
+  }
   private binding(reservation: ReservationRecord): Assignment {
     if (reservation.occupant.kind !== "job") throw new ExecutionError(422, "job_reservation_required");
     const environment = this.store.require(reservation.environmentId);
@@ -298,7 +389,7 @@ function withRootAccess(spec: EnvironmentSpec, rootAccess: boolean): Environment
   return rootAccess ? { ...rest, rootAccess: true } : rest;
 }
 
-function rootSummary(status: ReturnType<DockerEnvironmentDriver["rootStatus"]>): ContainerSummary["root"] {
-  if (!status) return { requested: false, effective: false };
-  return status.allowed ? { requested: true, effective: true } : { requested: true, effective: false, reason: status.reason };
+function rootSummary(requested: boolean, host: ReturnType<DockerEnvironmentDriver["hostRootStatus"]>): ContainerSummary["root"] {
+  if (host.allowed) return { requested, effective: requested, hostAllowed: true };
+  return { requested, effective: false, hostAllowed: false, reason: host.reason };
 }

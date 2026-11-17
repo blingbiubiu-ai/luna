@@ -104,10 +104,10 @@ export class RuntimeAgentTransport implements AgentAttemptTransport {
       const resources=new InvocationResources(this.db,config.paths.home).read(invocationId);
       if(!prepared || prepared.scope.agentId!==invocation.agentId || prepared.scope.shadowId!==invocation.shadowId
         || prepared.resources.digest!==resources.selection.digest)throw new ExecutionError(409,"invocation_preparation_mismatch");
-      // The Shadow switch grants sudo to every Job; the Runner judges when to use it.
-      const rootAccess = new ShadowRootAccessStore(this.db).enabled(invocation.shadowId);
+      // Container rootAccess follows the Shadow switch; OS-level privileged requires a trusted requester.
+      const root = new ShadowRootAccessStore(this.db).invocationPrivileged(invocation);
       const request = JobRequest.parse({ version: 2, jobId: randomUUID(), invocationId, environmentId: this.client.environmentId,
-        ...(rootAccess ? { rootAccess: true, privileged: true } : {}),
+        ...(root.rootAccess ? { rootAccess: true, ...(root.privileged ? { privileged: true } : {}) } : {}),
         scope:prepared.scope,resources:resources.selection,resourceRevision:resources.selection.digest,
         runnerContextId: options.runnerContextId, scopeKey, runnerKind: invocation.runnerKind,
         ...(projectId ? { projectId } : {}),

@@ -227,6 +227,8 @@ export class HonoServer {
 
     assertSafeDashboardBinding(hostname, Bun.env.LUNA_DASHBOARD_TOKEN);
 
+    const socketKeepalives = new WeakMap<ServerWebSocket<ServiceSocketData>, ReturnType<typeof setInterval>>();
+
     this._server = Bun.serve({
       fetch: (request, server) => {
         if (new URL(request.url).pathname.startsWith("/api/worker/")) {
@@ -254,7 +256,13 @@ export class HonoServer {
       websocket: {
         maxPayloadLength: 16 * 1024 * 1024,
         idleTimeout: 40,
+        sendPings: true,
         open: (ws: ServerWebSocket<ServiceSocketData>) => {
+          // Protocol-level RFC 6455 pings keep quiet terminal/VNC and Worker stream sockets
+          // alive across Bun's 40s idleTimeout without injecting application frames.
+          const timer = setInterval(() => { try { ws.ping(); } catch { clearInterval(timer); } }, 15000);
+          timer.unref?.();
+          socketKeepalives.set(ws, timer);
           const data = ws.data;
           if (!("kind" in data)) data.gateway.open(ws as ServerWebSocket<WorkerSocketData>);
           else if (data.kind === "worker-stream") data.gateway.streamOpened(ws as ServerWebSocket<WorkerStreamSocketData>);
@@ -267,6 +275,8 @@ export class HonoServer {
           else data.session.message(ws as ServerWebSocket<ContainerConsoleSocketData>, message);
         },
         close: (ws: ServerWebSocket<ServiceSocketData>) => {
+          const timer = socketKeepalives.get(ws);
+          if (timer) { clearInterval(timer); socketKeepalives.delete(ws); }
           const data = ws.data;
           if (!("kind" in data)) data.gateway.closed(ws as ServerWebSocket<WorkerSocketData>);
           else if (data.kind === "worker-stream") data.gateway.streamClosed(ws as ServerWebSocket<WorkerStreamSocketData>);

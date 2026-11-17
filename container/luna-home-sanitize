@@ -1,11 +1,11 @@
 #!/bin/sh
 # Usage: luna-home-sanitize HOME UID GID   (runs as root inside a Shadow container)
-# Root (sudo Jobs, Dashboard root terminals) can leave setuid/setgid files or root-owned
-# files in the Shadow HOME, which is a host directory: clear the special bits and give
-# root-owned files back to the Runner. -xdev keeps the read-only snapshot mount out.
+# Root (sudo Jobs, Dashboard root terminals) can leave setuid/setgid files or non-Runner
+# ownership in the Shadow HOME, which is a host directory: clear special bits and restore
+# ownership back to the Runner UID/GID. -xdev keeps the read-only snapshot mount out.
 set -eu
 [ "$#" -eq 3 ] || { echo "usage: luna-home-sanitize HOME UID GID" >&2; exit 2; }
 home=$1 uid=$2 gid=$3
 [ -d "$home" ] || exit 0
 find "$home" -xdev ! -type l \( -perm -4000 -o -perm -2000 \) -exec chmod ug-s {} + 2>/dev/null || true
-find "$home" -xdev -uid 0 -exec chown -h "$uid:$gid" {} + 2>/dev/null || true
+find "$home" -xdev \( ! -uid "$uid" -o ! -gid "$gid" \) -exec chown -h "$uid:$gid" {} + 2>/dev/null || true

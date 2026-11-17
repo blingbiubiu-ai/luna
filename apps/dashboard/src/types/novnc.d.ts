@@ -8,5 +8,6 @@ declare module "@novnc/novnc" {
     focusOnClick: boolean;
     disconnect(): void;
     focus(): void;
+    clipboardPasteFrom(text: string): void;
   }
 }

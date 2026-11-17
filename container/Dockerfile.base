@@ -71,15 +71,20 @@ ARG BUN_VERSION=1.3.14
 RUN npm install -g bun@${BUN_VERSION} \
     && bun --version
 
-# Official Chrome stable for the amd64 runner, including shared-library
-# dependencies and CJK fonts for headless screenshots/PDFs.
-RUN curl -fsSL --retry 3 \
-      https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb \
-      -o /tmp/google-chrome.deb \
-    && apt-get update \
-    && apt-get install -y --no-install-recommends /tmp/google-chrome.deb fonts-noto-cjk fonts-noto-color-emoji \
+# Official Chrome stable on amd64; Debian Chromium on arm64 (linked at /usr/bin/google-chrome),
+# including shared-library dependencies and CJK fonts for headless screenshots/PDFs and VNC.
+RUN apt-get update \
+    && case "${TARGETARCH:-$(dpkg --print-architecture)}" in \
+      amd64) \
+        curl -fsSL --retry 3 https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb -o /tmp/google-chrome.deb \
+        && apt-get install -y --no-install-recommends /tmp/google-chrome.deb fonts-noto-cjk fonts-noto-color-emoji \
+        && rm -f /tmp/google-chrome.deb ;; \
+      arm64) \
+        apt-get install -y --no-install-recommends chromium fonts-noto-cjk fonts-noto-color-emoji \
+        && ln -sf /usr/bin/chromium /usr/bin/google-chrome ;; \
+      *) exit 1 ;; \
+    esac \
     && google-chrome --version \
-    && rm -f /tmp/google-chrome.deb \
     && rm -rf /var/lib/apt/lists/*
 
 ENV CHROME_BIN=/usr/bin/google-chrome \
@@ -88,7 +93,7 @@ ENV CHROME_BIN=/usr/bin/google-chrome \
 # Dashboard remote desktop: a virtual display, openbox with a tint2 panel, a terminal
 # and a VNC server, started on demand by luna-desktop. Menus list .desktop entries, so
 # software that ships one (or one added under ~/.local/share/applications) appears there.
-# Chrome entries go through the container wrapper (/usr/local/bin/google-chrome).
+# Chrome/Chromium entries go through the container wrapper (/usr/local/bin/google-chrome).
 RUN apt-get update && apt-get install -y --no-install-recommends \
     xvfb \
     x11vnc \
@@ -97,9 +102,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     tint2 \
     lxterminal \
     && rm -rf /var/lib/apt/lists/* \
-    && sed -i 's#^Exec=/usr/bin/google-chrome-stable#Exec=/usr/local/bin/google-chrome#' /usr/share/applications/google-chrome.desktop \
+    && if [ -f /usr/share/applications/google-chrome.desktop ]; then \
+         sed -i 's#^Exec=/usr/bin/google-chrome-stable#Exec=/usr/local/bin/google-chrome#' /usr/share/applications/google-chrome.desktop \
+         && grep -q '^Exec=/usr/local/bin/google-chrome' /usr/share/applications/google-chrome.desktop; \
+       elif [ -f /usr/share/applications/chromium.desktop ]; then \
+         sed -i 's#^Exec=/usr/bin/chromium#Exec=/usr/local/bin/google-chrome#' /usr/share/applications/chromium.desktop \
+         && grep -q '^Exec=/usr/local/bin/google-chrome' /usr/share/applications/chromium.desktop; \
+       fi \
     && sed -i 's#^Exec=lxterminal.*#Exec=/usr/local/bin/luna-terminal#' /usr/share/applications/lxterminal.desktop \
-    && grep -q '^Exec=/usr/local/bin/google-chrome' /usr/share/applications/google-chrome.desktop \
     && grep -q '^Exec=/usr/local/bin/luna-terminal' /usr/share/applications/lxterminal.desktop \
     && for app in tint2 tint2conf x11vnc; do echo 'NoDisplay=true' >> "/usr/share/applications/$app.desktop"; done
 
@@ -133,6 +143,7 @@ COPY container/desktop/tint2rc /etc/xdg/tint2/tint2rc
 COPY container/luna-prompt.sh /etc/profile.d/luna-prompt.sh
 # Containers cannot enable Chrome's sandbox (no-new-privileges); hide the --no-sandbox banner.
 COPY container/chrome-policy.json /etc/opt/chrome/policies/managed/luna.json
+COPY container/chrome-policy.json /etc/chromium/policies/managed/luna.json
 RUN chmod +x /usr/local/bin/luna /usr/local/bin/luna-desktop /usr/local/bin/google-chrome /usr/local/bin/luna-terminal /usr/local/bin/luna-apps-menu /usr/local/bin/luna-home-sanitize
 
 ENV LANG=C.UTF-8 LC_ALL=C.UTF-8

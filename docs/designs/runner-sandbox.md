@@ -69,18 +69,19 @@ The hash covers the image, mounts and access modes, network/ports, security
 settings and Executor parameters, but not the contents of HOME, projects or working
 directories, the snapshot version or resource limits:
 
-- **A new snapshot** (configuration, Skills, prompts, memory) switches the
+- **A new snapshot** (Skills, commands, prompts, tools) switches the
   `.luna-resources` link once the Shadow has no reservation; running Jobs keep the
   version they were admitted with. Executor admits a Job only when the link names
   the Job's snapshot digest.
 - **Changed limits** (memory, CPUs, pids) are applied with `docker container update`
   once the Shadow is idle.
 - **A new image** or **a changed Shadow root switch** replaces the container after
-  reservations and Executor Jobs settle: this resets the system disk, as do
-  configuration changes of the launch arguments themselves and legacy containers
-  without the label. File maintenance never changes the root switch.
-- **Reset system disk** in the Dashboard removes the container (refused while Jobs
-  run); the next Job or console recreates it from the image.
+  reservations, Executor Jobs and active console streams settle: this resets the
+  system disk, as do configuration changes of the launch arguments themselves and
+  legacy containers without the label. File maintenance never changes the root switch.
+- **Reset system disk** in the Dashboard closes open console streams and removes the
+  container (refused while Jobs run); the next Job or console recreates it from the
+  image.
 
 Persistent host directories and the Executor data volume survive replacement;
 `/tmp` is a tmpfs and is cleared whenever the container stops.
@@ -88,31 +89,40 @@ Persistent host directories and the Executor data volume survive replacement;
 ## Dashboard container access
 
 The Dashboard Containers page lists an Agent's Shadow containers on its assigned
-Workers and opens a terminal, a root terminal or a desktop (VNC) in one of them.
-Only the Agent owner can do so. Opening a stopped container starts it first;
-draining or replacing environments are refused. Interactive sessions do not hold
-a reservation, so container replacement or reaping ends them.
+Workers, plus active Shadows whose container has not been created yet, and opens a
+terminal, a root terminal or a desktop (VNC) in one of them. Only the Agent owner
+can do so. Unprovisioned Shadows can be provisioned on demand (`POST /api/agents/:agentId/containers`)
+before any Job runs, placing the Shadow on an assigned Worker and publishing its
+current resource snapshot so subsequent Jobs reuse the same container. Opening a
+stopped container starts it first; draining or replacing environments are refused.
+Active console streams keep the environment marked non-idle and defer background
+container replacement until the streams close; explicit system-disk reset closes
+them immediately.
 
 - **Terminal** runs `docker exec -it` in a Worker-local PTY as the Runner UID,
   with `HOME` and `cwd` set to the Shadow HOME. Logins made here (gh, ssh, git)
   are files Jobs can read.
-- **Root terminal** uses `docker exec -u 0` with `HOME=/tmp`. apt works here, and
+- **Root terminal** uses `docker exec -u 0` with `HOME=/tmp` and requires the same
+  host `nosuid` check as Shadow root access (`rootHostCheck`). apt works here, and
   what it installs stays until the image is upgraded or the system disk is reset.
   When the session ends, Worker runs `luna-home-sanitize` in the container to clear
-  setuid/setgid bits and root ownership left in the Shadow HOME.
+  setuid/setgid bits and restore any non-Runner file ownership in the Shadow HOME.
 - **Desktop** runs `luna-desktop start` as the Runner: Xvfb, openbox with a tint2
-  panel (Chrome and terminal launchers, window list, clock) and x11vnc on
-  container-local `127.0.0.1:5900`; `luna-desktop bridge` then pipes the RFB bytes.
-  No application starts automatically. The right-click menu's 应用程序 submenu is
-  generated from `.desktop` entries in `/usr/share/applications`,
+  panel (Chrome and terminal launchers, window list, clock) and x11vnc (`-xkb`) on
+  container-local `127.0.0.1:5900`; `luna-desktop bridge` then pipes the RFB bytes,
+  and the Dashboard provides an RFB clipboard toolbar for pasting passwords, URLs
+  and CJK text. `luna-desktop stop` (`POST .../desktop/stop`) terminates the X11
+  session and desktop Chrome so Jobs can reuse `$HOME/.config/google-chrome` without
+  profile lock conflicts. No application starts automatically. The right-click menu's
+  应用程序 submenu is generated from `.desktop` entries in `/usr/share/applications`,
   `/usr/local/share/applications` and `~/.local/share/applications`, so software
   that ships an entry, or an entry a Shadow adds to its HOME, appears there.
-  `/usr/local/bin/google-chrome` wraps Chrome for the container (`--no-sandbox`,
-  no first-run prompts, clearing a profile lock left by a replaced container);
-  absolute `/usr/bin/google-chrome` used by Jobs is unaffected. Browser logins land
-  in `$HOME/.config/google-chrome`; a Job browser cannot open that profile while
-  the desktop Chrome is running. A managed policy hides the `--no-sandbox` banner.
-  The desktop terminal (lxterminal) runs a login shell.
+  `/usr/local/bin/google-chrome` wraps Chrome/Chromium for the container
+  (`--no-sandbox`, no first-run prompts, clearing a profile lock left by a replaced
+  container); absolute `/usr/bin/google-chrome` used by Jobs is unaffected (official
+  Chrome on `amd64`, Debian Chromium symlinked at `/usr/bin/google-chrome` on
+  `arm64`). A managed policy hides the `--no-sandbox` banner. The desktop terminal
+  (lxterminal) runs a login shell.
 - Runner UIDs have no passwd entry in the image; `/etc/profile.d/luna-prompt.sh`
   shows `runner` in the prompt instead of `I have no name!`.
 
@@ -121,11 +131,13 @@ Data path: browser WebSocket → Service → dedicated Worker data WebSocket →
 with a one-time token, only to Workers advertising `container-streams-v1`); the
 Worker then dials `/api/worker/streams/<id>` outbound with its credential and the
 token, so stream bytes never queue behind Job traffic and no inbound port is
-opened. Binary frames carry bytes; text frames carry `resize` (Service →
-Worker) and `end` reasons (Worker → Service). The browser socket requires the
-Dashboard cookie and a same-origin `Origin`. Service logs one
-`container_console_session` line at start and end (user, Agent, Shadow, Worker,
-environment, kind, user, duration, reason); there is no audit table.
+opened. Service sends periodic RFC 6455 WebSocket Ping frames to keep idle streams
+alive across its socket idle timeout without injecting application frames. Binary
+frames carry bytes; text frames carry `resize` (Service → Worker) and `end` reasons
+(Worker → Service). The browser socket requires the Dashboard cookie and a
+same-origin `Origin`. Service logs one `container_console_session` line at start
+and end (user, Agent, Shadow, Worker, environment, kind, user, duration, reason);
+there is no audit table.
 
 ## Shadow root access
 
@@ -144,27 +156,32 @@ their other grants.
   bind-mounted HOME. On Linux those are host files, so Worker allows root only when
   the HOME's filesystem is mounted `nosuid` (`findmnt`); Docker Desktop (macOS)
   maps container root to the host user and is allowed; other hosts are refused.
-  A refused switch keeps the container without sudo and the Containers page says why.
-- **Jobs.** With the switch on, every Job of the Shadow carries `rootAccess` and
-  `privileged` in its hashed request, and Executor starts its Runner with `setpriv`
-  keeping the bounding set and without `--no-new-privs`. (Without them Runners keep
-  `--bounding-set=-all --no-new-privs`, so sudo cannot raise them.)
-- **Judgement, not enforcement.** Whether to use sudo is the Runner's decision,
-  guided by `prompts/runner-root-access.md`, which Worker appends to Runner
-  instructions when the switch is on and the host allows it. The Runner acts like a
-  colleague with admin rights: only trusted people authorize root actions, checked
-  with `luna root status --user <userId>` (the Shadow comes from the runner token;
-  grants themselves are not exposed) against the sender ids in its input. It goes
-  ahead when a trusted person clearly wants the result, and otherwise asks in plain
-  terms ("I'm going to install ffmpeg, OK?") without mentioning root; any natural
-  agreement from a trusted person is enough. It never uses root for credentials,
+  A refused switch keeps the container without sudo, blocks root terminals, and
+  reports the reason on the Containers page.
+- **Jobs.** With the switch on, every Job of the Shadow carries `rootAccess` so the
+  container is not recreated per turn, while Service sets `privileged: true` only
+  when the invocation's actor or at least one user-message sender in the turn is
+  trusted (`ShadowRootAccessStore.invocationPrivileged`). Executor starts a
+  `privileged` Runner with `setpriv` keeping the bounding set and without
+  `--no-new-privs`; untrusted turns omit `privileged` and keep
+  `--bounding-set=-all --no-new-privs`, blocking `sudo` in the kernel.
+- **Judgement within privileged turns.** When a turn is `privileged`, whether to
+  use sudo is the Runner's decision, guided by `prompts/runner-root-access.md`,
+  which Worker appends to Runner instructions when the switch is on and the host
+  allows it. The Runner acts like a colleague with admin rights: only trusted people
+  authorize root actions, checked with `luna root status --user <userId>` (the
+  Shadow comes from the runner token; grants themselves are not exposed) against the
+  sender ids in its input. It goes ahead when a trusted person clearly wants the
+  result, and otherwise asks in plain terms ("I'm going to install ffmpeg, OK?")
+  without mentioning root; any natural agreement from a trusted person is enough
+  (and their reply runs in a `privileged` turn). It never uses root for credentials,
   sudo rules or accounts, other processes, or breaking the environment.
 - **HOME cleanup.** After a privileged Job, and when the container starts, Executor
   runs `luna-home-sanitize` like the root terminal does.
 
-Nothing outside the model stops a misled Runner on a Shadow with root: prompt
-injection through untrusted messages, web pages, files or a HOME shared by all of
-the Shadow's sessions can lead it to act as if a trusted person agreed. Keep root
+Container root shares the container namespace with Executor: prompt injection
+through untrusted messages, web pages, files or a HOME shared by all of the
+Shadow's sessions can still mislead a trusted turn into misusing `sudo`. Keep root
 Shadows away from conversations with untrusted members, or give trusted users
 their own Shadow with root.
 

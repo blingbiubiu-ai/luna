@@ -155,11 +155,22 @@ export class DockerEnvironmentDriver {
     return this.layouts.executorDirectory(environment.spec.scope, environment.id);
   }
   name(environment: EnvironmentRecord): string { return `luna-exec-${environment.spec.mode}-${contentHash([this.config.workerId, environment.id]).slice(0, 16)}`; }
+  /** Whether this host's Shadow HOME mount permits container root (nosuid on Linux, Docker Desktop on macOS). */
+  hostRootStatus(environment: EnvironmentRecord): RootHostCheck {
+    return rootHostCheck(this.layouts.ensure(environment.spec.scope).homeSource);
+  }
   /** Root takes effect only when the Shadow switch is on and this host's HOME passes the nosuid check. */
   rootStatus(environment: EnvironmentRecord): RootHostCheck | undefined {
-    return environment.spec.rootAccess ? rootHostCheck(this.layouts.ensure(environment.spec.scope).homeSource) : undefined;
+    return environment.spec.rootAccess ? this.hostRootStatus(environment) : undefined;
   }
   rootAllowed(environment: EnvironmentRecord): boolean { return this.rootStatus(environment)?.allowed === true; }
+  /** Stop the on-demand Xvfb/openbox/Chrome desktop session inside a running container. */
+  async stopDesktop(environment: EnvironmentRecord): Promise<void> {
+    const inspection = await this.inspect(environment);
+    if (!inspection?.State.Running) return;
+    await this.docker(["exec", "-u", `${this.config.runnerUid}:${this.config.runnerGid}`,
+      "-e", `HOME=${this.home(environment)}`, inspection.Id, "luna-desktop", "stop"]);
+  }
   /** The Shadow HOME as mounted inside its container. */
   home(environment: EnvironmentRecord): string { return this.layouts.ensure(environment.spec.scope).home; }
   /** One Docker call for all of this Worker's containers: name -> running. */

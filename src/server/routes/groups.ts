@@ -25,6 +25,7 @@ import {
   type AuthorizationRuleRecord,
 } from "../policy/authorization-rule-store";
 import { isGuardResponse, requireDashboardOnly } from "../auth/guards";
+import { requireAgentDirectoryUser } from "./users";
 import { getKernel } from "./kernel";
 
 export interface GroupsRouteOptions {
@@ -135,9 +136,13 @@ export function createGroupsRoutes(options: GroupsRouteOptions = {}) {
       const db = getDb();
       const body = await readBody(c.req.raw);
       const group = requireOwnedGroup(c, db);
+      const requesterId = dashboardRequesterUserIdFromContext(c)!;
+      const agent = new AgentStore(db).requireOwner(requesterId, group.agentId);
+      const userId = requiredString(body.userId, "userId");
+      requireAgentDirectoryUser(db, agent.id, agent.ownerUserId, requesterId, userId);
       const membership = new GroupStore(db).addMember({
         groupId: group.id,
-        userId: requiredString(body.userId, "userId"),
+        userId,
         role: parseGroupRole(body.role),
       });
       return c.json({

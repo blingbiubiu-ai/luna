@@ -177,14 +177,19 @@ export function createUsersRoutes(options: UsersRouteOptions = {}) {
     })
     .post("/:id/group-memberships", async (c) => {
       const db = getDb();
-      requireUserRow(db, c.req.param("id"));
+      const targetUserId = c.req.param("id");
+      requireUserRow(db, targetUserId);
       const body = await readBody(c.req.raw);
       const groupStore = new GroupStore(db);
       const group = groupStore.requireGroup(requiredString(body.groupId, "groupId"));
-      new AgentStore(db).requireOwner(dashboardRequesterUserIdFromContext(c)!, group.agentId);
+      const requesterId = dashboardRequesterUserIdFromContext(c)!;
+      const agent = new AgentStore(db).requireOwner(requesterId, group.agentId);
+      if (!isPlatformAdministrator(db, requesterId)) {
+        requireAgentUser(db, agent.id, agent.ownerUserId, targetUserId);
+      }
       const membership = groupStore.addMember({
         groupId: group.id,
-        userId: c.req.param("id"),
+        userId: targetUserId,
         role: parseGroupRole(body.role),
       });
       return c.json({ status: "ok", membership });
@@ -238,11 +243,18 @@ export function createUsersRoutes(options: UsersRouteOptions = {}) {
     })
     .delete("/:id/authorization-rules/:grantId", (c) => {
       const db = getDb();
-      const {id: agentId} = requireUserDirectoryAgent(c, db);
-      const row = requireUserRow(db, c.req.param("id"), true);
+      const {id: agentId, ownerUserId} = requireUserDirectoryAgent(c, db);
+      const requestedId = c.req.param("id");
+      const row = requireUserRow(db, requestedId, true);
+      const canonicalRow = resolveCanonicalUserRow(requestedId, loadDashboardUserRows(db)) ?? row;
+      if (!db.select({ id: users.id }).from(users)
+        .where(and(eq(users.id, canonicalRow.id), agentUserVisibility(db, agentId, ownerUserId))).get()) {
+        throw new HTTPException(404, {message: "User authorization rule not found"});
+      }
       const store = new AuthorizationRuleStore(db, {kind: "agent", agentId});
       const id = c.req.param("grantId");
-      const rule = store.listGrants({subjectType: "user", subjectId: row.id}).find(item => item.id === id);
+      const subjectIds = new Set([row.id, canonicalRow.id]);
+      const rule = store.listGrants().find(item => item.subjectType === "user" && subjectIds.has(item.subjectId) && item.id === id);
       if (!rule) throw new HTTPException(404, {message: "User authorization rule not found"});
       return c.json({grant: store.deleteGrant(id)});
     })
@@ -306,7 +318,12 @@ function validateOperationGrantTarget(input: {
   return { status: "ok", policy };
 }
 
-/** A user in this Agent's directory: only those can receive the Agent's grants. */
+/** A user in this Agent's directory: only those can receive the Agent's grants or group memberships from non-admin owners. */
+export function requireAgentDirectoryUser(db: DrizzleDB, agentId: string, ownerUserId: string, requesterId: string, id: string): UserRow {
+  if (isPlatformAdministrator(db, requesterId)) return requireUserRow(db, id);
+  return requireAgentUser(db, agentId, ownerUserId, id);
+}
+
 function requireAgentUser(db: DrizzleDB, agentId: string, ownerUserId: string, id: string): UserRow {
   const row = requireUserRow(db, id);
   if (!db.select({ id: users.id }).from(users).where(and(eq(users.id, row.id), agentUserVisibility(db, agentId, ownerUserId))).get()) {

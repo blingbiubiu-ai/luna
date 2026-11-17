@@ -1,6 +1,7 @@
 import { eq } from "drizzle-orm";
 import type { DrizzleDB } from "@/data";
 import { shadowRootAccess, users } from "@/data/schema";
+import { decodeInvocation } from "@/runners/invocation-codec";
 import { AuthorizationRuleStore } from "@/server/policy/authorization-rule-store";
 import { ruleMatchesOperation } from "@/server/policy/operation-policy";
 import { createLogger } from "@/shared";
@@ -13,9 +14,8 @@ export const ROOT_OPERATION = "agent.root";
 export interface ShadowRootSettings { shadowId: string; enabled: boolean }
 /**
  * Shadow root switch, and who is trusted with it (the `agent.root` grant).
- * With the switch on, every Job of the Shadow may use sudo. Whether to use it is the
- * Runner's judgement (prompts/runner-root-access.md): it checks requesters with
- * `luna root status --user` and acts on what trusted people want or agree to.
+ * With the switch on, the container is configured for sudo, while OS-level `privileged`
+ * execution is granted only to invocations whose actor or turn sender is trusted.
  */
 export class ShadowRootAccessStore {
   constructor(private readonly db: DrizzleDB) {}
@@ -49,6 +49,31 @@ export class ShadowRootAccessStore {
     const grants = new AuthorizationRuleStore(this.db, { kind: "agent", agentId: scope.agentId }).getEffectiveGrantsForUser(userId);
     if (grants.some(grant => grant.effect === "deny" && ruleMatchesOperation(grant, ROOT_OPERATION))) return false;
     return grants.some(grant => grant.effect === "allow" && ruleMatchesOperation(grant, ROOT_OPERATION));
+  }
+
+  /**
+   * Container `rootAccess` follows the Shadow switch so containers are not recreated per turn;
+   * process-level `privileged` requires at least one trusted requester in this invocation.
+   */
+  invocationPrivileged(invocation: { agentId: string; shadowId: string; actorUserId: string; inputSnapshot?: unknown }): { rootAccess: boolean; privileged: boolean } {
+    if (!this.enabled(invocation.shadowId)) return { rootAccess: false, privileged: false };
+    const scope = { agentId: invocation.agentId, shadowId: invocation.shadowId };
+    const candidates = new Set<string>([invocation.actorUserId]);
+    if (invocation.inputSnapshot !== undefined) {
+      try {
+        const parsed = decodeInvocation(invocation.inputSnapshot);
+        if (parsed.kind === "main") {
+          const command = parsed.input.input;
+          if (command.type === "user_messages") {
+            for (const msg of command.messages) if (msg.role === "user" && msg.senderUserId) candidates.add(msg.senderUserId);
+          } else if (command.type === "session_trigger" && command.requesterUserId) {
+            candidates.add(command.requesterUserId);
+          }
+        }
+      } catch { /* Validated at registration; fall back to actorUserId if malformed. */ }
+    }
+    const privileged = [...candidates].some(userId => this.trusted(scope, userId));
+    return { rootAccess: true, privileged };
   }
 
   private requireOwnedShadow(actorUserId: string, scope: { agentId: string; shadowId: string }): void {

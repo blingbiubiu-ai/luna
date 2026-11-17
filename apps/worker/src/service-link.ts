@@ -95,7 +95,7 @@ export class ServiceLink {
         }
         result = await new ExecutionClient(this.manager.driver.endpoint(call.environmentId), call.token).call(call.method, call.path, call.body);
       } else {
-        if (["/v1/environments/prepare", "/v1/files"].includes(request.path) && !this.ready) throw new ExecutionError(503, "worker_not_ready");
+        if (["/v1/environments/prepare", "/v1/files", "/v1/containers/provision"].includes(request.path) && !this.ready) throw new ExecutionError(503, "worker_not_ready");
         result = await new ExecutionClient(`http://127.0.0.1:${this.manager.driver.config.port}`, this.manager.driver.config.controlToken).call(request.method, request.path, request.body);
       }
       if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: "response", id: request.id, status: 200, body: result }));

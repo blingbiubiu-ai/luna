@@ -142,3 +142,23 @@ test("turning the Shadow root switch on replaces the idle container; file mainte
  await expect(f.manager.prepare(job)).rejects.toThrow("reached-context-preparation");
  expect(f.removed()).toBe(1);expect(f.store.require(id).spec.rootAccess).toBe(true);
 });
+test("active console streams defer background replacement during reap, and system disk reset notifies streamCloser",async()=>{
+ const f=fixture(),id=f.held.environment.id;
+ f.store.release("old-request",f.held.reservation.reservationId);
+ expect(f.store.require(id).idleSince).not.toBeNull();
+ f.manager.acquireStream(id);
+ expect(f.store.require(id).idleSince).toBeNull();
+ f.store.beginReplacement(id,f.imageRequest.spec);
+ // While a stream is open, background reap must not delete the container out from under the user.
+ await expect(f.manager.reap()).rejects.toMatchObject({code:"environment_mount_pending"});
+ expect(f.removed()).toBe(0);
+ f.manager.releaseStream(id);
+ await f.manager.reap();
+ expect(f.removed()).toBe(1);
+ expect(f.store.require(id).idleSince).not.toBeNull();
+
+ const closed:string[]=[];
+ f.manager.setStreamCloser((envId,reason)=>closed.push(`${envId}:${reason}`));
+ await f.manager.reset(id,"agent");
+ expect(closed).toEqual([`${id}:system_disk_reset`]);
+});

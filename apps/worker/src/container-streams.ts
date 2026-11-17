@@ -22,15 +22,17 @@ export type StreamDialer = (streamId: string, token: string) => WebSocket;
 
 /** Dashboard terminal/VNC streams into this Worker's Shadow containers. */
 export class ContainerStreams {
-  private readonly sockets = new Set<WebSocket>();
+  private readonly sockets = new Map<WebSocket, string>();
 
   constructor(
-    private readonly manager: Pick<EnvironmentManager, "streamTarget">,
+    private readonly manager: Pick<EnvironmentManager, "streamTarget"> & Partial<Pick<EnvironmentManager, "acquireStream" | "releaseStream" | "setStreamCloser">>,
     private readonly runner: { runnerUid: number; runnerGid: number },
     private readonly dial: StreamDialer,
     private readonly spawn: StreamSpawner = bunSpawner,
     private readonly run: CommandRunner = runDocker,
-  ) {}
+  ) {
+    this.manager.setStreamCloser?.((environmentId, reason) => this.closeEnvironment(environmentId, reason));
+  }
 
   get size(): number { return this.sockets.size; }
 
@@ -40,18 +42,22 @@ export class ContainerStreams {
     const socket = this.dial(command.streamId, command.token);
     if (this.sockets.size >= MAX_STREAMS) { socket.onopen = () => { socket.send(JSON.stringify({ type: "end", reason: "stream_limit" })); socket.close(4000); }; return; }
     socket.binaryType = "arraybuffer";
-    this.sockets.add(socket);
+    this.sockets.set(socket, command.environmentId);
+    this.manager.acquireStream?.(command.environmentId);
+    let released = false;
+    const release = () => { if (!released) { released = true; this.manager.releaseStream?.(command.environmentId); } };
     let process: StreamProcess | undefined;
     let ended = false;
     // Input and resizes can arrive while the container is still starting.
     let pending: Uint8Array[] = []; let pendingBytes = 0; let size: { cols: number; rows: number } | undefined;
     const end = (reason: string) => {
       if (ended) return; ended = true;
+      release();
       process?.kill();
       if (socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ type: "end", reason: reason.slice(0, 100) }));
       if (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING) socket.close(4000);
     };
-    socket.onclose = () => { this.sockets.delete(socket); ended = true; process?.kill(); };
+    socket.onclose = () => { this.sockets.delete(socket); ended = true; release(); process?.kill(); };
     socket.onerror = () => end("stream_socket_failed");
     socket.onmessage = event => {
       if (typeof event.data !== "string") {
@@ -80,24 +86,32 @@ export class ContainerStreams {
     };
   }
 
+  closeEnvironment(environmentId: string, reason: string): void {
+    for (const [socket, targetId] of this.sockets) {
+      if (targetId !== environmentId) continue;
+      if (socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ type: "end", reason }));
+      socket.close(4000);
+    }
+  }
+
   closeAll(): void {
-    for (const socket of this.sockets) {
+    for (const socket of this.sockets.keys()) {
       if (socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ type: "end", reason: "worker_stopping" }));
       socket.close(4000);
     }
   }
 
   private async start(command: ContainerStreamOpen, onData: (bytes: Uint8Array) => void): Promise<StreamProcess> {
-    const target = await this.manager.streamTarget(command.environmentId, command.agentId);
+    const root = command.kind === "terminal" && command.user === "root";
+    const target = await this.manager.streamTarget(command.environmentId, command.agentId, root ? { root: true } : undefined);
     const runner = `${this.runner.runnerUid}:${this.runner.runnerGid}`;
     const runnerEnv = ["-e", `HOME=${target.home}`, "-e", "LANG=C.UTF-8"];
     if (command.kind === "terminal") {
-      const root = command.user === "root";
       // Root keeps its own HOME so its dotfiles never become root-owned files in the Shadow HOME.
       const shell = this.spawn(["docker", "exec", "-it", "-u", root ? "0:0" : runner, "-w", target.home,
         "-e", `HOME=${root ? "/tmp" : target.home}`, "-e", "LANG=C.UTF-8", "-e", "TERM=xterm-256color",
         target.containerId, "bash", "-l"], { tty: { cols: command.cols, rows: command.rows }, onData });
-      // Whatever root left in the host-backed HOME (setuid bits, root-owned files) is undone afterwards.
+      // Whatever root left in the host-backed HOME (setuid bits, non-Runner ownership) is undone afterwards.
       if (root) void shell.exited.then(() => this.run(["exec", "-u", "0:0", target.containerId, "luna-home-sanitize", target.home,
         String(this.runner.runnerUid), String(this.runner.runnerGid)]).catch(() => {}));
       return shell;

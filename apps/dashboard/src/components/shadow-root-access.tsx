@@ -24,7 +24,7 @@ export function ShadowRootAccess({ agentId, shadowId, disabled }: { agentId: str
 
   function toggle(enabled: boolean) {
     const message = enabled
-      ? "开启 root 后，这个分身的任务可以在容器里使用 sudo，由 Agent 判断是否是受信用户想做或同意的操作。\n\n分身的容器会在空闲时重建：系统盘（apt 安装的软件等）会被重置，HOME 保留。确认开启？"
+      ? "开启 root 后，仅当触发者或本轮消息发送者为受信用户时，任务进程才会获得 sudo 能力，并由 Agent 判断是否为受信用户期望的操作。\n\n注意：容器内 root 与执行守护进程共享同一容器环境，请勿在面向外部非受信访客的分身上开启 root（避免提示词注入误导受信会话）。\n\n分身的容器会在空闲时重建：系统盘（apt 安装的软件等）会被重置，HOME 保留。确认开启？"
       : "关闭 root 后，分身的容器会在空闲时重建：系统盘（apt 安装的软件等）会被重置，HOME 保留。确认关闭？";
     if (confirm(message)) update.mutate(enabled);
   }
@@ -34,7 +34,7 @@ export function ShadowRootAccess({ agentId, shadowId, disabled }: { agentId: str
       <div>
         <h3 className="text-sm font-medium">Root 权限</h3>
         <p className="mt-1 text-xs text-muted-foreground">
-          开启后，任务可以使用 sudo。Agent 只为受信用户想做或同意的事使用它；需求来自其他人时，会先征求受信用户同意。
+          开启后，受信用户触发的任务可在容器内使用 sudo（纯非受信会话在系统层禁用提权）。请仅在内部受信私聊或受信群使用的分身上开启。
         </p>
       </div>
       <Switch aria-label="开启 root" checked={data?.enabled ?? false} disabled={busy} onCheckedChange={toggle} />

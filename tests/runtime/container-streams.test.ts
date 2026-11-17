@@ -64,9 +64,10 @@ beforeEach(async () => {
     imageDigest: `sha256:${"a".repeat(64)}`, runnerUid: 1234, runnerGid: 5678 });
   manager = new EnvironmentManager(new EnvironmentStore(workerDb), new DockerEnvironmentDriver(workerDb, workerConfig));
   targets = [];
-  manager.streamTarget = async (id, agentId) => {
+  manager.streamTarget = async (id, agentId, options) => {
     targets.push({ id, agentId });
     if (agentId !== "agent-a") throw new ExecutionError(403, "environment_agent_mismatch");
+    if (options?.root && process.env.DENY_HOST_ROOT === "1") throw new ExecutionError(403, "home_requires_nosuid");
     return { containerId: "container-1", home: "/data/agents/agent-a/shadows/shadow-a" };
   };
   manager.driver.health = async () => {}; // Streams are under test, not Docker health.
@@ -154,4 +155,22 @@ test("streams are only offered to Workers that advertise support", () => {
   const record = gateway.scheduler.workers.require(workerId);
   gateway.scheduler.workers.heartbeat(workerId, { ...record.health!, capabilities: ["shadow-scope-v2"] });
   expect(() => open()).toThrow("worker_streams_unsupported");
+});
+
+test("root terminal is refused on Workers whose host fails nosuid, while runner terminal still opens", async () => {
+  process.env.DENY_HOST_ROOT = "1";
+  try {
+    const denied = open({ user: "root" });
+    await until(() => denied.closed.length > 0);
+    expect(denied.closed).toEqual(["home_requires_nosuid"]);
+    expect(dockerCalls()).toEqual([]);
+
+    const allowed = open({ user: "runner" });
+    send(allowed.handle, "ok\n");
+    await until(() => allowed.output().includes("got:ok"));
+    allowed.handle.close();
+    await until(() => link.streams.size === 0);
+  } finally {
+    delete process.env.DENY_HOST_ROOT;
+  }
 });

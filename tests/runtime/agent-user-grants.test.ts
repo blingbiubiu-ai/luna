@@ -9,6 +9,7 @@ import { setLunaHome } from "@/shared";
 import { fixtureScope } from "../helpers/platform-fixtures";
 import { AuthorizationRuleStore } from "@/server/policy/authorization-rule-store";
 import { createUsersRoutes } from "@/server/routes/users";
+import { createGroupsRoutes } from "@/server/routes/groups";
 import { createOperationsRoutes } from "@/server/routes/operations";
 import { ShadowRootAccessStore } from "@/agents/shadow-root-access-store";
 
@@ -26,7 +27,7 @@ function app(actor: string) {
   return new Hono().use("*", async (c, next) => {
     (c as any).set("dashboardAuthSession", { authenticated: true, user: { id: actor, name: actor, provider: "test" } });
     (c as any).set("lunaRequestAuthKind", "dashboard-cookie"); (c as any).set("lunaAuthorizationDb", connection.db); await next();
-  }).route("/users", createUsersRoutes({ db: connection.db })).route("/operations", createOperationsRoutes({ db: connection.db }));
+  }).route("/users", createUsersRoutes({ db: connection.db })).route("/groups", createGroupsRoutes({ db: connection.db })).route("/operations", createOperationsRoutes({ db: connection.db }));
 }
 const json = { "content-type": "application/json" };
 
@@ -37,11 +38,16 @@ test("an Agent owner grants and revokes a user's permissions on its own Agent, n
   expect(ops.operations.map(o => o.id)).not.toContain("system.admin");
   expect((await app("bob").request(`/operations${scope}`)).status).toBe(403);
 
-  // Only users in the Agent's directory can be granted: bob is not, until he joins a group.
+  // Only users in the Agent's directory can be granted or added to groups by a non-admin owner:
+  // bob is a foreign user until he actually belongs to alice's Agent directory.
   expect((await app("alice").request(`/users/bob/authorization-rules/batch${scope}`, { method: "POST", headers: json,
     body: JSON.stringify({ items: [{ target: "agent.root", effect: "allow" }] }) })).status).toBe(404);
   const now = new Date().toISOString();
   connection.db.insert(schema.groups).values({ id: "ops", agentId: alice.agentId, slug: "ops", displayName: "Ops", createdAt: now, updatedAt: now }).run();
+  expect((await app("alice").request("/users/bob/group-memberships", { method: "POST", headers: json,
+    body: JSON.stringify({ groupId: "ops", role: "member" }) })).status).toBe(404);
+  expect((await app("alice").request("/groups/ops/members", { method: "POST", headers: json,
+    body: JSON.stringify({ userId: "bob", role: "member" }) })).status).toBe(404);
   connection.db.insert(schema.groupMemberships).values({ id: "ops-bob", groupId: "ops", userId: "bob", createdAt: now, updatedAt: now }).run();
   const granted = await app("alice").request(`/users/bob/authorization-rules/batch${scope}`, { method: "POST", headers: json,
     body: JSON.stringify({ items: [{ target: "agent.root", effect: "allow" }] }) });
