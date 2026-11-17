@@ -7,7 +7,7 @@ import {ShadowPreparation} from "../../apps/worker/src/shadow-preparation";
 import {createScopedResources} from "@luna/host-runtime/scoped-runner-resources";
 let root:string,db:Database,server:ReturnType<typeof Bun.serve>,preparer:ShadowPreparation,downloads:number,deny:boolean;
 const scope={agentId:"agent",shadowId:"shadow",placementGeneration:1};
-const files=["public/prompts/main-runner/instructions.md","public/prompts/runtime-confidentiality.md","shadow/config/SOUL.md"].map(path=>({path,content:Buffer.from(path).toString("base64"),mode:0o644}));
+const files=["public/prompts/main-runner/instructions.md","public/prompts/runtime-confidentiality.md","public/prompts/extra.md"].map(path=>({path,content:Buffer.from(path).toString("base64"),mode:0o644}));
 const bundle=createScopedResources(scope,files);
 const input={invocationId:"inv",protocolVersion:2,scope,resources:bundle.selection,contextId:"ctx",runnerId:"ctx",scopeKey:"session:one",runnerKind:"main",context:{sessionId:"one"}};
 beforeEach(()=>{
@@ -31,7 +31,7 @@ test("preparation keeps context ownership and rejects resource replacement while
  await preparer.prepare(input);
  await expect(preparer.prepare({...input,scopeKey:"session:other"})).rejects.toMatchObject({code:"context_preparation_conflict"});
  await expect(preparer.prepare({...input,scope:{...scope,shadowId:"other"}})).rejects.toMatchObject({code:"context_preparation_conflict"});
- const next=createScopedResources(scope,[...files,{path:"agent/memory/new.md",content:"",mode:0o644}]);
+ const next=createScopedResources(scope,[...files,{path:"agent/tools/new.md",content:"",mode:0o644}]);
  await expect(preparer.prepare({...input,invocationId:"next",contextId:"next",runnerId:"next",resources:next.selection})).rejects.toMatchObject({code:"shadow_resources_pending"});
  expect(downloads).toBe(1);
 });

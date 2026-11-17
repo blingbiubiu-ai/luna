@@ -50,14 +50,11 @@ test("Agent memory and Shadow persona entries never enter a snapshot",()=>{
  new AgentMemoryStore(connection.db).add({agentId:a.agentId,kind:"owner",trusted:true,owner:true,userId:"alice",shadowId:other.id},
   {type:"persona",title:"SOUL",description:"identity",body:"other-soul"});
  const first=builder.capture("alice",a),second=builder.capture("alice",scope);
- expect(first.selection.agentMemoryRevision).toBe(second.selection.agentMemoryRevision);
+ expect(first.selection).toEqual(initial.selection);
  expect(first.selection.agentToolsRevision).toBe(second.selection.agentToolsRevision);
- expect(first.selection.agentMemoryRevision).toBe(initial.selection.agentMemoryRevision);
- expect(Object.keys(contents(first)).filter(path=>path.startsWith("agent/memory/"))).toEqual([]);
  expect(JSON.stringify(contents(first))).not.toContain("shared-memory");
- expect(second.selection.shadowConfigRevision).not.toBe(first.selection.shadowConfigRevision);
+ // The digest still names the Shadow, so two Shadows never share a snapshot.
  expect(second.selection.digest).not.toBe(first.selection.digest);
- expect(Object.keys(contents(second)).filter(path=>path.startsWith("shadow/config/"))).toEqual([]);
  expect(JSON.stringify(contents(second))).not.toContain("other-soul");
  expect(builder.capture("alice",scope).selection).toEqual(second.selection);
 });
@@ -71,8 +68,7 @@ test("changing plugin configuration changes only tools selection",()=>{
  plugins.put("alice",a.agentId,"alpha",{expectedRevision:saved.revision,enabled:true,config:{setting:"new"}});
  const next=builder.capture("alice",a);
  expect(first.selection.agentToolsRevision).not.toBe(next.selection.agentToolsRevision);
- expect(first.selection.agentMemoryRevision).toBe(next.selection.agentMemoryRevision);
- expect(first.selection.shadowConfigRevision).toBe(next.selection.shadowConfigRevision);
+ expect(first.selection.publicRevision).toBe(next.selection.publicRevision);
 });
 test("rejects symlinks in source trees instead of packaging files outside the explicit source",()=>{
  writeFileSync(join(home,"secret"),"private");symlinkSync(join(home,"secret"),join(home,"public-skills","leak"));

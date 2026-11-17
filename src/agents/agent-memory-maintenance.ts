@@ -1,6 +1,6 @@
-import {and, eq, sql} from "drizzle-orm";
+import {and, desc, eq, sql} from "drizzle-orm";
 import type {DrizzleDB} from "@/data";
-import {lunaAgents, memoryConsolidations, memoryReflectionCheckpoints, runnerContexts, sessionCommands, sessions} from "@/data/schema";
+import {agentMemories, lunaAgents, memoryConsolidations, memoryReflectionCheckpoints, runnerContexts, sessionCommands, sessions} from "@/data/schema";
 import {AgentMemoryStore, type MemoryRecord} from "./agent-memory-store";
 import {SessionStore} from "@/sessions/session-store";
 import type {SessionCommand, SessionCommandService} from "@/messaging/session-command-service";
@@ -12,7 +12,11 @@ const CONSOLIDATION_ORIGIN = "memory-consolidation:";
 const REFLECTION_LOOKBACK_MS = 24 * 60 * 60 * 1000;
 const RUN_EXPIRES_MS = 60 * 60 * 1000;
 
-const REFLECTION_INSTRUCTION = `Memory reflection. This is an internal Luna maintenance turn, not a message from a user.
+/**
+ * The reflection instruction. `previous` is this conversation's latest episode, which the reflection extends
+ * when what happened since is how it turned out, such as a Task it started that has now finished.
+ */
+const reflectionInstruction = (previous: Pick<MemoryRecord, "id" | "revision" | "title" | "description"> | undefined) => `Memory reflection. This is an internal Luna maintenance turn, not a message from a user.
 
 Review this conversation since your last memory reflection and decide whether it produced anything worth keeping in Agent long-term memory, following the Long-Term Memory rules in your instructions:
 - a durable fact about a person in this conversation, their role or how they like to work;
@@ -21,6 +25,13 @@ Review this conversation since your last memory reflection and decide whether it
 - know-how that would save effort next time, or a pointer to an external resource.
 
 For each candidate run \`luna memory search\` first, then update the existing entry or add a new one. Most conversations produce nothing to save, and saving nothing is a correct result. Do not save what the memory index already says.
+
+Then record what happened, so you can later say what you have been doing. One episode tells one event as a story: who asked for what and why, what you did, including the Tasks you started and what they did, and how it ended or what is still open. The title names the event in a few words, the description says it in one line, and the body gives the details worth keeping. Write it as a record of events, not as instructions.
+${previous ? `
+This conversation's latest episode is [${previous.id}] (revision ${previous.revision}) ${inert(previous.title)}: ${inert(previous.description)}
+When what happened since is how that event turned out, such as a Task it started that has now finished or failed, or a question it left open that is now settled, extend that episode instead of adding one: \`luna memory get ${previous.id}\`, then \`luna memory update ${previous.id} --expected-revision N --title TITLE --description DESC --stdin\` with a body that tells the whole story, including when it began. Luna dates the episode to now. Add a new episode only for something else that happened; if the update is refused, add a new one instead.
+` : ""}
+Add an episode with \`luna memory add --type episode --title TITLE --description DESC --stdin\`. Add none when nothing happened beyond greetings.
 
 Do not send any message, do not create or change tasks, and do not mention this turn to anyone. End with LUNA_NOTHING_TO_SEND.`;
 
@@ -48,9 +59,9 @@ function sessionBusy(db: DrizzleDB, sessionId: string): boolean {
 const inert = (text: string) => text.replace(/artifact:/g, "artifact\u2236");
 
 /**
- * Queues one silent reflection turn for each Main session whose latest
- * reflectable human message is older than `idleMs` and has not been reflected
- * on. A message is reflectable only when a completed Main Runner turn took it
+ * Queues one silent reflection turn for each Main or Work session whose latest
+ * reflectable human message or handled Task result is older than `idleMs` and
+ * has not been reflected on. A message is reflectable only when a completed Main Runner turn took it
  * in, as its input or as context; group chatter nobody addressed to the bot,
  * history backfill and memory maintenance turns never start a reflection. The
  * turn runs in the session's own provider context, so the conversation is not
@@ -69,7 +80,7 @@ export function scheduleMemoryReflections(db: DrizzleDB, commands: Pick<SessionC
     JOIN luna_agents a ON a.id = s.agent_id
     JOIN users u ON u.id = m.sender_user_id
     LEFT JOIN memory_reflection_checkpoints c ON c.session_id = s.id
-    WHERE s.status = 'active' AND s.kind = 'main' AND a.status = 'active'
+    WHERE s.status = 'active' AND s.kind IN ('main', 'work') AND a.status = 'active'
       AND m.role = 'user' AND m.deleted_at IS NULL AND u.kind = 'human' AND u.status = 'active'
       AND m.created_at > ${now - REFLECTION_LOOKBACK_MS} AND m.created_at > coalesce(c.reflected_through, 0)
       AND (
@@ -87,16 +98,31 @@ export function scheduleMemoryReflections(db: DrizzleDB, commands: Pick<SessionC
             AND (sc.origin_id IS NULL OR (sc.origin_id NOT LIKE ${`${REFLECTION_ORIGIN}%`} AND sc.origin_id NOT LIKE ${`${CONSOLIDATION_ORIGIN}%`})))
       )
     ORDER BY m.created_at`);
+  // A Task result handled in the session is part of its story too; the Task's creator stands for who asked.
+  const results = db.all<{sessionId: string; ownerUserId: string; messageId: string; senderUserId: string; createdAt: number}>(sql`
+    SELECT tr.id AS messageId, s.id AS sessionId, coalesce(cu.id, a.owner_user_id) AS senderUserId, tr.updated_at AS createdAt, a.owner_user_id AS ownerUserId
+    FROM session_triggers tr
+    JOIN sessions s ON s.id = tr.session_id
+    JOIN luna_agents a ON a.id = s.agent_id
+    LEFT JOIN tasks tk ON tk.id = json_extract(tr.payload_json, '$.result.taskId')
+    LEFT JOIN users cu ON cu.id = tk.creator_user_id AND cu.kind = 'human' AND cu.status = 'active'
+    LEFT JOIN memory_reflection_checkpoints c ON c.session_id = s.id
+    WHERE tr.kind = 'task_result' AND tr.status = 'completed'
+      AND s.status = 'active' AND s.kind IN ('main', 'work') AND a.status = 'active'
+      AND tr.updated_at > ${now - REFLECTION_LOOKBACK_MS} AND tr.updated_at > coalesce(c.reflected_through, 0)`);
   const bySession = new Map<string, typeof rows>();
-  for (const row of rows) bySession.set(row.sessionId, [...bySession.get(row.sessionId) ?? [], row]);
+  for (const row of [...rows, ...results].sort((x, y) => x.createdAt - y.createdAt)) bySession.set(row.sessionId, [...bySession.get(row.sessionId) ?? [], row]);
   const queued: string[] = [];
   for (const [sessionId, unreflected] of bySession) {
     const latest = unreflected.at(-1)!;
     if (now - latest.createdAt < idleMs || sessionBusy(db, sessionId)) continue;
     const actor = unreflected.findLast(row => row.senderUserId !== latest.ownerUserId)?.senderUserId ?? latest.ownerUserId;
     try {
+      const previous = db.select({id: agentMemories.id, revision: agentMemories.revision, title: agentMemories.title, description: agentMemories.description})
+        .from(agentMemories).where(and(eq(agentMemories.type, "episode"), eq(agentMemories.status, "active"), eq(agentMemories.originSessionId, sessionId)))
+        .orderBy(desc(agentMemories.occurredAt)).get();
       const command = commands.accept({userId: actor, sourceSessionId: sessionId, originId: `${REFLECTION_ORIGIN}${latest.messageId}`},
-        sessionId, "session.invoke", "reflect", {content: REFLECTION_INSTRUCTION, purpose: "notification"}, {expiresAt: now + RUN_EXPIRES_MS});
+        sessionId, "session.invoke", "reflect", {content: reflectionInstruction(previous), purpose: "notification"}, {expiresAt: now + RUN_EXPIRES_MS});
       queued.push(command.id);
     } catch (error) {
       // An unavailable session or actor must not block the others; the checkpoint still advances so it is not retried every tick.
@@ -213,11 +239,13 @@ export interface MemoryMaintenanceSettings {
   consolidationIntervalMs: number;
   /** Time after which an unused non-core entry is archived; 0 keeps unused entries. Expired entries are always archived. */
   forgetUnusedMs: number;
+  /** Age after which an episode nobody read since is archived; 0 or unset keeps episodes. */
+  episodeRetentionMs?: number;
 }
 
 /** One pass of everything Service does to memory by itself: forget, then queue reflection and consolidation. */
 export function maintainMemory(db: DrizzleDB, commands: Pick<SessionCommandService, "accept">, settings: MemoryMaintenanceSettings, now = Date.now()): void {
-  new AgentMemoryStore(db).forget(settings.forgetUnusedMs, now);
+  new AgentMemoryStore(db).forget(settings.forgetUnusedMs, now, settings.episodeRetentionMs ?? 0);
   scheduleMemoryReflections(db, commands, settings.reflectionIdleMs, now);
   scheduleMemoryConsolidations(db, commands, settings.consolidationIntervalMs, now);
 }

@@ -11,7 +11,7 @@ import {createScopedResources} from "@luna/host-runtime/scoped-runner-resources"
 import {WorkerResourceDownload} from "../../apps/worker/src/resource-download";
 let home:string,workerHome:string,db:SqlDatabase,scheduler:RuntimeScheduler,gateway:WorkerGateway,server:ReturnType<typeof Bun.serve>;
 let allowed:string[],token:string,workerId:string,available:boolean,lookups:number;
-const scope={agentId:"agent",shadowId:"shadow"},bundle=createScopedResources(scope,[{path:"agent/memory/a",content:Buffer.from("private-memory").toString("base64"),mode:0o644}]);
+const scope={agentId:"agent",shadowId:"shadow"},bundle=createScopedResources(scope,[{path:"agent/tools/a",content:Buffer.from("private-memory").toString("base64"),mode:0o644}]);
 beforeEach(async()=>{
  home=mkdtempSync(join(tmpdir(),"luna-resource-gateway-"));workerHome=mkdtempSync(join(tmpdir(),"luna-resource-worker-"));db=openExecutionDatabase(":memory:");allowed=[];available=true;lookups=0;
  const config=RuntimeConfig.parse({runtimeId:"runtime",serviceId:"service",dataRoot:home,serviceToken:"s".repeat(43),adminToken:"a".repeat(43),homeWorkerId:"local"});
@@ -31,7 +31,7 @@ function request(agentId=scope.agentId,shadowId=scope.shadowId,generation="1",cr
 test("real HTTP download validates placement, persists scoped bytes and never mounts or replaces HOME",async()=>{
  const downloader=new WorkerResourceDownload(workerHome,server.url.origin,token);
  const path=await downloader.sync({...scope,placementGeneration:1},bundle.selection);
- expect(await Bun.file(join(path,"agent/memory/a")).text()).toBe("private-memory");
+ expect(await Bun.file(join(path,"agent/tools/a")).text()).toBe("private-memory");
  expect(path).toContain(`/agents/${scope.agentId}/shadow-resources/${scope.shadowId}/bundles/${bundle.selection.digest}/`);
  expect(existsSync(join(workerHome,"agents",scope.agentId,"shadows"))).toBe(false);
  expect(await downloader.sync({...scope,placementGeneration:1},bundle.selection)).toBe(path);

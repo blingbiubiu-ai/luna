@@ -1,10 +1,11 @@
 import type { CliResult, Env } from "@luna/cli-support/types";
-import { bodyWithDefinedValues, hasFlag, readOption } from "@luna/cli-support/options";
+import { bodyWithDefinedValues, hasFlag, parseDurationSeconds, readOption } from "@luna/cli-support/options";
 import { callUnifiedService, servicePathWithQuery } from "@luna/cli-support/service-client";
 
 const usage = [
-  "luna memory list [--type persona|person|feedback|project|procedure|reference] [--limit N]",
+  "luna memory list [--type persona|person|feedback|project|procedure|reference|episode] [--limit N]",
   "luna memory search <keywords> [--type T] [--subject USER_ID] [--archived]   # --archived searches forgotten entries",
+  "luna memory timeline [--since 7d|YYYY-MM-DD] [--until YYYY-MM-DD] [--shadow SHADOW_ID] [--with USER_ID] [--limit N] [--archived]   # what happened, newest first",
   "luna memory get <id>",
   "luna memory add --type T --title TITLE --description DESC [--subject USER_ID] [--visibility agent|shadow] [--expires YYYY-MM-DD] [--core true] [--force] (--body TEXT | --stdin)",
   "luna memory update <id> --expected-revision N [--type T] [--title TITLE] [--description DESC] [--subject USER_ID|none] [--visibility agent|shadow] [--expires YYYY-MM-DD|none] [--core true|false] [--body TEXT | --stdin]",
@@ -69,6 +70,20 @@ export async function runMemoryCli(argv: readonly string[], env: Env, readStdin:
       const q = words.join(" ").trim();
       if (!q) throw new Error("missing search keywords");
       return callUnifiedService(env, {method: "GET", path: servicePathWithQuery("/api/runner/memory/search", {q, type: option("--type"), subject: option("--subject"), archived: hasFlag(argv, "--archived") ? "true" : undefined})});
+    }
+    if (command === "timeline") {
+      /** A duration such as 7d or 12h counts back from now; a date is read as given. */
+      const moment = (name: string, endOfDay = false) => {
+        const value = option(name);
+        if (value === undefined) return undefined;
+        if (/^\d+[smhd]$/.test(value)) return String(Date.now() - parseDurationSeconds(value) * 1000);
+        const parsed = Date.parse(/^\d{4}-\d{2}-\d{2}$/.test(value) ? `${value}T${endOfDay ? "23:59:59" : "00:00:00"}Z` : value);
+        if (!Number.isFinite(parsed)) throw new Error(`${name} must be a duration such as 7d, YYYY-MM-DD or an ISO timestamp`);
+        return String(parsed);
+      };
+      return callUnifiedService(env, {method: "GET", path: servicePathWithQuery("/api/runner/memory/timeline", {
+        since: moment("--since"), until: moment("--until", true), shadow: option("--shadow"), with: option("--with"),
+        limit: option("--limit"), archived: hasFlag(argv, "--archived") ? "true" : undefined})});
     }
     if (command === "get") return callUnifiedService(env, {method: "GET", path: id()});
     if (command === "add") return callUnifiedService(env, {method: "POST", path: "/api/runner/memory", body: {...await fields(), ...(hasFlag(argv, "--force") ? {force: true} : {})}});

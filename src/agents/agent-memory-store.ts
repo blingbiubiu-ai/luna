@@ -10,12 +10,14 @@ import {AgentError} from "./agent-store";
 
 export type MemoryRecord = typeof agentMemories.$inferSelect;
 export type MemoryVisibility = "agent" | "shadow";
-export type MemorySummary = Pick<MemoryRecord, "id" | "type" | "title" | "description" | "subjectUserId" | "visibility" | "originKind" | "originUserId" | "trusted" | "revision" | "status" | "core" | "expiresAt" | "updatedAt">;
+export type MemorySummary = Pick<MemoryRecord, "id" | "type" | "title" | "description" | "subjectUserId" | "visibility" | "originKind" | "originUserId" | "trusted" | "revision" | "status" | "core" | "expiresAt" | "occurredAt" | "updatedAt">;
 
 /** Who is reading. `all` is the Agent owner or Service-launched consolidation. */
 export type MemoryViewer =
   | {agentId: string; all: true}
-  | {agentId: string; all?: false; shadowId: string; participants: readonly string[]};
+  | {agentId: string; all?: false; shadowId: string; participants: readonly string[];
+    /** Who asked for this turn, and whether that is the Agent owner. Episodes are shown to the owner, and to others only when they took part. */
+    actorUserId?: string | undefined; owner?: boolean | undefined};
 
 /** Who is writing. Callers derive this from an invocation or an authorized owner, never from request input. */
 export interface MemoryWriter {
@@ -42,6 +44,7 @@ interface MemoryFields {
   visibility: MemoryVisibility;
   core: boolean;
   expiresAt: number | null;
+  occurredAt: number | null;
 }
 type Optional<T> = {[K in keyof T]?: T[K] | undefined};
 export type MemoryInput = Pick<MemoryFields, "type" | "title" | "description" | "body"> & Optional<Omit<MemoryFields, "type" | "title" | "description" | "body">>;
@@ -59,7 +62,7 @@ const LIMITS = {title: 120, description: 200, body: 8 * 1024} as const;
 /** Types that change how the Agent works; only trusted writers may create or produce them. */
 const BEHAVIOR_TYPES: readonly MemoryType[] = ["feedback", "procedure"];
 /** Index order: what must not be missed comes first. */
-const TYPE_PRIORITY: Record<MemoryType, number> = {persona: -1, person: 0, feedback: 1, procedure: 1, project: 2, reference: 3};
+const TYPE_PRIORITY: Record<MemoryType, number> = {persona: -1, person: 0, feedback: 1, procedure: 1, project: 2, reference: 3, episode: 4};
 /** Share of title and description terms two entries have in common above which they count as the same fact. */
 const DUPLICATE_SIMILARITY = 0.6;
 const PERSON_STANDING_LIMIT = 20;
@@ -95,9 +98,10 @@ export class AgentMemoryStore {
 
   /** Visible active entries in index order; `omitted` counts those the limit left out. */
   index(viewer: MemoryViewer, options: Optional<{type: MemoryType; limit: number}> = {}): {entries: MemoryRecord[]; omitted: number} {
+    // Episodes are the timeline, not the index; they are listed only when asked for by type.
     const rows = this.db.select().from(agentMemories).where(and(
       this.visible(viewer),
-      options.type ? eq(agentMemories.type, options.type) : undefined,
+      options.type ? eq(agentMemories.type, options.type) : sql`${agentMemories.type} <> 'episode'`,
     )).orderBy(desc(agentMemories.updatedAt), agentMemories.id).all()
       .sort((a, b) => TYPE_PRIORITY[a.type] - TYPE_PRIORITY[b.type]);
     const entries = rows.slice(0, options.limit ?? rows.length);
@@ -111,6 +115,20 @@ export class AgentMemoryStore {
       .orderBy(desc(agentMemories.updatedAt), agentMemories.id).all();
     return [...rows.filter(row => row.type === "persona").reverse(), ...rows.filter(row => row.core),
       ...rows.filter(row => row.type === "person").slice(0, PERSON_STANDING_LIMIT)];
+  }
+
+  /**
+   * What happened, newest first: episodes this viewer may see, optionally narrowed to a time range, a Shadow or
+   * a person who took part. `archived` reads faded episodes instead of current ones.
+   */
+  timeline(viewer: MemoryViewer, options: Optional<{since: number; until: number; shadowId: string; withUserId: string; limit: number; archived: boolean}> = {}): MemoryRecord[] {
+    return this.db.select().from(agentMemories).where(and(
+      this.visible(viewer, [options.archived ? "archived" : "active"]), eq(agentMemories.type, "episode"),
+      options.since === undefined ? undefined : sql`${agentMemories.occurredAt} >= ${options.since}`,
+      options.until === undefined ? undefined : sql`${agentMemories.occurredAt} <= ${options.until}`,
+      options.shadowId ? eq(agentMemories.originShadowId, options.shadowId) : undefined,
+      options.withUserId ? sql`EXISTS (SELECT 1 FROM json_each(${agentMemories.participants}) WHERE value = ${options.withUserId})` : undefined,
+    )).orderBy(desc(agentMemories.occurredAt), agentMemories.id).limit(options.limit ?? 30).all();
   }
 
   /** Explicit search over title, description and body; `archived` searches forgotten entries instead of active ones. */
@@ -130,7 +148,7 @@ export class AgentMemoryStore {
     const terms = new Set(memoryTerms(text));
     if (!terms.size || options.limit <= 0) return [];
     const needed = Math.min(2, terms.size);
-    return this.match(viewer, text, "title description", ["active"], and(sql`${agentMemories.type} <> 'persona'`,
+    return this.match(viewer, text, "title description", ["active"], and(sql`${agentMemories.type} NOT IN ('persona', 'episode')`,
       options.exclude?.length ? notInArray(agentMemories.id, [...options.exclude]) : undefined))
       .filter(row => { let shared = 0; for (const term of summaryTerms(row)) if (terms.has(term)) shared++; return shared >= needed; })
       .slice(0, options.limit);
@@ -150,7 +168,7 @@ export class AgentMemoryStore {
     const terms = summaryTerms(entry);
     return this.match(viewer, `${entry.title} ${entry.description}`, "title description", ["active"], and(
       entry.type === "person" ? and(eq(agentMemories.type, "person"), eq(agentMemories.subjectUserId, entry.subjectUserId ?? ""))
-        : options.anyType && entry.type !== "persona" ? sql`${agentMemories.type} NOT IN ('person', 'persona')` : eq(agentMemories.type, entry.type),
+        : options.anyType && entry.type !== "persona" ? sql`${agentMemories.type} NOT IN ('person', 'persona', 'episode')` : eq(agentMemories.type, entry.type),
       entry.id ? sql`${agentMemories.id} <> ${entry.id}` : undefined,
     )).map(row => {
       const other = summaryTerms(row);
@@ -174,11 +192,11 @@ export class AgentMemoryStore {
     return {changed: rows.filter(row => row.status === "active"), removed: rows.filter(row => row.status !== "active")};
   }
 
-  /** Active entries, persona aside, last changed after a sequence number by something other than consolidation, oldest change first. */
+  /** Active entries, persona and episodes aside, last changed after a sequence number by something other than consolidation, oldest change first. */
   changedSince(agentId: string, after: number, limit: number): MemoryRecord[] {
     return this.db.select({row: agentMemories}).from(agentMemories)
       .innerJoin(agentMemoryRevisions, and(eq(agentMemoryRevisions.memoryId, agentMemories.id), eq(agentMemoryRevisions.revision, agentMemories.revision)))
-      .where(and(eq(agentMemories.agentId, agentId), eq(agentMemories.status, "active"), sql`${agentMemories.type} <> 'persona'`,
+      .where(and(eq(agentMemories.agentId, agentId), eq(agentMemories.status, "active"), sql`${agentMemories.type} NOT IN ('persona', 'episode')`,
         sql`${agentMemories.changeSeq} > ${after}`, sql`${agentMemoryRevisions.changeKind} <> 'consolidation'`))
       .orderBy(asc(agentMemories.changeSeq)).limit(limit).all().map(result => result.row);
   }
@@ -206,16 +224,20 @@ export class AgentMemoryStore {
     if (ids.length) this.db.update(agentMemories).set({lastUsedAt: now}).where(and(inArray(agentMemories.id, [...ids]), eq(agentMemories.status, "active"))).run();
   }
 
-  /** With `duplicatesFor`, an entry that repeats one this viewer can see is rejected unless `force` is set. */
-  add(writer: MemoryWriter, input: MemoryInput, options: {duplicatesFor?: MemoryViewer; force?: boolean | undefined} = {}): MemoryRecord {
+  /**
+   * With `duplicatesFor`, an entry that repeats one this viewer can see is rejected unless `force` is set.
+   * `participants` are the users who took part in an episode; callers derive them, never the request.
+   */
+  add(writer: MemoryWriter, input: MemoryInput, options: {duplicatesFor?: MemoryViewer; force?: boolean | undefined; participants?: readonly string[]} = {}): MemoryRecord {
+    const now = Date.now();
     const fields = this.validate(writer, {
       type: input.type, title: input.title, description: input.description, body: input.body,
       subjectUserId: input.subjectUserId ?? null, visibility: input.visibility ?? (input.type === "persona" ? "shadow" : "agent"), core: input.core ?? false, expiresAt: input.expiresAt ?? null,
+      occurredAt: input.occurredAt ?? (input.type === "episode" ? now : null),
     }, writer.shadowId);
-    const now = Date.now();
     return this.db.transaction(tx => {
       const store = new AgentMemoryStore(tx, this.limits);
-      if (options.duplicatesFor && !options.force && fields.type !== "persona") {
+      if (options.duplicatesFor && !options.force && fields.type !== "persona" && fields.type !== "episode") {
         const duplicates = store.similar(options.duplicatesFor, fields).filter(candidate => candidate.similarity >= DUPLICATE_SIMILARITY);
         if (duplicates.length) throw new MemoryDuplicateError(duplicates.map(candidate => candidate.row));
       }
@@ -226,6 +248,7 @@ export class AgentMemoryStore {
         originKind: writer.kind, originShadowId: writer.shadowId, originSessionId: writer.sessionId ?? null,
         originTaskId: writer.taskId ?? null, originUserId: writer.userId, updatedContextId: writer.contextId ?? null, trusted: writer.trusted,
         revision: 1, changeSeq: store.latestSeq() + 1, status: "active", supersededBy: null, lastUsedAt: now, createdAt: now, updatedAt: now,
+        participants: fields.type === "episode" ? [...new Set(options.participants ?? [])] : [],
       };
       tx.insert(agentMemories).values(row).run();
       indexTerms(tx, row);
@@ -234,12 +257,18 @@ export class AgentMemoryStore {
     });
   }
 
-  update(writer: MemoryWriter, viewer: MemoryViewer, id: string, input: Optional<MemoryFields> & {expectedRevision: number}): MemoryRecord {
+  /**
+   * `participants` join those of an episode. A reflection extending an episode
+   * tells how the event turned out, so the episode is dated to now unless the
+   * caller says otherwise.
+   */
+  update(writer: MemoryWriter, viewer: MemoryViewer, id: string, input: Optional<MemoryFields> & {expectedRevision: number},
+    options: {participants?: readonly string[]} = {}): MemoryRecord {
     return this.change(writer, viewer, id, input.expectedRevision, current => {
       // A forgotten entry is brought back with restore first; editing it in place would leave the edit archived.
       if (current.status !== "active") throw new AgentError("memory_not_active", 409);
-      // A persona entry is a different kind of thing; it is never made from, or turned into, an ordinary entry.
-      if (input.type !== undefined && input.type !== current.type && (input.type === "persona" || current.type === "persona")) throw new AgentError("invalid_memory_type", 400);
+      // Persona and episode entries are different kinds of thing; neither is made from, or turned into, an ordinary entry.
+      if (input.type !== undefined && input.type !== current.type && [input.type, current.type].some(type => type === "persona" || type === "episode")) throw new AgentError("invalid_memory_type", 400);
       return this.validate(writer, {
       type: input.type ?? current.type,
       title: input.title ?? current.title,
@@ -249,8 +278,11 @@ export class AgentMemoryStore {
       visibility: input.visibility ?? current.visibility,
       core: input.core ?? current.core,
       expiresAt: input.expiresAt === undefined ? current.expiresAt : input.expiresAt,
-    }, current.originShadowId);
-    });
+      occurredAt: input.occurredAt !== undefined ? input.occurredAt
+        : current.type === "episode" && writer.kind === "reflection" ? Date.now() : current.occurredAt,
+    }, current.originShadowId) as Partial<MemoryRecord>;
+    }, false, false, current => current.type === "episode" && options.participants?.length
+      ? {participants: [...new Set([...current.participants, ...options.participants])]} : {});
   }
 
   /** Soft delete; `supersededBy` records the entry that replaced this one, when a merge retired it. */
@@ -282,14 +314,17 @@ export class AgentMemoryStore {
   }
 
   /**
-   * Archives active entries whose expiry has passed and, when `unusedMs` is
-   * positive, non-core entries nobody read or changed for that long.
+   * Archives active entries whose expiry has passed; when `unusedMs` is
+   * positive, non-core entries nobody read or changed for that long; and when
+   * `episodeRetentionMs` is positive, episodes that happened, and were last
+   * read, longer ago than that.
    */
-  forget(unusedMs: number, now = Date.now()): number {
+  forget(unusedMs: number, now = Date.now(), episodeRetentionMs = 0): number {
     return this.db.transaction(tx => {
       const due = tx.select().from(agentMemories).where(and(eq(agentMemories.status, "active"), or(
         lte(agentMemories.expiresAt, now),
-        unusedMs > 0 ? and(eq(agentMemories.core, false), sql`${agentMemories.type} <> 'persona'`, lte(agentMemories.lastUsedAt, now - unusedMs)) : undefined,
+        unusedMs > 0 ? and(eq(agentMemories.core, false), sql`${agentMemories.type} NOT IN ('persona', 'episode')`, lte(agentMemories.lastUsedAt, now - unusedMs)) : undefined,
+        episodeRetentionMs > 0 ? and(eq(agentMemories.type, "episode"), lte(agentMemories.occurredAt, now - episodeRetentionMs), lte(agentMemories.lastUsedAt, now - episodeRetentionMs)) : undefined,
       ))).all();
       for (const current of due) {
         const row: MemoryRecord = {...current, status: "archived", updatedContextId: null, revision: current.revision + 1,
@@ -309,20 +344,17 @@ export class AgentMemoryStore {
     return missing.length;
   }
 
-  /** Owner view: every entry of the Agent, including deleted and archived ones. */
-  listAll(agentId: string): MemoryRecord[] {
-    return this.db.select().from(agentMemories).where(eq(agentMemories.agentId, agentId))
-      .orderBy(desc(agentMemories.updatedAt), agentMemories.id).all();
-  }
+
 
   /** Owner view, one filtered page at a time; `query` is a substring of title, description or body. */
-  page(agentId: string, options: Optional<{status: MemoryStatus; type: MemoryType; originKind: MemoryOriginKind; originShadowId: string; core: boolean; trusted: boolean;
+  page(agentId: string, options: Optional<{status: MemoryStatus; type: MemoryType; excludeType: MemoryType; originKind: MemoryOriginKind; originShadowId: string; core: boolean; trusted: boolean;
     query: string; sort: "updatedAt" | "createdAt"; limit: number; offset: number}> = {}): {entries: MemoryRecord[]; total: number} {
     const pattern = options.query?.trim() ? `%${options.query.trim().replace(/[\\%_]/g, "\\$&")}%` : undefined;
     const where = and(
       eq(agentMemories.agentId, agentId),
       options.status ? eq(agentMemories.status, options.status) : undefined,
       options.type ? eq(agentMemories.type, options.type) : undefined,
+      options.excludeType ? sql`${agentMemories.type} <> ${options.excludeType}` : undefined,
       options.originKind ? eq(agentMemories.originKind, options.originKind) : undefined,
       options.originShadowId ? eq(agentMemories.originShadowId, options.originShadowId) : undefined,
       options.core === undefined ? undefined : eq(agentMemories.core, options.core),
@@ -334,6 +366,31 @@ export class AgentMemoryStore {
       .orderBy(desc(options.sort === "createdAt" ? agentMemories.createdAt : agentMemories.updatedAt), agentMemories.id)
       .limit(options.limit ?? 50).offset(options.offset ?? 0).all();
     return {entries, total};
+  }
+
+  /** Counts used by the owner Dashboard tabs and per-Shadow persona badges, independent of the active filter. */
+  counts(agentId: string): {activeMemories: number; archivedMemories: number; untrustedMemories: number; activePersonas: number; personaByShadow: Record<string, number>} {
+    const rows = this.db.select({
+      type: agentMemories.type, status: agentMemories.status, trusted: agentMemories.trusted, originShadowId: agentMemories.originShadowId,
+      n: sql<number>`count(*)`,
+    }).from(agentMemories).where(eq(agentMemories.agentId, agentId))
+      .groupBy(agentMemories.type, agentMemories.status, agentMemories.trusted, agentMemories.originShadowId).all();
+    let activeMemories = 0, archivedMemories = 0, untrustedMemories = 0, activePersonas = 0;
+    const personaByShadow: Record<string, number> = {};
+    for (const row of rows) {
+      if (row.type === "persona") {
+        if (row.status === "active") {
+          activePersonas += row.n;
+          if (row.originShadowId) personaByShadow[row.originShadowId] = (personaByShadow[row.originShadowId] ?? 0) + row.n;
+        }
+      } else if (row.status === "active") {
+        activeMemories += row.n;
+        if (!row.trusted) untrustedMemories += row.n;
+      } else if (row.status === "archived") {
+        archivedMemories += row.n;
+      }
+    }
+    return {activeMemories, archivedMemories, untrustedMemories, activePersonas, personaByShadow};
   }
 
   history(agentId: string, id: string) {
@@ -354,14 +411,15 @@ export class AgentMemoryStore {
     return this.change(writer, {agentId: writer.agentId, all: true}, id, expectedRevision, current => ({
       ...this.validate(writer, {
         type: snapshot.type, title: snapshot.title, description: snapshot.description, body: snapshot.body,
-        subjectUserId: snapshot.subjectUserId, visibility: snapshot.visibility, core: snapshot.core, expiresAt,
+        subjectUserId: snapshot.subjectUserId, visibility: snapshot.visibility, core: snapshot.core, expiresAt, occurredAt: snapshot.occurredAt ?? null,
       }, current.originShadowId),
       status: snapshot.status, supersededBy: snapshot.supersededBy,
     }), true);
   }
 
   private change(writer: MemoryWriter, viewer: MemoryViewer, id: string, expectedRevision: number,
-    next: (current: MemoryRecord) => Partial<MemoryRecord>, anyStatus = false, confirms = false): MemoryRecord {
+    next: (current: MemoryRecord) => Partial<MemoryRecord>, anyStatus = false, confirms = false,
+    extra: (current: MemoryRecord) => Partial<MemoryRecord> = () => ({})): MemoryRecord {
     return this.db.transaction(tx => {
       const store = new AgentMemoryStore(tx, this.limits);
       const current = anyStatus ? store.owned(writer.agentId, id) : store.get(viewer, id);
@@ -370,7 +428,7 @@ export class AgentMemoryStore {
       // An untrusted writer changes only what they wrote themselves; otherwise one member could rewrite or retire another's facts under the original attribution.
       if (!writer.trusted && (current.originUserId === null || current.originUserId !== writer.userId)) throw new AgentError("memory_protected", 403);
       const now = Date.now();
-      const row: MemoryRecord = {...current, ...next(current), updatedContextId: writer.contextId ?? null,
+      const row: MemoryRecord = {...current, ...next(current), ...extra(current), updatedContextId: writer.contextId ?? null,
         revision: current.revision + 1, changeSeq: store.latestSeq() + 1, updatedAt: now};
       // An untrusted entry becomes trusted only when a trusted writer vouches for it: by rewriting what it says, by
       // making it a core rule, or explicitly. Maintenance never does: consolidation setting an expiry, or a restore
@@ -443,8 +501,11 @@ export class AgentMemoryStore {
       or(eq(agentMemories.visibility, "agent"), eq(agentMemories.originShadowId, viewer.shadowId)),
       or(sql`${agentMemories.type} <> 'person'`,
         viewer.participants.length ? inArray(agentMemories.subjectUserId, [...viewer.participants]) : sql`0`),
+      // The Agent owner sees every episode; anyone else only those they took part in, whoever wrote them down.
+      or(sql`${agentMemories.type} <> 'episode'`, viewer.owner ? sql`1`
+        : viewer.actorUserId ? sql`EXISTS (SELECT 1 FROM json_each(${agentMemories.participants}) WHERE value = ${viewer.actorUserId})` : sql`0`),
       // What an untrusted writer said reaches only conversations its author takes part in, so it cannot steer anyone else's.
-      or(eq(agentMemories.trusted, true),
+      or(eq(agentMemories.type, "episode"), eq(agentMemories.trusted, true),
         viewer.participants.length ? inArray(agentMemories.originUserId, [...viewer.participants]) : sql`0`),
     )!;
   }
@@ -457,7 +518,8 @@ export class AgentMemoryStore {
     if (!body || Buffer.byteLength(body) > LIMITS.body) throw new AgentError("invalid_memory_body", 400);
     if (input.visibility !== "agent" && !(input.visibility === "shadow" && originShadowId)) throw new AgentError("invalid_memory_visibility", 400);
     if ((input.type === "person") !== Boolean(input.subjectUserId)) throw new AgentError("invalid_memory_subject", 400);
-    if (input.core && (input.type === "person" || input.type === "persona")) throw new AgentError("invalid_memory_core", 400);
+    if (input.core && (input.type === "person" || input.type === "persona" || input.type === "episode")) throw new AgentError("invalid_memory_core", 400);
+    if ((input.type === "episode") !== (input.occurredAt !== null) || (input.occurredAt !== null && !(Number.isSafeInteger(input.occurredAt) && input.occurredAt > 0))) throw new AgentError("invalid_memory_occurred_at", 400);
     if (input.type === "persona") {
       // Identity outlives the conversation that set it, so only the Agent owner may have it written.
       if (!writer.owner) throw new AgentError("memory_write_forbidden", 403);
@@ -468,7 +530,7 @@ export class AgentMemoryStore {
       if (BEHAVIOR_TYPES.includes(input.type) || input.core) throw new AgentError("memory_write_forbidden", 403);
       if (input.type === "person" && input.subjectUserId !== writer.userId) throw new AgentError("memory_write_forbidden", 403);
     }
-    return {type: input.type, title, description, body, subjectUserId: input.subjectUserId || null, visibility: input.visibility, core: input.core, expiresAt: input.expiresAt};
+    return {type: input.type, title, description, body, subjectUserId: input.subjectUserId || null, visibility: input.visibility, core: input.core, expiresAt: input.expiresAt, occurredAt: input.occurredAt};
   }
 }
 
@@ -486,15 +548,15 @@ function deleteTerms(tx: Pick<DrizzleDB, "run">, id: string): void {
 }
 
 function record(tx: Pick<DrizzleDB, "insert">, row: MemoryRecord, kind: MemoryChangeKind, userId: string | null, shadowId: string | null, now: number): void {
-  const {type, title, description, body, subjectUserId, visibility, status, supersededBy, trusted, core, expiresAt} = row;
+  const {type, title, description, body, subjectUserId, visibility, status, supersededBy, trusted, core, expiresAt, occurredAt} = row;
   tx.insert(agentMemoryRevisions).values({
     memoryId: row.id, revision: row.revision,
-    snapshot: {type, title, description, body, subjectUserId, visibility, status, supersededBy, trusted, core, expiresAt},
+    snapshot: {type, title, description, body, subjectUserId, visibility, status, supersededBy, trusted, core, expiresAt, occurredAt},
     changeKind: kind, changedByUserId: userId, changedByShadowId: shadowId, createdAt: now,
   }).run();
 }
 
 export function memorySummary(row: MemoryRecord): MemorySummary {
-  const {id, type, title, description, subjectUserId, visibility, originKind, originUserId, trusted, revision, status, core, expiresAt, updatedAt} = row;
-  return {id, type, title, description, subjectUserId, visibility, originKind, originUserId, trusted, revision, status, core, expiresAt, updatedAt};
+  const {id, type, title, description, subjectUserId, visibility, originKind, originUserId, trusted, revision, status, core, expiresAt, occurredAt, updatedAt} = row;
+  return {id, type, title, description, subjectUserId, visibility, originKind, originUserId, trusted, revision, status, core, expiresAt, occurredAt, updatedAt};
 }

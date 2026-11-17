@@ -61,7 +61,7 @@ test("a Runner adds, finds, reads, updates and deletes memory inside its invocat
   expect(added.status).toBe(201);
   expect(added.body.memory).toMatchObject({ title: "发布冻结", revision: 1, trusted: false, originUserId: "user", originUserName: "User", body: "不合并功能分支" });
   const id = added.body.memory.id;
-  expect(new AgentMemoryStore(f.db).listAll(f.session.agent_id)[0]).toMatchObject({ originKind: "inline", originShadowId: f.session.shadow_id, originSessionId: f.session.id });
+  expect(new AgentMemoryStore(f.db).page(f.session.agent_id, {limit: 200}).entries[0]).toMatchObject({ originKind: "inline", originShadowId: f.session.shadow_id, originSessionId: f.session.id });
   expect((await f.call("GET", "")).body).toMatchObject({ omitted: 0, memories: [{ id, description: "11-20 前冻结发布" }] });
   expect((await f.call("GET", "")).body.memories[0].body).toBeUndefined();
   expect((await f.call("GET", `/search?q=${encodeURIComponent("冻结")}`)).body.memories.map((m: any) => m.id)).toEqual([id]);
@@ -145,9 +145,9 @@ test("core needs a trusted actor; expiry is stored; reading an entry counts as u
   expect(added).toMatchObject({ core: false, expiresAt, status: "active" });
   f.db.update(schema.agentMemories).set({ lastUsedAt: 1 }).run();
   await f.call("GET", ""); await f.call("GET", `/search?q=${encodeURIComponent("冻结")}`);
-  expect(new AgentMemoryStore(f.db).listAll(f.session.agent_id)[0]!.lastUsedAt).toBe(1);
+  expect(new AgentMemoryStore(f.db).page(f.session.agent_id, {limit: 200}).entries[0]!.lastUsedAt).toBe(1);
   await f.call("GET", `/${added.id}`);
-  expect(new AgentMemoryStore(f.db).listAll(f.session.agent_id)[0]!.lastUsedAt).toBeGreaterThan(1);
+  expect(new AgentMemoryStore(f.db).page(f.session.agent_id, {limit: 200}).entries[0]!.lastUsedAt).toBeGreaterThan(1);
   f.grant("allow", "memory.write");
   expect((await f.call("PUT", `/${added.id}`, { expectedRevision: 1, core: true, expiresAt: null })).body.memory).toMatchObject({ core: true, expiresAt: null });
   expect((await f.call("PUT", `/${added.id}`, { expectedRevision: 2, expiresAt: "tomorrow" })).status).toBe(400);
@@ -179,4 +179,26 @@ test("a Runner cannot write persona for anyone but the Agent owner, even with me
   expect((await f.call("GET", `/${mine.id}`)).body.memory).toMatchObject({ type: "persona", body: "你叫小黑", visibility: "shadow" });
   expect(await f.call("PUT", `/${mine.id}`, { expectedRevision: 1, body: "你叫小白" })).toMatchObject({ status: 403, body: { error: "memory_protected" } });
   expect((await f.call("DELETE", `/${mine.id}?expectedRevision=1`)).status).toBe(403);
+});
+
+test("a Runner records an episode with the invocation's participants and reads the timeline", async () => {
+  const f = fixture();
+  const added = await f.call("POST", "", { type: "episode", title: "帮用户查日志", description: "用户问登录失败，定位到配置过期", body: "已更新配置" });
+  expect(added.status).toBe(201);
+  expect(added.body.memory).toMatchObject({ type: "episode", core: false });
+  expect(added.body.memory.occurredAt).toBeGreaterThan(0);
+  expect(new AgentMemoryStore(f.db).page(f.session.agent_id, {limit: 200}).entries[0]!.participants).toEqual(["user"]);
+  expect((await f.call("POST", "", { type: "episode", title: "帮用户查日志", description: "用户问登录失败，定位到配置过期", body: "又一次" })).status).toBe(201);
+  const timeline = (await f.call("GET", "/timeline")).body.episodes;
+  expect(timeline).toHaveLength(2);
+  expect(timeline[0].body).toBeUndefined();
+  expect((await f.call("GET", `/timeline?since=${Date.now() + 60_000}`)).body.episodes).toEqual([]);
+  expect((await f.call("GET", "/timeline?with=someone-else")).body.episodes).toEqual([]);
+  expect((await f.call("GET", "/timeline?with=user&limit=1")).body.episodes).toHaveLength(1);
+  expect((await f.call("GET", "/timeline?limit=0")).status).toBe(400);
+  expect((await f.call("GET", "")).body.memories).toEqual([]);
+  // An episode someone else took part in is not on this actor's timeline.
+  new AgentMemoryStore(f.db).add({ agentId: f.session.agent_id, kind: "owner", trusted: true, userId: "fixture-owner", shadowId: f.session.shadow_id },
+    { type: "episode", title: "所有者的事", description: "d", body: "b" }, { participants: ["fixture-owner"] });
+  expect((await f.call("GET", "/timeline")).body.episodes).toHaveLength(2);
 });

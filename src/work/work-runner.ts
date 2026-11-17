@@ -436,10 +436,84 @@ export class WorkRunner {
     this._attachStatusCardToTurn(input.turn.id, sentCard);
   }
 
+  /**
+   * A silent turn Service queues in a Work session, such as a memory
+   * reflection. Unlike a Work turn it answers nobody: it sends no status card
+   * and may end without a reply. It runs in the session's provider context, so
+   * a session that has none yet has nothing to reflect on and is skipped.
+   */
+  async executeMaintenanceTurn(session: SessionRow, command: {id: string; actorUserId: string; instruction: string}, signal?: AbortSignal): Promise<void> {
+    const db = this._options.db;
+    const invocationId = new InvocationStore(db).findActive({ runnerKind: "work", originId: command.id, sessionId: session.id })?.id ?? randomUUID();
+    const snapshot = this._options.createRunner === undefined && this._options.runnerType !== "mock" && this._options.runnerType !== "dummy"
+      ? getKernel().resolveAgentExecutionSnapshot({agentId: session.agent_id, shadowId: session.shadow_id}, invocationId)
+      : undefined;
+    const runnerType = snapshot?.agentType ?? this._options.runnerType;
+    let runnerContext = this._runnerContexts.resolveForSession(session.id, runnerType);
+    if (snapshot !== undefined) runnerContext = this._runnerContexts.syncAgentCompatibility(runnerContext.id, {
+      providerFingerprint: snapshot.providerFingerprint, modelFingerprint: snapshot.modelFingerprint, resumeOnModelChange: snapshot.resumeOnModelChange,
+    }).runnerContext;
+    const latest = this._messageStore.listMessagesBefore({ sessionId: session.id, beforeCreatedAt: Date.now() + 1 }).at(-1);
+    if (runnerContext.runner_session_id === null || latest === undefined) return;
+    const attempt = this._attemptStore.createRunning({
+      sessionId: session.id, turnId: command.id, runnerContextId: runnerContext.id, runnerType,
+      runnerSessionId: runnerContext.runner_session_id, attemptKind: "primary", inputPrompt: command.instruction,
+    });
+    workInvocations(db).set(invocationId, { runnerContextId: runnerContext.id, sessionId: session.id, turnId: command.id, ...(signal ? { signal } : {}) });
+    try {
+      const runner = this._options.createRunner?.() ?? createAgentRunnerForConfig(snapshot!, getKernel().runtimeAgentTransport);
+      const serviceEnv = this._serviceEnv(invocationId, runnerContext.id, command.actorUserId, session, snapshot);
+      const instructions = await prepareRunnerFiles(runnerContext, buildWorkRunnerContextFile(session, buildInboundFromMessageRow(session, latest)), signal, invocationId);
+      runnerContext = this._runnerContexts.syncInstructionFingerprint(runnerContext.id, instructions.instructionFingerprint).runnerContext;
+      if (runnerContext.runner_session_id === null) {
+        // Changed instructions reset the provider context, and the conversation went with it.
+        const invocations = new InvocationStore(db);
+        if (invocations.find(invocationId) && !invocations.jobsFor(invocationId).length) invocations.finish(invocationId);
+        this._attemptStore.markParsed(attempt.id, { rawOutput: "", parsedActionJson: { title: "记忆维护", status: "completed", steps: [], summary: "会话上下文已重置，跳过" } });
+        return;
+      }
+      const memory = memoryInjection(db, {agentId: session.agent_id, shadowId: session.shadow_id, actorUserId: command.actorUserId,
+        sessionId: session.id, taskId: null, runnerContextId: runnerContext.id});
+      const prompt = memory.text ? `${command.instruction}\n\n${memory.text}` : command.instruction;
+      if (prompt !== command.instruction) this._attemptStore.updateInputPrompt(attempt.id, prompt);
+      const invocation = await invokeSessionAgent({
+        runner, runnerContext, runnerContextStore: this._runnerContexts, runnerKind: "work",
+        messageId: `work-${session.id}-${command.id}`, prompt,
+        env: { ...(snapshot?.env ?? {}), ...(serviceEnv ?? {}) },
+        ...(signal !== undefined ? { signal } : {}),
+      });
+      memory.commit();
+      if (!signal?.aborted) finalizeRunnerReply(db, {
+        sessionId: session.id, originId: command.id, text: invocation.text, allowSilent: true,
+        ...(new InvocationStore(db).find(invocationId) ? { invocationId } : {}),
+        actorUserId: command.actorUserId,
+      });
+      this._attemptStore.markParsed(attempt.id, {
+        rawOutput: invocation.text, parsedActionJson: { title: "记忆维护", status: "completed", steps: [], summary: "" },
+        ...(invocation.runnerSessionId !== undefined ? { runnerSessionId: invocation.runnerSessionId } : {}),
+      });
+    } catch (err) {
+      if (!(err instanceof RuntimeDetachedError)) this._attemptStore.markRunnerFailed(attempt.id, { error: err });
+      throw err;
+    } finally {
+      workInvocations(db).delete(invocationId);
+    }
+  }
+
   private _workRunnerServiceEnv(
     invocationId: string,
     runnerContextId: string,
     messageRow: MessageRow,
+    session: SessionRow,
+    agentConfig?:AgentExecutionSnapshot,
+  ): Record<string, string> | undefined {
+    return this._serviceEnv(invocationId, runnerContextId, this._requestedByUserIdForWorkRunner(messageRow, session), session, agentConfig);
+  }
+
+  private _serviceEnv(
+    invocationId: string,
+    runnerContextId: string,
+    requestedByUserId: string | undefined,
     session: SessionRow,
     agentConfig?:AgentExecutionSnapshot,
   ): Record<string, string> | undefined {
@@ -450,10 +524,7 @@ export class WorkRunner {
         invocationId,
         runnerContextId,
         sessionId: session.id,
-        requestedByUserId: this._requestedByUserIdForWorkRunner(
-          messageRow,
-          session,
-        ),
+        requestedByUserId,
         db: this._options.db,
       });
     } catch (err) {

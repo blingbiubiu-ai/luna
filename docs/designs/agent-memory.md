@@ -31,8 +31,8 @@ cannot support Shadows that learn while they work:
 - one revision for the whole document set makes concurrent Shadow writes conflict;
 - the snapshot is pinned at acceptance, so a running session never sees what
   another Shadow just learned;
-- `instructionFingerprint` hashes the resource selection, including
-  `agentMemoryRevision` (`src/runtime/context-preparation.ts`). A changed
+- `instructionFingerprint` hashes the resource selection
+  (`src/runtime/context-preparation.ts`). A changed
   fingerprint invalidates provider sessions, so frequent memory writes would
   reset every Shadow's conversation context;
 - a snapshot is per Shadow, while `person` visibility is per session.
@@ -49,6 +49,7 @@ One entry holds one fact.
 | `project` | Ongoing work, decisions and constraints, with absolute dates |
 | `procedure` | Reusable know-how |
 | `reference` | Pointers to external resources |
+| `episode` | Something that happened: when, with whom, what was done and how it ended; see below |
 
 Not stored: conversation transcripts (messages), task results and files
 (tasks, artifacts), knowledge content (Knowledge workspace), secrets, and
@@ -94,6 +95,38 @@ principles. It replaces the per-Shadow USER and SOUL documents.
 What a Shadow learns about the people it works with is not persona: it belongs
 in `person` entries, or in Shadow-private entries when it concerns only that
 Shadow.
+
+### Episodes
+
+Facts say what is true; episodes say what happened. An `episode` entry is
+episodic memory: it carries `occurred_at` and `participants` and forms the
+Agent's timeline across all its Shadows, which is what answers "what have you
+been doing lately".
+
+- Episodes are written by reflection, by the model that took part in the
+  conversation, never from a template. Each reflection covers the stretch of
+  the conversation since the previous one and writes one episode as a story:
+  who asked for what, what was done, including the Tasks started and what they
+  did, and how it ended. A handled Task result makes the session due for
+  reflection like a human message does, with the Task's creator as the asker.
+- One event is one episode. Each reflection is shown the conversation's latest
+  episode; when the new stretch is how that event turned out, such as a Task it
+  started that has since finished, the reflection extends that episode instead
+  of adding one. An episode extended by a reflection is dated to the time of the
+  extension and gains the conversation's participants; its body keeps when it
+  began. Only the prompt keeps the reflection from adding a second episode.
+- `participants` come from the invocation, never from the request: its actor
+  and everyone who spoke in its session; for a Task also its creator.
+- The Agent owner sees every episode. Anyone else sees only episodes they took
+  part in, whoever wrote them and whether or not the writer was trusted. This
+  replaces the untrusted-author rule for episodes.
+- Episodes are read with `luna memory timeline` and found by search. They are
+  never core, never recalled by a message, not checked for duplicates, not
+  handed to consolidation, and left out of `luna memory list` unless asked for
+  by type. An entry cannot change into or out of `episode`.
+- An episode that happened, and was last read, more than
+  `memory.episode_retention_ms` (90 days) ago is archived. It stays on
+  `luna memory timeline --archived` and can be restored.
 
 ### Core entries
 
@@ -232,6 +265,7 @@ the Dashboard; restoring clears an expiry that has passed.
 ```text
 luna memory list [--type T] [--limit N]
 luna memory search <keywords> [--type T] [--subject USER_ID] [--archived]
+luna memory timeline [--since 7d|YYYY-MM-DD] [--until YYYY-MM-DD] [--shadow SHADOW_ID] [--with USER_ID] [--limit N] [--archived]
 luna memory get <id>
 luna memory add --type T --title TITLE --description DESC [--subject USER_ID] [--visibility agent|shadow] [--expires YYYY-MM-DD] [--core true] [--force] (--body TEXT | --stdin)
 luna memory update <id> --expected-revision N [--title ...] [--description ...] [--type ...] [--subject USER_ID|none] [--visibility ...] [--expires YYYY-MM-DD|none] [--core true|false] [--body TEXT | --stdin]
@@ -250,7 +284,7 @@ is "revert".
 | Moment | Trigger | Mechanism |
 | --- | --- | --- |
 | Inline | The user asks to remember, corrects the Agent, or states a durable fact | The Runner searches first, then updates an existing entry or adds one |
-| Reflection | The latest reflectable human message of a Main session is older than `memory.reflection_idle_ms` (30 minutes) and has not been reflected on | Service queues a silent `session.invoke` turn in the same session, so the provider context already holds the conversation |
+| Reflection | The latest reflectable human message of a Main or Work session is older than `memory.reflection_idle_ms` (30 minutes) and has not been reflected on | Service queues a silent `session.invoke` turn in the same session, so the provider context already holds the conversation |
 | Consolidation | An Agent's memory was changed by something other than consolidation, at most once per `memory.consolidation_interval_ms` (24 hours) | Silent turn in a dedicated Dashboard session of the default Shadow |
 
 The session command worker runs one maintenance pass a minute: forget, then
@@ -271,8 +305,12 @@ entry. Sessions whose last reflectable message is older than 24 hours are
 skipped, so enabling memory does not replay history.
 `memory_reflection_checkpoints` records how far each session has been
 reflected on; it advances when the turn is queued, so reflection is best
-effort. Work sessions are not reflected on, and a Task Run ending does not by
-itself start a reflection; both save memory inline.
+effort. A Work session is reflected on the same way, but by its own Runner: its
+conversation lives in the Work Runner's provider context, so Service routes the
+turn to a silent Work maintenance turn that sends no status card and needs no
+answer. A session with no provider context, or one whose context was just
+reset, is skipped. A Task Run ending makes the session that started it due
+for reflection once its result has been handled there.
 
 Consolidation is incremental. Service hands the turn the entries changed since
 the last run (up to 100; a backlog continues ten minutes later), each with up to
@@ -307,6 +345,7 @@ confirmation" filter lists untrusted entries; confirming one shares it.
 | `memory.reflection_idle_ms` | 30 minutes | Idle time before reflection; 0 disables |
 | `memory.consolidation_interval_ms` | 24 hours | Minimum time between consolidations; 0 disables |
 | `memory.forget_unused_ms` | 180 days | Unused time before archiving; 0 keeps unused entries |
+| `memory.episode_retention_ms` | 90 days | Age, since it happened and was last read, at which an episode is archived; 0 keeps episodes |
 | `memory.recall_limit` | 8 | Entries recalled into one turn; 0 disables recall |
 | `memory.core_limit` | 30 | Active shared core entries per Agent |
 | `memory.shadow_core_limit` | 10 | Active Shadow-private core entries per Shadow |
@@ -317,8 +356,7 @@ confirmation" filter lists untrusted entries; confirming one shares it.
 The per-Shadow USER/SOUL documents, their API (`/api/agents/:agentId/shadows/:shadowId/config`)
 and their publication into the snapshot's `config/` directory are removed.
 Migration `0002_agent_memories.sql` imports each non-empty document as a persona
-entry of its Shadow. `shadowConfigRevision` remains in the resource selection as
-the digest of an empty file set, like `agentMemoryRevision`.
+entry of its Shadow.
 
 Migration `0002_agent_memories.sql` imports each non-empty legacy memory file as
 one trusted `reference` entry with origin `migration`; consolidation then splits
@@ -326,13 +364,25 @@ and classifies it. Files holding only whitespace are skipped. The forgetting
 clock of an imported entry starts at the upgrade, since the document was in
 every conversation until then. The import does not enforce the 8 KB body limit, so an
 oversized imported entry must be split before it can be edited. The document
-memory API and snapshot publication are removed. The legacy revisions stay in
-`agent_document_revisions` and `luna_agents.memory_revision` is left as is.
-`agentMemoryRevision` remains in the resource selection as the digest of an
-empty file set so the Worker protocol stays compatible.
+memory API and snapshot publication are removed. Once the documents are
+imported, `0004_memory_cleanup.sql` drops `agent_document_revisions`, the
+triggers that guarded it and the `luna_agents.memory_revision` and
+`agent_shadows.config_revision` pointers into it. The resource selection no
+longer has `agentMemoryRevision` or `shadowConfigRevision`, and snapshots no
+longer have `agent/memory/` or `shadow/config/` parts, so Service, Worker and
+the runner image's Executor must be upgraded together.
 
 ## Known limits
 
+- A Task whose result is not handled in any session (no primary session)
+  leaves no episode.
+- Participants leave out system users, such as a Shadow's own reply identity.
+- A Work session whose provider context was reset (changed instructions or
+  model) before its reflection ran is skipped, so that stretch of work leaves
+  no episode.
+- Old episodes are archived one by one; they are not condensed into digests. A
+  digest would be visible to everyone who took part in any of its episodes and
+  so leak the others.
 - Recall and duplicate detection match terms, not meaning.
 - Common two-character pieces can make an unrelated entry pass the two-term
   recall threshold; rarity only affects ranking.

@@ -14,6 +14,7 @@ test("memory CLI maps commands to Runner memory routes and rejects invalid input
     for (const [args, stdin] of [
       [["list", "--type", "feedback", "--limit", "50"]],
       [["search", "周报", "格式", "--subject", "u1", "--archived"]],
+      [["timeline", "--since", "2026-11-01", "--until", "2026-11-07", "--with", "u1", "--shadow", "s1", "--limit", "5", "--archived"]],
       [["get", "m 1"]],
       [["add", "--type", "person", "--title", "张三", "--description", "只要结论", "--subject", "u1", "--visibility", "shadow", "--force", "--stdin"], "不要过程\n"],
       [["add", "--type", "project", "--title", "t", "--description", "d", "--body", "b", "--expires", "2026-11-20", "--core", "true"]],
@@ -27,6 +28,7 @@ test("memory CLI maps commands to Runner memory routes and rejects invalid input
     expect(requests).toEqual([
       {method: "GET", path: "/api/runner/memory?type=feedback&limit=50", body: undefined},
       {method: "GET", path: `/api/runner/memory/search?q=${encodeURIComponent("周报 格式").replace(/%20/g, "+")}&subject=u1&archived=true`, body: undefined},
+      {method: "GET", path: `/api/runner/memory/timeline?since=${Date.parse("2026-11-01T00:00:00Z")}&until=${Date.parse("2026-11-07T23:59:59Z")}&shadow=s1&with=u1&limit=5&archived=true`, body: undefined},
       {method: "GET", path: "/api/runner/memory/m%201", body: undefined},
       {method: "POST", path: "/api/runner/memory", body: {type: "person", title: "张三", description: "只要结论", subjectUserId: "u1", visibility: "shadow", body: "不要过程\n", force: true}},
       {method: "POST", path: "/api/runner/memory", body: {type: "project", title: "t", description: "d", body: "b", expiresAt: Date.parse("2026-11-20T23:59:59Z"), core: true}},
@@ -42,7 +44,12 @@ test("memory CLI maps commands to Runner memory routes and rejects invalid input
       ["delete", "m1"], ["add", "--body", "a", "--stdin"], ["unknown"], ["restore", "m1"],
       ["update", "m1", "--expected-revision", "1", "--expires", "soon"], ["update", "m1", "--expected-revision", "1", "--core", "yes"],
     ]) expect(await run(args)).toMatchObject({status: "error", code: "invalid_memory_command"});
-    expect(requests).toHaveLength(11);
+    expect(requests).toHaveLength(12);
+    const before = Date.now();
+    expect((await run(["timeline", "--since", "7d"])).status).toBe("ok");
+    const since = Number(new URL("http://x" + requests.at(-1)!.path).searchParams.get("since"));
+    expect(Math.abs(before - 7 * 86_400_000 - since)).toBeLessThan(5000);
+    expect(await run(["timeline", "--since", "lately"])).toMatchObject({status: "error", code: "invalid_memory_command"});
     expect((await run(["help"])).output).toContain("luna memory search");
   } finally { server.stop(true); }
 });

@@ -243,6 +243,15 @@ when an entry you were shown changes. Each line is
 - Entries nobody uses for a long time, and entries past their expiry, are
   forgotten. `luna memory search <keywords> --archived` finds them and
   `luna memory restore <id> --expected-revision N` brings one back.
+- Memory also keeps a timeline of what happened: `episode` entries, written in
+  each conversation's memory reflection once it has gone quiet, including the
+  Tasks it started and how they ended, across all Shadows of the Agent. When someone asks what you have been doing, what
+  happened recently, or when something took place, do not answer from this
+  conversation alone: run `luna memory timeline --since 7d` (also
+  `--with <Luna user id>`, `--shadow <id>`, `--until`) and read an episode with
+  `luna memory get <id>` when you need its details. You are shown only the
+  episodes the person asking took part in, unless that person is the Agent
+  owner. Do not add episodes yourself outside a memory reflection turn.
 - Save a memory when the user asks you to remember something, corrects how you
   work, or states a fact that will matter in later conversations. Search first
   and update the existing entry with

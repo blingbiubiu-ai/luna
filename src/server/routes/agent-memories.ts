@@ -16,7 +16,8 @@ const fields = {
   expiresAt: z.number().int().positive().nullable().optional(),
 };
 const listQuery = z.object({
-  status: z.enum(MEMORY_STATUSES).optional(), type: z.enum(MEMORY_TYPES).optional(), originKind: z.enum(MEMORY_ORIGIN_KINDS).optional(),
+  status: z.enum(MEMORY_STATUSES).optional(), type: z.enum(MEMORY_TYPES).optional(), excludeType: z.enum(MEMORY_TYPES).optional(),
+  originKind: z.enum(MEMORY_ORIGIN_KINDS).optional(),
   originShadowId: z.string().min(1).optional(), core: z.enum(["true", "false"]).optional(), trusted: z.enum(["true", "false"]).optional(), query: z.string().max(200).optional(),
   sort: z.enum(["updatedAt", "createdAt"]).optional(), limit: z.coerce.number().int().min(1).max(200).default(50), offset: z.coerce.number().int().min(0).default(0),
 });
@@ -68,8 +69,12 @@ export function createAgentMemoryRoutes(db: DrizzleDB) {
       const {core, trusted, ...filters} = listQuery.parse(c.req.query());
       const flag = (value: string | undefined) => value === undefined ? undefined : value === "true";
       const {entries, total} = store.page(viewer.agentId, {...filters, core: flag(core), trusted: flag(trusted)});
-      return c.json({memories: named(entries), total,
-        core: {used: store.coreUsed(viewer.agentId, null), limit: config.memory.core_limit, shadowLimit: config.memory.shadow_core_limit}});
+      const {personaByShadow, ...stats} = store.counts(viewer.agentId);
+      return c.json({
+        memories: named(entries), total, stats,
+        core: {used: store.coreUsed(viewer.agentId, null), limit: config.memory.core_limit, shadowLimit: config.memory.shadow_core_limit},
+        persona: {limit: config.memory.persona_limit, byShadow: personaByShadow},
+      });
     })
     .post("/:agentId/memories/:id/restore", async c => {
       const {viewer, writer} = owner(c);

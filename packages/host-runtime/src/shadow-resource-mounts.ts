@@ -2,7 +2,7 @@ import {ScopedResourceStore} from "./scoped-resource-store";
 import {ImmutableResourceDirectory,type ImmutableResourceFile} from "./immutable-resource-directory";
 import type {ResourceScope,ResourceSelection} from "./scoped-runner-resources";
 
-const roots=["memory","config","skills/skills","commands","prompts","tools"] as const;
+const roots=["skills/skills","commands","prompts","tools"] as const;
 /** Deterministic union of approved public and Agent tools, outside writable HOME. */
 export function materializeShadowMountSources(workerHome:string,scope:ResourceScope,selection:ResourceSelection):string {
  const bundle=new ScopedResourceStore(workerHome).read(scope,selection),files:ImmutableResourceFile[]=[];
@@ -11,7 +11,7 @@ export function materializeShadowMountSources(workerHome:string,scope:ResourceSc
   let target:string|undefined;
   if(file.path==="agent/tools/catalog.json")target="tools/catalog.json";
   else for(const [source,destination] of [["public/skills/","skills/skills/"],["agent/tools/skills/","skills/skills/"],["public/commands/","commands/"],
-   ["agent/tools/commands/","commands/"],["public/prompts/","prompts/"],["agent/memory/","memory/"],["shadow/config/","config/"]]){
+   ["agent/tools/commands/","commands/"],["public/prompts/","prompts/"]]){
    if(file.path.startsWith(source!)){target=destination!+file.path.slice(source!.length);break;}
   }
   if(!target)throw new Error("Unsupported resource mount path");
@@ -35,5 +35,5 @@ export function materializeShadowMountSources(workerHome:string,scope:ResourceSc
  }
  // Version the derived layout independently: changing this mapping must not replace old mounts.
  const tree=new ImmutableResourceDirectory(workerHome);
- return tree.publish(`agents/${scope.agentId}/shadow-resources/${scope.shadowId}/mounts/v3/${selection.digest}`,files,roots,0o755);
+ return tree.publish(`agents/${scope.agentId}/shadow-resources/${scope.shadowId}/mounts/v4/${selection.digest}`,files,roots,0o755);
 }

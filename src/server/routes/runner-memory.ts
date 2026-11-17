@@ -19,7 +19,9 @@ const fields = {
   visibility: z.enum(["agent", "shadow"]).optional(),
   core: z.boolean().optional(),
   expiresAt: z.number().int().positive().nullable().optional(),
+  occurredAt: z.number().int().positive().nullable().optional(),
 };
+const time = z.coerce.number().int().positive();
 const addBody = z.object({...fields, force: z.boolean().optional()}).strict();
 const updateBody = z.object(fields).partial().extend({expectedRevision: z.number().int().positive()}).strict();
 const revision = z.coerce.number().int().positive();
@@ -30,7 +32,9 @@ export function createRunnerMemoryRoutes(options: {db?: DrizzleDB} = {}) {
   const access = (claims: LunaAccessTokenClaims | undefined) => {
     if (claims?.source !== "runner" || !claims.runnerKind) throw new GatewayError("runner_required", "A Runner token is required", 403);
     const {invocation, snapshot} = new InvocationService(db()).requireActive(claims, claims.runnerKind);
-    const trigger = snapshot.kind === "main" && snapshot.input.input.type === "session_trigger" ? snapshot.input.input.triggerId : undefined;
+    // A Service-queued turn carries its command id: as the trigger of a Main turn, or as the turn id of a Work maintenance turn.
+    const trigger = snapshot.kind === "main" ? (snapshot.input.input.type === "session_trigger" ? snapshot.input.input.triggerId : undefined)
+      : snapshot.kind === "work" ? snapshot.input.turnId : undefined;
     return memoryAccess(db(), invocation, trigger ? memoryOriginOfTrigger(db(), trigger) : "inline");
   };
   /** Summaries name who said it and when, so the reader can weigh the source. */
@@ -55,6 +59,13 @@ export function createRunnerMemoryRoutes(options: {db?: DrizzleDB} = {}) {
       const {entries, omitted} = new AgentMemoryStore(db()).index(access(c.get("lunaAccessTokenClaims")).viewer, query);
       return c.json({memories: summaries(entries), omitted});
     })
+    .get("/memory/timeline", c => {
+      const query = z.object({since: time.optional(), until: time.optional(), shadow: z.string().min(1).optional(), with: z.string().min(1).optional(),
+        archived: z.enum(["true", "false"]).optional(), limit: z.coerce.number().int().min(1).max(100).default(30)}).parse(c.req.query());
+      const rows = new AgentMemoryStore(db()).timeline(access(c.get("lunaAccessTokenClaims")).viewer,
+        {since: query.since, until: query.until, shadowId: query.shadow, withUserId: query.with, limit: query.limit, archived: query.archived === "true"});
+      return c.json({episodes: summaries(rows)});
+    })
     .get("/memory/search", c => {
       const query = z.object({q: z.string().max(200), type: type.optional(), subject: z.string().optional(), archived: z.enum(["true", "false"]).optional(),
         limit: z.coerce.number().int().min(1).max(50).default(10)}).parse(c.req.query());
@@ -67,13 +78,16 @@ export function createRunnerMemoryRoutes(options: {db?: DrizzleDB} = {}) {
       const {viewer, writer} = access(c.get("lunaAccessTokenClaims"));
       const author = writer();
       const {force, ...input} = addBody.parse(await c.req.json().catch(() => null));
-      return c.json({memory: detail(new AgentMemoryStore(db()).add(author, input, {duplicatesFor: viewer, force}))}, 201);
+      return c.json({memory: detail(new AgentMemoryStore(db()).add(author, input, {duplicatesFor: viewer, force,
+        // Who took part in an episode comes from the invocation: its actor and everyone who spoke in its session.
+        participants: viewer.all ? [author.userId].filter((id): id is string => id !== null) : viewer.participants}))}, 201);
     })
     .put("/memory/:id", async c => {
       const {viewer, writer} = access(c.get("lunaAccessTokenClaims"));
       const author = writer();
       const input = updateBody.parse(await c.req.json().catch(() => null));
-      return c.json({memory: detail(new AgentMemoryStore(db()).update(author, viewer, c.req.param("id"), input))});
+      // Whoever took part in this conversation also took part in an episode it extends.
+      return c.json({memory: detail(new AgentMemoryStore(db()).update(author, viewer, c.req.param("id"), input, {participants: viewer.all ? [] : viewer.participants}))});
     })
     .post("/memory/:id/restore", async c => {
       const {viewer, writer} = access(c.get("lunaAccessTokenClaims"));

@@ -15,6 +15,20 @@
       "when": 1794787200000,
       "tag": "0002_agent_memories",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1794873600000,
+      "tag": "0003_memory_episodes",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1794960000000,
+      "tag": "0004_memory_cleanup",
+      "breakpoints": true
     }
   ]
 }

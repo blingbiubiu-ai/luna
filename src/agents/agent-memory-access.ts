@@ -1,6 +1,6 @@
-import {and, eq, isNull} from "drizzle-orm";
+import {and, eq, isNull, ne} from "drizzle-orm";
 import type {DrizzleDB} from "@/data";
-import {messages, tasks} from "@/data/schema";
+import {messages, tasks, users} from "@/data/schema";
 import {AuthorizationRuleStore} from "@/server/policy/authorization-rule-store";
 import {ruleMatchesOperation} from "@/server/policy/operation-policy";
 import {AgentError, AgentStore} from "./agent-store";
@@ -15,7 +15,10 @@ export interface MemoryInvocation {
   runnerContextId: string;
 }
 
-/** The actor, everyone who has spoken in the session, and for a Task its creator and primary session. */
+/**
+ * The actor, everyone who has spoken in the session, and for a Task its creator and primary session.
+ * System users, such as a Shadow's own reply identity, are the Agent speaking, not people taking part.
+ */
 export function memoryParticipants(db: DrizzleDB, invocation: Pick<MemoryInvocation, "actorUserId" | "sessionId" | "taskId">): string[] {
   const participants = new Set([invocation.actorUserId]);
   const sessionIds = new Set(invocation.sessionId ? [invocation.sessionId] : []);
@@ -26,7 +29,8 @@ export function memoryParticipants(db: DrizzleDB, invocation: Pick<MemoryInvocat
   }
   for (const sessionId of sessionIds) {
     for (const row of db.selectDistinct({userId: messages.senderUserId}).from(messages)
-      .where(and(eq(messages.ownerSessionId, sessionId), isNull(messages.deletedAt))).all()) participants.add(row.userId);
+      .innerJoin(users, eq(users.id, messages.senderUserId))
+      .where(and(eq(messages.ownerSessionId, sessionId), isNull(messages.deletedAt), ne(users.kind, "system"))).all()) participants.add(row.userId);
   }
   return [...participants];
 }
@@ -44,7 +48,7 @@ export function memoryAccess(db: DrizzleDB, invocation: MemoryInvocation, kind: 
   return {
     // Consolidation is queued by Service for the owner and has to see everything it tidies.
     viewer: kind === "consolidation" && owner ? {agentId: invocation.agentId, all: true}
-      : {agentId: invocation.agentId, shadowId: invocation.shadowId, participants: memoryParticipants(db, invocation)},
+      : {agentId: invocation.agentId, shadowId: invocation.shadowId, participants: memoryParticipants(db, invocation), actorUserId: invocation.actorUserId, owner},
     writer: () => {
       if (rule("deny", "memory.write")) throw new AgentError("memory_access_denied", 403);
       return {

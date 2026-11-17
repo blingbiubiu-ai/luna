@@ -74,3 +74,15 @@ test("stopped Shadow environments do not exhaust the finite port pool", () => {
     }
   } finally { db.close(); }
 });
+
+test("environments recorded before memory left the resource snapshot still load", () => {
+  const db = openExecutionDatabase(":memory:");
+  try {
+    const store = new EnvironmentStore(db), scoped = fixtureJobScope("agent", "shadow");
+    const { environment } = store.prepare({ requestId: "request", occupant: { kind: "maintenance", scope: scoped.scope, operationId: "request", operationHash: "a".repeat(64), contextId: "context" }, spec: { protocolVersion: 2, scope: scoped.scope, resourceSelection: scoped.resources, environmentId: "environment", mode: "shared", scopeKey: "session", imageDigest: `sha256:${"a".repeat(64)}`, callbackRuntimeId: "runtime", resources: { memory: "1g", cpus: 1, pidsLimit: 128 } } });
+    const legacy = { ...environment, spec: { ...environment.spec, resourceSelection: { ...environment.spec.resourceSelection, agentMemoryRevision: "b".repeat(64), shadowConfigRevision: "c".repeat(64) } } };
+    db.prepare("UPDATE worker_environments SET record_json=? WHERE id=?").run(JSON.stringify(legacy), environment.id);
+    expect(store.list().map(item => item.spec.resourceSelection)).toEqual([scoped.resources]);
+    expect(store.require(environment.id).spec.resourceSelection).toEqual(scoped.resources);
+  } finally { db.close(); }
+});

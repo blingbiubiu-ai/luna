@@ -7,7 +7,6 @@ export const lunaAgents = sqliteTable("luna_agents", {
   id: text("id").primaryKey(),
   ownerUserId: text("owner_user_id").notNull().references(() => users.id),
   name: text("name").notNull(),
-  memoryRevision: text("memory_revision"),
   defaultShadowId: text("default_shadow_id").notNull(),
   status: text("status", {enum: ["active", "disabled", "deleted"]}).notNull(),
   createdAt: integer("created_at").notNull(),
@@ -25,7 +24,6 @@ export const agentShadows = sqliteTable("agent_shadows", {
   name: text("name").notNull(),
   replyUserId: text("reply_user_id").notNull().references(() => users.id),
   status: text("status", {enum: ["active", "disabled", "deleted"]}).notNull(),
-  configRevision: text("config_revision"),
   createdAt: integer("created_at").notNull(),
   updatedAt: integer("updated_at").notNull(),
 }, t => [

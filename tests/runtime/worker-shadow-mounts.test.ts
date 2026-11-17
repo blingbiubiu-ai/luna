@@ -10,9 +10,9 @@ let root:string,db:Database,planner:WorkerShadowMounts;
 const a={agentId:"agent-a",shadowId:"shadow-a"},b={agentId:"agent-a",shadowId:"shadow-b"},c={agentId:"agent-c",shadowId:"shadow-c"};
 beforeEach(()=>{root=realpathSync(mkdtempSync(join(tmpdir(),"worker-shadow-mounts-")));db=new Database(join(root,"worker.sqlite"));planner=new WorkerShadowMounts(db,root);});
 afterEach(()=>{db.close();rmSync(root,{recursive:true,force:true});});
-function snapshot(scope:ResourceScope,memory="memory"){
- const bundle=createScopedResources(scope,[{path:"agent/memory/note.md",content:Buffer.from(memory).toString("base64"),mode:0o644},
- {path:"shadow/config/SOUL.md",content:Buffer.from(scope.shadowId).toString("base64"),mode:0o644}]);
+function snapshot(scope:ResourceScope,prompt="prompt"){
+ const bundle=createScopedResources(scope,[{path:"public/prompts/note.md",content:Buffer.from(prompt).toString("base64"),mode:0o644},
+ {path:"agent/tools/commands/whoami",content:Buffer.from(scope.shadowId).toString("base64"),mode:0o644}]);
  new ScopedResourceStore(root).publish(bundle,scope,bundle.selection);return bundle.selection;
 }
 test("three Shadow plans each mount one fixed resource snapshot read-only",()=>{
@@ -23,7 +23,7 @@ test("three Shadow plans each mount one fixed resource snapshot read-only",()=>{
    {source:result.resourceSource,destination:join(result.layout.home,".luna-resources"),readonly:true},
   ]);
   expect(result.resourceSource.startsWith(result.layout.resourceRoot+"/mounts/")).toBe(true);
-  expect(readFileSync(join(result.resourceSource,"config","SOUL.md"),"utf8")).toBe(scope.shadowId);
+  expect(readFileSync(join(result.resourceSource,"commands","whoami"),"utf8")).toBe(scope.shadowId);
 
  }
 });
@@ -34,8 +34,8 @@ test("scope substitution fails before HOME creation; resource revisions never ch
  const old=planner.prepare(a,selection),next=planner.prepare(a,snapshot(a,"changed"));
  expect(old.layout).toEqual(next.layout);
  expect(old.resourceSource).not.toBe(next.resourceSource);
- expect(readFileSync(join(old.resourceSource,"memory","note.md"),"utf8")).toBe("memory");
- expect(readFileSync(join(next.resourceSource,"memory","note.md"),"utf8")).toBe("changed");
+ expect(readFileSync(join(old.resourceSource,"prompts","note.md"),"utf8")).toBe("prompt");
+ expect(readFileSync(join(next.resourceSource,"prompts","note.md"),"utf8")).toBe("changed");
 });
 test("Runner-created symlinks cannot redirect the resource mount to another Shadow",()=>{
  const selection=snapshot(a),first=planner.prepare(a,selection),other=planner.prepare(b,snapshot(b));

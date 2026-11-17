@@ -1329,3 +1329,47 @@ function extractWorkTurnInputJson(prompt: string): Record<string, unknown> {
   expect(match?.[1]).toBeString();
   return JSON.parse(match![1]!) as Record<string, unknown>;
 }
+
+test("a memory maintenance turn runs silently in the Work session's provider context", async () => {
+  const { WorkRunner } = await import("../../src/work/work-runner");
+  const { RunnerContextStore } = await import("../../src/runners/runner-context-store");
+  const channel = new FakeFeishuChannel("feishu-main");
+  const session = new SessionStore(database.db).createWorkSession({
+    channelType: "feishu", channelId: "feishu-main", groupId: "g-maint", threadId: "t-maint", rootMessageId: "t-maint",
+  });
+  database.db.insert(lunaSchema.users).values({ id: "u-maint", kind: "human", displayName: "Maint", status: "active", createdAt: "now", updatedAt: "now" }).run();
+  const received: { prompt: string; runnerSessionId: string | undefined; runnerKind: string | undefined }[] = [];
+  const runner = new WorkRunner({
+    db: database.db, runnerType: "mock", channelForMessage: () => channel,
+    createRunner: () => ({
+      type: "mock",
+      async *stream(message: any, options: any) {
+        received.push({ prompt: message.content[0].text, runnerSessionId: options.runnerSessionId, runnerKind: options.runnerKind });
+        yield { id: "assistant-final", session_id: session.id, role: "assistant", content: [{ type: "text", text: "LUNA_NOTHING_TO_SEND" }] };
+      },
+    }),
+  } as never);
+  const command = { id: "cmd-reflect", actorUserId: "u-maint", instruction: "Memory reflection. Review this conversation." };
+
+  // Nothing was said and no provider context exists: there is nothing to reflect on.
+  await runner.executeMaintenanceTurn(session, command);
+  expect(received).toEqual([]);
+
+  new MessageStore(database.db).appendOnce({ sessionId: session.id, channelMessageKey: "m-maint", role: "user", senderUserId: "u-maint",
+    content: [{ type: "text", text: "帮我实现登录页" }], channel: { type: "feishu", id: "feishu-main" } });
+  const contexts = new RunnerContextStore(database.db);
+  const contextId = contexts.resolveForSession(session.id, "mock").id;
+  // Instructions that changed since the provider session began reset it; the conversation is gone, so the turn is skipped.
+  contexts.persistRunnerSessionId(contextId, "provider-work-0");
+  await runner.executeMaintenanceTurn(session, command);
+  expect(received).toEqual([]);
+  contexts.persistRunnerSessionId(contextId, "provider-work-1");
+  await runner.executeMaintenanceTurn(session, { ...command, id: "cmd-reflect-2" });
+
+  expect(received).toHaveLength(1);
+  expect(received[0]).toMatchObject({ runnerSessionId: "provider-work-1", runnerKind: "work" });
+  expect(received[0]!.prompt).toStartWith("Memory reflection. Review this conversation.");
+  // No status card, progress or reply reaches the thread.
+  expect(channel.outbound).toEqual([]);
+  expect(database.db.select().from(lunaSchema.messages).where(and(eq(lunaSchema.messages.ownerSessionId, session.id), eq(lunaSchema.messages.role, "assistant"))).all()).toEqual([]);
+});

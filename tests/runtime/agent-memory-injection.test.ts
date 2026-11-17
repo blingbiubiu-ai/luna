@@ -156,9 +156,9 @@ test("an entry recalled into a committed turn counts as used; standing entries d
   const core = store.add(elsewhere(), rule), entry = store.add(elsewhere(), weekly);
   db.db.update(schema.agentMemories).set({lastUsedAt: 1}).run();
   inject("帮我按周报格式写周报");
-  expect(store.listAll(scope.agentId).map(row => row.lastUsedAt)).toEqual([1, 1]);
+  expect(store.page(scope.agentId, {limit: 200}).entries.map(row => row.lastUsedAt)).toEqual([1, 1]);
   turn("帮我按周报格式写周报");
-  const used = Object.fromEntries(store.listAll(scope.agentId).map(row => [row.id, row.lastUsedAt]));
+  const used = Object.fromEntries(store.page(scope.agentId, {limit: 200}).entries.map(row => [row.id, row.lastUsedAt]));
   expect(used[entry.id]).toBeGreaterThan(1);
   expect(used[core.id]).toBe(1);
 });

@@ -160,6 +160,8 @@ export const MemoryConfig = z.object({
   consolidation_interval_ms: z.number().int().nonnegative().default(24 * 60 * 60 * 1000),
   /** A non-core entry nobody read or changed for this long is archived. */
   forget_unused_ms: z.number().int().nonnegative().default(180 * 24 * 60 * 60 * 1000),
+  /** An episode this old, and not read since, is archived; 0 keeps episodes. */
+  episode_retention_ms: z.number().int().nonnegative().default(90 * 24 * 60 * 60 * 1000),
   /** Most entries recalled into one turn. */
   recall_limit: z.number().int().nonnegative().default(8),
   /** Most active core entries shared by all Shadows of one Agent. */

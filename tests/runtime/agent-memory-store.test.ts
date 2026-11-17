@@ -128,7 +128,7 @@ test("deleted entries, merged away or not, leave the index but keep history, and
   store.update(owner(), viewer(a.shadowId), old.id, {expectedRevision: 1, body: "v2"});
   store.remove(owner(), viewer(a.shadowId), old.id, 2, replacement.id);
   expect(store.index(viewer(a.shadowId)).entries.map(row => row.id)).toEqual([replacement.id]);
-  expect(store.listAll(a.agentId).find(row => row.id === old.id)).toMatchObject({status: "deleted", supersededBy: replacement.id});
+  expect(store.page(a.agentId, {limit: 200}).entries.find(row => row.id === old.id)).toMatchObject({status: "deleted", supersededBy: replacement.id});
   expect(store.history(a.agentId, old.id).map(row => row.revision)).toEqual([3, 2, 1]);
   expect(() => store.history(b.agentId, old.id)).toThrow("memory_not_found");
   const dashboard: MemoryWriter = {agentId: a.agentId, kind: "owner", trusted: true, userId: "alice", shadowId: null};
@@ -247,13 +247,13 @@ test("forgetting archives expired and long-unused entries, spares core ones, and
   const used = store.add(owner(), {...note, title: "常用"});
   const core = store.add(owner(), {type: "feedback", title: "规则", description: "d", body: "b", core: true});
   expect(store.forget(180 * DAY, now + 100 * DAY)).toBe(1);
-  expect(store.listAll(a.agentId).find(row => row.id === expiring.id)).toMatchObject({status: "archived", revision: 2, trusted: true});
+  expect(store.page(a.agentId, {limit: 200}).entries.find(row => row.id === expiring.id)).toMatchObject({status: "archived", revision: 2, trusted: true});
   expect(store.history(a.agentId, expiring.id)[0]).toMatchObject({changeKind: "forgetting", changedByUserId: null, snapshot: {status: "archived"}});
   store.use(viewer(a.shadowId), used.id, now + 150 * DAY);
   expect(store.forget(180 * DAY, now + 181 * DAY)).toBe(1);
-  const after = Object.fromEntries(store.listAll(a.agentId).map(row => [row.id, row.status]));
+  const after = Object.fromEntries(store.page(a.agentId, {limit: 200}).entries.map(row => [row.id, row.status]));
   expect(after).toMatchObject({[unused.id]: "archived", [used.id]: "active", [core.id]: "active"});
-  expect(store.listAll(a.agentId).find(row => row.id === unused.id)!.trusted).toBe(false);
+  expect(store.page(a.agentId, {limit: 200}).entries.find(row => row.id === unused.id)!.trusted).toBe(false);
   expect(store.forget(0, now + 9999 * DAY)).toBe(0);
   expect(store.index(viewer(a.shadowId)).entries.map(row => row.id).sort()).toEqual([used.id, core.id].sort());
   expect(() => store.add(owner(), {...note, expiresAt: -1})).toThrow("invalid_memory_expiry");
@@ -405,4 +405,65 @@ test("being recalled keeps an entry from being forgotten; standing injection and
   expect(store.get(viewer(a.shadowId), listed.id).status).toBe("archived");
   store.markUsed([listed.id], now + 400 * DAY);
   expect(store.get(viewer(a.shadowId), listed.id).lastUsedAt).toBe(listed.lastUsedAt);
+});
+
+test("episodes form a timeline: the owner sees all of it, others only what they took part in", () => {
+  const t0 = Date.now();
+  const asOwner = (shadowId = a.shadowId): MemoryViewer => ({agentId: a.agentId, shadowId, participants: ["alice"], actorUserId: "alice", owner: true});
+  const asMember = (userId: string, shadowId = a.shadowId): MemoryViewer => ({agentId: a.agentId, shadowId, participants: [userId, "alice"], actorUserId: userId, owner: false});
+  const episode = (title: string, at: number) => ({type: "episode" as const, title, description: `${title} 的经过`, body: "细节", occurredAt: at});
+  const withLisi = store.add(member("lisi"), episode("帮李四查日志", t0 - 3 * DAY), {participants: ["lisi"]});
+  const withZhang = store.add(owner(sibling), episode("和张三评审方案", t0 - 2 * DAY), {participants: ["zhangsan", "alice"]});
+  const ownerOnly = store.add(owner(), episode("整理周报", t0 - DAY), {participants: ["alice"]});
+  expect(store.timeline(asOwner(sibling)).map(row => row.id)).toEqual([ownerOnly.id, withZhang.id, withLisi.id]);
+  expect(store.timeline(asMember("lisi", sibling)).map(row => row.id)).toEqual([withLisi.id]);
+  expect(store.timeline(asMember("zhangsan")).map(row => row.id)).toEqual([withZhang.id]);
+  expect(store.timeline(viewer(a.shadowId, "lisi"))).toEqual([]);
+  expect(() => store.get(asMember("lisi"), withZhang.id)).toThrow("memory_not_found");
+  expect(store.search(asMember("lisi"), "评审方案")).toEqual([]);
+  expect(store.search(asOwner(), "评审方案").map(row => row.id)).toEqual([withZhang.id]);
+  // Filters: time range, Shadow and a person who took part.
+  expect(store.timeline(asOwner(), {since: t0 - 2 * DAY - 1}).map(row => row.id)).toEqual([ownerOnly.id, withZhang.id]);
+  expect(store.timeline(asOwner(), {until: t0 - 2 * DAY}).map(row => row.id)).toEqual([withZhang.id, withLisi.id]);
+  expect(store.timeline(asOwner(), {shadowId: sibling}).map(row => row.id)).toEqual([withZhang.id]);
+  expect(store.timeline(asOwner(), {withUserId: "lisi"}).map(row => row.id)).toEqual([withLisi.id]);
+  expect(store.timeline(asOwner(), {limit: 1}).map(row => row.id)).toEqual([ownerOnly.id]);
+  expect(store.timeline(everything())).toHaveLength(3);
+  expect(store.add(owner(), {type: "episode", title: "现在", description: "d", body: "b"}).occurredAt).toBeGreaterThanOrEqual(t0);
+});
+
+test("episodes stay out of the index, recall, duplicate checks, consolidation and the core tier", () => {
+  const me: MemoryViewer = {agentId: a.agentId, shadowId: a.shadowId, participants: ["alice"], actorUserId: "alice", owner: true};
+  const entry = {type: "episode" as const, title: "周报格式评审", description: "讨论周报格式不要用表格", body: "b"};
+  const first = store.add(owner(), entry, {participants: ["alice"], duplicatesFor: me});
+  expect(() => store.add(owner(), entry, {participants: ["alice"], duplicatesFor: me})).not.toThrow();
+  expect(store.index(me).entries).toEqual([]);
+  expect(store.index(me, {type: "episode"}).entries).toHaveLength(2);
+  expect(store.recall(me, "帮我按周报格式写周报", {limit: 8})).toEqual([]);
+  expect(store.standing(me)).toEqual([]);
+  expect(store.changedSince(a.agentId, 0, 10)).toEqual([]);
+  expect(store.similar(everything(), {type: "feedback", title: "周报格式", description: "周报不要用表格", subjectUserId: null}, {anyType: true})).toEqual([]);
+  expect(() => store.add(owner(), {...entry, core: true})).toThrow("invalid_memory_core");
+  expect(() => store.add(owner(), {...note, occurredAt: Date.now()})).toThrow("invalid_memory_occurred_at");
+  expect(() => store.update(owner(), everything(), first.id, {expectedRevision: 1, type: "project"})).toThrow("invalid_memory_type");
+  const plain = store.add(owner(), note);
+  expect(() => store.update(owner(), everything(), plain.id, {expectedRevision: 1, type: "episode"})).toThrow("invalid_memory_type");
+  expect(store.history(a.agentId, first.id)[0]!.snapshot.occurredAt).toBe(first.occurredAt);
+});
+
+test("episodes fade by age unless read since; the unused rule does not apply to them", () => {
+  const now = Date.now();
+  const me: MemoryViewer = {agentId: a.agentId, shadowId: a.shadowId, participants: ["alice"], actorUserId: "alice", owner: true};
+  const old = store.add(owner(), {type: "episode", title: "旧事", description: "d", body: "b", occurredAt: now - 100 * DAY}, {participants: ["alice"]});
+  const reread = store.add(owner(), {type: "episode", title: "重读过的旧事", description: "d", body: "b", occurredAt: now - 100 * DAY}, {participants: ["alice"]});
+  const recent = store.add(owner(), {type: "episode", title: "近事", description: "d", body: "b", occurredAt: now - 10 * DAY}, {participants: ["alice"]});
+  db.db.update(schema.agentMemories).set({lastUsedAt: now - 100 * DAY}).run();
+  store.use(me, reread.id, now - 5 * DAY);
+  expect(store.forget(0, now, 0)).toBe(0);
+  expect(store.forget(30 * DAY, now, 0)).toBe(0);
+  expect(store.forget(0, now, 90 * DAY)).toBe(1);
+  expect(store.timeline(me).map(row => row.id).sort()).toEqual([reread.id, recent.id].sort());
+  expect(store.timeline(me, {archived: true}).map(row => row.id)).toEqual([old.id]);
+  expect(store.restore(owner(), me, old.id, 2).status).toBe("active");
+  expect(store.forget(0, now + 1000, 90 * DAY)).toBe(0);
 });

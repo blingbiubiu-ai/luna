@@ -7,10 +7,30 @@ import type { MainRunner } from "@/main-runner/main-runner";
 import { MainRunnerContextBuilder } from "@/main-runner/context-builder";
 import { RunnerContextStore } from "@/runners/runner-context-store";
 import { InvocationStore } from "@/runners/invocation-store";
-import { prepareMemoryConsolidationRun } from "@/agents/agent-memory-maintenance";
+import { memoryOriginOfTrigger, prepareMemoryConsolidationRun } from "@/agents/agent-memory-maintenance";
 import type { SessionCommand } from "@/messaging/session-command-service";
-export function createSessionTriggerExecutor(db: DrizzleDB, main: () => MainRunner, runnerType: (sessionId: string) => string) {
+/** Runs a Service-queued memory turn in a Work session with that session's own Runner. */
+export type WorkMaintenanceTurn = (session: typeof sessions.$inferSelect, command: {id: string; actorUserId: string; instruction: string}, signal: AbortSignal) => Promise<void>;
+export function createSessionTriggerExecutor(db: DrizzleDB, main: () => MainRunner, runnerType: (sessionId: string) => string, workMaintenance?: WorkMaintenanceTurn) {
     return async (command: SessionCommand, signal: AbortSignal) => {
+        const session = db.select().from(sessions).where(eq(sessions.id, command.sessionId)).get();
+        if (session?.kind === "work" && workMaintenance && memoryOriginOfTrigger(db, command.id) !== "inline") {
+            // A Work session's conversation lives in the Work Runner's provider context; Main would start from nothing.
+            const now = Date.now();
+            db.insert(sessionTurns).values({ id: command.id, session_id: command.sessionId, turn_kind: "execution", status: "running", runner_invoked: true, reason: "session_trigger", started_at: now, created_at: now, updated_at: now }).onConflictDoUpdate({ target: sessionTurns.id, set: { status: "running", error: null, completed_at: null, updated_at: now } }).run();
+            let outcome: "completed" | "failed" | undefined = "failed", failure: string | null = null;
+            try {
+                await workMaintenance(session, { id: command.id, actorUserId: command.actorUserId, instruction: String(command.payload.content) }, signal);
+                if (signal.aborted) throw new Error("Trigger cancelled");
+                outcome = "completed";
+            } catch (error) {
+                if (error instanceof RuntimeDetachedError) outcome = undefined; else failure = String(error);
+                throw error;
+            } finally {
+                if (outcome) db.update(sessionTurns).set({ status: outcome, error: failure, completed_at: Date.now(), updated_at: Date.now() }).where(eq(sessionTurns.id, command.id)).run();
+            }
+            return;
+        }
         const packs = new ContextPackStore(db);
         const pack = packs.createPack({ ownerType: "session", ownerId: command.sessionId, kind: "turn_delta", selectionStrategy: "trigger_recent_context", createdForInvocationId: command.id });
         const recent = db.select({ entry: sessionTimelineEntries, message: messages }).from(sessionTimelineEntries).innerJoin(messages, eq(messages.id, sessionTimelineEntries.messageId)).where(eq(sessionTimelineEntries.sessionId, command.sessionId)).orderBy(desc(sessionTimelineEntries.createdAt)).limit(30).all().reverse().filter(row => {

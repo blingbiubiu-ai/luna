@@ -1576,7 +1576,7 @@ export function useSkill(slug: string | null) {
 
 // --- Agent memory ---
 
-export type DashboardMemoryType = "persona" | "person" | "feedback" | "project" | "procedure" | "reference";
+export type DashboardMemoryType = "persona" | "person" | "feedback" | "project" | "procedure" | "reference" | "episode";
 export type DashboardMemoryOriginKind = "inline" | "reflection" | "consolidation" | "owner" | "migration";
 export type DashboardMemoryChangeKind = DashboardMemoryOriginKind | "forgetting";
 export type DashboardMemoryStatus = "active" | "deleted" | "archived";
@@ -1623,6 +1623,7 @@ export interface DashboardMemoryRevision {
 export interface DashboardMemoryFilter {
   query: string;
   type: string;
+  excludeType?: string;
   originKind: string;
   originShadowId: string;
   status: string;
@@ -1634,6 +1635,14 @@ export interface DashboardMemoryFilter {
   offset: number;
 }
 
+export interface DashboardMemoryListResponse {
+  memories: DashboardMemory[];
+  total: number;
+  core: { used: number; limit: number; shadowLimit: number };
+  persona: { limit: number; byShadow: Record<string, number> };
+  stats: { activeMemories: number; archivedMemories: number; untrustedMemories: number; activePersonas: number };
+}
+
 /** Owner view of an Agent's memory, one server-filtered page at a time, with its edit, delete and restore operations. */
 export function useAgentMemories(agentId: string, filter: DashboardMemoryFilter) {
   const base = `/agents/${encodeURIComponent(agentId)}/memories`;
@@ -1642,10 +1651,10 @@ export function useAgentMemories(agentId: string, filter: DashboardMemoryFilter)
   const refresh = () => client.invalidateQueries({ queryKey: scopeKey });
   const send = (path: string, method: string, body?: unknown) =>
     apiFetch<{ memory: DashboardMemory }>(`${base}${path}`, { method, ...(body === undefined ? {} : { body: JSON.stringify(body) }) }).then(result => result.memory);
-  const params = new URLSearchParams(Object.entries(filter).filter(([, value]) => value !== "").map(([key, value]) => [key, String(value)]));
+  const params = new URLSearchParams(Object.entries(filter).filter(([, value]) => value !== undefined && value !== "").map(([key, value]) => [key, String(value)]));
   const list = useQuery({
     queryKey: [...scopeKey, "list", params.toString()],
-    queryFn: ({ signal }) => apiFetch<{ memories: DashboardMemory[]; total: number; core: { used: number; limit: number } }>(`${base}?${params}`, { signal }),
+    queryFn: ({ signal }) => apiFetch<DashboardMemoryListResponse>(`${base}?${params}`, { signal }),
     placeholderData: previous => previous,
   });
   const save = useMutation({

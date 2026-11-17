@@ -103,6 +103,13 @@ test("the owner writes persona entries for a chosen Shadow of the Agent; the per
   expect((await call("PUT", `/${added.id}`, {expectedRevision: 1, body: "你叫小白"})).body.memory).toMatchObject({body: "你叫小白", revision: 2});
   expect((await call("GET", "?type=persona")).body.memories.map((m: any) => m.id)).toEqual([added.id]);
   expect((await call("POST", "", {...note, shadowId: a.shadowId})).body.memory).toMatchObject({visibility: "agent", originShadowId: null});
+  const nonPersona = (await call("GET", "?excludeType=persona")).body;
+  expect(nonPersona.memories.every((m: any) => m.type !== "persona")).toBe(true);
+  expect(nonPersona).toMatchObject({
+    total: 1,
+    stats: {activeMemories: 1, archivedMemories: 0, untrustedMemories: 0, activePersonas: 1},
+    persona: {limit: 5, byShadow: {[a.shadowId]: 1}},
+  });
   const app = new Hono().use("*", async (c, next) => {
     (c as any).set("dashboardAuthSession", {authenticated: true, user: {id: "alice", name: "alice", provider: "test"}});
     (c as any).set("lunaRequestAuthKind", "dashboard-cookie"); await next();

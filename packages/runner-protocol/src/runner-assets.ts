@@ -19,7 +19,6 @@ export function runnerResourcesPath(home: string): string {
 export function runnerAssetPaths(home: string) {
   const resources = runnerResourcesPath(home);
   return {
-    memory: join(resources, "memory"),
     skillPlugin: join(resources, "skills"),
     commands: join(resources, "commands"),
   };

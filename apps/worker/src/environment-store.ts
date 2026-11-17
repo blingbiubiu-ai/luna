@@ -207,9 +207,20 @@ function environmentConfiguration(spec: EnvironmentSpec): unknown {
   return {...spec,scopeKey:"shared-within-shadow"};
 }
 
+/**
+ * Records written before the memory and persona parts left the resource
+ * snapshot still carry their two revisions. They are dropped on read so such an
+ * environment can still be listed, reaped and replaced; its old digest never
+ * matches a current selection, so it is never reused.
+ */
+function currentSpec(spec:unknown):EnvironmentSpec {
+ const selection=(spec as {resourceSelection?:Record<string,unknown>}|null)?.resourceSelection;
+ if(selection && typeof selection==="object"){delete selection.agentMemoryRevision;delete selection.shadowConfigRevision;}
+ return EnvironmentSpec.parse(spec);
+}
 function decodeEnvironment(body:string):EnvironmentRecord {
  const record=JSON.parse(body) as EnvironmentRecord;
- record.spec=EnvironmentSpec.parse(record.spec);
- if(record.pendingSpec)record.pendingSpec=EnvironmentSpec.parse(record.pendingSpec);
+ record.spec=currentSpec(record.spec);
+ if(record.pendingSpec)record.pendingSpec=currentSpec(record.pendingSpec);
  return record;
 }

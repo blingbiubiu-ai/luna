@@ -12,7 +12,7 @@ function fixture(){
  const store=new EnvironmentStore(db),preparations=new ShadowPreparationStore(db);
  const scope={agentId:"agent",shadowId:"shadow",placementGeneration:1};
  const old=createScopedResources(scope,[]).selection;
- const next=createScopedResources(scope,[{path:"shadow/config/SOUL.md",content:Buffer.from("next").toString("base64"),mode:0o644}]).selection;
+ const next=createScopedResources(scope,[{path:"public/prompts/SOUL.md",content:Buffer.from("next").toString("base64"),mode:0o644}]).selection;
  const spec={protocolVersion:2 as const,scope,resourceSelection:old,environmentId:"luna",scopeKey:"session:one",mode:"shared" as const,imageDigest:`sha256:${"a".repeat(64)}`,callbackRuntimeId:"runtime",resources:{memory:"1g",cpus:1,pidsLimit:128}};
  const occupant={kind:"job" as const,invocationId:"old",scope,jobId:"old-job",assignmentId:"old-assignment",requestHash:"a".repeat(64),scopeKey:spec.scopeKey,contextId:"ctx"};
  const held=store.prepare({requestId:"old-request",spec,occupant});

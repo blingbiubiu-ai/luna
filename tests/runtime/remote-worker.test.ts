@@ -130,15 +130,15 @@ test("remote Worker binds once, downloads its scoped snapshot and renders its ow
         }
         execFileSync("docker",["exec",container!.Id,"touch",join(home,"own-write")]);
         expect(readFileSync(join(home,"own-write"),"utf8")).toBe("");
-        expect(container!.Mounts.some(m=>m.Destination===join(home,"config") && !m.RW)).toBe(true);
-        expect(()=>execFileSync("docker",["exec",container!.Id,"touch",join(home,"config/forbidden-write")],{stdio:"ignore"})).toThrow();
+        expect(container!.Mounts.some(m=>m.Destination===join(home,".luna-resources") && !m.RW)).toBe(true);
+        expect(()=>execFileSync("docker",["exec",container!.Id,"touch",join(home,".luna-resources/forbidden-write")],{stdio:"ignore"})).toThrow();
       }
 
 
       const previous = environments.find(environment => environment.spec.scope.shadowId === scope.shadowId)!;
       const oldContainer = await manager.driver.inspect(previous);
       const updated = createScopedResources(scope, [...bundle.files, {
-        path: "shadow/config/SOUL.md",
+        path: "public/prompts/SOUL.md",
         content: Buffer.from("updated persona").toString("base64"),
         mode: 0o644,
       }]);
@@ -166,7 +166,7 @@ test("remote Worker binds once, downloads its scoped snapshot and renders its ow
       expect(manager.store.list()).toHaveLength(3);
       const container = await manager.driver.inspect(replacement);
       expect(container?.Id).not.toBe(oldContainer?.Id);
-      expect(execFileSync("docker", ["exec", container!.Id, "cat", join(context.home, "config/SOUL.md")], { encoding: "utf8" })).toBe("updated persona");
+      expect(execFileSync("docker", ["exec", container!.Id, "cat", join(context.home, ".luna-resources/prompts/SOUL.md")], { encoding: "utf8" })).toBe("updated persona");
       execFileSync("docker", ["exec", container!.Id, "test", "-f", join(context.home, "own-write")]);
       for (const other of environments.filter(environment => environment.id !== previous.id)) {
         expect((await manager.driver.inspect(other))?.Id).toBe(other.containerId ?? undefined);

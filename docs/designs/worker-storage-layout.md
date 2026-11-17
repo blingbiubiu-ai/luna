@@ -45,8 +45,8 @@ assignments preserve Worker identity and must use the same Service origin.
 ## Scoped resource snapshots
 
 Service pins an immutable resource selection to each invocation before issuing
-execution credentials. Snapshots separate public resources, Agent memory,
-Agent tools and Shadow configuration. Content digests include ownership scope
+execution credentials. Snapshots separate public resources and Agent tools;
+Agent memory and Shadow persona stay in Service. Content digests include ownership scope
 where required; a digest does not replace authorization.
 
 Worker downloads only the snapshot authorized for its placement and verifies

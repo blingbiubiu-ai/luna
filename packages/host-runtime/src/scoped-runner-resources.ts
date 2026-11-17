@@ -4,8 +4,6 @@ import type {ResourceFile} from "./runner-resources";
 export interface ResourceScope {agentId:string;shadowId:string}
 export interface ResourceSelection {
  publicRevision:string;
- agentMemoryRevision:string;
- shadowConfigRevision:string;
  agentToolsRevision:string;
  digest:string;
 }
@@ -14,8 +12,8 @@ export interface ScopedResourceBundle extends ResourceScope {
  selection:ResourceSelection;
  files:ResourceFile[];
 }
-const parts=["public","agent/memory","agent/tools","shadow/config"] as const;
-const selectionKeys=["publicRevision","agentMemoryRevision","shadowConfigRevision","agentToolsRevision","digest"] as const;
+const parts=["public","agent/tools"] as const;
+const selectionKeys=["publicRevision","agentToolsRevision","digest"] as const;
 const hash=(value:unknown)=>createHash("sha256").update(JSON.stringify(value)).digest("hex");
 const compare=(a:string,b:string)=>a<b ? -1 : a>b ? 1 : 0;
 function exact(value:unknown,keys:readonly string[]): asserts value is Record<string,unknown> {
@@ -59,8 +57,6 @@ export function createScopedResources(scope:ResourceScope,input:ResourceFile[]):
  const revision=(part:typeof parts[number],identity:unknown)=>hash({version:2,part,scope:identity,files:files.filter(f=>f.path.startsWith(part+"/"))});
  const revisions={
   publicRevision:revision("public",null),
-  agentMemoryRevision:revision("agent/memory",{agentId:scope.agentId}),
-  shadowConfigRevision:revision("shadow/config",{agentId:scope.agentId,shadowId:scope.shadowId}),
   agentToolsRevision:revision("agent/tools",{agentId:scope.agentId}),
  };
  const selection={...revisions,digest:hash({version:2,agentId:scope.agentId,shadowId:scope.shadowId,...revisions})};

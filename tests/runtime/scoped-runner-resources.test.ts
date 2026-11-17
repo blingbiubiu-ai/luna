@@ -3,17 +3,16 @@ import {createScopedResources,validateScopedResources} from "@luna/host-runtime/
 const scope={agentId:"agent-a",shadowId:"shadow-a"};
 const file=(path:string,content="hello",mode=0o644)=>({path,content:Buffer.from(content).toString("base64"),mode});
 test("resource revisions are deterministic, partitioned and bound to scope",()=>{
- const files=[file("shadow/config/SOUL.md"),file("agent/memory/note.md"),file("public/skills/test.md"),file("agent/tools/commands/test", "run",0o755)];
+ const files=[file("public/prompts/note.md"),file("public/skills/test.md"),file("agent/tools/commands/test", "run",0o755)];
  const a=createScopedResources(scope,files),reordered=createScopedResources(scope,[...files].reverse());
  expect(reordered).toEqual(a);
+ expect(Object.keys(a.selection)).toEqual(["publicRevision","agentToolsRevision","digest"]);
  const shadow=createScopedResources({...scope,shadowId:"shadow-b"},files);
  expect(shadow.selection.publicRevision).toBe(a.selection.publicRevision);
- expect(shadow.selection.agentMemoryRevision).toBe(a.selection.agentMemoryRevision);
  expect(shadow.selection.agentToolsRevision).toBe(a.selection.agentToolsRevision);
- expect(shadow.selection.shadowConfigRevision).not.toBe(a.selection.shadowConfigRevision);
  expect(shadow.selection.digest).not.toBe(a.selection.digest);
  const agent=createScopedResources({...scope,agentId:"agent-b"},files);
- expect(agent.selection.agentMemoryRevision).not.toBe(a.selection.agentMemoryRevision);
+ expect(agent.selection.publicRevision).toBe(a.selection.publicRevision);
  expect(agent.selection.agentToolsRevision).not.toBe(a.selection.agentToolsRevision);
  expect(validateScopedResources(a,scope,a.selection)).toEqual(a);
 });
@@ -24,13 +23,13 @@ test("empty resources have explicit scoped revisions",()=>{
  expect(()=>validateScopedResources(a,scope,{...a.selection,digest:"0".repeat(64)})).toThrow("selection");
 });
 test("rejects legacy, tampered, extra and incomplete manifests",()=>{
- const a=createScopedResources(scope,[file("agent/memory/a")]);
- for(const invalid of [{revision:a.selection.digest,files:a.files},{...a,version:1},{...a,secret:"bad"},{...a,selection:{...a.selection,extra:1}},{...a,files:[file("agent/memory/a","changed")]},{...a,files:[{...a.files[0],secret:"bad"}]},null]){
+ const a=createScopedResources(scope,[file("agent/tools/a")]);
+ for(const invalid of [{revision:a.selection.digest,files:a.files},{...a,version:1},{...a,secret:"bad"},{...a,selection:{...a.selection,extra:1}},{...a,files:[file("agent/tools/a","changed")]},{...a,files:[{...a.files[0],secret:"bad"}]},null]){
   expect(()=>validateScopedResources(invalid,scope,a.selection)).toThrow();
  }
 });
 test("rejects traversal, ambiguous paths, noncanonical encodings and special modes",()=>{
- for(const path of ["agent/memory/../x","/public/a","public//a","agent/credentials/key","shadow/config/../../x","public/a\\b","public/a\n","public/.","public/é","public/e\u0301"]){
+ for(const path of ["agent/memory/a","shadow/config/SOUL.md","agent/tools/../x","/public/a","public//a","agent/credentials/key","shadow/config/../../x","public/a\\b","public/a\n","public/.","public/é","public/e\u0301"]){
   if(path==="public/é") continue;
   expect(()=>createScopedResources(scope,[file(path)])).toThrow();
  }
@@ -45,18 +44,18 @@ import {ScopedResourceStore} from "@luna/host-runtime/scoped-resource-store";
 test("publishes immutable versions, retains old snapshots and verifies after restart",()=>{
  const home=mkdtempSync(join(tmpdir(),"luna-resources-"));
  try{
-  const store=new ScopedResourceStore(home),first=createScopedResources(scope,[file("agent/memory/a","old")]);
+  const store=new ScopedResourceStore(home),first=createScopedResources(scope,[file("agent/tools/a","old")]);
   const path=store.publish(first,scope,first.selection);
-  const next=createScopedResources(scope,[file("agent/memory/a","new")]);
+  const next=createScopedResources(scope,[file("agent/tools/a","new")]);
   const nextPath=store.publish(next,scope,next.selection);
   expect(path).not.toBe(nextPath);
-  expect(readFileSync(join(path,"agent/memory/a"),"utf8")).toBe("old");
+  expect(readFileSync(join(path,"agent/tools/a"),"utf8")).toBe("old");
   expect(store.publish(first,scope,first.selection)).toBe(path);
   expect(new ScopedResourceStore(home).read(scope,next.selection)).toEqual(next);
   const other={...scope,shadowId:"shadow-b"},otherBundle=createScopedResources(other,first.files);
   expect(store.publish(otherBundle,other,otherBundle.selection)).not.toBe(path);
   expect(()=>store.publish(first,other,first.selection)).toThrow("scope");
-  chmodSync(join(path,"agent/memory/a"),0o644);writeFileSync(join(path,"agent/memory/a"),"tampered");
+  chmodSync(join(path,"agent/tools/a"),0o644);writeFileSync(join(path,"agent/tools/a"),"tampered");
   expect(()=>store.read(scope,first.selection)).toThrow("integrity");
   expect(()=>store.publish(first,scope,first.selection)).toThrow("integrity");
   expect(store.read(scope,next.selection)).toEqual(next);

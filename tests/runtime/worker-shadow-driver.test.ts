@@ -19,7 +19,7 @@ beforeEach(()=>{
 afterEach(()=>{db.close();rmSync(root,{recursive:true,force:true});});
 function environment(agentId:string,shadowId:string){
  const scope={agentId,shadowId,placementGeneration:1};
- const bundle=createScopedResources(scope,[{path:"agent/memory/note",content:Buffer.from(agentId).toString("base64"),mode:0o644}]);
+ const bundle=createScopedResources(scope,[{path:"agent/tools/commands/note",content:Buffer.from(agentId).toString("base64"),mode:0o644}]);
  new ScopedResourceStore(driver.config.dataRoot).publish(bundle,scope,bundle.selection);
  const {environment}=store.prepare({requestId:shadowId,occupant:{kind:"maintenance",scope,operationId:shadowId,operationHash:"a".repeat(64),contextId:shadowId},spec:{protocolVersion:2,scope,resourceSelection:bundle.selection,environmentId:"luna",scopeKey:`session:${shadowId}`,mode:"shared",imageDigest:driver.config.imageDigest,callbackRuntimeId:"runtime",resources:{memory:"1g",cpus:1,pidsLimit:128}}});
  return environment;

@@ -43,7 +43,6 @@ export * from "./identity-bindings";
 export * from "./shadow-bot-bindings";
 export * from "./agent-lifecycle";
 
-export * from "./agent-documents";
 
 export * from "./agent-plugin-configs";
 export * from "./runner-resources";

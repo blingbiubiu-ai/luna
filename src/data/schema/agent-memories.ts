@@ -3,7 +3,11 @@ import {check, index, integer, primaryKey, sqliteTable, text, uniqueIndex} from 
 import {lunaAgents} from "./luna-agents";
 
 /** `persona` is one Shadow's identity and principles: private to it, always told in full, changed only for the Agent owner. */
-export const MEMORY_TYPES = ["persona", "person", "feedback", "project", "procedure", "reference"] as const;
+/**
+ * `episode` is episodic memory: something that happened, at `occurredAt`, with `participants`. Episodes form the
+ * timeline; they are never core, never recalled by a message and fade by age.
+ */
+export const MEMORY_TYPES = ["persona", "person", "feedback", "project", "procedure", "reference", "episode"] as const;
 export const MEMORY_ORIGIN_KINDS = ["inline", "reflection", "consolidation", "owner", "migration"] as const;
 export type MemoryType = typeof MEMORY_TYPES[number];
 /** A change is made by one of the writers above, or by Service forgetting an entry. */
@@ -45,12 +49,17 @@ export const agentMemories = sqliteTable("agent_memories", {
   lastUsedAt: integer("last_used_at").notNull(),
   createdAt: integer("created_at").notNull(),
   updatedAt: integer("updated_at").notNull(),
+  /** When an episode happened; null for every other type. */
+  occurredAt: integer("occurred_at"),
+  /** Users who took part in an episode. Anyone but the Agent owner sees only episodes they took part in. */
+  participants: text("participants_json", {mode: "json"}).$type<string[]>().notNull().default([]),
 }, t => [
   index("agent_memories_agent_status_idx").on(t.agentId, t.status, t.updatedAt),
   uniqueIndex("agent_memories_change_seq_idx").on(t.changeSeq),
   check("agent_memories_person_subject", sql`(${t.type}='person') = (${t.subjectUserId} IS NOT NULL)`),
   check("agent_memories_shadow_origin", sql`${t.visibility}='agent' OR ${t.originShadowId} IS NOT NULL`),
-  check("agent_memories_core_type", sql`${t.core}=0 OR ${t.type} NOT IN ('person','persona')`),
+  check("agent_memories_core_type", sql`${t.core}=0 OR ${t.type} NOT IN ('person','persona','episode')`),
+  check("agent_memories_episode_time", sql`(${t.type}='episode') = (${t.occurredAt} IS NOT NULL)`),
   check("agent_memories_persona_private", sql`${t.type}<>'persona' OR ${t.visibility}='shadow'`),
 ]);
 
@@ -66,6 +75,8 @@ export interface MemorySnapshot {
   trusted: boolean;
   core: boolean;
   expiresAt: number | null;
+  /** Absent in revisions written before episodes existed. */
+  occurredAt?: number | null;
 }
 
 /** State of an entry after each change; the latest row equals the current entry. */
