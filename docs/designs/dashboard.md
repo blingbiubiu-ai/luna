@@ -19,11 +19,16 @@ Projection code should prepare stable UI data while keeping authorization and si
 
 ## Platform Shell
 
-Pages outside an Agent (`/` and `/platform/*`) share the Agent pages' sidebar
-layout. The sidebar shows 工作台 → 我的 Agent (the Agent list, with a 新建 Agent
-dialog) to everyone, and 平台管理 → 插件管理 only when `GET /api/auth/me` reports
-`isPlatformAdmin`. Platform pages check the same flag and the platform APIs enforce
-administrator authority themselves; `/agent/*` paths use the Agent router.
+Every page shows a platform rail at the far left: the Luna brand, Agents (`/`; also
+active inside any Agent), 平台 → 插件 only when `GET /api/auth/me` reports
+`isPlatformAdmin`, and the account menu at the bottom. There is no Agent list page:
+`/` opens the first Agent the user can access, or, when there is none, offers 新建
+Agent. Agent pages (`/agent/*`, Agent router) add a collapsible Agent sidebar beside
+the rail, headed by an Agent switcher (other Agents and 新建 Agent) and grouped into
+运行, 工作空间, 用户与权限 and 运行环境. `/platform/*` pages show only the rail.
+The rail stays mounted across all pages and the Agent router and platform pages share
+one browser history, so rail and sidebar navigation switch content without a page load. Platform pages
+check the administrator flag and the platform APIs enforce that authority themselves.
 
 ## Plugins View
 

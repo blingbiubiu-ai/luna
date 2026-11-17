@@ -24,8 +24,8 @@ function RootLayout() {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
   return (
-    <SidebarProvider style={{ "--sidebar-width": "14rem" } as CSSProperties}>
-      <AppSidebar />
+    <SidebarProvider className="min-w-0 flex-1" style={{ "--sidebar-width": "14rem" } as CSSProperties}>
+      <AppSidebar className="md:left-(--rail-width)" />
       <SidebarInset className="luna-shell h-svh min-w-0">
         <header className="luna-header flex shrink-0 items-center gap-2">
           <SidebarTrigger className="-ml-1" />

@@ -14,7 +14,7 @@ function AgentLayout() {
   if (!agent.data) {
     return <div className="space-y-3 p-6">
       <p role="alert">无法打开此 Agent。</p>
-      <a className="underline" href="/">返回 Agent 首页</a>
+      <a className="underline" href="/">打开其他 Agent</a>
     </div>;
   }
 

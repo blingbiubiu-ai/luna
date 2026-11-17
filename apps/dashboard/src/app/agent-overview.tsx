@@ -18,7 +18,6 @@ function AgentOverview() {
   return (
     <HomeOverview
       scopePicker={<>
-        <a className="text-sm underline" href="/">返回 Agent 首页</a>
         {selection.availableShadows.length > 1 && <ShadowPicker selection={selection} />}
         <a className="text-sm underline" href={`${base}/settings/channels`}>数字分身</a>
       </>}

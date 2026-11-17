@@ -1352,24 +1352,24 @@ describe("luna dashboard api", () => {
     expect(botHtml).toContain("2 identities");
   });
 
-  test("sidebar footer opens account menu from the user row", () => {
+  test("platform rail opens account menu from the user avatar", () => {
     const source = readFileSync(
-      join(import.meta.dir, "../src/components/app-sidebar.tsx"),
+      join(import.meta.dir, "../src/components/platform-rail.tsx"),
       "utf-8",
     );
 
-    expect(source).toContain("function SidebarUserMenu");
+    expect(source).toContain("function RailUserMenu");
     expect(source).toContain('data-testid="sidebar-user-menu-trigger"');
     expect(source).toContain('data-testid="sidebar-user-menu-profile"');
     expect(source).toContain('data-testid="sidebar-settings-menu-item"');
     expect(source).toContain('data-testid="sidebar-logout-button"');
     expect(source).toContain("<DropdownMenuTrigger asChild>");
     expect(source).toContain("<DropdownMenuContent");
-    expect(source).toContain('side="top"');
+    expect(source).toContain('side="right"');
     expect(source).toContain("<DropdownMenuSeparator");
     expect(source).toContain("Settings");
     expect(source).toContain("Log out");
-    expect(source).toContain("<SidebarUserMenu />");
+    expect(source).toContain("<RailUserMenu />");
     expect(source).not.toContain("<SidebarLogoutButton />");
   });
 

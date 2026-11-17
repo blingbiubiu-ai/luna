@@ -95,6 +95,10 @@
   --sidebar-accent-foreground: #292925;
   --sidebar-border: #e7e7e3;
   --sidebar-ring: oklch(0.708 0 0);
+  --rail-width: 4.5rem;
+  --rail: #eff0eb;
+  --rail-foreground: #6b6e64;
+  --rail-border: #e2e3dc;
   --kanban-board-circle-blue: oklch(0.6232 0.1879 259.8);
   --kanban-board-circle-cyan: oklch(0.7146 0.1256 215.13);
   --kanban-board-circle-gray: oklch(0.5513 0.0233 264.36);
@@ -139,6 +143,9 @@
   --sidebar-accent-foreground: #f0f1ec;
   --sidebar-border: #353930;
   --sidebar-ring: transparent;
+  --rail: #151613;
+  --rail-foreground: #9da293;
+  --rail-border: #2a2d25;
   --kanban-board-circle-blue: oklch(0.7135 0.1435 254.61);
   --kanban-board-circle-cyan: oklch(0.7973 0.1339 211.45);
   --kanban-board-circle-gray: oklch(0.7137 0.0192 261.33);
@@ -224,6 +231,15 @@
 [data-sidebar="menu-button"] { font-weight: 500; }
 [data-sidebar="menu-button"][data-active="true"] { box-shadow: inset 0 0 0 1px var(--border); }
 [data-sidebar="group-label"] { font-size: 10px; letter-spacing: .14em; text-transform: uppercase; color: var(--muted-foreground); }
+/* Platform rail: global navigation left of the Agent sidebar. */
+.luna-rail { position: sticky; top: 0; z-index: 20; display: flex; flex: none; flex-direction: column; align-items: stretch; gap: 4px; width: var(--rail-width); height: 100svh; padding: 12px 8px; background: var(--rail); color: var(--rail-foreground); border-right: 1px solid var(--rail-border); }
+.luna-rail-item { position: relative; display: flex; flex-direction: column; align-items: center; gap: 5px; padding: 9px 2px 8px; border-radius: 12px; font-size: 11px; line-height: 1.2; font-weight: 500; text-align: center; transition: background-color .15s, color .15s; }
+.luna-rail-item svg { width: 20px; height: 20px; }
+.luna-rail-item:hover { color: var(--foreground); background: var(--sidebar-accent); }
+.luna-rail-item[aria-current="page"] { color: var(--foreground); background: var(--card); box-shadow: inset 0 0 0 1px var(--border); }
+.luna-rail-item[aria-current="page"]::before { content: ""; position: absolute; left: -8px; top: 12px; bottom: 12px; width: 3px; border-radius: 0 2px 2px 0; background: #a3b69e; }
+.luna-rail-separator { height: 1px; margin: 4px 6px; background: var(--rail-border); }
+@media (max-width: 767px) { :root { --rail-width: 3.75rem; } .luna-rail { padding: 10px 6px; } .luna-rail-item { font-size: 10px; } .luna-rail-item[aria-current="page"]::before { left: -6px; } }
 .luna-overview { padding: 20px 28px 32px; gap: 28px; }
 .luna-hero { display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 32px; min-height: 240px; padding: 20px 0 36px; border-bottom: 1px solid var(--border); background: radial-gradient(ellipse at 55% 45%, #10b98106, transparent 65%); }
 .luna-hero h1 { font-size: clamp(36px, 4.6vw, 68px); line-height: 1.05; max-width: 720px; }

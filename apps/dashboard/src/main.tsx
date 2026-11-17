@@ -1,10 +1,12 @@
 import { LocaleProvider } from "@/lib/i18n";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { createRouter, RouterProvider } from "@tanstack/react-router";
-import { StrictMode } from "react";
+import { StrictMode, useSyncExternalStore } from "react";
 import { createRoot } from "react-dom/client";
 
+import { PlatformRail } from "@/components/platform-rail";
 import { dashboardTheme, ThemeProvider } from "@/components/theme-provider";
+import { agentRouterHistory, appHistory } from "@/lib/app-history";
 
 import { PlatformShell } from "./platform-shell";
 import { routeTree } from "./routeTree.gen";
@@ -21,6 +23,7 @@ const queryClient = new QueryClient({
 const router = createRouter({
   routeTree,
   basepath: "/agent",
+  history: agentRouterHistory,
   defaultViewTransition: true,
 });
 
@@ -30,11 +33,22 @@ declare module "@tanstack/react-router" {
   }
 }
 
+/** The platform rail stays mounted; only the area beside it switches between Agent and platform pages. */
+function AppFrame() {
+  const pathname = useSyncExternalStore(appHistory.subscribe, () => appHistory.location.pathname);
+  return (
+    <div className="flex min-h-svh w-full">
+      <PlatformRail path={pathname} />
+      {pathname.startsWith("/agent/") ? <RouterProvider router={router} /> : <PlatformShell pathname={pathname} />}
+    </div>
+  );
+}
+
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
     <QueryClientProvider client={queryClient}>
       <ThemeProvider {...dashboardTheme}>
-        <LocaleProvider>{location.pathname.startsWith("/agent/") ? <RouterProvider router={router} /> : <PlatformShell pathname={location.pathname} />}</LocaleProvider>
+        <LocaleProvider><AppFrame /></LocaleProvider>
       </ThemeProvider>
     </QueryClientProvider>
   </StrictMode>,

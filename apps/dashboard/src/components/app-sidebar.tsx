@@ -1,5 +1,5 @@
 import { useTranslation } from "@/lib/i18n";
-import { useMatch } from "@tanstack/react-router";
+import { Link, useMatch, useMatchRoute } from "@tanstack/react-router";
 import Avatar from "boring-avatars";
 import {
   LayoutDashboardIcon,
@@ -8,15 +8,13 @@ import {
   BookOpenIcon,
   BrainCircuitIcon,
   BriefcaseBusinessIcon,
+  CheckIcon,
   ChevronsUpDownIcon,
   ContainerIcon,
   KeyRoundIcon,
-  LogOutIcon,
   MessagesSquareIcon,
-  MoonStarIcon,
-  SettingsIcon,
+  PlusIcon,
   BotIcon,
-  ShieldCheckIcon,
   SparklesIcon,
   UsersIcon,
 } from "lucide-react";
@@ -24,7 +22,6 @@ import {
 import {
   Sidebar,
   SidebarContent,
-  SidebarFooter,
   SidebarGroup,
   SidebarGroupContent,
   SidebarGroupLabel,
@@ -34,60 +31,54 @@ import {
   SidebarMenuButton,
   SidebarMenuItem,
   SidebarRail,
-  useSidebar,
 } from "@/components/ui/sidebar";
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuLabel,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import {
-  logoutDashboard,
-  useDashboardAuthSession,
-  type DashboardAuthSession,
-} from "@/lib/api";
-import { cn } from "@/lib/utils";
-import type { ReactNode } from "react";
+import { useState } from "react";
+import { CreateAgentDialog } from "@/components/create-agent-dialog";
+import { useDashboardAgent, useDashboardAgents } from "@/lib/api";
+import type { DashboardAgentChoice } from "@/lib/api/hooks";
 
 const navGroups = [
   { title: "Operate", items: [
-    { title: "Overview", icon: LayoutDashboardIcon, to: "/" },
-    { title: "Sessions", icon: MessagesSquareIcon, to: "/sessions" },
-    { title: "Tasks", icon: BriefcaseBusinessIcon, to: "/tasks" },
-    { title: "Schedules", icon: CalendarClockIcon, to: "/schedules" },
+    { title: "Overview", icon: LayoutDashboardIcon, to: "/$agentId/" },
+    { title: "Sessions", icon: MessagesSquareIcon, to: "/$agentId/sessions" },
+    { title: "Tasks", icon: BriefcaseBusinessIcon, to: "/$agentId/tasks" },
+    { title: "Schedules", icon: CalendarClockIcon, to: "/$agentId/schedules" },
   ] },
   { title: "Workspace", items: [
-    { title: "Knowledge", icon: BookOpenIcon, to: "/knowledge" },
-    { title: "Skills", icon: SparklesIcon, to: "/skills" },
-    { title: "Memory", icon: BrainCircuitIcon, to: "/memory" },
-    { title: "Plugins", icon: BlocksIcon, to: "/plugins" },
+    { title: "Knowledge", icon: BookOpenIcon, to: "/$agentId/knowledge" },
+    { title: "Skills", icon: SparklesIcon, to: "/$agentId/skills" },
+    { title: "Memory", icon: BrainCircuitIcon, to: "/$agentId/memory" },
+    { title: "Plugins", icon: BlocksIcon, to: "/$agentId/plugins" },
   ] },
-  { title: "Control", items: [
-    { title: "Users", icon: UsersIcon, to: "/users" },
-    { title: "Groups", icon: UsersIcon, to: "/groups" },
-    { title: "Tokens", icon: KeyRoundIcon, to: "/settings/tokens" },
-    { title: "Model Configuration", icon: BotIcon, to: "/settings/agents" },
-    { title: "Workers", icon: BotIcon, to: "/settings/workers" },
-    { title: "Containers", icon: ContainerIcon, to: "/settings/containers" },
-    { title: "Digital Shadows", icon: BotIcon, to: "/settings/channels" },
+  { title: "Access", items: [
+    { title: "Users", icon: UsersIcon, to: "/$agentId/users" },
+    { title: "Groups", icon: UsersIcon, to: "/$agentId/groups" },
+    { title: "Tokens", icon: KeyRoundIcon, to: "/$agentId/settings/tokens" },
+  ] },
+  { title: "Runtime", items: [
+    { title: "Model Configuration", icon: BotIcon, to: "/$agentId/settings/agents" },
+    { title: "Workers", icon: BotIcon, to: "/$agentId/settings/workers" },
+    { title: "Containers", icon: ContainerIcon, to: "/$agentId/settings/containers" },
+    { title: "Digital Shadows", icon: BotIcon, to: "/$agentId/settings/channels" },
   ] },
 ] as const;
 
-interface SidebarUserInfo {
-  readonly id: string;
-  readonly name: string;
-  readonly provider: string;
-  readonly avatarUrl: string | null;
+/** Router path (under the `/agent` basepath) for an Agent page. */
+function agentPath(route: string, agentId: string): string {
+  return route.replace("$agentId", encodeURIComponent(agentId));
 }
 
-function NavSidebarGroup() {
+function NavSidebarGroup({ agentId }: { readonly agentId: string }) {
   const { t } = useTranslation();
-  const agent = useMatch({ from: "/$agentId", shouldThrow: false });
-  if (!agent) return null;
-  const base = `/agent/${encodeURIComponent(agent.params.agentId)}`;
-  const currentPath = window.location.pathname.replace(/\/$/, "");
+  const matchRoute = useMatchRoute();
   return (
     <>
       {navGroups.map((group) => (
@@ -96,20 +87,20 @@ function NavSidebarGroup() {
           <SidebarGroupContent>
             <SidebarMenu>
               {group.items.map((item) => {
-                const href = item.to === "/" ? base : base + item.to;
+                const to = agentPath(item.to, agentId);
                 return (
-                  <SidebarMenuItem key={item.to}>
-                    <SidebarMenuButton
-                      asChild
-                      isActive={currentPath === href || (item.to !== "/" && currentPath.startsWith(href + "/"))}
-                      tooltip={t(item.title)}
-                    >
-                      <a href={href}>
-                        <item.icon />
-                        <span>{t(item.title)}</span>
-                      </a>
-                    </SidebarMenuButton>
-                  </SidebarMenuItem>
+                <SidebarMenuItem key={item.to}>
+                  <SidebarMenuButton
+                    asChild
+                    isActive={Boolean(matchRoute({ to, fuzzy: item.to !== "/$agentId/" }))}
+                    tooltip={t(item.title)}
+                  >
+                    <Link to={to}>
+                      <item.icon />
+                      <span>{t(item.title)}</span>
+                    </Link>
+                  </SidebarMenuButton>
+                </SidebarMenuItem>
                 );
               })}
             </SidebarMenu>
@@ -120,224 +111,81 @@ function NavSidebarGroup() {
   );
 }
 
-function SidebarUserMenu() {
-  const { data: session } = useDashboardAuthSession();
-
-  return <SidebarUserMenuContent session={session} />;
+function AgentMark({ name, size }: { readonly name: string; readonly size: number }) {
+  return (
+    <span className="flex shrink-0 overflow-hidden rounded-md ring-1 ring-black/5" aria-hidden="true">
+      <Avatar name={name} variant="marble" size={size} square />
+    </span>
+  );
 }
 
-function SidebarUserMenuContent({
-  session,
-}: {
-  readonly session: DashboardAuthSession | undefined;
+function AgentSwitcher({ agentId }: { readonly agentId: string }) {
+  const agent = useDashboardAgent(agentId);
+  const agents = useDashboardAgents();
+  return <AgentSwitcherView
+    current={agent.data?.agent}
+    agentId={agentId}
+    agents={agents.data?.agents ?? []}
+  />;
+}
+
+export function AgentSwitcherView({ current, agentId, agents }: {
+  readonly current: DashboardAgentChoice | undefined;
+  readonly agentId: string;
+  readonly agents: readonly DashboardAgentChoice[];
 }) {
   const { t } = useTranslation();
-  async function handleLogout() {
-    try {
-      await logoutDashboard();
-    } finally {
-      window.location.assign("/login");
-    }
-  }
-
-  const userInfo = sidebarUserInfo(session);
-
+  const [creating, setCreating] = useState(false);
+  const name = current?.name ?? "Agent";
   return (
     <SidebarMenuItem>
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
-          <SidebarMenuButton
-            className="group-data-[collapsible=icon]:justify-center"
-            data-testid="sidebar-user-menu-trigger"
-            size="lg"
-            tooltip={userInfo.name}
-          >
-            <SidebarUserIdentity
-              avatarSize={32}
-              showId={false}
-              userInfo={userInfo}
-            />
-            <ChevronsUpDownIcon className="ml-auto text-muted-foreground group-data-[collapsible=icon]:hidden" />
+          <SidebarMenuButton size="lg" tooltip={name} aria-label={t("Switch Agent")}
+            className="border border-sidebar-border bg-background group-data-[collapsible=icon]:border-0 group-data-[collapsible=icon]:bg-transparent">
+            <AgentMark name={agentId} size={28} />
+            <span className="min-w-0 flex-1 truncate text-left font-semibold">{name}</span>
+            <ChevronsUpDownIcon className="text-muted-foreground" />
           </SidebarMenuButton>
         </DropdownMenuTrigger>
-        <DropdownMenuContent
-          align="start"
-          className="w-64 rounded-xl p-2 shadow-lg"
-          side="top"
-          sideOffset={10}
-        >
-          <div
-            className="flex items-center gap-3 rounded-lg px-2 py-2"
-            data-testid="sidebar-user-menu-profile"
-          >
-            <SidebarUserIdentity
-              avatarSize={36}
-              showId
-              userInfo={userInfo}
-            />
-          </div>
+        <DropdownMenuContent align="start" className="w-(--radix-dropdown-menu-trigger-width) min-w-56 rounded-xl p-1.5" sideOffset={6}>
+          <DropdownMenuLabel className="text-xs text-muted-foreground">{t("Switch Agent")}</DropdownMenuLabel>
+          {agents.map(item => (
+            <DropdownMenuItem key={item.id} asChild>
+              <Link to={agentPath("/$agentId/", item.id)}>
+                <AgentMark name={item.id} size={20} />
+                <span className="min-w-0 flex-1 truncate">{item.name}</span>
+                {item.id === agentId && <CheckIcon className="text-muted-foreground" />}
+              </Link>
+            </DropdownMenuItem>
+          ))}
           <DropdownMenuSeparator />
-          <DropdownMenuItem data-testid="sidebar-settings-menu-item">
-            <SettingsIcon />
-            <span>{t("Settings")}</span>
-          </DropdownMenuItem>
-          <DropdownMenuSeparator />
-          <DropdownMenuItem
-            data-testid="sidebar-logout-button"
-            onClick={handleLogout}
-          >
-            <LogOutIcon />
-            <span>{t("Log out")}</span>
+          <DropdownMenuItem onSelect={() => setCreating(true)}>
+            <PlusIcon /><span>{t("New Agent")}</span>
           </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
+      <CreateAgentDialog open={creating} onOpenChange={setCreating} />
     </SidebarMenuItem>
   );
 }
 
-function SidebarUserIdentity({
-  avatarSize,
-  showId,
-  userInfo,
-}: {
-  readonly avatarSize: number;
-  readonly showId: boolean;
-  readonly userInfo: SidebarUserInfo;
-}) {
+/** Agent-level sidebar, shown beside the platform rail on Agent pages. */
+export function AppSidebar({ className }: { readonly className?: string } = {}) {
+  const agent = useMatch({ from: "/$agentId", shouldThrow: false });
+  const agentId = agent?.params.agentId;
   return (
-    <>
-      <SidebarUserAvatar
-        avatarUrl={userInfo.avatarUrl}
-        name={userInfo.name}
-        size={avatarSize}
-      />
-      <div className="grid min-w-0 flex-1 text-left leading-tight">
-        <span className="truncate text-sm font-semibold">{userInfo.name}</span>
-        <span className="truncate text-xs text-muted-foreground">
-          {userInfo.provider}
-        </span>
-        {showId ? (
-          <span className="truncate font-mono text-[11px] text-muted-foreground">
-            {userInfo.id}
-          </span>
-        ) : null}
-      </div>
-    </>
-  );
-}
-
-function SidebarUserAvatar({
-  avatarUrl,
-  name,
-  size,
-}: {
-  readonly avatarUrl: string | null;
-  readonly name: string;
-  readonly size: number;
-}) {
-  if (avatarUrl) {
-    return (
-      <img
-        alt={name}
-        className="aspect-square rounded-full object-cover"
-        height={size}
-        src={avatarUrl}
-        width={size}
-      />
-    );
-  }
-  return <Avatar name={name} variant="beam" size={size} />;
-}
-
-function sidebarUserInfo(
-  session: DashboardAuthSession | undefined,
-): SidebarUserInfo {
-  const user = session?.authenticated === true ? session.user : null;
-  return {
-    id: user?.id ?? "unknown-dashboard-user",
-    name: user?.name ?? "Dashboard user",
-    provider: user?.provider ?? "Unknown provider",
-    avatarUrl: user?.avatarUrl ?? null,
-  };
-}
-
-export function SidebarUserMenuForTest({
-  session,
-}: {
-  readonly session: DashboardAuthSession;
-}) {
-  return <SidebarUserMenuContent session={session} />;
-}
-
-export function SidebarUserMenuProfileForTest({
-  session,
-}: {
-  readonly session: DashboardAuthSession;
-}) {
-  return (
-    <SidebarUserIdentity
-      avatarSize={36}
-      showId
-      userInfo={sidebarUserInfo(session)}
-    />
-  );
-}
-
-function SidebarBrand({ open }: { readonly open: boolean }) {
-  const { t } = useTranslation();
-  return (
-    <div className="flex min-w-0 items-center gap-2.5 text-sidebar-foreground">
-      <span
-        className="flex size-7 shrink-0 items-center justify-center rounded-md bg-linear-to-br from-amber-100 via-emerald-100 to-sky-300 text-slate-700 shadow-xs ring-1 ring-black/5"
-        data-testid="luna-brand-icon"
-        aria-hidden="true"
-      >
-        <MoonStarIcon className="size-5" strokeWidth={1.6} />
-      </span>
-      <span className={cn("min-w-0 text-left leading-tight", open ? "" : "sr-only")}>
-        <span className="block text-sm font-semibold tracking-tight">Luna</span>
-        <span className="mt-0.5 block truncate text-[10px] font-normal text-muted-foreground">{t("Agent management console")}</span>
-      </span>
-    </div>
-  );
-}
-
-export function SidebarBrandForTest({ open }: { readonly open: boolean }) {
-  return <SidebarBrand open={open} />;
-}
-
-/**
- * Main application sidebar with navigation and user info. Agent pages use the Agent
- * navigation; the platform shell (home, platform pages) passes its own `nav`.
- */
-export function AppSidebar({ nav }: { readonly nav?: ReactNode } = {}) {
-  const { open } = useSidebar();
-  return (
-    <Sidebar collapsible="icon">
-      <SidebarHeader className="py-2">
+    <Sidebar collapsible="icon" className={className}>
+      <SidebarHeader className="py-3">
         <SidebarMenu>
-          <SidebarMenuItem>
-            <SidebarMenuButton size="lg" className="h-10 group-data-[collapsible=icon]:justify-center" asChild>
-              <a href="/">
-                <div className="min-w-0 flex-1 group-data-[collapsible=icon]:flex group-data-[collapsible=icon]:justify-center">
-                  <SidebarBrand open={open} />
-                </div>
-              </a>
-            </SidebarMenuButton>
-          </SidebarMenuItem>
+          {agentId && <AgentSwitcher agentId={agentId} />}
         </SidebarMenu>
       </SidebarHeader>
       <SidebarSeparator className="data-[orientation=horizontal]:w-auto" />
 
       <SidebarContent>
-        {nav ?? <NavSidebarGroup />}
+        {agentId && <NavSidebarGroup agentId={agentId} />}
       </SidebarContent>
-
-      <SidebarFooter className="border-t border-sidebar-border">
-        <SidebarMenu>
-          <SidebarUserMenu />
-        </SidebarMenu>
-      </SidebarFooter>
 
       <SidebarRail />
     </Sidebar>

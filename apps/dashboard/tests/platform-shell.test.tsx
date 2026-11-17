@@ -3,25 +3,35 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
-import { AgentList, PlatformNav } from "../src/platform-shell";
-import { SidebarProvider } from "../src/components/ui/sidebar";
+import { agentsLandingHref, NoAgents } from "../src/platform-shell";
+import { PlatformRailView } from "../src/components/platform-rail";
 
-const nav = (isAdmin: boolean, path = "/") =>
-  renderToStaticMarkup(createElement(SidebarProvider, null, createElement(PlatformNav, { path, isAdmin })));
+const rail = (isAdmin: boolean, path = "/") =>
+  renderToStaticMarkup(createElement(QueryClientProvider, { client: new QueryClient() },
+    createElement(PlatformRailView, { path, isAdmin })));
 
-test("home sidebar shows plugin management only to platform administrators", () => {
-  const user = nav(false);
-  expect(user).toContain("我的 Agent");
-  expect(user).not.toContain("插件管理");
+test("platform rail shows plugin management only to platform administrators", () => {
+  const user = rail(false);
+  expect(user).toContain("Agents");
   expect(user).not.toContain("/platform/plugins");
-  const admin = nav(true, "/platform/plugins");
-  expect(admin).toContain("平台管理");
-  expect(admin).toContain('href="/platform/plugins"');
+  const admin = rail(true, "/platform/plugins");
+  expect(admin).not.toContain("luna-rail-label");
+  expect(admin).toMatch(/href="\/platform\/plugins" aria-current="page"/);
 });
 
-test("the home page lists Agents with a create action", () => {
-  const html = renderToStaticMarkup(createElement(QueryClientProvider, { client: new QueryClient() }, createElement(AgentList)));
-  expect(html).toContain("我的 Agent");
+test("platform rail keeps the Agent entry active inside an Agent", () => {
+  expect(rail(false, "/agent/a1/sessions")).toMatch(/href="\/" aria-current="page"/);
+});
+
+test("the Agents entry lands on the first Agent", () => {
+  const agent = (id: string) => ({ id, name: id, ownerUserId: "u", defaultShadowId: "s", status: "active" });
+  expect(agentsLandingHref([agent("a 1"), agent("b")])).toBe("/agent/a%201");
+  expect(agentsLandingHref([])).toBeNull();
+});
+
+test("with no Agent the landing offers to create one", () => {
+  const html = renderToStaticMarkup(createElement(NoAgents));
+  expect(html).toContain("还没有 Agent");
   expect(html).toContain("新建 Agent");
 });
 
