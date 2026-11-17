@@ -111,6 +111,12 @@ function AgentContainers({ agentId, agentName }: { agentId: string; agentName: s
     setConsoles(list => [...list, { key, row, kind }]);
     setActive(key);
   };
+  // A stopped container may hold a resource snapshot its Worker can no longer mount (an older
+  // format, or one replaced since); provisioning brings it to the current snapshot and starts it.
+  const openOrStart = (row: ContainerRow, kind: ConsoleKind) => {
+    if (row.running) open(row, kind);
+    else provision.mutate({ shadowId: row.shadowId, openKind: kind });
+  };
   const close = (key: string) => setConsoles(list => {
     const index = list.findIndex(item => item.key === key);
     const rest = list.filter(item => item.key !== key);
@@ -173,8 +179,8 @@ function AgentContainers({ agentId, agentName }: { agentId: string; agentName: s
               </TableCell>
               <TableCell className="space-x-2 px-3 whitespace-nowrap">
                 {consoleKinds.map(kind => <Button key={kind} size="sm" variant="outline"
-                  disabled={isKindBlocked(row, kind)} title={kindBlockedHint(row, kind)}
-                  onClick={() => open(row, kind)}>{consoleLabels[kind]}</Button>)}
+                  disabled={isKindBlocked(row, kind) || provision.isPending} title={kindBlockedHint(row, kind)}
+                  onClick={() => openOrStart(row, kind)}>{consoleLabels[kind]}</Button>)}
                 <Button size="sm" variant="ghost" className="text-destructive" disabled={isBlocked(row) || reset.isPending}
                   title="删除容器的系统盘改动（apt 安装的软件等），HOME 保留" onClick={() => confirmReset(row)}>重置系统盘</Button>
               </TableCell>
@@ -229,8 +235,8 @@ function AgentContainers({ agentId, agentName }: { agentId: string; agentName: s
           <RootBadge row={row} />
           <div className="mt-2 flex flex-wrap gap-1">
             {consoleKinds.map(kind => <Button key={kind} size="xs" variant="outline"
-              disabled={isKindBlocked(row, kind)} title={kindBlockedHint(row, kind)}
-              onClick={() => open(row, kind)}>{consoleLabels[kind]}</Button>)}
+              disabled={isKindBlocked(row, kind) || provision.isPending} title={kindBlockedHint(row, kind)}
+              onClick={() => openOrStart(row, kind)}>{consoleLabels[kind]}</Button>)}
             <Button size="xs" variant="ghost" className="text-destructive" disabled={isBlocked(row) || reset.isPending}
               title="重置系统盘：apt 安装的软件等会丢失，HOME 保留" onClick={() => confirmReset(row)}>重置</Button>
           </div>
