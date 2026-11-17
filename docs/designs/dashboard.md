@@ -151,4 +151,4 @@ Each Shadow card opens an editor with the bot settings and the Shadow’s lifecy
 
 At `/agent/<agentId>/settings/workers`, the Agent owner can create a pairing code for that Agent, and see assigned Workers. The Worker CLI redeems the code and the Service assigns the Worker to that Agent. To assign an existing private Worker to another Agent, get a new code from that Agent and run bind again on the same Worker. The owner can remove an assignment from that Agent.
 
-Platform administrators can pause or resume an assigned Worker from their Agent’s Workers page. The action applies to that Worker across its assignments.
+The Agent owner can pause or resume an assigned Worker from the Agent’s Workers page. The action changes only this Agent’s assignment; other Agents using the same Worker keep admitting work.

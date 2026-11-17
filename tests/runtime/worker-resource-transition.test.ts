@@ -19,16 +19,21 @@ function fixture(){
  const input={protocolVersion:2 as const,invocationId:"next",scope,resources:next,contextId:"ctx",runnerId:"ctx",scopeKey:spec.scopeKey,runnerKind:"main" as const};
  preparations.begin(input);preparations.complete("next",{});
  const request={requestId:"new-request",spec:{...spec,resourceSelection:next},occupant:{...occupant,invocationId:"next",jobId:"new-job",assignmentId:"new-assignment"}};
- let removals=0;let duringRemove=()=>{};
- const driver={inspect:async()=>null,remove:async()=>{removals++;duringRemove();},prepareContext:async()=>{throw new Error("reached-context-preparation");}} as unknown as DockerEnvironmentDriver;
- return {store,preparations,request,held,next,scope,manager:new EnvironmentManager(store,driver),removed:()=>removals,setDuringRemove:(fn:()=>void)=>{duringRemove=fn;}};
+ let removals=0;let duringRemove=()=>{};const limitUpdates:unknown[]=[];
+ const driver={inspect:async()=>null,remove:async()=>{removals++;duringRemove();},updateLimits:async(_env:unknown,limits:unknown)=>{limitUpdates.push(limits);},
+  prepareContext:async()=>{throw new Error("reached-context-preparation");}} as unknown as DockerEnvironmentDriver;
+ // An image change is the only transition that still replaces the container.
+ const imageRequest={...request,spec:{...request.spec,imageDigest:`sha256:${"b".repeat(64)}`}};
+ return {store,preparations,request,imageRequest,held,next,scope,manager:new EnvironmentManager(store,driver),removed:()=>removals,limitUpdates,setDuringRemove:(fn:()=>void)=>{duringRemove=fn;}};
 }
-test("new resource mounts wait for Job reservations before replacing the environment",async()=>{
+test("a new snapshot waits for Job reservations, then switches without replacing the container",async()=>{
  const f=fixture();
  await expect(f.manager.prepare(f.request)).rejects.toMatchObject({code:"environment_mount_pending"});expect(f.removed()).toBe(0);
+ expect(f.store.require(f.held.environment.id).spec.resourceSelection).not.toEqual(f.next);
  f.store.release("old-request",f.held.reservation.reservationId);
  await expect(f.manager.prepare(f.request)).rejects.toThrow("reached-context-preparation");
- expect(f.removed()).toBe(1);expect(f.store.require(f.held.environment.id).spec.resourceSelection).toEqual(f.next);
+ expect(f.removed()).toBe(0);expect(f.store.require(f.held.environment.id).spec.resourceSelection).toEqual(f.next);
+ expect(f.store.require(f.held.environment.id).state).not.toBe("draining");
  expect(f.store.reservation("new-request")?.state).toBe("preparing");
 });
 test("file maintenance cannot select a new resource version",async()=>{
@@ -36,34 +41,34 @@ test("file maintenance cannot select a new resource version",async()=>{
  await expect(f.manager.prepare({...f.request,occupant:{kind:"maintenance",scope:f.scope,operationId:"file",operationHash:"a".repeat(64),contextId:"ctx"}})).rejects.toMatchObject({code:"environment_mount_pending"});
  expect(f.removed()).toBe(0);
 });
-test("preparation released during Docker removal cannot reserve the new environment",async()=>{
+test("preparation released during image replacement cannot reserve the new environment",async()=>{
  const f=fixture();f.store.release("old-request",f.held.reservation.reservationId);
  f.setDuringRemove(()=>f.preparations.release({invocationId:"next",contextId:"ctx",scope:f.scope,resourceRevision:f.next.digest}));
- await expect(f.manager.prepare(f.request)).rejects.toMatchObject({code:"context_preparation_released"});
+ await expect(f.manager.prepare(f.imageRequest)).rejects.toMatchObject({code:"context_preparation_released"});
  expect(f.store.reservation("new-request")).toBeUndefined();
  expect(f.store.require(f.held.environment.id).spec.resourceSelection).toEqual(f.next);
  expect(f.store.require(f.held.environment.id).state).toBe("stopped");
 });
 
-test("an active file lease blocks resource replacement",async()=>{
+test("an active file lease blocks a snapshot switch",async()=>{
  const f=fixture();f.store.release("old-request",f.held.reservation.reservationId);
  const held=f.store.prepare({requestId:"file-request",spec:f.held.environment.spec,occupant:{kind:"maintenance",scope:f.scope,operationId:"file",operationHash:"a".repeat(64),contextId:"ctx"}});
  await expect(f.manager.prepare(f.request)).rejects.toMatchObject({code:"environment_mount_pending"});expect(f.removed()).toBe(0);
  f.store.release("file-request",held.reservation.reservationId);
- await expect(f.manager.prepare(f.request)).rejects.toThrow("reached-context-preparation");expect(f.removed()).toBe(1);
+ await expect(f.manager.prepare(f.request)).rejects.toThrow("reached-context-preparation");expect(f.removed()).toBe(0);
 });
 
-test("failed Docker removal retains the target and a restarted manager resumes it",async()=>{
+test("failed Docker removal on an image change retains the target and a restarted manager resumes it",async()=>{
  const f=fixture();f.store.release("old-request",f.held.reservation.reservationId);
  f.setDuringRemove(()=>{throw new Error("docker-unavailable");});
- await expect(f.manager.prepare(f.request)).rejects.toThrow("docker-unavailable");
+ await expect(f.manager.prepare(f.imageRequest)).rejects.toThrow("docker-unavailable");
  const pending=f.store.require(f.held.environment.id);
  expect(pending.state).toBe("draining");expect(pending.pendingSpec?.resourceSelection).toEqual(f.next);
  expect(pending.spec.resourceSelection).toEqual(f.held.environment.spec.resourceSelection);
  expect(()=>f.store.prepare({...f.request,requestId:"another"})).toThrow("environment_draining");
  f.setDuringRemove(()=>{});
  const restarted=new EnvironmentManager(new EnvironmentStore(f.store.db),f.manager.driver);
- await expect(restarted.prepare(f.request)).rejects.toThrow("reached-context-preparation");
+ await expect(restarted.prepare(f.imageRequest)).rejects.toThrow("reached-context-preparation");
  expect(f.removed()).toBe(2);expect(f.store.require(pending.id).pendingSpec).toBeUndefined();
  expect(f.store.require(pending.id).spec.resourceSelection).toEqual(f.next);
 });
@@ -78,7 +83,7 @@ test("maintenance sweep completes an abandoned durable replacement without accep
  expect(f.store.require(f.held.environment.id).pendingSpec).toBeUndefined();
  expect(f.store.reservation("new-request")).toBeUndefined();
 });
-test("changed container limits replace the idle environment instead of conflicting",async()=>{
+test("changed container limits apply in place to the idle environment",async()=>{
  const f=fixture();
  const old=f.store.require(f.held.environment.id).spec;
  f.preparations.release({invocationId:"next",contextId:"ctx",scope:f.scope,resourceRevision:f.next.digest});
@@ -88,7 +93,8 @@ test("changed container limits replace the idle environment instead of conflicti
  await expect(f.manager.prepare(request)).rejects.toMatchObject({code:"environment_mount_pending"});expect(f.removed()).toBe(0);
  f.store.release("old-request",f.held.reservation.reservationId);
  await expect(f.manager.prepare(request)).rejects.toThrow("reached-context-preparation");
- expect(f.removed()).toBe(1);expect(f.store.require(f.held.environment.id).spec.resources).toEqual({memory:"512m",cpus:2,pidsLimit:256});
+ expect(f.removed()).toBe(0);expect(f.limitUpdates).toEqual([{memory:"512m",cpus:2,pidsLimit:256}]);
+ expect(f.store.require(f.held.environment.id).spec.resources).toEqual({memory:"512m",cpus:2,pidsLimit:256});
  expect(f.store.reservation("limits-request")?.state).toBe("preparing");
 });
 test("a reservation never sent to an Executor cancels without restarting a vanished container",async()=>{
@@ -102,4 +108,37 @@ test("a reservation sent to an Executor still requires Executor-fenced cancellat
  const env=f.store.require(f.held.environment.id);env.containerId="vanished";f.store.saveEnvironment(env);
  f.store.markExecutorBound("old-request");
  expect(f.store.cancelPreparation("old-request",true).state).toBe("cancelling");
+});
+test("system disk reset is refused for another Agent or a running Job, then removes only the container",async()=>{
+ const f=fixture(),id=f.held.environment.id;
+ await expect(f.manager.reset(id,"other-agent")).rejects.toMatchObject({code:"environment_agent_mismatch"});
+ await expect(f.manager.reset(id,"agent")).rejects.toMatchObject({code:"environment_occupied"});expect(f.removed()).toBe(0);
+ f.store.release("old-request",f.held.reservation.reservationId);
+ await f.manager.reset(id,"agent");
+ expect(f.removed()).toBe(1);expect(f.store.require(id).state).toBe("stopped");
+ // The same environment record (HOME binding, instance) is reused by the next preparation.
+ expect(f.store.require(id).instanceId).toBe(f.held.environment.instanceId);
+});
+test("a console on a stopped environment from an older image replaces it with the Worker's image",async()=>{
+ const f=fixture(),id=f.held.environment.id;
+ f.store.release("old-request",f.held.reservation.reservationId);
+ const ensured:string[]=[];
+ Object.assign(f.manager.driver,{config:{imageDigest:`sha256:${"c".repeat(64)}`,runtimeId:"runtime"},home:()=>"/home",
+  ensure:async(env:{spec:{imageDigest:string}})=>{ensured.push(env.spec.imageDigest);throw new Error("reached-ensure");}});
+ await expect(f.manager.streamTarget(id,"agent")).rejects.toThrow("reached-ensure");
+ expect(f.removed()).toBe(1);expect(ensured).toEqual([`sha256:${"c".repeat(64)}`]);
+ expect(f.store.require(id).spec.imageDigest).toBe(`sha256:${"c".repeat(64)}`);
+});
+test("turning the Shadow root switch on replaces the idle container; file maintenance keeps the current switch",async()=>{
+ const f=fixture(),id=f.held.environment.id;
+ f.store.release("old-request",f.held.reservation.reservationId);
+ // Maintenance with the same snapshot never changes root, so it reaches context preparation without replacement.
+ const file={...f.request,spec:{...f.held.environment.spec,rootAccess:true},occupant:{kind:"maintenance" as const,scope:f.scope,operationId:"file",operationHash:"a".repeat(64),contextId:"ctx"}};
+ await expect(f.manager.prepare(file)).rejects.toThrow("reached-context-preparation");
+ expect(f.removed()).toBe(0);expect(f.store.require(id).spec.rootAccess).toBeUndefined();
+ f.store.db.prepare("DELETE FROM worker_reservations WHERE request_id=?").run("new-request");
+ f.store.db.prepare("DELETE FROM worker_reservations WHERE json_extract(record_json,'$.occupant.kind')='maintenance'").run();
+ const job={...f.request,requestId:"root-request",spec:{...f.request.spec,rootAccess:true}};
+ await expect(f.manager.prepare(job)).rejects.toThrow("reached-context-preparation");
+ expect(f.removed()).toBe(1);expect(f.store.require(id).spec.rootAccess).toBe(true);
 });

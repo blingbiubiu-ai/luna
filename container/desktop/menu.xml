@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Luna desktop right-click menu. Applications are listed from .desktop entries on each open. -->
+<openbox_menu xmlns="http://openbox.org/3.4/menu">
+  <menu id="luna-apps" label="应用程序" execute="/usr/local/bin/luna-apps-menu"/>
+  <menu id="root-menu" label="Luna">
+    <item label="Google Chrome"><action name="Execute"><command>/usr/local/bin/google-chrome</command></action></item>
+    <item label="终端"><action name="Execute"><command>/usr/local/bin/luna-terminal</command></action></item>
+    <separator/>
+    <menu id="luna-apps"/>
+  </menu>
+</openbox_menu>

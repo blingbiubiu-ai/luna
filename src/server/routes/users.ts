@@ -141,9 +141,8 @@ export function createUsersRoutes(options: UsersRouteOptions = {}) {
       throw error;
     })
     .use("*", async (c, next) => {
-      const auth = c.req.method === "GET"
-        ? requireDashboardOnly(c)
-        : requireAdmin(c);
+      // Users belong to an Agent's directory: the Agent owner manages memberships and grants.
+      const auth = requireDashboardOnly(c);
       if (isGuardResponse(auth)) return auth;
       await next();
     })
@@ -170,6 +169,9 @@ export function createUsersRoutes(options: UsersRouteOptions = {}) {
       });
     })
     .delete("/:id", (c) => {
+      // Deleting a user removes a platform-wide account, so it stays admin-only.
+      const admin = requireAdmin(c);
+      if (isGuardResponse(admin)) return admin;
       deleteDashboardUser(getDb(), c.req.param("id"), dashboardRequesterUserIdFromContext(c));
       return c.json({ status: "ok" });
     })
@@ -209,21 +211,40 @@ export function createUsersRoutes(options: UsersRouteOptions = {}) {
       }
       return c.json({ status: "ok", membership: removed });
     })
-    .post("/:id/authorization-rules", async (c) => {
+    // Grants on the Users page are scoped to the Agent in ?agentId, like group grants.
+    .post("/:id/authorization-rules/batch", async (c) => {
       const db = getDb();
-      const row = requireUserRow(db, c.req.param("id"));
+      const {id: agentId, ownerUserId} = requireUserDirectoryAgent(c, db);
+      const row = requireAgentUser(db, agentId, ownerUserId, c.req.param("id"));
       const body = await readBody(c.req.raw);
-      const input = grantInputFromBody({...body,subjectType:"user",subjectId:row.id});
-      const validation = validateOperationGrantTarget({
-        db,
-        subjectType: "user",
-        target: input.matchType === "prefix" ? `${input.target.replace(/\.\*$/, "")}.*` : input.target,
-      });
-      if (validation.status === "error") {
-        return c.json(validation, 400);
+      if (!Array.isArray(body.items) || body.items.length === 0) {
+        throw new HTTPException(400, {message: "Authorization rules are required"});
       }
-      const grant = new AuthorizationRuleStore(db, {kind: "platform"}).addGrant(input);
-      return c.json({ status: "ok", grant });
+      const rules = body.items.map((item, index) => {
+        if (item === null || typeof item !== "object" || Array.isArray(item)) {
+          throw new HTTPException(400, {message: `Invalid authorization rule at index ${index}`});
+        }
+        const input = grantInputFromBody({...item, subjectType: "user", subjectId: row.id});
+        const validation = validateOperationGrantTarget({
+          db,
+          subjectType: "user",
+          target: input.matchType === "prefix" ? `${input.target.replace(/\.\*$/, "")}.*` : input.target,
+        });
+        if (validation.status === "error") throw new HTTPException(400, {message: validation.message});
+        return input;
+      });
+      const grants = new AuthorizationRuleStore(db, {kind: "agent", agentId}).addGrants(rules);
+      return c.json({grants});
+    })
+    .delete("/:id/authorization-rules/:grantId", (c) => {
+      const db = getDb();
+      const {id: agentId} = requireUserDirectoryAgent(c, db);
+      const row = requireUserRow(db, c.req.param("id"), true);
+      const store = new AuthorizationRuleStore(db, {kind: "agent", agentId});
+      const id = c.req.param("grantId");
+      const rule = store.listGrants({subjectType: "user", subjectId: row.id}).find(item => item.id === id);
+      if (!rule) throw new HTTPException(404, {message: "User authorization rule not found"});
+      return c.json({grant: store.deleteGrant(id)});
     })
     .get("/:id", (c) => {
       const db = getDb();
@@ -239,7 +260,9 @@ export function createUsersRoutes(options: UsersRouteOptions = {}) {
         });
       }
       return c.json({
-        canManageUsers: isPlatformAdministrator(db, ownerUserId),
+        // The requester reached here as the Agent owner.
+        canManageUsers: true,
+        canDeleteUsers: isPlatformAdministrator(db, dashboardRequesterUserIdFromContext(c)!),
         ...toDashboardUser(
           canonicalRow,
           context.activityByUserId.get(canonicalRow.id),
@@ -281,6 +304,15 @@ function validateOperationGrantTarget(input: {
     };
   }
   return { status: "ok", policy };
+}
+
+/** A user in this Agent's directory: only those can receive the Agent's grants. */
+function requireAgentUser(db: DrizzleDB, agentId: string, ownerUserId: string, id: string): UserRow {
+  const row = requireUserRow(db, id);
+  if (!db.select({ id: users.id }).from(users).where(and(eq(users.id, row.id), agentUserVisibility(db, agentId, ownerUserId))).get()) {
+    throw new HTTPException(404, { message: `User not found: ${id}` });
+  }
+  return row;
 }
 
 function requireUserDirectoryAgent(c: Context, db: DrizzleDB) {

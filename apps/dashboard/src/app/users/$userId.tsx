@@ -12,7 +12,10 @@ import { Skeleton } from "@/components/ui/skeleton";
 import {
   useDashboardAuthSession,
   useGroups,
+  useOperations,
   useUser,
+  useUserOperationGrantBatchMutation,
+  useUserOperationGrantDeleteMutation,
   useUserGroupMembershipDeleteMutation,
   useUserGroupMembershipMutation,
 } from "@/lib/api";
@@ -35,6 +38,9 @@ function UserDetailPage() {
   const groups = useGroups(agentId, canManageUsers);
   const membership = useUserGroupMembershipMutation(resolvedUserId);
   const removeMembership = useUserGroupMembershipDeleteMutation(resolvedUserId);
+  const operations = useOperations(agentId, undefined, canManageUsers);
+  const grant = useUserOperationGrantBatchMutation(resolvedUserId, agentId);
+  const deleteGrant = useUserOperationGrantDeleteMutation(resolvedUserId, agentId);
 
   useEffect(() => {
     if (user === undefined || user.id === userId) {
@@ -70,7 +76,7 @@ function UserDetailPage() {
           </Badge>
         ) : null}
         {user?.status === "deleted" ? <Badge variant="secondary">已删除</Badge> : null}
-        {canManageUsers && user && user.status !== "deleted" && user.kind !== "system" && currentUserId !== undefined && user.id !== currentUserId ? <DeleteRecordButton kind="users" id={user.id} name={user.displayName} onDeleted={() => { window.location.assign(`${base}/users`); }} /> : null}
+        {user?.canDeleteUsers === true && user.status !== "deleted" && user.kind !== "system" && currentUserId !== undefined && user.id !== currentUserId ? <DeleteRecordButton kind="users" id={user.id} name={user.displayName} onDeleted={() => { window.location.assign(`${base}/users`); }} /> : null}
       </header>
 
       <main className="space-y-4 p-4">
@@ -98,6 +104,11 @@ function UserDetailPage() {
               })
             }
             onRemoveGroup={(groupId) => removeMembership.mutateAsync(groupId)}
+            operations={operations.data ?? []}
+            grantError={grant.error}
+            isGrantingOperation={grant.isPending}
+            onGrantOperations={(input) => grant.mutateAsync({ items: input.rules })}
+            onRemoveGrant={(grantId) => deleteGrant.mutateAsync(grantId)}
             user={user}
           />
         ) : null}

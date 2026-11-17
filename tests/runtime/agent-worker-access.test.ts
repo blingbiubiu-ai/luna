@@ -59,9 +59,10 @@ test("a private pairing code assigns a new Worker to the issuing Agent and only 
   expect(gateway.owner(workerId)).toBe("alice");
   expect(store.allowed(a.agentId)).toEqual([workerId]);
   const drainPath = `/${a.agentId}/workers/${workerId}/drain`;
-  expect((await alice.request(drainPath, generate)).status).toBe(403);
+  // Pausing admission is this Agent's own assignment: its owner may, a platform admin may not.
   expect((await app("admin", gateway).request(drainPath, generate)).status).toBe(403);
-  fixturePlatformAdmin(connection.db, "alice");
+  expect((await bob.request(drainPath, generate)).status).not.toBe(200);
+  expect(store.allowed(a.agentId)).toEqual([workerId]);
   expect((await alice.request(drainPath, generate)).status).toBe(200);
   expect(gateway.list()[0]?.draining).toBe(false);
   expect(store.allowed(a.agentId)).toEqual([]);
@@ -69,7 +70,7 @@ test("a private pairing code assigns a new Worker to the issuing Agent and only 
   expect(store.allowed(a.agentId)).toEqual([workerId]);
   const bobCode = await (await bob.request(`/${b.agentId}/workers/binding-code`, generate)).json() as { code: string };
   expect((await redeem({ code: bobCode.code }, token)).status).toBe(403);
-  expect(await (await bob.request(`/${b.agentId}/workers`)).json()).toEqual({ workers: [], assignments: [], canManageWorkers: false });
+  expect(await (await bob.request(`/${b.agentId}/workers`)).json()).toEqual({ workers: [], assignments: [], canManageWorkers: true });
   const second = new AgentStore(connection.db).create("alice", { name: "Second" }, "second-agent");
   const secondPath = `/${second.id}/workers`;
   const update = { method: "PUT", headers: { "Content-Type": "application/json" } };
@@ -129,7 +130,7 @@ test("the deployed local Worker can be assigned and paused, but its binding cann
   const list = await alice.request(path);
   expect(await list.json()).toMatchObject({
    workers: [expect.objectContaining({workerId, local: true, owned: true})],
-   canManageWorkers: false,
+   canManageWorkers: true,
   });
   const second = new AgentStore(connection.db).create("alice", {name: "Second"}, "second-local-agent");
   store.setOwned("alice", second.id, workerId, "active");

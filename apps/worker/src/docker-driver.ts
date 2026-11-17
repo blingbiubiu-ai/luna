@@ -1,5 +1,5 @@
-import {WorkerShadowLayouts,type ShadowLayout} from "./shadow-layout";
-import {WorkerShadowMounts,type ShadowBindMount} from "./shadow-mounts";
+import {WorkerShadowLayouts} from "./shadow-layout";
+import {WorkerShadowMounts,type ShadowMountPlan} from "./shadow-mounts";
 import type {ResourceScope} from "@luna/host-runtime/scoped-runner-resources";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
@@ -12,6 +12,7 @@ import type { WorkerConfig } from "./config";
 import type { EnvironmentRecord } from "./environment-store";
 import { WorkerContextStore, type WorkerContext } from "./context-store";
 import { ProjectMounts } from "./project-mounts";
+import { rootHostCheck, type RootHostCheck } from "./root-host";
 
 const execute = promisify(execFile);
 interface Deployment { port: number; controlToken: string; maintenanceToken: string; }
@@ -43,7 +44,7 @@ export class DockerEnvironmentDriver {
     return (this.db.prepare("SELECT cwd FROM worker_shadow_context_paths WHERE context_id=?").get(contextId) as {cwd:string}|undefined)?.cwd;
   }
   /** Build the scoped bind set used by ensure. */
-  mountPlan(environment:EnvironmentRecord,requiredContextId?:string):{layout:ShadowLayout;mounts:ShadowBindMount[]} {
+  mountPlan(environment:EnvironmentRecord,requiredContextId?:string):ShadowMountPlan {
     const plan=new WorkerShadowMounts(this.db,this.config.dataRoot).prepare(environment.spec.scope,environment.spec.resourceSelection);
     if(requiredContextId){
       const row=this.db.prepare("SELECT shadow_id FROM worker_shadow_context_paths WHERE context_id=?").get(requiredContextId) as {shadow_id:string}|undefined;
@@ -90,20 +91,20 @@ export class DockerEnvironmentDriver {
   async ensure(environment: EnvironmentRecord, requiredContextId?: string): Promise<string> {
     if (environment.spec.imageDigest !== this.config.imageDigest || environment.spec.callbackRuntimeId !== this.config.runtimeId) throw new ExecutionError(409, "worker_configuration_conflict");
     const prior = await this.inspect(environment);
-    const {layout,mounts}=this.mountPlan(environment,requiredContextId);
+    const plan=this.mountPlan(environment,requiredContextId),{layout,mounts}=plan;
     const deployment = this.deployment(environment.id);
     const configFile = join(this.executorDirectory(environment), "executor.json");
-    const executorConfig = { protocolVersion:2,scope:environment.spec.scope,resourceSelection:environment.spec.resourceSelection,instanceId: environment.instanceId, runtimeId: this.config.runtimeId, workerId: this.config.workerId,
+    // The snapshot version is not launch configuration: it switches through the HOME link.
+    const executorConfig = { protocolVersion:2,scope:environment.spec.scope,instanceId: environment.instanceId, runtimeId: this.config.runtimeId, workerId: this.config.workerId,
       runtimeEndpoint: this.config.runtimeEndpoint, capacity: this.config.capacity,
       runnerLayout: { home: layout.home, runners: layout.runners },
-      runnerUid: this.config.runnerUid, runnerGid: this.config.runnerGid, controlToken: deployment.controlToken, maintenanceToken: deployment.maintenanceToken };
+      runnerUid: this.config.runnerUid, runnerGid: this.config.runnerGid, runnerSudo: this.rootAllowed(environment), controlToken: deployment.controlToken, maintenanceToken: deployment.maintenanceToken };
     const volume = `luna-${contentHash(this.config.workerId).slice(0, 12)}-${environment.id}`;
     const args = ["run", "--detach", "--init", "--name", this.name(environment), "--label", `luna.worker=${this.config.workerId}`, "--label", `luna.instance=${environment.instanceId}`,
       "--label", `luna.agent=${environment.spec.scope.agentId}`, "--label", `luna.shadow=${environment.spec.scope.shadowId}`, "--label", `luna.placement=${environment.spec.scope.placementGeneration}`,
       "--user", "0:0", "--cap-drop", "ALL", ...["CHOWN", "DAC_OVERRIDE", "KILL", "SETUID", "SETGID", "SETPCAP"].flatMap((cap) => ["--cap-add", cap]),
-      "--security-opt", "no-new-privileges", "--read-only", "--tmpfs", "/tmp:rw,nosuid,nodev,mode=1777", "--network", this.config.network,
+      ...(this.rootAllowed(environment) ? [] : ["--security-opt", "no-new-privileges"]), "--tmpfs", "/tmp:rw,nosuid,nodev,mode=1777", "--network", this.config.network,
       "--add-host", "host.docker.internal:host-gateway", "--publish", `${this.config.publishHost}:${deployment.port}:8080`,
-      "--memory", environment.spec.resources.memory, "--cpus", String(effectiveCpus(environment.spec.resources.cpus, await this.dockerHostCpus())), "--pids-limit", String(environment.spec.resources.pidsLimit),
       "--mount", `type=volume,src=${volume},dst=/data`, "--mount", `type=bind,src=${configFile},dst=/run/luna/executor.json,readonly`,
     ];
     for (const { source, destination, readonly } of mounts.sort((a, b) => a.destination.localeCompare(b.destination))) {
@@ -111,22 +112,38 @@ export class DockerEnvironmentDriver {
     }
     // Hash the actual launch arguments and Executor configuration, not mutable
     // HOME/project contents. Containers must already carry the scoped identity labels.
+    // Resource limits are excluded: updateLimits applies them to the running container,
+    // so the writable system layer survives limit changes.
     const command = ["--entrypoint", "bun", this.config.imageDigest, "/app/agent-runner/dist/executor.js"];
     const configuration = contentHash({ args, command, executorConfig });
     const mountsMatch = prior && mounts.every(({ source, destination, readonly }) =>
       prior.Mounts.some(mount => mount.Type === "bind" && mount.Destination === destination &&
         mount.RW === !readonly && hostSourceNames(source).includes(mount.Source)));
     if (prior && mountsMatch && prior.Config.Labels["luna.configuration"] === configuration) {
+      new WorkerShadowMounts(this.db, this.config.dataRoot).activate(plan);
       if (!prior.State.Running) await this.docker(["container", "start", prior.Id]);
       return prior.Id;
     }
     // EnvironmentManager fences replacement of running containers until idle.
+    // The link is left alone: the old container's Jobs may still read their snapshot.
     if (prior?.State.Running) throw new ExecutionError(409, "container_configuration_update_required");
     if (prior) await this.docker(["container", "rm", prior.Id]);
+    new WorkerShadowMounts(this.db, this.config.dataRoot).activate(plan);
     writePrivateJson(configFile, executorConfig);
     await this.docker(["volume", "create", "--label", `luna.worker=${this.config.workerId}`, volume]);
-    args.push("--label", `luna.configuration=${configuration}`, ...command);
+    args.push(...await this.limitArgs(environment.spec.resources), "--label", `luna.configuration=${configuration}`, ...command);
     return (await this.docker(args)).trim();
+  }
+  /** Apply changed limits in place; a missing container takes them at creation. */
+  async updateLimits(environment: EnvironmentRecord, resources: EnvironmentRecord["spec"]["resources"]): Promise<void> {
+    const prior = await this.inspect(environment);
+    if (!prior) return;
+    // Docker run defaults swap to twice the memory limit; keep that when updating.
+    const swap = 2 * memoryBytes(resources.memory);
+    await this.docker(["container", "update", ...await this.limitArgs(resources), "--memory-swap", String(swap), prior.Id]);
+  }
+  private async limitArgs(resources: EnvironmentRecord["spec"]["resources"]): Promise<string[]> {
+    return ["--memory", resources.memory, "--cpus", String(effectiveCpus(resources.cpus, await this.dockerHostCpus())), "--pids-limit", String(resources.pidsLimit)];
   }
   async remove(environment: EnvironmentRecord): Promise<void> {
     const inspection = await this.inspect(environment);
@@ -137,7 +154,19 @@ export class DockerEnvironmentDriver {
   private executorDirectory(environment: EnvironmentRecord): string {
     return this.layouts.executorDirectory(environment.spec.scope, environment.id);
   }
-  private name(environment: EnvironmentRecord): string { return `luna-exec-${environment.spec.mode}-${contentHash([this.config.workerId, environment.id]).slice(0, 16)}`; }
+  name(environment: EnvironmentRecord): string { return `luna-exec-${environment.spec.mode}-${contentHash([this.config.workerId, environment.id]).slice(0, 16)}`; }
+  /** Root takes effect only when the Shadow switch is on and this host's HOME passes the nosuid check. */
+  rootStatus(environment: EnvironmentRecord): RootHostCheck | undefined {
+    return environment.spec.rootAccess ? rootHostCheck(this.layouts.ensure(environment.spec.scope).homeSource) : undefined;
+  }
+  rootAllowed(environment: EnvironmentRecord): boolean { return this.rootStatus(environment)?.allowed === true; }
+  /** The Shadow HOME as mounted inside its container. */
+  home(environment: EnvironmentRecord): string { return this.layouts.ensure(environment.spec.scope).home; }
+  /** One Docker call for all of this Worker's containers: name -> running. */
+  async containerStates(): Promise<Map<string, boolean>> {
+    const output = await this.docker(["container", "ls", "--all", "--filter", `label=luna.worker=${this.config.workerId}`, "--format", "{{.Names}}\t{{.State}}"]);
+    return new Map(output.split("\n").filter(Boolean).map(line => { const [name = "", state] = line.split("\t"); return [name, state === "running"]; }));
+  }
   /** Docker rejects --cpus above the daemon's CPU count, so Service-wide defaults are capped per Worker host. */
   private async dockerHostCpus(): Promise<number> {
     if (this.hostCpus === undefined) {
@@ -161,6 +190,14 @@ export class DockerEnvironmentDriver {
 /** Cap the requested CPU quota at what the Docker host can grant. */
 export function effectiveCpus(requested: number, hostCpus: number): number {
   return hostCpus > 0 ? Math.min(requested, hostCpus) : requested;
+}
+
+/** Bytes for a Docker memory value such as "512m" or "32g". */
+export function memoryBytes(value: string): number {
+  const match = /^(\d+(?:\.\d+)?)([bkmg]?)$/i.exec(value.trim());
+  if (!match) throw new ExecutionError(422, "invalid_memory_limit");
+  const unit = { "": 1, b: 1, k: 1024, m: 1024 ** 2, g: 1024 ** 3 }[match[2]!.toLowerCase() as "" | "b" | "k" | "m" | "g"];
+  return Math.round(Number(match[1]) * unit);
 }
 
 /** Docker Desktop may report its VM-side /host_mnt path after starting a bind mount. */

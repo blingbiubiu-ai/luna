@@ -29,6 +29,13 @@
       "when": 1794960000000,
       "tag": "0004_memory_cleanup",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1795046400000,
+      "tag": "0005_shadow_root_access",
+      "breakpoints": true
     }
   ]
 }

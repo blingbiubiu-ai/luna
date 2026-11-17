@@ -594,7 +594,7 @@ describe("unified API namespaces", () => {
       }
       const ownScope = `?agentId=${otherAgent.id}`;
       expect(await (await ordinaryOwner.request("/api/groups" + ownScope)).json()).toMatchObject({
-        canManageGroups: false,
+        canManageGroups: true,
         groups: [expect.objectContaining({id: otherGroup.id})],
       });
       for (const suffix of ["", "/members"]) {
@@ -603,7 +603,8 @@ describe("unified API namespaces", () => {
         expect((await app.request(`/api/groups/${otherGroup.id}${suffix}${ownScope}`)).status).toBe(403);
       }
       expect((await app.request(`/api/groups/${otherGroup.id}`, {method: "PATCH"})).status).toBe(403);
-      expect((await ordinaryOwner.request(`/api/groups/${otherGroup.id}`, {method: "PATCH"})).status).toBe(403);
+      // Groups belong to the Agent: its owner manages them without platform administration.
+      expect((await ordinaryOwner.request(`/api/groups/${otherGroup.id}`, {method: "PATCH", body: JSON.stringify({displayName: "Renamed"})})).status).toBe(200);
       expect((await app.request(`/api/users/${user.id}/group-memberships`, {
         method: "POST",
         body: JSON.stringify({groupId: otherGroup.id}),

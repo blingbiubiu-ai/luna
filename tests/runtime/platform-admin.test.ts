@@ -31,7 +31,8 @@ test("Agent owners can read their user directory without platform administration
     expect(list.users.map(user => user.id).sort()).toEqual(["owner", db.select().from(schema.agentShadows).where(eq(schema.agentShadows.id, agent.defaultShadowId)).get()!.replyUserId].sort());
     const profile = await app.request("/users/owner" + scope, {headers});
     expect(profile.status).toBe(200);
-    expect(await profile.json()).toMatchObject({canManageUsers: false, directGrants: []});
+    // The Agent owner manages its users; deleting a platform account needs an administrator.
+    expect(await profile.json()).toMatchObject({canManageUsers: true, canDeleteUsers: false, directGrants: []});
     expect((await app.request("/users/other" + scope, {headers})).status).toBe(404);
     expect((await app.request("/users?agentId=" + other.id, {headers})).status).toBe(403);
     for (const path of ["/users", "/users/owner", "/users?agentId="]) {
@@ -47,7 +48,7 @@ test("Agent owners can read their user directory without platform administration
     const adminList = await app.request("/users" + scope, {headers});
     expect(await adminList.json()).toEqual(list);
     const adminProfile = await app.request("/users/owner" + scope, {headers});
-    expect(await adminProfile.json()).toMatchObject({canManageUsers: true, directGrants: []});
+    expect(await adminProfile.json()).toMatchObject({canManageUsers: true, canDeleteUsers: true, directGrants: []});
     expect((await app.request("/users/other" + scope, {headers})).status).toBe(404);
     expect((await app.request("/users/other?agentId=" + other.id, {headers})).status).toBe(403);
     expect((await app.request("/users/owner", {headers})).status).toBe(400);

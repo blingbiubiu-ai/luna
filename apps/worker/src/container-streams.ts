@@ -1,0 +1,143 @@
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+import { ExecutionError } from "@luna/execution-store";
+import { ContainerStreamOpen, ContainerStreamResize } from "@luna/runner-protocol";
+import type { EnvironmentManager } from "./environment-manager";
+
+const execute = promisify(execFile);
+const MAX_STREAMS = 32;
+const MAX_BUFFERED = 16 * 1024 * 1024;
+const MAX_PENDING_INPUT = 1024 * 1024;
+
+export interface StreamProcess {
+  write(bytes: Uint8Array): void;
+  resize(cols: number, rows: number): void;
+  kill(): void;
+  readonly exited: Promise<number>;
+}
+export type StreamSpawner = (command: string[], options: { tty?: { cols: number; rows: number }; onData(bytes: Uint8Array): void }) => StreamProcess;
+export type CommandRunner = (args: string[]) => Promise<void>;
+/** Opens the dedicated data socket for one stream (see CONTAINER_STREAM_PATH). */
+export type StreamDialer = (streamId: string, token: string) => WebSocket;
+
+/** Dashboard terminal/VNC streams into this Worker's Shadow containers. */
+export class ContainerStreams {
+  private readonly sockets = new Set<WebSocket>();
+
+  constructor(
+    private readonly manager: Pick<EnvironmentManager, "streamTarget">,
+    private readonly runner: { runnerUid: number; runnerGid: number },
+    private readonly dial: StreamDialer,
+    private readonly spawn: StreamSpawner = bunSpawner,
+    private readonly run: CommandRunner = runDocker,
+  ) {}
+
+  get size(): number { return this.sockets.size; }
+
+  /** Handle a `stream.open` control message; everything else happens on the data socket. */
+  open(input: unknown): void {
+    const command = ContainerStreamOpen.parse(input);
+    const socket = this.dial(command.streamId, command.token);
+    if (this.sockets.size >= MAX_STREAMS) { socket.onopen = () => { socket.send(JSON.stringify({ type: "end", reason: "stream_limit" })); socket.close(4000); }; return; }
+    socket.binaryType = "arraybuffer";
+    this.sockets.add(socket);
+    let process: StreamProcess | undefined;
+    let ended = false;
+    // Input and resizes can arrive while the container is still starting.
+    let pending: Uint8Array[] = []; let pendingBytes = 0; let size: { cols: number; rows: number } | undefined;
+    const end = (reason: string) => {
+      if (ended) return; ended = true;
+      process?.kill();
+      if (socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ type: "end", reason: reason.slice(0, 100) }));
+      if (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING) socket.close(4000);
+    };
+    socket.onclose = () => { this.sockets.delete(socket); ended = true; process?.kill(); };
+    socket.onerror = () => end("stream_socket_failed");
+    socket.onmessage = event => {
+      if (typeof event.data !== "string") {
+        const bytes = new Uint8Array(event.data as ArrayBuffer);
+        if (process) { process.write(bytes); return; }
+        pendingBytes += bytes.length;
+        if (pendingBytes > MAX_PENDING_INPUT) end("stream_buffer_full"); else pending.push(bytes);
+        return;
+      }
+      const resize = ContainerStreamResize.safeParse(safeJson(event.data));
+      if (!resize.success) return;
+      if (process) process.resize(resize.data.cols, resize.data.rows); else size = resize.data;
+    };
+    socket.onopen = () => {
+      void this.start(command, bytes => {
+        if (socket.bufferedAmount > MAX_BUFFERED) { end("backpressure"); return; }
+        socket.send(bytes);
+      }).then(started => {
+        if (ended) { started.kill(); return; }
+        process = started;
+        if (size) started.resize(size.cols, size.rows);
+        for (const bytes of pending) started.write(bytes);
+        pending = []; pendingBytes = 0;
+        void started.exited.then(code => end(`exited:${code}`));
+      }, error => end(error instanceof ExecutionError ? error.code : "stream_open_failed"));
+    };
+  }
+
+  closeAll(): void {
+    for (const socket of this.sockets) {
+      if (socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ type: "end", reason: "worker_stopping" }));
+      socket.close(4000);
+    }
+  }
+
+  private async start(command: ContainerStreamOpen, onData: (bytes: Uint8Array) => void): Promise<StreamProcess> {
+    const target = await this.manager.streamTarget(command.environmentId, command.agentId);
+    const runner = `${this.runner.runnerUid}:${this.runner.runnerGid}`;
+    const runnerEnv = ["-e", `HOME=${target.home}`, "-e", "LANG=C.UTF-8"];
+    if (command.kind === "terminal") {
+      const root = command.user === "root";
+      // Root keeps its own HOME so its dotfiles never become root-owned files in the Shadow HOME.
+      const shell = this.spawn(["docker", "exec", "-it", "-u", root ? "0:0" : runner, "-w", target.home,
+        "-e", `HOME=${root ? "/tmp" : target.home}`, "-e", "LANG=C.UTF-8", "-e", "TERM=xterm-256color",
+        target.containerId, "bash", "-l"], { tty: { cols: command.cols, rows: command.rows }, onData });
+      // Whatever root left in the host-backed HOME (setuid bits, root-owned files) is undone afterwards.
+      if (root) void shell.exited.then(() => this.run(["exec", "-u", "0:0", target.containerId, "luna-home-sanitize", target.home,
+        String(this.runner.runnerUid), String(this.runner.runnerGid)]).catch(() => {}));
+      return shell;
+    }
+    // The desktop always runs as the Runner so browser profiles stay usable by Jobs.
+    await this.run(["exec", "-u", runner, ...runnerEnv, target.containerId, "luna-desktop", "start"]);
+    return this.spawn(["docker", "exec", "-i", "-u", runner, ...runnerEnv, target.containerId, "luna-desktop", "bridge"], { onData });
+  }
+}
+
+function safeJson(text: string): unknown { try { return JSON.parse(text); } catch { return undefined; } }
+
+async function runDocker(args: string[]): Promise<void> {
+  try { await execute("docker", args, { timeout: 30000 }); }
+  catch (error) {
+    const code = (error as { code?: unknown }).code;
+    throw new ExecutionError(503, code === 127 ? "desktop_unavailable" : "desktop_start_failed");
+  }
+}
+
+/**
+ * Terminal streams get a local PTY so `docker exec -it` forwards resizes; VNC is a plain byte pipe.
+ * The explicit env resolves `docker` like the driver's execFile does (Bun.spawn otherwise uses the startup env).
+ */
+export const bunSpawner: StreamSpawner = (command, { tty, onData }) => {
+  if (tty) {
+    const child = Bun.spawn(command, { env: process.env, terminal: { cols: tty.cols, rows: tty.rows, data: (_terminal, bytes) => onData(bytes) } });
+    return {
+      write: bytes => { child.terminal?.write(bytes); },
+      resize: (cols, rows) => { child.terminal?.resize(cols, rows); },
+      kill: () => { child.kill(); },
+      exited: child.exited,
+    };
+  }
+  const child = Bun.spawn(command, { env: process.env, stdin: "pipe", stdout: "pipe", stderr: "ignore" });
+  void (async () => { for await (const bytes of child.stdout) onData(bytes); })().catch(() => {});
+  return {
+    write: bytes => { child.stdin.write(bytes); void child.stdin.flush(); },
+    resize: () => {},
+    kill: () => { child.kill(); },
+    exited: child.exited,
+  };
+};

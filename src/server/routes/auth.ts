@@ -12,7 +12,6 @@ import { AccessTokenService } from "../auth/access-token-service";
 import {
   isGuardResponse,
   requireAccessTokenSelf,
-  requireAdmin,
   requireAuthenticated,
   requireDashboardOnly,
 } from "../auth/guards";
@@ -163,11 +162,12 @@ export function createAuthRoutes(
       return c.json({ status: "approved" });
     })
     .get("/tokens", (c) => {
-      const admin = requireAdmin(c);
-      if (isGuardResponse(admin)) {
-        return admin;
+      // Personal CLI/MCP tokens: every signed-in Dashboard user manages their own.
+      const self = requireDashboardOnly(c);
+      if (isGuardResponse(self)) {
+        return self;
       }
-      const userId = admin.user.id;
+      const userId = self.user.id;
       const db = authDb(options);
       if (db === undefined) {
         return c.json({ status: "error", code: "access_token_unavailable" }, 503);
@@ -181,11 +181,12 @@ export function createAuthRoutes(
       return c.json({ tokens: rows.map(publicTokenRecord) });
     })
     .post("/tokens", async (c) => {
-      const admin = requireAdmin(c);
-      if (isGuardResponse(admin)) {
-        return admin;
+      // Personal CLI/MCP tokens: every signed-in Dashboard user manages their own.
+      const self = requireDashboardOnly(c);
+      if (isGuardResponse(self)) {
+        return self;
       }
-      const userId = admin.user.id;
+      const userId = self.user.id;
       const body = await readJsonRecord(c.req.raw);
       const source = body.source === "mcp" ? "mcp" : "cli";
       const service = accessTokenService(options);
@@ -226,11 +227,12 @@ export function createAuthRoutes(
       return c.json({ status: "revoked" });
     })
     .delete("/tokens/:tokenId", (c) => {
-      const admin = requireAdmin(c);
-      if (isGuardResponse(admin)) {
-        return admin;
+      // Personal CLI/MCP tokens: every signed-in Dashboard user manages their own.
+      const self = requireDashboardOnly(c);
+      if (isGuardResponse(self)) {
+        return self;
       }
-      const userId = admin.user.id;
+      const userId = self.user.id;
       const service = accessTokenService(options);
       if (service === null) {
         return c.json({ status: "error", code: "access_token_unavailable" }, 503);

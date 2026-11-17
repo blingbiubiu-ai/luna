@@ -51,3 +51,4 @@ export * from "./shadow-worker-routing";
 export * from "./shadow-model-selection";
 
 export * from "./agent-memories";
+export * from "./shadow-root-access";

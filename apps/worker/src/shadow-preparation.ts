@@ -8,6 +8,7 @@ import {ensureRunnerWorkspaceInstructionFiles} from "@luna/host-runtime/runner-i
 import {WorkerResourceDownload} from "./resource-download";
 import {WorkerShadowLayouts} from "./shadow-layout";
 import {WorkerShadowMounts} from "./shadow-mounts";
+import {rootHostCheck} from "./root-host";
 
 /** Durable preparation ownership prevents concurrent requests from rewriting a pinned context. */
 export class ShadowPreparation {
@@ -49,7 +50,9 @@ export class ShadowPreparation {
     if(info && (!info.isFile() || info.isSymbolicLink() || info.nlink!==1))throw new ExecutionError(409,"invalid_context_target");
    }
    const rendered=ensureRunnerWorkspaceInstructionFiles({home:plan.layout.home,promptsRoot:join(plan.resourceSource,"prompts"),
-    runnerRootPath:cwd,runnerKind:input.runnerKind,previousFingerprint:null});
+    runnerRootPath:cwd,runnerKind:input.runnerKind,previousFingerprint:null,
+    // The rules accompany the Shadow switch only where this host lets the container use sudo.
+    runnerSudo:input.rootAccess===true && rootHostCheck(plan.layout.homeSource).allowed});
    const target=join(cwd,".luna/runner-context.json"),temp=join(cwd,".luna",`.context-${randomUUID()}`);
    try{writeFileSync(temp,JSON.stringify(input.context??{},null,2)+"\n",{flag:"wx",mode:0o600});renameSync(temp,target);}
    finally{rmSync(temp,{force:true});}

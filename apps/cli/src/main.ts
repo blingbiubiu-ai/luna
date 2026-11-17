@@ -3,6 +3,7 @@ import { runDeployment } from "./deployment";
 import { runTaskReportCli } from "./commands/task-report";
 import { runGroupsCli } from "./commands/groups";
 import { runUsersCli } from "./commands/users";
+import { runRootCli } from "./commands/root";
 
 import type { CliResult, Env, NormalizedCliInput } from "@luna/cli-support/types";
 import { versionHelpText } from "@luna/cli-support/help";
@@ -59,6 +60,7 @@ export async function runClientCli(
   if (command === "schedules") return runSchedulesCli(rest, env);
   if (command === "groups") return runGroupsCli(rest, env);
   if (command === "users") return runUsersCli(rest, env);
+  if (command === "root") return runRootCli(rest, env);
   if (command === "task" && rest[0] === "report") return runTaskReportCli(rest.slice(1), env);
   if (command === "task" || command === "session") return runRunnerOperationsCli(command, rest, env);
   if (command === "messages") return runMessagesCli(rest, env);
@@ -110,6 +112,7 @@ function clientHelpText(): string {
     "  luna groups create|invite --json '<object>' [--request-id <id>]",
     "  luna session create-thread [--json '<object>' | --stdin] [--request-id <id>]",
     "  luna users search --query <name> [--kind user|bot] | get <user-id> | lookup --channel-id <id> --feishu-user-id <id>",
+    "  luna root status [--user <user-id>]",
     "  luna messages send (--text <text> | --stdin) [--json] [--request-id <id>] [--purpose progress|answer|notification] [--session-id <id> | --user-id <id> | --feishu-user-id <id> --channel-id <id>]",
     "  luna memory list|search|get|add|update|delete (see `luna memory help`)",
     "  luna task create|update|restart|cancel (--stdin | --json <JSON>) --request-id <id>",

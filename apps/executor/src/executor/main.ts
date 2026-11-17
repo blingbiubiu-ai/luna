@@ -1,25 +1,29 @@
 import { join } from "node:path";
 import { z } from "zod";
-import { Id,ExecutionScope,ResourceSelection } from "@luna/runner-protocol";
+import { Id,ExecutionScope } from "@luna/runner-protocol";
 import { openExecutionDatabase, readPrivateJson } from "@luna/execution-store";
 import { TokenAuthority } from "@luna/execution-transport";
 import { createExecutor } from "./server";
+import { configureRunnerSudo, sanitizeHome } from "./runner-sudo";
 
 import { RunnerLayout } from "@luna/runner-protocol/runner-assets";
 
 const token = z.string().regex(/^[A-Za-z0-9_-]{43}$/);
 export const ExecutorDeployment = z.object({
-  protocolVersion:z.literal(2),scope:ExecutionScope,resourceSelection:ResourceSelection,
+  protocolVersion:z.literal(2),scope:ExecutionScope,
   instanceId: Id, runtimeId: Id, workerId: Id,
   dataRoot: z.string().default("/data"), runnerEntry: z.string().default("/app/agent-runner/dist/job-main.js"),
   runtimeEndpoint: z.url().refine((value) => new URL(value).protocol === "http:"),
   runnerUid: z.number().int().min(1).max(4294967294), runnerGid: z.number().int().min(0).max(4294967294),
   capacity: z.number().int().positive(), listenHost: z.string().default("0.0.0.0"), port: z.number().int().min(1).max(65535).default(8080),
   controlToken: token, maintenanceToken: token, runnerLayout: RunnerLayout,
+  runnerSudo: z.boolean().default(false),
 }).strict();
 
 export async function runExecutor(configFile: string): Promise<void> {
   const config = ExecutorDeployment.parse(readPrivateJson(configFile));
+  configureRunnerSudo({ uid: config.runnerUid, gid: config.runnerGid, home: config.runnerLayout.home, enabled: config.runnerSudo });
+  if (config.runnerSudo) sanitizeHome(config.runnerLayout.home, config.runnerUid, config.runnerGid);
   const db = openExecutionDatabase(join(config.dataRoot, "control", "executor.sqlite"));
   db.exec("DROP TABLE IF EXISTS execution_credentials");
   const authority = new TokenAuthority();

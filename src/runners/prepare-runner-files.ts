@@ -1,3 +1,4 @@
+import { ShadowRootAccessStore } from "@/agents/shadow-root-access-store";
 import {InvocationStore} from "./invocation-store";
 import {InvocationResources} from "./invocation-resources";
 import {resolveInvocationScope} from "./invocation-scope";
@@ -30,6 +31,7 @@ export async function prepareRunnerFiles(input: {
           runnerKind: context?.runnerKind ?? "main", ...(context ? { context: { ...context } } : {}),
           ...(runtime.sharedProject ? { projectId: runtime.sharedProject.projectId } : {}),
           ...(config.git ? { git: config.git } : {}),
+          ...(new ShadowRootAccessStore(db).enabled(invocation.shadowId) ? { rootAccess: true } : {}),
         }, signal);
         const current=new InvocationStore(db).require(invocationId);
         if(current.state!=="active" || current.settledAt!==null)throw new ExecutionError(409,"invocation_preparation_mismatch");

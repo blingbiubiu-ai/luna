@@ -85,6 +85,24 @@ RUN curl -fsSL --retry 3 \
 ENV CHROME_BIN=/usr/bin/google-chrome \
     PUPPETEER_EXECUTABLE_PATH=/usr/bin/google-chrome
 
+# Dashboard remote desktop: a virtual display, openbox with a tint2 panel, a terminal
+# and a VNC server, started on demand by luna-desktop. Menus list .desktop entries, so
+# software that ships one (or one added under ~/.local/share/applications) appears there.
+# Chrome entries go through the container wrapper (/usr/local/bin/google-chrome).
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    xvfb \
+    x11vnc \
+    x11-xserver-utils \
+    openbox \
+    tint2 \
+    lxterminal \
+    && rm -rf /var/lib/apt/lists/* \
+    && sed -i 's#^Exec=/usr/bin/google-chrome-stable#Exec=/usr/local/bin/google-chrome#' /usr/share/applications/google-chrome.desktop \
+    && sed -i 's#^Exec=lxterminal.*#Exec=/usr/local/bin/luna-terminal#' /usr/share/applications/lxterminal.desktop \
+    && grep -q '^Exec=/usr/local/bin/google-chrome' /usr/share/applications/google-chrome.desktop \
+    && grep -q '^Exec=/usr/local/bin/luna-terminal' /usr/share/applications/lxterminal.desktop \
+    && for app in tint2 tint2conf x11vnc; do echo 'NoDisplay=true' >> "/usr/share/applications/$app.desktop"; done
+
 # Reuse node user (UID 1000 already exists in node:22-slim). This passwd home
 # is only account metadata; Luna injects the shared HOME and the session/task working directory.
 RUN usermod -l runner -d /home/runner -m node 2>/dev/null || true \
@@ -106,7 +124,16 @@ COPY dist/luna-client.js /app/luna-cli/cli.js
 COPY --from=builder /build/apps/executor/dist /app/agent-runner/dist
 
 COPY container/npm-global.sh /etc/profile.d/luna-npm-global.sh
-RUN chmod +x /usr/local/bin/luna
+COPY container/luna-desktop /usr/local/bin/luna-desktop
+COPY container/google-chrome /usr/local/bin/google-chrome
+COPY container/luna-home-sanitize /usr/local/bin/luna-home-sanitize
+COPY container/desktop/luna-terminal container/desktop/luna-apps-menu /usr/local/bin/
+COPY container/desktop/menu.xml /etc/xdg/openbox/menu.xml
+COPY container/desktop/tint2rc /etc/xdg/tint2/tint2rc
+COPY container/luna-prompt.sh /etc/profile.d/luna-prompt.sh
+# Containers cannot enable Chrome's sandbox (no-new-privileges); hide the --no-sandbox banner.
+COPY container/chrome-policy.json /etc/opt/chrome/policies/managed/luna.json
+RUN chmod +x /usr/local/bin/luna /usr/local/bin/luna-desktop /usr/local/bin/google-chrome /usr/local/bin/luna-terminal /usr/local/bin/luna-apps-menu /usr/local/bin/luna-home-sanitize
 
 ENV LANG=C.UTF-8 LC_ALL=C.UTF-8
 

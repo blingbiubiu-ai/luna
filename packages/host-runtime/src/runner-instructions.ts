@@ -17,6 +17,8 @@ export interface EnsureRunnerWorkspaceInstructionFilesInput {
   readonly runnerKind: RunnerInstructionKind;
   readonly runnerRootPath: string;
   readonly previousFingerprint: string | null;
+  /** Worker grants Jobs sudo: add the root-access rules from the prompts directory. */
+  readonly runnerSudo?: boolean;
 }
 
 export interface EnsureRunnerWorkspaceInstructionFilesResult {
@@ -65,6 +67,7 @@ export function ensureRunnerWorkspaceInstructionFiles(
   const source = [
     readFileSync(entryPath, "utf-8").trimEnd(),
     readFileSync(join(promptsRoot, "runtime-confidentiality.md"), "utf-8").trimEnd(),
+    ...(input.runnerSudo ? [readFileSync(join(promptsRoot, "runner-root-access.md"), "utf-8").trimEnd()] : []),
     [
       "## Execution directories",
       `Luna HOME is \`${input.home}\`. It is shared only by Runner processes of this Shadow.`,

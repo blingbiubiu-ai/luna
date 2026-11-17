@@ -1,11 +1,12 @@
 import { spawn } from "node:child_process";
 import { dlopen, FFIType } from "bun:ffi";
 import { cleanupJobChildren } from "./process-cleanup";
+import { runnerSetprivArgs } from "./runner-sudo";
 
 const PR_SET_CHILD_SUBREAPER = 36;
 
 async function main(): Promise<number> {
-  const [uid, gid, home, entry] = process.argv.slice(2);
+  const [uid, gid, home, entry, privileges] = process.argv.slice(2);
   if (!uid || !gid || !home || !entry) throw new Error("Missing Runner process configuration");
   const libc = dlopen("libc.so.6", {
     prctl: { args: [FFIType.i32, FFIType.u64, FFIType.u64, FFIType.u64, FFIType.u64], returns: FFIType.i32 },
@@ -19,8 +20,7 @@ async function main(): Promise<number> {
   process.once("SIGTERM", stop);
   process.once("SIGINT", stop);
   const child = spawn("/usr/bin/setpriv", [
-    `--reuid=${uid}`, `--regid=${gid}`, "--clear-groups",
-    "--inh-caps=-all", "--ambient-caps=-all", "--bounding-set=-all", "--no-new-privs",
+    ...runnerSetprivArgs(uid, gid, privileges === "sudo"),
     "--", process.execPath, entry,
   ], { cwd: home, stdio: "inherit" });
   const code = await new Promise<number>((resolve) => {

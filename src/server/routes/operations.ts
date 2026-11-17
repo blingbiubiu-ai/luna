@@ -1,6 +1,6 @@
 import {GatewayError} from "../gateway-error";
 import {pluginRequestScope} from "../policy/plugin-scope";
-import {AgentError} from "@/agents/agent-store";
+import {AgentError, AgentStore} from "@/agents/agent-store";
 import { operationDispatchStatus } from "@/plugins/dispatch-status";
 import { Hono } from "hono";
 
@@ -20,7 +20,7 @@ import {
   dashboardAuthSessionFromContext,
   lunaAccessTokenClaimsFromContext,
 } from "../auth";
-import { isGuardResponse, requireAdmin } from "../auth/guards";
+import { isGuardResponse, requireAdmin, requireDashboardOnly } from "../auth/guards";
 
 import { getKernel } from "./kernel";
 
@@ -34,6 +34,20 @@ export function createOperationsRoutes(options: OperationsRouteOptions = {}) {
   const getPluginRegistry = () => options.pluginRegistry ?? defaultPluginRegistry();
   return new Hono().onError((error,c)=>{if(error instanceof GatewayError)return c.json({status:"error",code:error.code},error.status as 400|401|403|404|409|500);if(error instanceof AgentError)return c.json({status:"error",code:error.code},error.status);throw error;})
     .get("/", (c) => {
+      // An Agent owner granting on its Users/Groups pages sees the Agent-scoped operations
+      // only: no platform operations and no invocation audits.
+      const agentId = stringQuery(c.req.query("agentId"));
+      if (agentId !== undefined) {
+        const auth = requireDashboardOnly(c);
+        if (isGuardResponse(auth)) return auth;
+        const db = getDb();
+        new AgentStore(db).requireOwner(auth.user.id, agentId);
+        return c.json({
+          status: "ok",
+          operations: listOperationSuggestions(db, stringQuery(c.req.query("namespace")))
+            .filter(operation => operation.namespace !== "system"),
+        });
+      }
       const admin = requireAdmin(c);
       if (isGuardResponse(admin)) {
         return admin;

@@ -23,7 +23,10 @@ async function prepareCodexSkills(env: NodeJS.ProcessEnv, resources: string, cod
   mkdirSync(codexHome, { recursive: true });
   const proc = Bun.spawn([
     "flock", join(codexHome, ".luna-skills.lock"), "sh", "-ec",
-    'if [ ! -f "$2" ]; then codex plugin marketplace add "$1" && codex plugin add luna-skills@luna-platform; fi',
+    // Codex records the marketplace by its resolved path. $HOME/.luna-resources links to a
+    // per-version directory, so a new snapshot is a new source: replace the old registration.
+    'if [ ! -f "$2" ]; then codex plugin marketplace remove luna-platform >/dev/null 2>&1 || true; '
+      + 'codex plugin marketplace add "$1" && codex plugin add luna-skills@luna-platform; fi',
     "sh", resources, installed,
   ], { env, stdout: "ignore", stderr: "pipe" });
   const [code, stderr] = await Promise.all([proc.exited, new Response(proc.stderr).text()]);

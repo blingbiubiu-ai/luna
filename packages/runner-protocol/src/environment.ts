@@ -13,6 +13,8 @@ export const EnvironmentSpec = z.object({
   environmentId: Id, scopeKey: z.string().min(1).max(512), mode: z.literal("shared"),
   imageDigest: z.string().regex(/^sha256:[a-f0-9]{64}$/), callbackRuntimeId: Id,
   resources: z.object({ memory: z.string().regex(/^\d+[mg]$/i), cpus: z.number().positive().max(256), pidsLimit: z.number().int().min(32).max(65536) }).strict(),
+  /** The Shadow's root switch: the container allows sudo (still gated per Job by `privileged`). */
+  rootAccess: z.boolean().optional(),
 }).strict();
 export type EnvironmentSpec = z.infer<typeof EnvironmentSpec>;
 export const PrepareRequest = z.object({ requestId: Id, occupant: Occupant, spec: EnvironmentSpec, resourceRevision: z.string().regex(/^[a-f0-9]{64}$/).optional(), projectId: Id.optional(), cwd: absoluteRunnerPath.optional() }).strict().refine(value=>value.occupant.scope.agentId===value.spec.scope.agentId && value.occupant.scope.shadowId===value.spec.scope.shadowId && value.occupant.scope.placementGeneration===value.spec.scope.placementGeneration,"Occupant scope mismatch").refine(value=>value.resourceRevision===undefined || value.resourceRevision===value.spec.resourceSelection.digest,"Resource revision mismatch");

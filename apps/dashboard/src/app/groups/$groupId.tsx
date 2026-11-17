@@ -20,7 +20,7 @@ function GroupDetailPage() {
   const group = useGroup(groupId, agentId);
   const users = useUsers(agentId);
   const canManageGroups = group.data?.canManageGroups === true;
-  const operations = useOperations(undefined, canManageGroups);
+  const operations = useOperations(agentId, undefined, canManageGroups);
   const addMember = useGroupMemberMutation();
   const removeMember = useGroupMemberDeleteMutation();
   const grant = useOperationGrantBatchMutation(groupId);

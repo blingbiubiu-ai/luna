@@ -55,10 +55,10 @@ describe("Luna schema baseline", () => {
     first.close();
     const sqlite = new Database(join(home, "data", "luna.db"));
     const baseline = readMigrationFiles({ migrationsFolder: "src/data/drizzle" });
-    // The baseline plus 0002_agent_memories, 0003_memory_episodes and 0004_memory_cleanup, which upgrade existing databases in place.
-    expect(baseline).toHaveLength(4);
+    // The baseline plus 0002_agent_memories, 0003_memory_episodes, 0004_memory_cleanup and 0005_shadow_root_access, which upgrade existing databases in place.
+    expect(baseline).toHaveLength(5);
     expect(baseline[0]!.sql.length).toBeGreaterThan(0);
-    expect(sqlite.query("SELECT count(*) AS n FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name != '__drizzle_migrations'").get()).toEqual({n:87});
+    expect(sqlite.query("SELECT count(*) AS n FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name != '__drizzle_migrations'").get()).toEqual({n:88});
     expect(sqlite.query("SELECT hash, created_at FROM __drizzle_migrations").all()).toEqual([
       ...baseline.map(migration => ({ hash: migration.hash, created_at: migration.folderMillis })),
     ]);

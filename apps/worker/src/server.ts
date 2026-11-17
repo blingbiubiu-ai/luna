@@ -19,6 +19,9 @@ export function workerServer(authority: TokenAuthority, manager: EnvironmentMana
       json(response, 200, { workerId: manager.driver.config.workerId, imageDigest: manager.driver.config.imageDigest, capacity: manager.driver.config.capacity,
         occupied: environments.reduce((count, env) => count + manager.store.active(env.id).length, 0) }); return;
     }
+    if (request.method === "GET" && url.pathname === "/v1/containers") {
+      json(response, 200, { containers: await manager.containers(Id.parse(url.searchParams.get("agentId"))) }); return;
+    }
     if (request.method === "POST" && url.pathname === "/v1/files") { json(response, 200, await manager.files(await readJson(request, 8 * 1024 * 1024))); return; }
     if (request.method === "POST" && url.pathname === "/v1/environments/prepare") {
       json(response, 200, await manager.prepare(await readJson(request))); return;
@@ -27,7 +30,7 @@ export function workerServer(authority: TokenAuthority, manager: EnvironmentMana
     if (request.method === "POST" && preparation) {
       json(response, 200, await manager.cancelPreparation(Id.parse(preparation[1]))); return;
     }
-    const environment = /^\/v1\/environments\/([^/]+)(?:\/(release|drain))?$/.exec(url.pathname);
+    const environment = /^\/v1\/environments\/([^/]+)(?:\/(release|drain|reset))?$/.exec(url.pathname);
     if (!environment) throw new ExecutionError(404, "route_not_found");
     const id = Id.parse(environment[1]);
     if (request.method === "GET" && !environment[2]) {
@@ -36,6 +39,10 @@ export function workerServer(authority: TokenAuthority, manager: EnvironmentMana
     if (request.method === "POST" && environment[2] === "release") {
       const body = z.object({ reservationId: Id, proof: ReleaseProof }).strict().parse(await readJson(request));
       await manager.release(id, body.reservationId, body.proof); json(response, 204); return;
+    }
+    if (request.method === "POST" && environment[2] === "reset") {
+      const { agentId } = z.object({ agentId: Id }).strict().parse(await readJson(request));
+      await manager.reset(id, agentId); json(response, 204); return;
     }
     if (request.method === "POST" && environment[2] === "drain") { await manager.drain(id); json(response, 200, manager.store.require(id)); return; }
     if (request.method === "DELETE" && !environment[2]) { await manager.destroy(id); json(response, 204); return; }

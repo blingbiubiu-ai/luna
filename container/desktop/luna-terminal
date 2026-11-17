@@ -1,0 +1,3 @@
+#!/bin/bash
+# Desktop terminal: a login shell, so /etc/profile.d (Luna PATH, prompt) applies like in Jobs.
+exec lxterminal --working-directory="$HOME" --command="bash -l" "$@"

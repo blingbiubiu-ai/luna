@@ -9,6 +9,7 @@ import {
   BrainCircuitIcon,
   BriefcaseBusinessIcon,
   ChevronsUpDownIcon,
+  ContainerIcon,
   KeyRoundIcon,
   LogOutIcon,
   MessagesSquareIcon,
@@ -68,6 +69,7 @@ const navGroups = [
     { title: "Tokens", icon: KeyRoundIcon, to: "/settings/tokens" },
     { title: "Model Configuration", icon: BotIcon, to: "/settings/agents" },
     { title: "Workers", icon: BotIcon, to: "/settings/workers" },
+    { title: "Containers", icon: ContainerIcon, to: "/settings/containers" },
     { title: "Digital Shadows", icon: BotIcon, to: "/settings/channels" },
   ] },
 ] as const;

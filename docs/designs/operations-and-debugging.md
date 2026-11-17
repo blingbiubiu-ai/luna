@@ -46,7 +46,7 @@ Use timeline entry id when asking "which message entered the runner?" Use messag
 
 ## Message Flow Debugging
 
-Production HTTP exposes read-only Runtime status at `/api/runtime/status`.
+Production HTTP exposes read-only Runtime status at `/api/runtime/status` to signed-in Dashboard users. Channel connection status belongs to Agents: `?agentId=` returns that Agent's channels to its owner; without it only a platform administrator sees all channels.
 The former `/api/runtime/test/inject-message` route is removed: callers must not
 synthesize verified provider identities or substitute channel adapters through
 an authenticated HTTP endpoint. Test code exercises ingress through the existing

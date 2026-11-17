@@ -93,7 +93,7 @@ test("deleted users lose bindings and grants; subsequent identity resolution cre
   expect(detail.status).toBe(404);
   expect(((await (await app().request("/users" + scope)).json()) as { users: { id: string }[] }).users.some((user: { id: string }) => user.id === old.id)).toBe(false);
   expect((await app().request(`/users/${old.id}/group-memberships`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ groupId: "any", role: "member" }) })).status).toBe(404);
-  expect((await app().request(`/users/${old.id}/authorization-rules`, { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" })).status).toBe(404);
+  expect((await app().request(`/users/${old.id}/authorization-rules/batch${scope}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ items: [{ target: "agent.root", effect: "allow" }] }) })).status).toBe(404);
   expect(connection.db.select().from(schema.users).where(eq(schema.users.id, old.id)).get()?.status).toBe("deleted");
   expect(connection.db.select().from(schema.authorizationRules).where(eq(schema.authorizationRules.subjectId, old.id)).all()).toHaveLength(0);
   expect(bound(observed.id)).toBeUndefined();

@@ -7,6 +7,7 @@ import { useState, type FormEvent } from "react";
 import { RadioIcon, PlusIcon, PencilIcon, Loader2Icon } from "lucide-react";
 import { AgentLifecycleActions } from "@/app/agents/agent-lifecycle-actions";
 import { useAgentShadows } from "@/components/shadow-picker";
+import { ShadowRootAccess } from "@/components/shadow-root-access";
 import { useRouteAgent } from "@/lib/agent-route";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -357,6 +358,7 @@ function AgentShadows({ agent }: { agent: DashboardAgentChoice }) {
               {busy ? "正在保存…" : creation && !creation.shadow ? "创建分身" : "保存并应用"}
             </Button>
           </form>
+          {target && <ShadowRootAccess agentId={agent.id} shadowId={target.id} disabled={!agentActive || busy} />}
           {target && <div className="flex flex-wrap gap-2 border-t px-6 py-4">
             {editing?.bindingId && <Button variant="outline" size="sm" disabled={busy} onClick={() => {
               setNotice(null);

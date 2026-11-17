@@ -1,22 +1,35 @@
 import {validateScopedResources} from "@luna/host-runtime/scoped-runner-resources";
 import type {ResourceScope,ScopedResourceBundle} from "@luna/host-runtime/scoped-runner-resources";
 import {ExecutionScope} from "@luna/runner-protocol";
-import { createHash, randomBytes, randomUUID } from "node:crypto";
+import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import type { ServerWebSocket } from "bun";
 import { ExecutionError, transaction, type SqlDatabase } from "@luna/execution-store";
 import { ReverseChannel } from "@luna/execution-transport";
 import { z } from "zod";
-import { Id } from "@luna/runner-protocol";
+import { CONTAINER_STREAM_TOKEN_HEADER, ContainerStreamEnd, Id, type ContainerStreamOpen } from "@luna/runner-protocol";
 import type { RuntimeScheduler } from "./scheduler";
 export type WorkerResourceSource=(scope:ResourceScope,digest:string)=>ScopedResourceBundle|undefined;
 export interface WorkerBindingTarget { ownerUserId: string; agentId: string }
 export type AssignBoundWorker = (target: WorkerBindingTarget, workerId: string) => void;
 export interface WorkerSocketData { workerId: string; gateway: WorkerGateway; channel?: ReverseChannel; }
+export interface ContainerStreamHandlers { data(bytes: Uint8Array): void; close(reason: string): void; }
+export interface ContainerStreamHandle { write(bytes: Uint8Array): void; resize(cols: number, rows: number): void; close(): void; }
+export type ContainerStreamRequest = Omit<ContainerStreamOpen, "type" | "streamId" | "token">;
+export interface WorkerStreamSocketData { kind: "worker-stream"; streamId: string; gateway: WorkerGateway }
+export const CONTAINER_STREAMS_CAPABILITY = "container-streams-v1";
+const MAX_STREAMS_PER_WORKER = 32;
+const STREAM_ATTACH_TIMEOUT_MS = 15000;
+const MAX_PENDING_STREAM_BYTES = 1024 * 1024;
+interface StreamState {
+  workerId: string; tokenHash: string; handlers: ContainerStreamHandlers; timer: ReturnType<typeof setTimeout>;
+  queue: Uint8Array[]; queuedBytes: number; size?: { cols: number; rows: number }; socket?: ServerWebSocket<WorkerStreamSocketData>; endReason?: string;
+}
 const digest = (value: string) => createHash("sha256").update(value).digest("hex");
 const healthSchema = z.object({ capabilities:z.array(z.string().max(128)).max(32).optional(), workerId: Id, imageDigest: z.string(), capacity: z.number().int().positive().max(256), occupied: z.number().int().nonnegative(), ready: z.boolean(), revision: z.string().optional(), desiredRevision: z.string().optional(), error: z.string().max(512).optional(), projects: z.array(Id).max(256) });
 /** The public Service listener authenticates Worker traffic independently of dashboard sessions. */
 export class WorkerGateway {
   private sockets = new Map<string, ServerWebSocket<WorkerSocketData>>();
+  private streams = new Map<string, StreamState>();
   constructor(private db: SqlDatabase, readonly scheduler: RuntimeScheduler, private readonly resourceSource?:WorkerResourceSource, private readonly assignBoundWorker?: AssignBoundWorker) {
     db.exec("CREATE TABLE IF NOT EXISTS worker_bind_codes(hash TEXT PRIMARY KEY,expires INTEGER NOT NULL); CREATE TABLE IF NOT EXISTS worker_bindings(worker_id TEXT PRIMARY KEY,token_hash TEXT UNIQUE NOT NULL,revoked INTEGER NOT NULL DEFAULT 0)");
     db.exec(`CREATE TABLE IF NOT EXISTS worker_bind_targets (
@@ -135,8 +148,77 @@ export class WorkerGateway {
   }
   closed(ws: ServerWebSocket<WorkerSocketData>): void {
     ws.data.channel?.close();
+    // Attached data sockets are independent of the control link; only unattached streams are lost.
+    for (const [id, stream] of this.streams) if (stream.workerId === ws.data.workerId && !stream.socket) this.finishStream(id, "worker_disconnected");
     if (this.sockets.get(ws.data.workerId) !== ws) return;
     this.sockets.delete(ws.data.workerId); if (ws.data.channel) this.scheduler.workers.detach(ws.data.workerId, ws.data.channel);
+  }
+  /** Ask a Worker to open a terminal/VNC stream; its bytes arrive on a dedicated Worker data socket. */
+  openStream(workerId: string, request: ContainerStreamRequest, handlers: ContainerStreamHandlers): ContainerStreamHandle {
+    const ws = this.sockets.get(workerId);
+    if (!ws) throw new ExecutionError(503, "worker_disconnected");
+    const worker = this.scheduler.workers.list().find(item => item.workerId === workerId);
+    // Older Workers close their control link on unknown message types.
+    if (!worker?.health?.capabilities?.includes(CONTAINER_STREAMS_CAPABILITY)) throw new ExecutionError(409, "worker_streams_unsupported");
+    if ([...this.streams.values()].filter(stream => stream.workerId === workerId).length >= MAX_STREAMS_PER_WORKER) throw new ExecutionError(503, "stream_limit");
+    const streamId = randomUUID(); const token = randomBytes(32).toString("base64url");
+    if (ws.send(JSON.stringify({ type: "stream.open", streamId, token, ...request })) === 0) throw new ExecutionError(503, "worker_disconnected");
+    const timer = setTimeout(() => this.finishStream(streamId, "worker_stream_timeout"), STREAM_ATTACH_TIMEOUT_MS);
+    this.streams.set(streamId, { workerId, tokenHash: digest(token), handlers, timer, queue: [], queuedBytes: 0 });
+    return {
+      write: bytes => {
+        const stream = this.streams.get(streamId); if (!stream) return;
+        if (stream.socket) { if (stream.socket.send(bytes) === 0) this.finishStream(streamId, "worker_stream_backpressure"); return; }
+        stream.queuedBytes += bytes.length;
+        if (stream.queuedBytes > MAX_PENDING_STREAM_BYTES) { this.finishStream(streamId, "stream_buffer_full"); return; }
+        stream.queue.push(new Uint8Array(bytes));
+      },
+      resize: (cols, rows) => {
+        const stream = this.streams.get(streamId); if (!stream) return;
+        if (stream.socket) stream.socket.send(JSON.stringify({ type: "resize", cols, rows })); else stream.size = { cols, rows };
+      },
+      close: () => {
+        const stream = this.streams.get(streamId); if (!stream) return;
+        this.streams.delete(streamId); clearTimeout(stream.timer); stream.socket?.close(1000, "client_closed");
+      },
+    };
+  }
+  /** Authenticate a Worker data socket: Worker credentials plus the one-time token of a pending stream. */
+  authenticateStream(request: Request, streamId: string): WorkerStreamSocketData {
+    const workerId = this.authenticate(request);
+    const stream = this.streams.get(streamId);
+    const token = request.headers.get(CONTAINER_STREAM_TOKEN_HEADER) ?? "";
+    if (!stream || stream.socket || stream.workerId !== workerId || !timingSafeEqual(Buffer.from(digest(token)), Buffer.from(stream.tokenHash))) {
+      throw new ExecutionError(401, "invalid_stream_credentials");
+    }
+    return { kind: "worker-stream", streamId, gateway: this };
+  }
+  streamOpened(ws: ServerWebSocket<WorkerStreamSocketData>): void {
+    const stream = this.streams.get(ws.data.streamId);
+    if (!stream || stream.socket) { ws.close(4004, "stream_not_pending"); return; }
+    clearTimeout(stream.timer); stream.socket = ws;
+    if (stream.size) ws.send(JSON.stringify({ type: "resize", ...stream.size }));
+    for (const bytes of stream.queue) ws.send(bytes);
+    stream.queue = []; stream.queuedBytes = 0;
+  }
+  streamMessage(ws: ServerWebSocket<WorkerStreamSocketData>, raw: string | Buffer): void {
+    const stream = this.streams.get(ws.data.streamId);
+    if (stream?.socket !== ws) return;
+    if (typeof raw !== "string") { stream.handlers.data(raw); return; }
+    const end = ContainerStreamEnd.safeParse((() => { try { return JSON.parse(raw); } catch { return undefined; } })());
+    if (end.success) stream.endReason = end.data.reason;
+  }
+  streamClosed(ws: ServerWebSocket<WorkerStreamSocketData>): void {
+    const stream = this.streams.get(ws.data.streamId);
+    if (stream?.socket !== ws) return;
+    this.streams.delete(ws.data.streamId);
+    stream.handlers.close(stream.endReason ?? "worker_stream_closed");
+  }
+  private finishStream(streamId: string, reason: string): void {
+    const stream = this.streams.get(streamId); if (!stream) return;
+    this.streams.delete(streamId); clearTimeout(stream.timer);
+    stream.socket?.close(4000, reason);
+    stream.handlers.close(reason);
   }
   list() {
     return this.scheduler.workers.list().map(w => ({ ...w, connected: this.sockets.has(w.workerId) && w.lastSeen > Date.now() - 30000,
@@ -147,7 +229,10 @@ export class WorkerGateway {
     if (action === "revoke" && this.isLocal(id)) throw new ExecutionError(409, "local_worker_cannot_unbind");
     if (action === "drain") this.scheduler.workers.drain(id);
     else if (action === "resume") this.scheduler.workers.resume(id);
-    else { this.db.prepare("UPDATE worker_bindings SET revoked=1 WHERE worker_id=?").run(id); this.scheduler.workers.drain(id); this.sockets.get(id)?.close(4003, "revoked"); }
+    else { this.db.prepare("UPDATE worker_bindings SET revoked=1 WHERE worker_id=?").run(id); this.scheduler.workers.drain(id); this.sockets.get(id)?.close(4003, "revoked");
+      for (const [streamId, stream] of this.streams) if (stream.workerId === id) this.finishStream(streamId, "worker_revoked"); }
   }
-  close() { for (const ws of this.sockets.values()) { ws.data.channel?.close(); ws.terminate(); } this.sockets.clear(); }
+  close() {
+    for (const id of [...this.streams.keys()]) this.finishStream(id, "service_stopping");
+    for (const ws of this.sockets.values()) { ws.data.channel?.close(); ws.terminate(); } this.sockets.clear(); }
 }

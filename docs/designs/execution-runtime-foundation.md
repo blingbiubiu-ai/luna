@@ -279,8 +279,10 @@ reservation blocks preparation release.
 
 Worker checks the image, resource selection and container limits
 (Runtime `resources`: memory, CPUs, pids) before reusing an environment.
-A new version waits for old preparation references and reservations to drain,
-then replaces the container while preserving writable Shadow HOME. Other
+A new snapshot or limit waits for old preparation references and reservations to
+drain, then switches the snapshot link or runs `docker container update` in place.
+Only a new image replaces the container (resetting its writable system layer)
+while preserving writable Shadow HOME. Other
 Shadows retain their environments. Snapshot cleanup and physical process
 shutdown are separate from invocation settlement.
 

@@ -1,5 +1,5 @@
 import {afterEach,beforeEach,expect,test} from "bun:test";
-import {mkdtempSync,mkdirSync,rmSync,existsSync} from "node:fs";
+import {mkdtempSync,mkdirSync,rmSync,existsSync,symlinkSync} from "node:fs";
 import {tmpdir} from "node:os";
 import {join} from "node:path";
 import {openExecutionDatabase,contentHash} from "@luna/execution-store";
@@ -9,20 +9,22 @@ import {fixtureJobScope} from "../helpers/job-scope";
 let root:string,db:ReturnType<typeof openExecutionDatabase>,executor:ReturnType<typeof createExecutor>,worker:ExecutionClient,runtime:ExecutionClient;
 const scopedTest=test.skipIf(process.platform!=="linux" || process.getuid?.()!==0);
 const fixed=fixtureJobScope(),scope=fixed.scope,foreign={...scope,shadowId:"foreign"};
-function configuration(){return {scope,resourceSelection:fixed.resources,instanceId:"instance",runtimeId:"runtime",workerId:"worker",dataRoot:root,runnerEntry:"unused",runtimeEndpoint:"http://127.0.0.1:1",capacity:1,runnerUid:process.getuid!(),runnerGid:process.getgid!()};}
+function configuration(){return {scope,runnerLayout:{home:root,runners:join(root,"runners")},instanceId:"instance",runtimeId:"runtime",workerId:"worker",dataRoot:root,runnerEntry:"unused",runtimeEndpoint:"http://127.0.0.1:1",capacity:1,runnerUid:process.getuid!(),runnerGid:process.getgid!()};}
 function job(){return {version:2,...fixed,jobId:"job",invocationId:"inv",environmentId:"environment",runnerContextId:"ctx",scopeKey:"session:ctx",runnerKind:"work",sessionId:"session",input:{runnerType:"codex",prompt:"test"},credentialsRevision:1,timeoutMs:10000};}
 function binding(request=job()){return {scope:request.scope,jobId:request.jobId,assignmentId:"assignment",reservationId:"reservation",instanceId:"instance",workerId:"worker",executionEnvironmentId:"environment",contextId:"ctx",scopeKey:request.scopeKey,requestHash:contentHash(request)};}
 beforeEach(async()=>{
  root=mkdtempSync(join(tmpdir(),"executor-shadow-"));db=openExecutionDatabase(join(root,"control.sqlite"));
  const authority=new TokenAuthority(),wt=authority.issue("worker",{role:"worker",id:"worker"}),rt=authority.issue("runtime",{role:"runtime",id:"runtime"});
  executor=createExecutor(db,authority,configuration());mkdirSync(join(root,"runners/ctx"),{recursive:true});
+ // Worker points HOME at the reserved snapshot version.
+ symlinkSync(`.luna-resource-versions/${fixed.resources.digest}`,join(root,".luna-resources"));
  await new Promise<void>(resolve=>executor.server.listen(0,"127.0.0.1",resolve));
  const port=(executor.server.address() as {port:number}).port;
  worker=new ExecutionClient(`http://127.0.0.1:${port}`,wt);runtime=new ExecutionClient(`http://127.0.0.1:${port}`,rt);
 });
 afterEach(async()=>{if(executor){await executor.stop();await closeExecutionServer(executor.server);}db.close();rmSync(root,{recursive:true,force:true});});
 scopedTest("HTTP reservation and Job admission require the container scope and mounted resource version",async()=>{
- const health=await worker.call<any>("GET","/v1/health");expect(health.scope).toEqual(scope);expect(health.resourceSelection).toEqual(fixed.resources);
+ const health=await worker.call<any>("GET","/v1/health");expect(health.scope).toEqual(scope);expect(health.resourceSelection).toBeUndefined();
  await expect(worker.call("PUT","/v1/contexts/ctx",{scope:foreign})).rejects.toMatchObject({code:"executor_scope_mismatch"});
  await worker.call("PUT","/v1/contexts/ctx",{scope});
  await expect(worker.call("PUT","/v1/reservations/reservation",{...binding(),scope:foreign})).rejects.toMatchObject({code:"executor_scope_mismatch"});

@@ -32,7 +32,7 @@ test("Docker mount plans use distinct Shadow HOME and resources without mounting
   expect(plan.layout.home).toBe(join(driver.config.dataRoot,"agents",agent,"shadows",shadow));
   expect(driver.contextPath(shadow)).toBe(join(plan.layout.home,"runners",shadow));
   expect(plan.mounts.some(m=>m.source===driver.config.dataRoot)).toBe(false);
-  expect(plan.mounts.find(m=>m.destination===join(plan.layout.home,".luna-resources"))?.readonly).toBe(true);
+  expect(plan.mounts.find(m=>m.destination===join(plan.layout.home,".luna-resource-versions"))?.readonly).toBe(true);
   expect(plan.mounts.some(m=>m.destination===join(plan.layout.home,"projects") || m.source===join(root,"projects"))).toBe(false);
  }
  expect(new Set(plans.map(plan=>plan.layout.home)).size).toBe(3);

@@ -31,7 +31,10 @@ export const JobRequest = z.object({
     sessionId: z.string().min(1).max(512).optional(), model: z.string().min(1).max(256).optional(),
   }).strict(),
   credentialsRevision: Sequence.min(1), timeoutMs: z.number().int().positive().max(7 * 86400_000),
+  /** Shadow root switch at submission, and whether this Job's Runner may use sudo. */
+  rootAccess: z.boolean().optional(), privileged: z.boolean().optional(),
 }).strict().superRefine((job, context) => {
+  if (job.privileged && !job.rootAccess) context.addIssue({ code: "custom", message: "A privileged Job requires root access" });
   if(job.resourceRevision!==job.resources.digest)context.addIssue({code:"custom",message:"Resource revision mismatch"});
   if (job.runnerKind === "task" ? !job.taskId || !job.taskRunId : !job.sessionId) {
     context.addIssue({ code: "custom", message: "Task requires taskId/taskRunId; Main and Work require sessionId" });

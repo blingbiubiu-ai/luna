@@ -399,6 +399,8 @@ export interface UserIdentityLink {
 
 export interface DashboardUser {
   canManageUsers?: boolean;
+  /** Deleting a user removes a platform-wide account: platform administrators only. */
+  canDeleteUsers?: boolean;
   id: string;
   kind: UserKind;
   displayName: string;
@@ -596,10 +598,11 @@ export function useSession(sessionId: string, agentId: string) {
   });
 }
 
-export function useRuntimeStatus() {
+/** Service status with this Agent's channel connections. */
+export function useRuntimeStatus(agentId: string) {
   return useQuery({
-    queryKey: ["luna", "runtime", "status"],
-    queryFn: () => apiFetch<DashboardRuntimeStatus>("/runtime/status"),
+    queryKey: ["luna", "runtime", "status", agentId],
+    queryFn: () => apiFetch<DashboardRuntimeStatus>(`/runtime/status?agentId=${encodeURIComponent(agentId)}`),
     refetchInterval: 10_000,
   });
 }
@@ -1157,16 +1160,16 @@ export interface DashboardGroup {
   directGrants: OperationGrant[];
 }
 
-export function useOperations(namespace?: string, enabled = true) {
+/** Operations an Agent owner can grant on the Agent's Users and Groups pages. */
+export function useOperations(agentId: string, namespace?: string, enabled = true) {
   return useQuery({
     enabled,
-    queryKey: ["operations", namespace ?? null],
+    queryKey: ["operations", agentId, namespace ?? null],
     queryFn: async () => {
+      const params = new URLSearchParams({ agentId });
       const trimmedNamespace = namespace?.trim();
-      const path =
-        trimmedNamespace === undefined || trimmedNamespace.length === 0
-          ? "/operations"
-          : `/operations?namespace=${encodeURIComponent(trimmedNamespace)}`;
+      if (trimmedNamespace) params.set("namespace", trimmedNamespace);
+      const path = `/operations?${params}`;
       const json = await apiFetch<{ operations: OperationPolicy[] }>(
         path,
       );
@@ -1404,31 +1407,7 @@ export function useGroupGrantMutation() {
   });
 }
 
-export function useOperationGrantMutation() {
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: (input: {
-      subjectType: AuthorizationSubjectType;
-      subjectId: string;
-      target: string;
-      matchType?: "exact" | "prefix";
-      effect: OperationGrantEffect;
-      constraints?: Record<string, unknown>;
-      expiresAt?: number;
-    }) =>
-      apiFetch<{ grant: OperationGrant }>("/authorization-rules", {
-        method: "POST",
-        body: JSON.stringify(input),
-      }),
-    onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: ["groups"] });
-      void queryClient.invalidateQueries({ queryKey: ["luna", "users"] });
-      void queryClient.invalidateQueries({ queryKey: ["authorization-rules"] });
-    },
-  });
-}
-
-export function useOperationGrantBatchMutation(groupId?: string) {
+export function useOperationGrantBatchMutation(groupId: string) {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (input: {
@@ -1442,9 +1421,7 @@ export function useOperationGrantBatchMutation(groupId?: string) {
         expiresAt?: number;
       }>;
     }) =>
-      apiFetch<{ grants: OperationGrant[] }>(groupId
-        ? `/groups/${encodeURIComponent(groupId)}/authorization-rules/batch`
-        : "/authorization-rules/batch", {
+      apiFetch<{ grants: OperationGrant[] }>(`/groups/${encodeURIComponent(groupId)}/authorization-rules/batch`, {
         method: "POST",
         body: JSON.stringify(input),
       }),
@@ -1456,14 +1433,12 @@ export function useOperationGrantBatchMutation(groupId?: string) {
   });
 }
 
-export function useOperationGrantDeleteMutation(groupId?: string) {
+export function useOperationGrantDeleteMutation(groupId: string) {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (grantId: string) =>
       apiFetch<{ grant: OperationGrant }>(
-        groupId
-          ? `/groups/${encodeURIComponent(groupId)}/authorization-rules/${encodeURIComponent(grantId)}`
-          : `/authorization-rules/${encodeURIComponent(grantId)}`,
+        `/groups/${encodeURIComponent(groupId)}/authorization-rules/${encodeURIComponent(grantId)}`,
         { method: "DELETE" },
       ),
     onSuccess: () => {
@@ -1517,35 +1492,40 @@ export function useUserGroupMembershipDeleteMutation(userId: string) {
   });
 }
 
-export function useUserOperationGrantMutation(userId: string) {
+/** Agent-scoped grants for one user, managed by the Agent owner on the Users page. */
+export function useUserOperationGrantBatchMutation(userId: string, agentId: string) {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (input: {
-      target: string;
-      matchType?: "exact" | "prefix";
-      effect: OperationGrantEffect;
-      constraints?: Record<string, unknown>;
-      expiresAt?: number;
+      items: Array<{
+        target: string;
+        matchType?: "exact" | "prefix";
+        effect: OperationGrantEffect;
+        expiresAt?: number;
+      }>;
     }) =>
-      apiFetch<{ grant: OperationGrant }>(
-        `/users/${userId}/authorization-rules`,
-        {
-          method: "POST",
-          body: JSON.stringify({
-            target: input.target,
-            matchType: input.matchType,
-            effect: input.effect,
-            ...(input.expiresAt === undefined
-              ? {}
-              : { expiresAt: input.expiresAt }),
-          }),
-        },
+      apiFetch<{ grants: OperationGrant[] }>(
+        `/users/${encodeURIComponent(userId)}/authorization-rules/batch?agentId=${encodeURIComponent(agentId)}`,
+        { method: "POST", body: JSON.stringify(input) },
       ),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ["luna", "users"] });
-      void queryClient.invalidateQueries({ queryKey: ["luna", "users", userId] });
       void queryClient.invalidateQueries({ queryKey: ["groups"] });
-      void queryClient.invalidateQueries({ queryKey: ["authorization-rules"] });
+    },
+  });
+}
+
+export function useUserOperationGrantDeleteMutation(userId: string, agentId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (grantId: string) =>
+      apiFetch<{ grant: OperationGrant }>(
+        `/users/${encodeURIComponent(userId)}/authorization-rules/${encodeURIComponent(grantId)}?agentId=${encodeURIComponent(agentId)}`,
+        { method: "DELETE" },
+      ),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["luna", "users"] });
+      void queryClient.invalidateQueries({ queryKey: ["groups"] });
     },
   });
 }

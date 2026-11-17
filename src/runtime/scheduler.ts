@@ -361,7 +361,7 @@ export class RuntimeScheduler {
 
   private prepareRequest(job: ScheduledJob) {
     return { requestId: `prep_${job.assignmentId}`, ...(job.job.resourceRevision ? { resourceRevision: job.job.resourceRevision } : {}), ...(job.job.projectId ? { projectId: job.job.projectId } : {}), occupant: { kind: "job", invocationId:job.job.invocationId,scope:job.job.scope, jobId: job.jobId, assignmentId: job.assignmentId, requestHash: job.requestHash, scopeKey: job.job.scopeKey, contextId: job.job.runnerContextId },
-      spec: { protocolVersion:2,scope:job.job.scope,resourceSelection:job.job.resources,environmentId: job.job.environmentId, scopeKey: job.job.scopeKey, mode: this.config.mode, imageDigest: this.workers.imageDigest(job.workerId!), callbackRuntimeId: this.config.runtimeId, resources: this.config.resources } };
+      spec: { protocolVersion:2,scope:job.job.scope,resourceSelection:job.job.resources,...(job.job.rootAccess ? { rootAccess: true } : {}),environmentId: job.job.environmentId, scopeKey: job.job.scopeKey, mode: this.config.mode, imageDigest: this.workers.imageDigest(job.workerId!), callbackRuntimeId: this.config.runtimeId, resources: this.config.resources } };
   }
   private ingestCredential(instanceId: string): PrivateCredential {
     const file = this.secretPath("ingest", instanceId);

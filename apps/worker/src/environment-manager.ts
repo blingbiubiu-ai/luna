@@ -11,8 +11,14 @@ import { EnvironmentStore, environmentKey, type ReservationRecord, type Environm
 import { DockerEnvironmentDriver } from "./docker-driver";
 import { ProjectMounts } from "./project-mounts";
 
-interface ExecutorHealth { instanceId: string; bootId: string; activeJobs: number; scope:EnvironmentSpec["scope"];resourceSelection:EnvironmentSpec["resourceSelection"]; }
+interface ExecutorHealth { instanceId: string; bootId: string; activeJobs: number; scope:EnvironmentSpec["scope"]; }
 export interface PreparedEnvironment { handle: EnvironmentHandle; controlCredential: { credentialId: string; token: string }; }
+export interface ContainerSummary {
+  environmentId: string; shadowId: string; mode: EnvironmentSpec["mode"]; state: EnvironmentRecord["state"]; running: boolean;
+  activeJobs: number; idleSince: number | null; resources: EnvironmentSpec["resources"]; imageDigest: string;
+  /** Root as the container runs it: off, on, or requested but refused by this host. */
+  root: { requested: boolean; effective: boolean; reason?: string };
+}
 
 /** Serializes the lifecycle of each persistent Shadow environment. */
 export class EnvironmentManager {
@@ -25,20 +31,30 @@ export class EnvironmentManager {
     return this.lock(id, () => this.prepareLocked(request));
   }
 
-  private async prepareLocked(request: PrepareRequest): Promise<PreparedEnvironment> {
-      new ShadowPreparationStore(this.store.db).requireJob(request);
-      const id = environmentKey(request.spec);
+  private async prepareLocked(input: PrepareRequest): Promise<PreparedEnvironment> {
+      new ShadowPreparationStore(this.store.db).requireJob(input);
+      const id = environmentKey(input.spec);
       await this.resumeReplacement(id);
       const previous = this.store.find(id);
+      // Only a Job carries the Shadow's root switch; file maintenance keeps the current container's.
+      const request = input.occupant.kind === "job" || !previous ? input : { ...input, spec: withRootAccess(input.spec, previous.spec.rootAccess === true) };
+      const rootChanged = previous && (previous.spec.rootAccess === true) !== (request.spec.rootAccess === true);
       const resourcesChanged = previous && contentHash(previous.spec.resourceSelection) !== contentHash(request.spec.resourceSelection);
-      // Container limits (cpus/memory/pids) are launch arguments; an idle environment is rebuilt to apply them.
       const limitsChanged = previous && contentHash(previous.spec.resources) !== contentHash(request.spec.resources);
-      if (previous && (previous.spec.imageDigest !== request.spec.imageDigest || resourcesChanged || limitsChanged)) {
-        // A maintenance request cannot choose a new mounted snapshot. A live Job
-        // preparation owns the target version and prevents old-version preparation.
-        if (resourcesChanged && request.occupant.kind !== "job") throw new ExecutionError(503, "environment_mount_pending");
+      // A maintenance request cannot choose a new snapshot. A live Job preparation owns
+      // the target version and prevents old-version preparation.
+      if (resourcesChanged && request.occupant.kind !== "job") throw new ExecutionError(503, "environment_mount_pending");
+      if (previous && (previous.spec.imageDigest !== request.spec.imageDigest || rootChanged)) {
+        // A new image is a new system disk, and the root switch is a launch option
+        // (no-new-privileges): either way the container is replaced once idle.
         this.store.beginReplacement(id, request.spec);
         await this.resumeReplacement(id);
+      } else if (previous && (resourcesChanged || limitsChanged)) {
+        // Snapshots switch through the HOME link and limits through `docker update`, so the
+        // container and its writable system layer stay. Running Jobs keep their version.
+        if (this.store.active(id).length) throw new ExecutionError(503, "environment_mount_pending");
+        if (limitsChanged) await this.driver.updateLimits(previous, request.spec.resources);
+        this.store.retarget(id, request.spec);
       }
       // A release can race inspection/removal. The durable transition completes,
       // but a released invocation must never obtain a reservation afterward.
@@ -187,6 +203,52 @@ export class EnvironmentManager {
       });
     }
   }
+  /** Dashboard view of one Agent's environments on this Worker. */
+  async containers(agentId: string): Promise<ContainerSummary[]> {
+    const states = await this.driver.containerStates();
+    return this.store.list().filter(environment => environment.spec.scope.agentId === agentId).map(environment => ({
+      environmentId: environment.id, shadowId: environment.spec.scope.shadowId, mode: environment.spec.mode, state: environment.state,
+      running: states.get(this.driver.name(environment)) === true,
+      activeJobs: this.store.active(environment.id).filter(item => item.occupant.kind === "job").length,
+      idleSince: environment.idleSince, resources: environment.spec.resources, imageDigest: environment.spec.imageDigest, root: rootSummary(this.driver.rootStatus(environment)),
+    }));
+  }
+
+  /** Start a stopped container for an interactive stream; retiring or replacing environments are refused. */
+  async streamTarget(id: string, agentId: string): Promise<{ containerId: string; home: string }> {
+    return this.lock(id, async () => {
+      let environment = this.store.require(id);
+      if (environment.spec.scope.agentId !== agentId) throw new ExecutionError(403, "environment_agent_mismatch");
+      if (environment.pendingSpec || ["draining", "reaping"].includes(environment.state)) throw new ExecutionError(409, "environment_draining");
+      const actual = await this.driver.inspect(environment);
+      if (actual?.State.Running) return { containerId: actual.Id, home: this.driver.home(environment) };
+      // The Worker moved to another image while this container was stopped: like a Job would,
+      // replace it (a new system disk) instead of refusing the console.
+      const { imageDigest, runtimeId } = this.driver.config;
+      if (environment.spec.imageDigest !== imageDigest || environment.spec.callbackRuntimeId !== runtimeId) {
+        if (this.store.active(id).length) throw new ExecutionError(503, "environment_mount_pending");
+        this.store.beginReplacement(id, { ...environment.spec, imageDigest, callbackRuntimeId: runtimeId });
+        await this.resumeReplacement(id);
+        environment = this.store.require(id);
+      }
+      environment.containerId = await this.driver.ensure(environment);
+      environment.endpoint = this.driver.endpoint(id);
+      environment.bootId = (await this.waitReady(id, environment.instanceId)).bootId;
+      environment.state = "ready";
+      this.store.saveEnvironment(environment);
+      return { containerId: environment.containerId, home: this.driver.home(environment) };
+    });
+  }
+
+  /**
+   * Reset the system disk: remove the container (its writable layer) while HOME stays.
+   * The next Job or console recreates it from the image. Refused while work is running.
+   */
+  async reset(id: string, agentId: string): Promise<void> {
+    if (this.store.require(id).spec.scope.agentId !== agentId) throw new ExecutionError(403, "environment_agent_mismatch");
+    await this.destroy(id);
+  }
+
   async drain(id: string): Promise<void> { await this.lock(id, async () => { this.store.drain(id); }); }
   async destroy(id: string): Promise<void> {
     await this.lock(id, async () => {
@@ -216,7 +278,7 @@ export class EnvironmentManager {
         const health = await this.executor(id).call<ExecutorHealth>("GET", "/v1/health", undefined, AbortSignal.timeout(1000));
         if (health.instanceId !== instanceId) throw new ExecutionError(409, "executor_identity_conflict");
         const spec=this.store.require(id).spec;
-        if(contentHash(health.scope)!==contentHash(spec.scope) || contentHash(health.resourceSelection)!==contentHash(spec.resourceSelection))throw new ExecutionError(409,"executor_scope_mismatch");
+        if(contentHash(health.scope)!==contentHash(spec.scope))throw new ExecutionError(409,"executor_scope_mismatch");
         return health;
       } catch (error) { if (error instanceof ExecutionError && [401, 403, 409].includes(error.status)) throw error; }
       await delay(100);
@@ -229,4 +291,14 @@ export class EnvironmentManager {
     this.locks.set(id, next);
     try { return await next; } finally { if (this.locks.get(id) === next) this.locks.delete(id); }
   }
+}
+
+function withRootAccess(spec: EnvironmentSpec, rootAccess: boolean): EnvironmentSpec {
+  const { rootAccess: _, ...rest } = spec;
+  return rootAccess ? { ...rest, rootAccess: true } : rest;
+}
+
+function rootSummary(status: ReturnType<DockerEnvironmentDriver["rootStatus"]>): ContainerSummary["root"] {
+  if (!status) return { requested: false, effective: false };
+  return status.allowed ? { requested: true, effective: true } : { requested: true, effective: false, reason: status.reason };
 }

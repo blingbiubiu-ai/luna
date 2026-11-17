@@ -1,0 +1,51 @@
+# Luna desktop panel: launchers, window list and clock along the bottom edge.
+# Background 1: panel
+rounded = 0
+border_width = 0
+background_color = #1f2329 100
+border_color = #1f2329 0
+# Background 2: active window
+rounded = 4
+border_width = 0
+background_color = #3b4252 100
+border_color = #3b4252 0
+
+panel_items = LTC
+panel_size = 100% 36
+panel_margin = 0 0
+panel_padding = 6 3 8
+panel_position = bottom center horizontal
+panel_layer = top
+panel_background_id = 1
+wm_menu = 1
+panel_dock = 0
+autohide = 0
+strut_policy = follow_size
+font_shadow = 0
+
+launcher_padding = 2 2 6
+launcher_background_id = 0
+launcher_icon_size = 26
+launcher_tooltip = 1
+launcher_item_app = /usr/share/applications/google-chrome.desktop
+launcher_item_app = /usr/share/applications/lxterminal.desktop
+
+taskbar_mode = single_desktop
+taskbar_padding = 6 0 6
+taskbar_background_id = 0
+taskbar_active_background_id = 0
+task_text = 1
+task_icon = 1
+task_centered = 0
+task_maximum_size = 240 30
+task_padding = 8 2 6
+task_font_color = #d8dee9 100
+task_active_font_color = #ffffff 100
+task_background_id = 0
+task_active_background_id = 2
+task_tooltip = 1
+
+time1_format = %H:%M
+clock_font_color = #d8dee9 100
+clock_padding = 10 0
+clock_background_id = 0

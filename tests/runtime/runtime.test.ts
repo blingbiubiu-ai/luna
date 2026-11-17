@@ -1563,7 +1563,7 @@ describe("agent runtime package shell", () => {
         code: "access_token_required",
       });
 
-      fixturePlatformAdmin(runtime.database.db, "local-dashboard-user");
+      // Personal tokens are self-service: no platform administrator grant is needed.
       const createMcp = await server.app.fetch(
         new Request("http://luna.test/api/auth/tokens", {
           method: "POST",
@@ -1740,7 +1740,9 @@ describe("agent runtime package shell", () => {
       Bun.env.LUNA_DASHBOARD_TOKEN = "local-secret";
 
       const { HonoServer } = await import("../../src/server/server");
-      const server = new HonoServer();
+      // The server's own policy database: runtime status checks administrator grants in it.
+      const statusDb = new DataConnection(lunaSchema);
+      const server = new HonoServer({ db: statusDb.db });
 
       const unauthenticated = await server.app.fetch(
         new Request("http://luna.test/api/runtime/status"),
@@ -1777,11 +1779,18 @@ describe("agent runtime package shell", () => {
         };
 
         const cookie = await _dashboardCookie(server, "local-secret");
-        const response = await server.app.fetch(
+        const status = () => server.app.fetch(
           new Request("http://luna.test/api/runtime/status", {
             headers: { cookie },
           }),
         );
+        // Channels belong to Agents: without an Agent scope only a platform administrator sees them.
+        const ordinary = await status();
+        expect(ordinary.status).toBe(200);
+        expect(await ordinary.json()).toMatchObject({ status: "ok", channels: [] });
+        const session = await (await server.app.fetch(new Request("http://luna.test/api/auth/session", { headers: { cookie } }))).json() as { user: { id: string } };
+        fixturePlatformAdmin(statusDb.db, session.user.id);
+        const response = await status();
 
         expect(response.status).toBe(200);
         const responseBody = await response.json() as { agent: unknown };

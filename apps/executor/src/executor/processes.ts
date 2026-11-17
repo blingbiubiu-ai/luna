@@ -1,3 +1,4 @@
+import { sanitizeHome } from "./runner-sudo";
 import { spawn, type ChildProcess } from "node:child_process";
 import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
@@ -17,7 +18,7 @@ export class ExecutorProcesses {
   private readonly running = new Map<string, Running>();
   private stopped = false;
   constructor(private readonly store: ExecutorStore, private readonly contexts: ExecutorContexts,
-    private readonly runnerEntry: string, private readonly capacity: number) {
+    private readonly runnerEntry: string, private readonly capacity: number, private readonly runnerSudo = false) {
     if (process.platform !== "linux" || process.getuid?.() !== 0) throw new Error("Executor requires Linux root with limited container capabilities");
     if (!Number.isInteger(capacity) || capacity < 1) throw new Error("Invalid Executor capacity");
   }
@@ -107,7 +108,7 @@ export class ExecutorProcesses {
       environment.GRADLE_OPTS = "-Dorg.gradle.workers.max=6";
       environment.CMAKE_BUILD_PARALLEL_LEVEL = "6";
     }
-    const child = spawn(process.execPath, [jobProcess, String(context.uid), String(context.gid), context.cwd, this.runnerEntry],
+    const child = spawn(process.execPath, [jobProcess, String(context.uid), String(context.gid), context.cwd, this.runnerEntry, this.runnerSudo && job.privileged === true ? "sudo" : "restricted"],
       { cwd: "/", env: environment, stdio: ["pipe", "pipe", "pipe"] });
     let finish!: () => void;
     const running: Running = { child, contextId: context.id, done: new Promise<void>((resolve) => { finish = resolve; }) };
@@ -178,7 +179,8 @@ export class ExecutorProcesses {
       finally { finish(); }
     };
     child.once("error", () => { failed = true; unsafeFailure = true; });
-    child.once("close", (code, signal) => { void complete(code, signal); });
+    // Root may have left setuid or root-owned files in the host-backed HOME.
+    child.once("close", (code, signal) => { if (this.runnerSudo && job.privileged === true) sanitizeHome(context.home, context.uid, context.gid); void complete(code, signal); });
     child.once("spawn", () => {
       try {
         if (!child.pid) throw new Error("Runner PID missing after spawn");

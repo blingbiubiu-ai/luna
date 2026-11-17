@@ -3,6 +3,7 @@
 This directory stores prompt assets used by Luna runtime components.
 
 - `runtime-confidentiality.md` is appended to every runner's generated instructions and included in their fingerprint. It defines the shared boundary between internal runtime access and user-visible disclosure, while permitting scoped project file work.
+- `runner-root-access.md` is appended after it only when the Shadow's root switch is on and the Worker host allows it. It tells runners to use sudo only for what trusted people (checked with `luna root status --user`) want or agree to, to ask in plain terms otherwise, and what root may never be used for.
 
 - `main-runner/instructions.md` contains static Main Runner instructions. It is mounted into each session runner root through `CLAUDE.md` and consumed by Codex as generated `AGENTS.md`.
 - `main-runner/user-turn-template.md` contains the dynamic per-turn payload template. It should only include the command protocol, current input JSON, and the completion marker.

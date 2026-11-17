@@ -1,20 +1,24 @@
 import {createPlatformAgentRoutes} from "./routes/platform-agents";
 import type {AgentLifecycleJob} from "@/agents/agent-lifecycle-store";
 import { getKernel } from "@/server/routes/kernel";
-import type { WorkerSocketData } from "@/runtime/worker-gateway";
+import type { WorkerSocketData, WorkerStreamSocketData } from "@/runtime/worker-gateway";
+import type { ContainerConsoleSocketData } from "./container-console";
+import { CONTAINER_STREAM_PATH } from "@luna/runner-protocol";
+
 import { createTaskReportRoutes } from "./routes/task-reports";
 import { createRunnerOperationRoutes } from "./routes/runner-operations";
 import { createChannelConfigRoutes } from "./routes/channel-config";
 import { createRunnerGroupRoutes } from "./routes/runner-groups";
 import { createRunnerUserRoutes } from "./routes/runner-users";
 import { createRunnerMemoryRoutes } from "./routes/runner-memory";
+import { createRunnerRootRoutes } from "./routes/runner-root";
 import { createSessionCommandAdminRoutes } from "./routes/session-commands";
 import { createRunnerMessageRoutes } from "./routes/runner-messages";
 import { loginDotMatrixScript } from "./login-dot-matrix";
 import { existsSync } from "node:fs";
 import { extname, join } from "node:path";
 
-import type { Server } from "bun";
+import type { Server, ServerWebSocket } from "bun";
 import { Hono } from "hono";
 import { serveStatic } from "hono/bun";
 import { cors } from "hono/cors";
@@ -99,6 +103,7 @@ function createApp(
       .route("/api/runner", createRunnerGroupRoutes(db === undefined ? {} : { db }))
       .route("/api/runner", createRunnerUserRoutes(db === undefined ? {} : { db }))
       .route("/api/runner", createRunnerMemoryRoutes(db === undefined ? {} : { db }))
+      .route("/api/runner", createRunnerRootRoutes(db === undefined ? {} : { db }))
       .route("/api/runner", createRunnerOperationRoutes())
       .route("/api/runner/task-reports", createTaskReportRoutes())
       .route("/api/runner", createRunnerMessageRoutes(db === undefined ? {} : { db }))
@@ -177,9 +182,12 @@ export type AppType = ReturnType<typeof createApp>;
  * Serves RESTful API routes under `/api` and static files from the built
  * React SPA at `apps/dashboard/dist/` when the dashboard has been built.
  */
+/** Worker control links, Worker stream data sockets and Dashboard container consoles share one listener. */
+type ServiceSocketData = WorkerSocketData | WorkerStreamSocketData | ContainerConsoleSocketData;
+
 export class HonoServer {
   private _app: AppType;
-  private _server: Server<WorkerSocketData> | undefined;
+  private _server: Server<ServiceSocketData> | undefined;
   private _logger: Logger;
 
   constructor(input: {
@@ -224,7 +232,15 @@ export class HonoServer {
         if (new URL(request.url).pathname.startsWith("/api/worker/")) {
           const gateway = getKernel().executionRuntime?.gateway;
           if (!gateway) return Response.json({ code: "runtime_not_ready" }, { status: 503 });
-          if (new URL(request.url).pathname === "/api/worker/connect") {
+          const pathname = new URL(request.url).pathname;
+          if (pathname.startsWith(CONTAINER_STREAM_PATH)) {
+            try {
+              const data = gateway.authenticateStream(request, pathname.slice(CONTAINER_STREAM_PATH.length));
+              if (server.upgrade(request, { data })) return;
+              return new Response("WebSocket required", { status: 400 });
+            } catch { return new Response("Unauthorized", { status: 401 }); }
+          }
+          if (pathname === "/api/worker/connect") {
             try {
               const workerId = gateway.authenticate(request);
               if (server.upgrade(request, { data: { workerId, gateway } })) return;
@@ -238,9 +254,24 @@ export class HonoServer {
       websocket: {
         maxPayloadLength: 16 * 1024 * 1024,
         idleTimeout: 40,
-        open: (ws: import("bun").ServerWebSocket<WorkerSocketData>) => ws.data.gateway.open(ws),
-        message: (ws: import("bun").ServerWebSocket<WorkerSocketData>, message: string | Buffer) => ws.data.gateway.message(ws, message),
-        close: (ws: import("bun").ServerWebSocket<WorkerSocketData>) => ws.data.gateway.closed(ws),
+        open: (ws: ServerWebSocket<ServiceSocketData>) => {
+          const data = ws.data;
+          if (!("kind" in data)) data.gateway.open(ws as ServerWebSocket<WorkerSocketData>);
+          else if (data.kind === "worker-stream") data.gateway.streamOpened(ws as ServerWebSocket<WorkerStreamSocketData>);
+          else data.session.open(ws as ServerWebSocket<ContainerConsoleSocketData>);
+        },
+        message: (ws: ServerWebSocket<ServiceSocketData>, message: string | Buffer) => {
+          const data = ws.data;
+          if (!("kind" in data)) data.gateway.message(ws as ServerWebSocket<WorkerSocketData>, message);
+          else if (data.kind === "worker-stream") data.gateway.streamMessage(ws as ServerWebSocket<WorkerStreamSocketData>, message);
+          else data.session.message(ws as ServerWebSocket<ContainerConsoleSocketData>, message);
+        },
+        close: (ws: ServerWebSocket<ServiceSocketData>) => {
+          const data = ws.data;
+          if (!("kind" in data)) data.gateway.closed(ws as ServerWebSocket<WorkerSocketData>);
+          else if (data.kind === "worker-stream") data.gateway.streamClosed(ws as ServerWebSocket<WorkerStreamSocketData>);
+          else data.session.closed();
+        },
       },
       port,
       hostname,

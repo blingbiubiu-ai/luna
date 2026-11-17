@@ -76,9 +76,12 @@ separate checks. API writes reject legacy parameter-constraint fields.
 
 Dashboard Users and Groups pages edit rules through a shared dialog: choose a
 scope, enter/select an operation path, choose exact/prefix, allow/deny, and optional
-expiry. The dialog previews the resulting target. `GET /api/operations` supplies
-builtin/static suggestions and dynamic scopes; it is not a management table.
-`/api/authorization-rules` and its batch endpoint persist rules.
+expiry. The dialog previews the resulting target. Both pages are Agent-scoped and
+managed by the Agent owner: `GET /api/operations?agentId=` supplies the grantable
+Agent operations (no `system.*`, no audits), and rules are written as Agent rules
+through `/api/users/:id/authorization-rules[/batch|/:grantId]?agentId=` (only users in
+that Agent's directory) and `/api/groups/:id/authorization-rules[/batch|/:grantId]`.
+The platform `/api/authorization-rules` endpoints remain for `system.admin` only.
 
 Plugin invocation audits record `operation_id`, execution result, and
 `authorization_json` containing the decision, reason, matched rule IDs and rule
@@ -164,7 +167,7 @@ Worker protocol endpoints `/api/worker/*` have their own authentication before D
 
 Authorization rules now carry an explicit platform or Agent scope. The rule store filters reads, writes, deletion and effective-grant collection by that scope; omitting it fails with `authorization_scope_required`. Platform rule creation only accepts `system.admin`. Agent rule creation rejects platform operations. Agent grants govern operations for active users, including tool calls triggered by Feishu messages. Dashboard visibility requires Agent ownership.
 
-Groups have a required Agent owner and a unique `(agent_id, slug)` key. Granting a foreign Agent's group is rejected. Group membership creation checks the user and the group’s Agent are active. Dashboard permission-group reads require the Agent owner. Group mutations also require platform administration. Agent self-service rule routes derive scope from their authorized Agent path.
+Groups have a required Agent owner and a unique `(agent_id, slug)` key. Granting a foreign Agent's group is rejected. Group membership creation checks the user and the group’s Agent are active. Dashboard permission-group reads and mutations require the Agent owner; platform administration is not involved. Agent self-service rule routes derive scope from their authorized Agent path.
 
 `requireAdmin` now checks an active human canonical user and evaluates `system.admin` with normal expiry and deny precedence. A Dashboard cookie alone is insufficient. The authenticated middleware supplies the policy database through server-side request context; missing context fails closed. Agent ownership does not imply platform administration.
 
@@ -214,5 +217,9 @@ do not elevate privileges.
 Session, task, overview, user and group queries require explicit Agent scope and
 ownership. Shadow-specific lists also include Shadow scope in their cache keys.
 Detail endpoints independently authorize the fixed resource ID. Platform admins
-follow the same private ownership boundary. Group modifications, user deletion
-and platform permission changes additionally require administrator authority.
+follow the same private ownership boundary. Users, groups, memberships and their
+grants belong to the Agent and are managed by its owner, as are the Agent's Worker
+admission pause and channel status. Personal CLI/MCP tokens (`/api/auth/tokens`)
+are managed by each signed-in user for themselves. Deleting a user account
+(a platform-wide record) and platform permission changes require administrator
+authority.

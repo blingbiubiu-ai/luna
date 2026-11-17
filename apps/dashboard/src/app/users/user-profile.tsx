@@ -5,6 +5,7 @@ import { UsersIcon, XIcon } from "lucide-react";
 import type { ReactNode } from "react";
 
 import { AssignGroupDialog } from "@/components/assign-group-dialog";
+import { GrantOperationDialog } from "@/components/grant-operation-dialog";
 import {
   OperationGrantList,
   IndirectOperationGrantList,
@@ -20,6 +21,7 @@ import { Button } from "@/components/ui/button";
 import type {
   DashboardGroup,
   DashboardUser,
+  OperationPolicy,
 } from "@/lib/api";
 
 export function UserProfile({
@@ -30,6 +32,11 @@ export function UserProfile({
 
   onAssignGroup,
   onRemoveGroup,
+  operations = [],
+  grantError,
+  isGrantingOperation = false,
+  onGrantOperations,
+  onRemoveGrant,
 }: {
   readonly groups?: readonly DashboardGroup[];
   readonly user: DashboardUser;
@@ -41,6 +48,12 @@ export function UserProfile({
     role: "member";
   }) => Promise<unknown> | unknown) | undefined;
   readonly onRemoveGroup?: ((groupId: string) => Promise<unknown> | unknown) | undefined;
+  /** Agent-scoped grants for this user (same as group grants). */
+  readonly operations?: readonly OperationPolicy[];
+  readonly grantError?: unknown;
+  readonly isGrantingOperation?: boolean;
+  readonly onGrantOperations?: ((input: { rules: Array<{ target: string; matchType?: "exact" | "prefix"; effect: "allow" | "deny"; expiresAt?: number }> }) => Promise<unknown> | unknown) | undefined;
+  readonly onRemoveGrant?: ((grantId: string) => Promise<unknown> | unknown) | undefined;
 }) {
   const base = useAgentBasePath();
   const { t } = useTranslation();
@@ -124,12 +137,25 @@ export function UserProfile({
             />
           </RelationSection>
           <RelationSection
+            action={canManageUsers && onGrantOperations ? (
+              <GrantOperationDialog
+                operations={operations}
+                error={grantError}
+                existingGrants={user.directGrants}
+                groups={[]}
+                isSubmitting={isGrantingOperation}
+                onGrantBatch={(input) => onGrantOperations({ rules: input.items })}
+                subject={{ type: "user", id: user.id, label: user.displayName }}
+                users={[]}
+              />
+            ) : undefined}
             dataTestId="user-direct-grants-section"
             title={t("Direct grants")}
           >
             <OperationGrantList
               emptyText={t("No direct grants.")}
               grants={user.directGrants}
+              onRemoveGrant={canManageUsers ? onRemoveGrant : undefined}
               relationKind="user-direct-grants"
             />
           </RelationSection>

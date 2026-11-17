@@ -24,8 +24,7 @@ import {
   AuthorizationRuleStore,
   type AuthorizationRuleRecord,
 } from "../policy/authorization-rule-store";
-import { isGuardResponse, requireAdmin, requireDashboardOnly } from "../auth/guards";
-import { isPlatformAdministrator } from "../policy/platform-administrator";
+import { isGuardResponse, requireDashboardOnly } from "../auth/guards";
 import { getKernel } from "./kernel";
 
 export interface GroupsRouteOptions {
@@ -63,7 +62,8 @@ export function createGroupsRoutes(options: GroupsRouteOptions = {}) {
       throw error;
     })
     .use("*", async (c, next) => {
-      const auth = c.req.method === "GET" ? requireDashboardOnly(c) : requireAdmin(c);
+      // Groups belong to an Agent; every write route checks that the requester owns it.
+      const auth = requireDashboardOnly(c);
       if (isGuardResponse(auth)) return auth;
       await next();
     })
@@ -73,7 +73,7 @@ export function createGroupsRoutes(options: GroupsRouteOptions = {}) {
       const agentId = agent.id;
       return c.json({
         status: "ok",
-        canManageGroups: isPlatformAdministrator(db, agent.ownerUserId),
+        canManageGroups: true,
         groups: new GroupStore(db).listGroups(agentId).map((group) =>
           toDashboardGroup(db, group),
         ),
@@ -101,7 +101,7 @@ export function createGroupsRoutes(options: GroupsRouteOptions = {}) {
       const group = new GroupStore(db).requireGroup(c.req.param("id"), agent.id);
       return c.json({
         status: "ok",
-        canManageGroups: isPlatformAdministrator(db, agent.ownerUserId),
+        canManageGroups: true,
         group: toDashboardGroup(db, group),
       });
     })

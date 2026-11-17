@@ -19,6 +19,7 @@ import { Route as KnowledgeIndexRouteImport } from './app/knowledge/index'
 import { Route as SettingsTokensRouteImport } from './app/settings/tokens'
 import { Route as SettingsAgentsRouteImport } from './app/settings/agents'
 import { Route as SettingsWorkersRouteImport } from './app/settings/workers'
+import { Route as SettingsContainersRouteImport } from './app/settings/containers'
 import { Route as SettingsChannelsRouteImport } from './app/settings/channels'
 import { Route as SkillsIndexRouteImport } from './app/skills/index'
 import { Route as MemoryIndexRouteImport } from './app/memory/index'
@@ -73,6 +74,11 @@ const SettingsAgentsRoute = SettingsAgentsRouteImport.update({
 const SettingsWorkersRoute = SettingsWorkersRouteImport.update({
   id: '/settings/workers/',
   path: '/settings/workers/',
+  getParentRoute: () => AgentIdRoute,
+} as any)
+const SettingsContainersRoute = SettingsContainersRouteImport.update({
+  id: '/settings/containers/',
+  path: '/settings/containers/',
   getParentRoute: () => AgentIdRoute,
 } as any)
 const SettingsChannelsRoute = SettingsChannelsRouteImport.update({
@@ -148,6 +154,7 @@ export interface FileRoutesByFullPath {
   '/$agentId/settings/tokens/': typeof SettingsTokensRoute
   '/$agentId/settings/agents/': typeof SettingsAgentsRoute
   '/$agentId/settings/workers/': typeof SettingsWorkersRoute
+  '/$agentId/settings/containers/': typeof SettingsContainersRoute
   '/$agentId/settings/channels/': typeof SettingsChannelsRoute
   '/$agentId/groups/': typeof GroupsIndexRoute
   '/$agentId/groups/$groupId': typeof GroupsGroupIdRoute
@@ -169,6 +176,7 @@ export interface FileRoutesByTo {
   '/$agentId/settings/tokens': typeof SettingsTokensRoute
   '/$agentId/settings/agents': typeof SettingsAgentsRoute
   '/$agentId/settings/workers': typeof SettingsWorkersRoute
+  '/$agentId/settings/containers': typeof SettingsContainersRoute
   '/$agentId/settings/channels': typeof SettingsChannelsRoute
   '/$agentId/groups': typeof GroupsIndexRoute
   '/$agentId/groups/$groupId': typeof GroupsGroupIdRoute
@@ -192,6 +200,7 @@ export interface FileRoutesById {
   '/$agentId/settings/tokens/': typeof SettingsTokensRoute
   '/$agentId/settings/agents/': typeof SettingsAgentsRoute
   '/$agentId/settings/workers/': typeof SettingsWorkersRoute
+  '/$agentId/settings/containers/': typeof SettingsContainersRoute
   '/$agentId/settings/channels/': typeof SettingsChannelsRoute
   '/$agentId/groups/': typeof GroupsIndexRoute
   '/$agentId/groups/$groupId': typeof GroupsGroupIdRoute
@@ -216,6 +225,7 @@ export interface FileRouteTypes {
     | '/$agentId/settings/tokens/'
     | '/$agentId/settings/agents/'
     | '/$agentId/settings/workers/'
+    | '/$agentId/settings/containers/'
     | '/$agentId/settings/channels/'
     | '/$agentId/groups/'
     | '/$agentId/groups/$groupId'
@@ -237,6 +247,7 @@ export interface FileRouteTypes {
     | '/$agentId/settings/tokens'
     | '/$agentId/settings/agents'
     | '/$agentId/settings/workers'
+    | '/$agentId/settings/containers'
     | '/$agentId/settings/channels'
     | '/$agentId/groups'
     | '/$agentId/groups/$groupId'
@@ -259,6 +270,7 @@ export interface FileRouteTypes {
     | '/$agentId/settings/tokens/'
     | '/$agentId/settings/agents/'
     | '/$agentId/settings/workers/'
+    | '/$agentId/settings/containers/'
     | '/$agentId/settings/channels/'
     | '/$agentId/groups/'
     | '/$agentId/groups/$groupId'
@@ -281,6 +293,7 @@ interface AgentRouteChildren {
   SettingsTokensRoute: typeof SettingsTokensRoute
   SettingsAgentsRoute: typeof SettingsAgentsRoute
   SettingsWorkersRoute: typeof SettingsWorkersRoute
+  SettingsContainersRoute: typeof SettingsContainersRoute
   SettingsChannelsRoute: typeof SettingsChannelsRoute
   GroupsIndexRoute: typeof GroupsIndexRoute
   GroupsGroupIdRoute: typeof GroupsGroupIdRoute
@@ -381,6 +394,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof SettingsWorkersRouteImport
       parentRoute: typeof AgentIdRoute
     }
+    '/$agentId/settings/containers/': {
+      id: '/$agentId/settings/containers/'
+      path: '/settings/containers'
+      fullPath: '/$agentId/settings/containers/'
+      preLoaderRoute: typeof SettingsContainersRouteImport
+      parentRoute: typeof AgentIdRoute
+    }
     '/$agentId/settings/channels/': {
       id: '/$agentId/settings/channels/'
       path: '/settings/channels'
@@ -448,6 +468,7 @@ const agentRouteChildren: AgentRouteChildren = {
   SettingsTokensRoute: SettingsTokensRoute,
   SettingsAgentsRoute: SettingsAgentsRoute,
   SettingsWorkersRoute: SettingsWorkersRoute,
+  SettingsContainersRoute: SettingsContainersRoute,
   SettingsChannelsRoute: SettingsChannelsRoute,
   GroupsIndexRoute: GroupsIndexRoute,
   GroupsGroupIdRoute: GroupsGroupIdRoute,

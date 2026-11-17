@@ -51,15 +51,16 @@ where required; a digest does not replace authorization.
 
 Worker downloads only the snapshot authorized for its placement and verifies
 scope, digest, file types and path boundaries. It stores versioned bundles and
-derived mount sources outside writable Shadow HOME. The mounted snapshot is
-read-only at `$HOME/.luna-resources/`; HOME remains writable. Provider-specific
+derived mount sources outside writable Shadow HOME. The Shadow's derived versions
+are mounted read-only at `$HOME/.luna-resource-versions/`, and
+`$HOME/.luna-resources` links to the selected one; HOME remains writable. Provider-specific
 skill installation consumes that snapshot. Runner commands are exposed through
 `.luna-resources/commands`.
 
 Preparation records retain their resource selection until trusted Service
 settlement and Job reservation release. A new resource version waits for the
-old preparation references to drain before replacing the container. Persistent
-Shadow files survive that replacement. Other Shadows keep their own containers
+old preparation references to drain, then switches the link without replacing the
+container. Other Shadows keep their own containers
 and snapshots.
 
 Deleting an Executor environment removes its associated credential directory.

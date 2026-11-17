@@ -68,7 +68,7 @@ if(input.prompt.startsWith('failure:')) { const kind=input.prompt.slice(8); outp
 if(input.prompt==='unclassified') { output({status:'error',error:'unclassified process failure'}); process.exit(1); }
 if(input.prompt==='long') { setInterval(()=>{},1000); } else { output({status:'success',result:'LUNA_NOTHING_TO_SEND'}); }
 `, { mode: 0o644 });
-  const executor = createExecutor(db, grants, { scope:fixtureJobScope().scope,resourceSelection:fixtureJobScope().resources,instanceId: "instance1", runtimeId: "runtime1", workerId: "worker1", dataRoot: join(root, "data"), runnerEntry: entry, runtimeEndpoint: endpoint, capacity: 2 });
+  const executor = createExecutor(db, grants, { scope:fixtureJobScope().scope,instanceId: "instance1", runtimeId: "runtime1", workerId: "worker1", dataRoot: join(root, "data"), runnerEntry: entry, runtimeEndpoint: endpoint, capacity: 2 });
   const executorEndpoint = await listen(executor.server);
   const client = new ExecutionClient(executorEndpoint, control); const worker = new ExecutionClient(executorEndpoint, maintenance);
   async function submit(id: string, context: string, prompt: string, project = false, legacy = false, options: { credentials?: boolean; timeoutMs?: number; kind?: JobRequest["runnerKind"]; resume?: string } = {}): Promise<Assignment> {
@@ -216,7 +216,7 @@ if(input.prompt==='long') { setInterval(()=>{},1000); } else { output({status:'s
     await until(() => executor.store.snapshot("restart-retry").state === "retry_wait", "restart begins during persisted backoff");
     await executor.stop();
     const beforeRestart = executor.store.snapshot("restart-retry");
-    const restarted = createExecutor(db, grants, { scope:fixtureJobScope().scope,resourceSelection:fixtureJobScope().resources,instanceId: "instance1", runtimeId: "runtime1", workerId: "worker1", dataRoot: join(root, "data"), runnerEntry: entry, runtimeEndpoint: endpoint, capacity: 2 });
+    const restarted = createExecutor(db, grants, { scope:fixtureJobScope().scope,instanceId: "instance1", runtimeId: "runtime1", workerId: "worker1", dataRoot: join(root, "data"), runnerEntry: entry, runtimeEndpoint: endpoint, capacity: 2 });
     try {
       restarted.reporter.configure(upload);
       await restarted.start();

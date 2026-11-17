@@ -1,0 +1,45 @@
+#!/usr/bin/python3 -I
+"""Openbox pipe menu listing installed applications from their .desktop entries.
+
+Later directories override earlier ones by file name, so a Shadow can add or hide
+entries in ~/.local/share/applications without touching the read-only image.
+"""
+import configparser, os, re, shlex
+from xml.sax.saxutils import quoteattr, escape
+
+DIRS = ["/usr/share/applications", "/usr/local/share/applications",
+        os.path.join(os.environ.get("HOME", "/nonexistent"), ".local/share/applications")]
+FIELD_CODES = re.compile(r"%[fFuUdDnNickvm]")
+
+entries = {}
+for directory in DIRS:
+    try:
+        names = sorted(os.listdir(directory))
+    except OSError:
+        continue
+    for name in names:
+        if not name.endswith(".desktop"):
+            continue
+        parser = configparser.RawConfigParser(interpolation=None, strict=False)
+        parser.optionxform = str
+        try:
+            parser.read(os.path.join(directory, name), encoding="utf-8")
+            entry = parser["Desktop Entry"]
+        except Exception:
+            continue
+        hidden = any(entry.get(key, "").lower() == "true" for key in ("NoDisplay", "Hidden"))
+        if entry.get("Type") != "Application" or hidden or "Exec" not in entry:
+            entries.pop(name, None)
+            continue
+        command = FIELD_CODES.sub("", entry["Exec"]).replace("%%", "%").strip()
+        if entry.get("Terminal", "").lower() == "true":
+            command = "lxterminal -e " + shlex.quote(command)
+        label = entry.get("Name[zh_CN]") or entry.get("Name[zh]") or entry.get("Name") or name[:-8]
+        entries[name] = (label, command)
+
+print('<openbox_pipe_menu>')
+for label, command in sorted(entries.values(), key=lambda item: item[0].lower()):
+    print(f'<item label={quoteattr(label)}><action name="Execute"><command>{escape(command)}</command></action></item>')
+if not entries:
+    print('<item label="（没有应用）"/>')
+print('</openbox_pipe_menu>')

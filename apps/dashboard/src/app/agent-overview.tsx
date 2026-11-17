@@ -1,6 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useRuntimeStatus, useSessions, useTasks } from "@/lib/api";
-import { useAgentBasePath } from "@/lib/agent-route";
+import { useAgentBasePath, useRouteAgent } from "@/lib/agent-route";
 import { ShadowPicker, useShadowScope } from "@/components/shadow-picker";
 import { HomeOverview } from "./home-overview";
 
@@ -12,7 +12,8 @@ function AgentOverview() {
   const { scope } = selection;
   const { data: tasks = [], isLoading: tasksLoading } = useTasks(scope);
   const { data: sessions = [], isLoading: sessionsLoading } = useSessions(scope);
-  const { data: runtimeStatus, isLoading: runtimeLoading, error: runtimeError } = useRuntimeStatus();
+  const agent = useRouteAgent();
+  const { data: runtimeStatus, isLoading: runtimeLoading, error: runtimeError } = useRuntimeStatus(agent.id);
 
   return (
     <HomeOverview

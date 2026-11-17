@@ -28,6 +28,9 @@ export const DEFAULT_OPERATION_POLICIES: readonly OperationPolicy[] = [
         providerType: "core" as const, allowedSubjectTypes: ["user", "group"] as const,
     })),
     { id: "system.admin", namespace: "system", operationKind: "admin", riskLevel: "high", defaultDecision: "deny", providerType: "core", allowedSubjectTypes: ["user"] },
+    // Trust for root on this Agent's Shadows whose root switch is on (see shadow-root-access-store).
+    { id: "agent.root", namespace: "agent", operationKind: "root", riskLevel: "high", defaultDecision: "deny", providerType: "core",
+      title: "Root 权限", description: "开启 root 的分身会为此人想做或同意的事使用 sudo", allowedSubjectTypes: ["user", "group"] },
 ];
 // Per-runtime registration: database identity only scopes independent kernels/tests.
 // No operation definitions or namespace ownership are persisted in the database.

@@ -1,0 +1,61 @@
+#!/bin/bash
+# On-demand desktop for Dashboard VNC access.
+#   luna-desktop start   Start Xvfb, openbox, the tint2 panel and x11vnc once per container (idempotent).
+#   luna-desktop bridge  Relay stdin/stdout to the container-local VNC port.
+# Worker runs both as the Runner UID, so files and logins made on the desktop stay usable
+# by Jobs. Applications such as Chrome are opened from the desktop, not started here.
+set -eu
+
+export DISPLAY=:99
+VNC_PORT=5900
+LOG_DIR=/tmp/luna-desktop
+GEOMETRY=${LUNA_DESKTOP_GEOMETRY:-1600x900x24}
+
+running() { pgrep -u "$(id -u)" -f "$1" >/dev/null 2>&1; }
+spawn() { local name=$1; shift; setsid "$@" >"$LOG_DIR/$name.log" 2>&1 </dev/null & }
+
+start() {
+  mkdir -p "$LOG_DIR"
+  if ! running "^Xvfb :99"; then
+    spawn xvfb Xvfb :99 -screen 0 "$GEOMETRY" -nolisten tcp
+    for _ in $(seq 100); do [ -S /tmp/.X11-unix/X99 ] && break; sleep 0.1; done
+    [ -S /tmp/.X11-unix/X99 ] || { cat "$LOG_DIR/xvfb.log" >&2; exit 1; }
+  fi
+  # The background is set once openbox runs; set earlier, openbox would repaint it black.
+  running "^openbox" || spawn openbox openbox --startup 'xsetroot -solid "#2e3440"'
+  # Explicit config: tint2 would otherwise copy the image default into HOME on first run,
+  # and later image updates would never reach that Shadow.
+  running "^tint2" || spawn tint2 tint2 -c /etc/xdg/tint2/tint2rc
+  if ! running "^x11vnc"; then
+    spawn x11vnc x11vnc -display :99 -localhost -rfbport "$VNC_PORT" -nopw -forever -shared -quiet
+    for _ in $(seq 100); do (exec 3<>"/dev/tcp/127.0.0.1/$VNC_PORT") 2>/dev/null && break; sleep 0.1; done
+  fi
+}
+
+bridge() {
+  exec python3 -c '
+import os, socket, sys, threading
+sock = socket.create_connection(("127.0.0.1", int(sys.argv[1])))
+def upstream():
+    while True:
+        data = os.read(0, 65536)
+        if not data:
+            break
+        sock.sendall(data)
+    sock.shutdown(socket.SHUT_WR)
+threading.Thread(target=upstream, daemon=True).start()
+out = sys.stdout.buffer
+while True:
+    data = sock.recv(65536)
+    if not data:
+        break
+    out.write(data)
+    out.flush()
+' "$VNC_PORT"
+}
+
+case "${1:-}" in
+  start) start ;;
+  bridge) bridge ;;
+  *) echo "usage: luna-desktop start|bridge" >&2; exit 2 ;;
+esac

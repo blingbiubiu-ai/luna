@@ -1444,10 +1444,12 @@ describe("luna dashboard api", () => {
     expect(hooks).toContain("/workspaces/${encodeURIComponent(workspaceId)}/${operation}");
     expect(hooks).toContain('workspaceId, "glob"');
     expect(hooks).toContain("useOperations");
-    expect(hooks).toContain('"/operations"');
+    expect(hooks).toContain('`/operations?${params}`');
     expect(hooks).toContain('"/groups"');
-    expect(hooks).toContain('"/authorization-rules"');
-    expect(hooks).toContain('"/authorization-rules/batch"');
+    // Users and Groups pages grant on the Agent, never on the platform.
+    expect(hooks).not.toContain('"/authorization-rules"');
+    expect(hooks).not.toContain('"/authorization-rules/batch"');
+    expect(hooks).toContain("/authorization-rules/batch?agentId=");
     expect(hooks).toContain('method: "DELETE"');
     expect(hooks).not.toContain('"/principals"');
     expect(hooks).toContain('apiFetch<{ users: DashboardUser[] }>(`/users?agentId=');

@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { Assignment, Credentials, ExecutionScope,ResourceSelection,Id, JobSubmission, isTerminal } from "@luna/runner-protocol";
+import { Assignment, Credentials, ExecutionScope,Id, JobSubmission, isTerminal } from "@luna/runner-protocol";
 import { ExecutionError,contentHash,canonicalJson,type SqlDatabase } from "@luna/execution-store";
 import { TokenAuthority, executionServer, json, readJson, requirePeer } from "@luna/execution-transport";
 import { ExecutorStore } from "./store";
@@ -8,20 +8,25 @@ import { ExecutorProcesses } from "./processes";
 import { executeFileOperation } from "./file-operation";
 import { ExecutorEventReporter } from "./event-reporter";
 
-import { absoluteRunnerPath, type RunnerLayout } from "@luna/runner-protocol/runner-assets";
+import { absoluteRunnerPath, runnerResourcesPath, type RunnerLayout } from "@luna/runner-protocol/runner-assets";
+import { readlinkSync } from "node:fs";
+import { basename } from "node:path";
 
 const BoundRequest = z.object({ assignment: Assignment }).strict();
 const CredentialRequest = z.object({ assignment: Assignment, credentials: Credentials }).strict();
 const IngestCredential = z.object({ credentialId: Id, token: z.string().regex(/^[A-Za-z0-9_-]{43}$/), runtimeId: Id }).strict();
 export interface ExecutorConfig {
-  scope:ExecutionScope;resourceSelection:z.infer<typeof ResourceSelection>;
+  /** The snapshot version is not fixed per Executor: Worker switches $HOME/.luna-resources between Jobs. */
+  scope:ExecutionScope;
   instanceId: string; runtimeId: string; workerId: string; dataRoot: string; runnerEntry: string;
   runtimeEndpoint: string; capacity: number; runnerLayout?: RunnerLayout; runnerUid?: number; runnerGid?: number;
+  /** The container allows sudo (Shadow root switch on a host that permits it); Jobs still need `privileged`. */
+  runnerSudo?: boolean;
 }
 
 /** Only Runtime controls Jobs; Worker has initialization and non-secret inspection rights. */
 export function createExecutor(db: SqlDatabase, authority: TokenAuthority, config: ExecutorConfig) {
-  const scope=ExecutionScope.parse(config.scope),resources=ResourceSelection.parse(config.resourceSelection);
+  const scope=ExecutionScope.parse(config.scope);
   const requireScope=(value:ExecutionScope)=>{if(contentHash(value)!==contentHash(scope))throw new ExecutionError(403,"executor_scope_mismatch");};
   db.exec("CREATE TABLE IF NOT EXISTS executor_scope (id INTEGER PRIMARY KEY CHECK(id=1),scope_json TEXT NOT NULL)");
   const prior=db.prepare("SELECT scope_json FROM executor_scope WHERE id=1").get() as {scope_json:string}|undefined;
@@ -30,7 +35,7 @@ export function createExecutor(db: SqlDatabase, authority: TokenAuthority, confi
   for(const job of store.list())requireScope(store.binding(job.jobId).scope);
   db.prepare("INSERT OR IGNORE INTO executor_scope VALUES (1,?)").run(canonicalJson(scope));
   const contexts = new ExecutorContexts(config.dataRoot, config.runnerUid, config.runnerGid, config.runnerLayout);
-  const processes = new ExecutorProcesses(store, contexts, config.runnerEntry, config.capacity);
+  const processes = new ExecutorProcesses(store, contexts, config.runnerEntry, config.capacity, config.runnerSudo === true);
   store.onTerminal = id => contexts.forgetCredentials(id);
   const reporter = new ExecutorEventReporter(store, config.runtimeEndpoint);
   const fileLeases = new Map<string, string>();
@@ -39,7 +44,7 @@ export function createExecutor(db: SqlDatabase, authority: TokenAuthority, confi
     if (peer.role === "worker") requirePeer(peer, "worker", config.workerId);
     else requirePeer(peer, "runtime", config.runtimeId);
     if (method === "GET" && url.pathname === "/v1/health") {
-      json(response, 200, { instanceId: store.instanceId, bootId: store.bootId, activeJobs: processes.activeCount(), scope,resourceSelection:resources,capabilities: ["job-retry-v1","shadow-scope-v2"], upload: reporter.status() }); return;
+      json(response, 200, { instanceId: store.instanceId, bootId: store.bootId, activeJobs: processes.activeCount(), scope,capabilities: ["job-retry-v1","shadow-scope-v2"], upload: reporter.status() }); return;
     }
     const contextRegistration = /^\/v1\/contexts\/([^/]+)$/.exec(url.pathname);
     if (method === "PUT" && contextRegistration) {
@@ -98,7 +103,8 @@ export function createExecutor(db: SqlDatabase, authority: TokenAuthority, confi
     if (method === "POST" && url.pathname === "/v1/jobs") {
       const submission = JobSubmission.parse(await readJson(request));
       requireScope(submission.job.scope);requireScope(submission.assignment.scope);
-      if(contentHash(submission.job.resources)!==contentHash(resources))throw new ExecutionError(409,"executor_resources_mismatch");
+      // Worker points $HOME/.luna-resources at the reserved snapshot before binding the Job.
+      if(config.runnerLayout && activeSnapshot(config.runnerLayout.home)!==submission.job.resources.digest)throw new ExecutionError(409,"executor_resources_mismatch");
       contexts.get(submission.job.runnerContextId);
       const snapshot = store.submit(submission);
       if (reporter.ready()) processes.tick();
@@ -130,4 +136,9 @@ export function createExecutor(db: SqlDatabase, authority: TokenAuthority, confi
     },
     async stop() { clearInterval(timer); await processes.stop(); reporter.stop(); },
   };
+}
+
+/** Digest of the snapshot the Shadow HOME currently exposes, or undefined when unlinked. */
+function activeSnapshot(home: string): string | undefined {
+  try { return basename(readlinkSync(runnerResourcesPath(home))); } catch { return undefined; }
 }

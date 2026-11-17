@@ -1,0 +1,12 @@
+#!/bin/bash
+# Chrome as launched by name in the container (desktop menu, terminals). Containers keep
+# no-new-privileges, so Chrome's sandbox cannot start; the policy hides the banner.
+# Absolute /usr/bin/google-chrome (CHROME_BIN, Puppeteer) is unaffected.
+profile="$HOME/.config/google-chrome"
+# A replaced container leaves a lock naming its old hostname, and Chrome then refuses the
+# default profile. A Shadow HOME has one live container, so a foreign-host lock is stale.
+lock=$(readlink "$profile/SingletonLock" 2>/dev/null || true)
+if [ -n "$lock" ] && [ "${lock%-*}" != "$(cat /proc/sys/kernel/hostname)" ]; then
+  rm -f "$profile/SingletonLock" "$profile/SingletonCookie" "$profile/SingletonSocket"
+fi
+exec /usr/bin/google-chrome --no-sandbox --disable-dev-shm-usage --no-first-run --no-default-browser-check "$@"

@@ -3,8 +3,7 @@ import {z} from "zod";
 import type {DrizzleDB} from "@/data";
 import {AgentError,AgentStore} from "@/agents/agent-store";
 import {AgentWorkerAccessStore} from "@/agents/agent-worker-access-store";
-import {isGuardResponse,requireAdmin,requireDashboardOnly} from "../auth/guards";
-import {isPlatformAdministrator} from "@/server/policy/platform-administrator";
+import {isGuardResponse,requireDashboardOnly} from "../auth/guards";
 import {getKernel} from "./kernel";
 
 const workerGateway = () => getKernel().executionRuntime?.gateway;
@@ -28,7 +27,7 @@ export function createAgentWorkerAccessRoutes(db: DrizzleDB, getGateway = worker
    const {workerId,connected,revoked,draining,health}=worker;
    return [{workerId,connected,revoked,draining,health,owned,local:gateway.isLocal(workerId),lastHeartbeatAt:worker.lastHeartbeatAt ?? worker.lastSeen}];
   }) ?? [];
-  return c.json({assignments,workers,canManageWorkers:isPlatformAdministrator(db,auth.user.id)});
+  return c.json({assignments,workers,canManageWorkers:true});
  }).post("/:agentId/workers/binding-code",c=>{
   const auth=requireDashboardOnly(c);if(isGuardResponse(auth))return auth;
   const agent=agents.requireOwner(auth.user.id,c.req.param("agentId"));
@@ -60,11 +59,7 @@ export function createAgentWorkerAccessRoutes(db: DrizzleDB, getGateway = worker
   }
   const gateway = getGateway();
   if (!gateway) return c.json({status:"error",code:"runtime_not_ready"},503);
-  const ownsLocalWorker = gateway.isLocal(workerId) && gateway.owner(workerId) === auth.user.id;
-  if (!ownsLocalWorker) {
-   const admin = requireAdmin(c);
-   if (isGuardResponse(admin)) return admin;
-  }
+  // Pausing changes only this Agent's assignment (setPaused checks the Agent owner).
   const worker = gateway.list().find(row => row.workerId === workerId && !row.revoked);
   if (!worker) throw new AgentError("worker_not_registered", 409);
   store.setPaused(auth.user.id, agentId, workerId, action === "drain");

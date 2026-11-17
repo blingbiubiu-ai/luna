@@ -168,6 +168,19 @@ export class EnvironmentStore {
     });
   }
 
+  /** Adopt a new snapshot or limits for the same container; only an idle environment may switch. */
+  retarget(id: string, target: EnvironmentSpec): void {
+    transaction(this.db, () => {
+      const env = this.require(id);
+      if (environmentKey(target) !== id) throw new ExecutionError(409, "environment_scope_conflict");
+      if (env.pendingSpec || ["draining", "reaping"].includes(env.state)) throw new ExecutionError(409, "environment_draining");
+      if (this.active(id).length) throw new ExecutionError(503, "environment_mount_pending");
+      if (env.spec.imageDigest !== target.imageDigest) throw new ExecutionError(409, "environment_replacement_required");
+      env.spec = target;
+      this.saveEnvironment(env);
+    });
+  }
+
   /** Docker absence has been verified; new admission may now create the target container. */
   finishReplacement(id: string): void {
     transaction(this.db, () => {

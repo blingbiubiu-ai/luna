@@ -1,4 +1,6 @@
 import {createAgentWorkerAccessRoutes} from "./agent-worker-access";
+import {createAgentContainerRoutes} from "./agent-containers";
+import {createShadowRootAccessRoutes} from "./shadow-root-access";
 import {createAgentPluginRoutes} from "./agent-plugins";
 import type {PluginRegistry} from "@/plugins/registry";
 import {createAgentMemoryRoutes} from "./agent-memories";
@@ -40,6 +42,8 @@ export function createPlatformAgentRoutes(db: DrizzleDB, registry?:PluginRegistr
   return new Hono()
     .route("/",createAgentMemoryRoutes(db))
     .route("/",createAgentWorkerAccessRoutes(db))
+    .route("/",createAgentContainerRoutes(db))
+    .route("/",createShadowRootAccessRoutes(db))
     .route("/",registry ? createAgentPluginRoutes(db,registry) : new Hono())
     .use("*", async (c, next) => {
       const auth = requireDashboardOnly(c);
