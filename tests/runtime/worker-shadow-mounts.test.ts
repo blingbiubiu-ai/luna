@@ -45,7 +45,7 @@ test("a new snapshot switches the link while the mounted version directory stays
  expect(next.mounts).toEqual(old.mounts);
  planner.activate(old);planner.activate(next);
  expect(readlinkSync(join(next.layout.home,".luna-resources"))).toBe(`.luna-resource-versions/${basename(next.resourceSource)}`);
- expect(readFileSync(join(old.resourceSource,"memory","note.md"),"utf8")).toBe("memory");
+ expect(readFileSync(join(old.resourceSource,"prompts","note.md"),"utf8")).toBe("prompt");
 });
 test("Runner edits to the resource link are repaired, but real content there is refused",()=>{
  const first=planner.prepare(a,snapshot(a)),other=planner.prepare(b,snapshot(b));
