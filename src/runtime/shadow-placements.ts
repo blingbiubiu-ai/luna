@@ -101,6 +101,17 @@ export class ShadowPlacements {
   this.db.prepare("UPDATE shadow_context_routes SET worker_id=? WHERE context_id=?").run(chosen.workerId,contextId);
   return {...prior,workerId:chosen.workerId};
  }
+ /** Placed Shadows, so a deleted Shadow whose Worker data remains can be found and purged. */
+ placed():ResourceScope[] {
+  return this.db.prepare("SELECT agent_id AS agentId,shadow_id AS shadowId FROM shadow_placements").all() as ResourceScope[];
+ }
+ /** Drop a purged Shadow's placement and context routes. */
+ forget(scope:ResourceScope):void {
+  transaction(this.db,()=>{
+   this.db.prepare("DELETE FROM shadow_context_routes WHERE shadow_id=?").run(scope.shadowId);
+   this.db.prepare("DELETE FROM shadow_placements WHERE shadow_id=? AND agent_id=?").run(scope.shadowId,scope.agentId);
+  });
+ }
  workerIds(scope:ResourceScope):string[] {
   const shadow=this.find(scope);
   if(!shadow)return [];

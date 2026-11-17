@@ -164,7 +164,10 @@ routes. Release packages and systemd use the same static asset location.
 
 The Agent owner manages the default Dashboard identity and digital Shadows at `/agent/<agentId>/settings/channels`. The creation form accepts a Shadow name and optional Feishu bot settings. If the bot cannot be bound after the Shadow is created, the form can retry the binding on the same Shadow.
 
-Each Shadow card opens an editor with the bot settings and the Shadow’s lifecycle actions. Removing the bot ends its binding and keeps the Shadow and its history. A saved bot configuration can be selected once its prior binding has been removed or its Shadow has been deleted.
+Each Shadow card opens an editor with the bot settings and the Shadow’s lifecycle actions. Removing the bot ends its binding and keeps the Shadow and its history. Deleting a Shadow (or
+Agent) warns that its Worker data — container, HOME (login state, git/ssh, browser data,
+files), installed software, resource snapshots and `/data` volume — is removed for good
+while history stays, and requires typing the name to confirm. A saved bot configuration can be selected once its prior binding has been removed or its Shadow has been deleted.
 
 At `/agent/<agentId>/settings/workers`, the Agent owner can create a pairing code for that Agent, and see assigned Workers. The Worker CLI redeems the code and the Service assigns the Worker to that Agent. To assign an existing private Worker to another Agent, get a new code from that Agent and run bind again on the same Worker. The owner can remove an assignment from that Agent.
 

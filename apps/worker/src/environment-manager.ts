@@ -330,6 +330,24 @@ export class EnvironmentManager {
     await this.destroy(id);
   }
 
+  /**
+   * Permanently delete a deleted Shadow's data on this Worker: its containers, /data volumes,
+   * environment records, HOME and resource directories. Refused while any of its work runs.
+   */
+  async purgeShadow(scope: { agentId: string; shadowId: string }): Promise<void> {
+    const environments = this.store.list().filter(environment =>
+      environment.spec.scope.agentId === scope.agentId && environment.spec.scope.shadowId === scope.shadowId);
+    for (const environment of environments) {
+      this.streamCloser?.(environment.id, "shadow_deleted");
+      await this.destroy(environment.id);
+      await this.lock(environment.id, async () => {
+        await this.driver.removeVolume(environment);
+        this.store.forget(environment.id);
+      });
+    }
+    await this.driver.purgeShadowFiles(scope);
+  }
+
   async drain(id: string): Promise<void> { await this.lock(id, async () => { this.store.drain(id); }); }
   async destroy(id: string): Promise<void> {
     await this.lock(id, async () => {

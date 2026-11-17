@@ -115,3 +115,39 @@ test("lifecycle acceptance is transactional if durable audit persistence fails",
   expect(connection.db.select().from(schema.sessionCommands).get()?.status).toBe("pending");
   expect(new AccessTokenService({db: connection.db, signingSecret: "test"}).verifyBearer(issued.token, {now: Date.now()}).claims.shadowId).toBe(scope.shadowId);
 });
+
+test("deleting a Shadow purges its Worker data after draining; disabling keeps it", async () => {
+  const lifecycle = new AgentLifecycleStore(connection.db);
+  const calls: string[] = [];
+  const drain = async (target: {shadowId: string}) => {calls.push(`drain:${target.shadowId}`);};
+  const purge = async (target: {shadowId: string}) => {calls.push(`purge:${target.shadowId}`);};
+  const target = {agentId: scope.agentId, shadowId};
+  const disabled = lifecycle.request(owner, target, "disabled", "disable-other");
+  await lifecycle.reconcile(disabled, async () => {}, drain, purge);
+  expect(calls).toEqual([`drain:${shadowId}`]);
+  lifecycle.request(owner, target, "active", "resume-other");
+  calls.length = 0;
+  const deleted = lifecycle.request(owner, target, "deleted", "delete-other");
+  let reachable = false;
+  await lifecycle.reconcile(deleted, async () => {}, drain, async target => {
+    calls.push(`purge:${target.shadowId}`);
+    if (!reachable) throw Error("worker_disconnected");
+  });
+  // A Worker that cannot be reached keeps the job pending; the purge is retried.
+  expect(lifecycle.pending()[0]).toMatchObject({id: deleted.id, lastError: "worker_disconnected"});
+  expect(lifecycle.purgeable([target])).toEqual([]);
+  reachable = true;
+  calls.length = 0;
+  await lifecycle.reconcile(deleted, async () => {}, drain, purge);
+  expect(calls).toEqual([`drain:${shadowId}`, `purge:${shadowId}`]);
+  expect(lifecycle.pending()).toEqual([]);
+});
+
+test("purgeable lists only placed Shadows that are deleted with no lifecycle job pending", () => {
+  const lifecycle = new AgentLifecycleStore(connection.db);
+  const deleted = {agentId: scope.agentId, shadowId}, live = {agentId: scope.agentId, shadowId: scope.shadowId};
+  connection.db.update(schema.agentShadows).set({status: "deleted"}).where(eq(schema.agentShadows.id, shadowId)).run();
+  expect(lifecycle.purgeable([deleted, live, {agentId: scope.agentId, shadowId: "unknown"}])).toEqual([deleted]);
+  lifecycle.request(owner, {agentId: scope.agentId}, "disabled", "disable-agent");
+  expect(lifecycle.purgeable([deleted])).toEqual([]);
+});

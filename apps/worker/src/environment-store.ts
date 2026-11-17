@@ -204,6 +204,15 @@ export class EnvironmentStore {
     this.saveEnvironment(env);
   }
 
+  /** Remove a stopped environment and its settled reservations (Shadow deletion). */
+  forget(id: string): void {
+    if (this.active(id).length) throw new ExecutionError(409, "environment_occupied");
+    transaction(this.db, () => {
+      this.db.prepare("DELETE FROM worker_reservations WHERE environment_id=?").run(id);
+      this.db.prepare("DELETE FROM worker_environments WHERE id=?").run(id);
+    });
+  }
+
   handle(requestId: string, workerId: string): EnvironmentHandle {
     const reservation = this.reservation(requestId);
     if (!reservation) throw new ExecutionError(404, "preparation_not_found");

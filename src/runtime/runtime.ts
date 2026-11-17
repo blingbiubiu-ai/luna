@@ -113,6 +113,27 @@ export class Runtime implements ExecutionRuntime {
       }
     }, signal);
   }
+  /**
+   * Permanently delete a deleted Shadow's data on every Worker that held it, then forget
+   * its placement. Called after drainShadow; retried by the caller until it succeeds.
+   */
+  purgeShadow(scope: ResourceScope, signal?: AbortSignal): Promise<void> {
+    return this.run(async () => {
+      if (this.fileOperations.isBusy(scope.shadowId) || this.scheduler.preparation.hasActiveShadow(scope.shadowId) ||
+        this.scheduler.jobs.list(true).some(job => job.job.scope.shadowId === scope.shadowId))
+        throw new ExecutionError(409, "shadow_execution_pending");
+      const workerIds = new Set([...this.scheduler.placements.workerIds(scope), ...this.scheduler.preparation.previousWorkers(scope.shadowId)]);
+      for (const workerId of workerIds) {
+        await this.scheduler.workers.client(workerId).call("DELETE",
+          `/v1/shadows/${encodeURIComponent(scope.agentId)}/${encodeURIComponent(scope.shadowId)}`, undefined,
+          AbortSignal.any([this.stopped.signal, AbortSignal.timeout(120000), ...(signal ? [signal] : [])]));
+      }
+      this.scheduler.preparation.forgetShadow(scope.shadowId);
+      this.scheduler.placements.forget(scope);
+    }, signal);
+  }
+  /** Shadows that still have a placement (and possibly Worker data). */
+  placedShadows(): ResourceScope[] { return this.scheduler.placements.placed(); }
   delete(id: string, signal?: AbortSignal): Promise<void> { return this.run(() => this.scheduler.delete(Id.parse(id)), signal); }
   async *events(id: string, after: number, detach: AbortSignal): AsyncGenerator<RuntimeEvent> {
     Id.parse(id);

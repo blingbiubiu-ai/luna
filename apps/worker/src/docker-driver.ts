@@ -3,7 +3,7 @@ import {WorkerShadowMounts,type ShadowMountPlan} from "./shadow-mounts";
 import type {ResourceScope} from "@luna/host-runtime/scoped-runner-resources";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { mkdirSync, rmSync } from "node:fs";
 import { randomBytes } from "node:crypto";
 import { availableParallelism } from "node:os";
@@ -99,7 +99,7 @@ export class DockerEnvironmentDriver {
       runtimeEndpoint: this.config.runtimeEndpoint, capacity: this.config.capacity,
       runnerLayout: { home: layout.home, runners: layout.runners },
       runnerUid: this.config.runnerUid, runnerGid: this.config.runnerGid, runnerSudo: this.rootAllowed(environment), controlToken: deployment.controlToken, maintenanceToken: deployment.maintenanceToken };
-    const volume = `luna-${contentHash(this.config.workerId).slice(0, 12)}-${environment.id}`;
+    const volume = this.volume(environment);
     const args = ["run", "--detach", "--init", "--name", this.name(environment), "--label", `luna.worker=${this.config.workerId}`, "--label", `luna.instance=${environment.instanceId}`,
       "--label", `luna.agent=${environment.spec.scope.agentId}`, "--label", `luna.shadow=${environment.spec.scope.shadowId}`, "--label", `luna.placement=${environment.spec.scope.placementGeneration}`,
       "--user", "0:0", "--cap-drop", "ALL", ...["CHOWN", "DAC_OVERRIDE", "KILL", "SETUID", "SETGID", "SETPCAP"].flatMap((cap) => ["--cap-add", cap]),
@@ -120,8 +120,9 @@ export class DockerEnvironmentDriver {
       prior.Mounts.some(mount => mount.Type === "bind" && mount.Destination === destination &&
         mount.RW === !readonly && hostSourceNames(source).includes(mount.Source)));
     if (prior && mountsMatch && prior.Config.Labels["luna.configuration"] === configuration) {
-      new WorkerShadowMounts(this.db, this.config.dataRoot).activate(plan);
-      if (!prior.State.Running) await this.docker(["container", "start", prior.Id]);
+      const resourceMounts = new WorkerShadowMounts(this.db, this.config.dataRoot);
+      if (prior.State.Running) await this.switchResourcesInside(prior.Id, resourceMounts.pendingSwitch(plan));
+      else { resourceMounts.activate(plan); await this.docker(["container", "start", prior.Id]); }
       return prior.Id;
     }
     // EnvironmentManager fences replacement of running containers until idle.
@@ -150,6 +151,30 @@ export class DockerEnvironmentDriver {
     if (inspection) await this.docker(["container", "rm", "--force", inspection.Id]);
     this.db.prepare("DELETE FROM worker_deployments WHERE environment_id=?").run(environment.id);
     rmSync(this.executorDirectory(environment), { recursive: true, force: true });
+  }
+  /** Atomically repoint $HOME/.luna-resources from inside a running container (see pendingSwitch). */
+  private async switchResourcesInside(containerId: string, change: { link: string; target: string } | undefined): Promise<void> {
+    if (!change) return;
+    const user = `${this.config.runnerUid}:${this.config.runnerGid}`, temporary = `${change.link}.${randomBytes(8).toString("hex")}`;
+    await this.docker(["exec", "-u", user, containerId, "ln", "-s", change.target, temporary]);
+    await this.docker(["exec", "-u", user, containerId, "mv", "-T", temporary, change.link]);
+  }
+  private volume(environment: EnvironmentRecord): string { return `luna-${contentHash(this.config.workerId).slice(0, 12)}-${environment.id}`; }
+  /** The environment's /data volume; only a deleted Shadow's environments are removed with it. */
+  async removeVolume(environment: EnvironmentRecord): Promise<void> {
+    await this.docker(["volume", "rm", "--force", this.volume(environment)]);
+  }
+  /**
+   * Delete a deleted Shadow's HOME and resource directories and their records. Files that
+   * container root created can be unremovable for the Worker user; a root helper removes them.
+   */
+  async purgeShadowFiles(scope: ResourceScope): Promise<void> {
+    for (const directory of this.layouts.remove(scope)) {
+      try { rmSync(directory, { recursive: true, force: true }); continue; }
+      catch (error) { if (!["EACCES", "EPERM", "ENOTEMPTY"].includes((error as NodeJS.ErrnoException).code ?? "")) throw error; }
+      await this.docker(["run", "--rm", "--user", "0:0", "--network", "none", "--entrypoint", "rm",
+        "--mount", `type=bind,src=${dirname(directory)},dst=/purge`, this.config.imageDigest, "-rf", `/purge/${basename(directory)}`]);
+    }
   }
   private executorDirectory(environment: EnvironmentRecord): string {
     return this.layouts.executorDirectory(environment.spec.scope, environment.id);

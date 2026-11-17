@@ -85,7 +85,22 @@ export class AgentLifecycleStore {
       target.shadowId ? eq(shadowBotBindings.shadowId, target.shadowId) : undefined)).all().map(row => row.id);
   }
 
-  async reconcile(job: AgentLifecycleJob, reloadChannel: (id: string) => Promise<void>, drainShadow: (scope: AgentScope) => Promise<void>): Promise<void> {
+  /**
+   * Of the placed Shadows, those that are deleted (or whose Agent is) with no lifecycle job
+   * still pending: their Worker data is left over and can be purged.
+   */
+  purgeable(placed: readonly AgentScope[]): AgentScope[] {
+    return placed.filter(scope => {
+      const shadow = this.db.select({status: agentShadows.status}).from(agentShadows).where(eq(agentShadows.id, scope.shadowId)).get();
+      const agent = this.db.select({status: lunaAgents.status}).from(lunaAgents).where(eq(lunaAgents.id, scope.agentId)).get();
+      if (shadow?.status !== "deleted" && agent?.status !== "deleted") return false;
+      return !this.db.select({id: agentLifecycleJobs.id}).from(agentLifecycleJobs)
+        .where(and(eq(agentLifecycleJobs.agentId, scope.agentId), eq(agentLifecycleJobs.status, "pending"))).get();
+    });
+  }
+
+  async reconcile(job: AgentLifecycleJob, reloadChannel: (id: string) => Promise<void>, drainShadow: (scope: AgentScope) => Promise<void>,
+    purgeShadow?: (scope: AgentScope) => Promise<void>): Promise<void> {
     try {
       for (const id of this.channels(job)) await reloadChannel(id);
       if (this.db.select({id: runnerInvocations.id}).from(runnerInvocations).where(and(
@@ -98,6 +113,8 @@ export class AgentLifecycleStore {
       const shadows = job.shadowId ? [job.shadowId] : this.db.select({id: agentShadows.id}).from(agentShadows)
         .where(eq(agentShadows.agentId, job.agentId)).all().map(row => row.id);
       for (const shadowId of shadows) await drainShadow({agentId: job.agentId, shadowId});
+      // Deleting removes the Shadows' Worker data for good; Service history stays.
+      if (job.targetStatus === "deleted" && purgeShadow) for (const shadowId of shadows) await purgeShadow({agentId: job.agentId, shadowId});
       this.db.update(agentLifecycleJobs).set({status: "completed", lastError: null, completedAt: Date.now()})
         .where(and(eq(agentLifecycleJobs.id, job.id), eq(agentLifecycleJobs.status, "pending"))).run();
     } catch (error) {

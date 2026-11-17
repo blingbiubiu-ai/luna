@@ -63,6 +63,21 @@ old preparation references to drain, then switches the link without replacing th
 container. Other Shadows keep their own containers
 and snapshots.
 
+While the container runs, Worker switches the link from inside it (`docker exec` as the
+Runner user). Docker Desktop's file sharing keeps serving a symlink the host replaced, so
+reads through a host-switched link fail with EINVAL; a stopped container is switched on
+the host and sees the new link when it starts.
+
+Deleting a Shadow (or its Agent) removes its Worker data for good once its work has
+drained: every environment's container, `/data` volume and record, the Shadow HOME
+(`agents/<agent>/shadows/<shadow>`) and its resource directory
+(`agents/<agent>/shadow-resources/<shadow>`), plus its layout, context and preparation
+records. Service then forgets the Shadow's placement. Disabling keeps all of it. Service
+keeps the Shadow's sessions, messages, tasks and memories. A Worker that cannot be reached
+keeps the delete pending until it returns; Shadows deleted before this rule are found by
+their remaining placement and purged by a once-a-minute sweep. Files container root left
+in HOME are removed through a short-lived root container.
+
 Deleting an Executor environment removes its associated credential directory.
 Snapshot retention and cleanup follow execution ownership and reference rules;
 private resource directories must never be mounted as a shared parent tree.

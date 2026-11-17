@@ -44,6 +44,25 @@ export class WorkerShadowLayouts {
   });
  }
 
+ /**
+  * Forget a deleted Shadow: drop its layout, context and preparation records and return
+  * the HOME and resource directories the caller must delete.
+  */
+ remove(scope:ResourceScope):string[] {
+  const resourceRoot=this.resourceRoot(scope);
+  const home=join(this.root,"agents",scope.agentId,"shadows",scope.shadowId);
+  transaction(this.db,()=>{
+   const tables=new Set((this.db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all() as {name:string}[]).map(row=>row.name));
+   const contexts="SELECT context_id FROM worker_shadow_context_paths WHERE shadow_id=?";
+   for(const table of ["worker_contexts","worker_context_projects"])
+    if(tables.has(table))this.db.prepare(`DELETE FROM ${table} WHERE context_id IN (${contexts})`).run(scope.shadowId);
+   if(tables.has("worker_shadow_preparations"))this.db.prepare("DELETE FROM worker_shadow_preparations WHERE shadow_id=?").run(scope.shadowId);
+   this.db.prepare("DELETE FROM worker_shadow_context_paths WHERE shadow_id=?").run(scope.shadowId);
+   this.db.prepare("DELETE FROM worker_shadow_layouts WHERE shadow_id=? AND agent_id=?").run(scope.shadowId,scope.agentId);
+  });
+  return [home,resourceRoot];
+ }
+
  /** Executor configuration is stored outside Runner HOME. */
  executorDirectory(scope:ResourceScope,environmentId:string):string {
   validateId(environmentId);

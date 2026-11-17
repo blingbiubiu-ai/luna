@@ -5,7 +5,7 @@ import { workerServer } from "../../apps/worker/src/server";
 import { closeExecutionServer } from "@luna/execution-transport";
 import { contentHash } from "@luna/execution-store";
 import { expect, test } from "bun:test";
-import { realpathSync, mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, cpSync } from "node:fs";
+import { realpathSync, mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, cpSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
@@ -130,7 +130,8 @@ test("remote Worker binds once, downloads its scoped snapshot and renders its ow
         }
         execFileSync("docker",["exec",container!.Id,"touch",join(home,"own-write")]);
         expect(readFileSync(join(home,"own-write"),"utf8")).toBe("");
-        expect(container!.Mounts.some(m=>m.Destination===join(home,".luna-resources") && !m.RW)).toBe(true);
+        // Snapshot versions are mounted read-only; .luna-resources is a link into them.
+        expect(container!.Mounts.some(m=>m.Destination===join(home,".luna-resource-versions") && !m.RW)).toBe(true);
         expect(()=>execFileSync("docker",["exec",container!.Id,"touch",join(home,".luna-resources/forbidden-write")],{stdio:"ignore"})).toThrow();
       }
 
@@ -165,7 +166,8 @@ test("remote Worker binds once, downloads its scoped snapshot and renders its ow
       expect(replacement.spec.resourceSelection.digest).toBe(updated.selection.digest);
       expect(manager.store.list()).toHaveLength(3);
       const container = await manager.driver.inspect(replacement);
-      expect(container?.Id).not.toBe(oldContainer?.Id);
+      // A new snapshot switches the HOME link; the container (and its system disk) stays.
+      expect(container?.Id).toBe(oldContainer?.Id);
       expect(execFileSync("docker", ["exec", container!.Id, "cat", join(context.home, ".luna-resources/prompts/SOUL.md")], { encoding: "utf8" })).toBe("updated persona");
       execFileSync("docker", ["exec", container!.Id, "test", "-f", join(context.home, "own-write")]);
       for (const other of environments.filter(environment => environment.id !== previous.id)) {
@@ -192,6 +194,31 @@ test("remote Worker binds once, downloads its scoped snapshot and renders its ow
         expect((await manager.driver.inspect(other))?.Id).toBe(other.containerId ?? undefined);
       }
     }
+    // Deleting the Shadow purges its Worker data for good: environments, HOME and resource files.
+    const shadowHome = join(workerHome, "agents/agent/shadows/shadow"), shadowResources = join(workerHome, "agents/agent/shadow-resources/shadow");
+    expect(existsSync(shadowHome)).toBe(true);
+    const mine = (environment: { spec: { scope: { shadowId: string } } }) => environment.spec.scope.shadowId === scope.shadowId;
+    const containers = await Promise.all(manager.store.list().filter(mine).map(environment => manager!.driver.inspect(environment)));
+    const others = manager.store.list().filter(environment => !mine(environment));
+    const removedIds = manager.store.list().filter(mine).map(environment => environment.id);
+    settled.add("invocation"); await scheduler.tick();
+    // Without Docker the Worker's HTTP side is not wired, so purge it directly.
+    if (dockerEnabled) await runtime.purgeShadow(scope); else await manager.purgeShadow(scope);
+    expect(existsSync(shadowHome)).toBe(false);
+    expect(existsSync(shadowResources)).toBe(false);
+    expect(manager.store.list().filter(environment => environment.spec.scope.shadowId === scope.shadowId)).toEqual([]);
+    expect(workerDb.prepare("SELECT count(*) AS n FROM worker_shadow_layouts WHERE shadow_id=?").get(scope.shadowId)).toEqual({ n: 0 });
+    for (const container of containers.filter(Boolean)) expect(() => execFileSync("docker", ["container", "inspect", container!.Id], { stdio: "ignore" })).toThrow();
+    if (dockerEnabled) for (const id of removedIds)
+      expect(execFileSync("docker", ["volume", "ls", "-q", "--filter", `name=${id}`], { encoding: "utf8" }).trim()).toBe("");
+    // Other Shadows on the same Worker keep their environments.
+    expect(manager.store.list().map(environment => environment.id).sort()).toEqual(others.map(environment => environment.id).sort());
+    if (dockerEnabled) {
+      expect(scheduler.placements.find(scope)).toBeUndefined();
+      expect(runtime.placedShadows().map(placed => placed.shadowId).sort()).toEqual(["default", "second"]);
+      await runtime.purgeShadow(scope);
+    }
+    await manager.purgeShadow(scope);
     gateway.action(bound.workerId, "drain"); expect(gateway.list()[0]!.draining).toBe(true);
     gateway.action(bound.workerId, "resume"); expect(gateway.list()[0]!.draining).toBe(false);
     gateway.action(bound.workerId, "revoke"); await until(() => !gateway.list()[0]!.connected);

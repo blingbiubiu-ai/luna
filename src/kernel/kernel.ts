@@ -145,6 +145,7 @@ class Kernel {
   private _channelReloadsClosed = false;
   private _lifecycleTimer?: ReturnType<typeof setInterval>;
   private _lifecycleWork: Promise<void> | undefined;
+  private _lastShadowPurgeSweep = 0;
 
   reloadChannel(id: string): Promise<void> {
     if (this._channelReloadsClosed) return Promise.reject(new Error("Kernel is stopping"));
@@ -628,7 +629,14 @@ class Kernel {
     const lifecycle = new AgentLifecycleStore(this._database.db);
     await Promise.all(lifecycle.pending().map(job => lifecycle.reconcile(job, async id => {
       if (this._lunaChannels.has(id)) await this.reloadChannel(id);
-    }, scope => runtime.drainShadow(scope))));
+    }, scope => runtime.drainShadow(scope), scope => runtime.purgeShadow(scope))));
+    // Shadows deleted before their data was purged (or while a Worker was away); once a minute.
+    if (Date.now() - this._lastShadowPurgeSweep < 60_000) return;
+    this._lastShadowPurgeSweep = Date.now();
+    for (const scope of lifecycle.purgeable(runtime.placedShadows())) {
+      try { await runtime.purgeShadow(scope); }
+      catch (error) { this._logger.warn({error, ...scope}, "Deleted Shadow data purge remains pending"); }
+    }
   }
 
   /**

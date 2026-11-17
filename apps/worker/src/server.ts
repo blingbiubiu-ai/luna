@@ -33,8 +33,12 @@ export function workerServer(authority: TokenAuthority, manager: EnvironmentMana
     if (request.method === "POST" && preparation) {
       json(response, 200, await manager.cancelPreparation(Id.parse(preparation[1]))); return;
     }
+    const shadow = /^\/v1\/shadows\/([^/]+)\/([^/]+)$/.exec(url.pathname);
+    if (request.method === "DELETE" && shadow) {
+      await manager.purgeShadow({ agentId: Id.parse(shadow[1]), shadowId: Id.parse(shadow[2]) }); json(response, 204); return;
+    }
     const environment = /^\/v1\/environments\/([^/]+)(?:\/(release|drain|reset|desktop-stop))?$/.exec(url.pathname);
-    if (!environment) throw new ExecutionError(404, "route_not_found");
+    if (!environment)throw new ExecutionError(404, "route_not_found");
     const id = Id.parse(environment[1]);
     if (request.method === "GET" && !environment[2]) {
       json(response, 200, { environment: manager.store.require(id), reservations: manager.store.reservations(id) }); return;

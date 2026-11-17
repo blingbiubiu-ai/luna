@@ -25,6 +25,13 @@ export class ContextPreparationManager {
    .all(shadowId) as {worker_id:string}[];
   return rows.map(row=>row.worker_id);
  }
+ /** Drop a purged Shadow's settled preparation records; active ones keep the purge pending. */
+ forgetShadow(shadowId:string):void {
+  transaction(this.db,()=>{
+   for(const table of ["runtime_prepared_contexts","runtime_previous_preparations"])
+    this.db.prepare(`DELETE FROM ${table} WHERE json_extract(input_json,'$.scope.shadowId')=?`).run(shadowId);
+  });
+ }
  cached(id:string):PreparedContext|undefined {
   const row=this.db.prepare("SELECT body FROM runtime_prepared_contexts WHERE context_id=?").get(id) as {body:string}|undefined;
   return row ? PreparedContext.parse(JSON.parse(row.body)) : undefined;

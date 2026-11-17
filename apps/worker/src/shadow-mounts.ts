@@ -39,6 +39,19 @@ export class WorkerShadowMounts {
   * Point `$HOME/.luna-resources` at the plan's snapshot. Callers switch versions only while
   * the Shadow has no running Job; re-asserting the same version also repairs a Runner edit.
   */
+ /**
+  * For a running container: the link switch to perform inside it, or undefined when the link
+  * is already current. Docker Desktop's file sharing keeps serving a symlink the host replaced
+  * (reads through it fail with EINVAL), so a running container must switch it itself.
+  */
+ pendingSwitch(plan:ShadowMountPlan):{link:string;target:string}|undefined {
+  const link=runnerResourcesPath(plan.layout.homeSource),target=join(RESOURCE_VERSIONS_DIR,basename(plan.resourceSource));
+  const info=lstatSync(link,{throwIfNoEntry:false});
+  if(info?.isSymbolicLink() && readlinkSync(link)===target)return undefined;
+  // Anything but a link is validated (and refused or migrated) on the host.
+  if(info && !info.isSymbolicLink()){this.activate(plan);return undefined;}
+  return {link:runnerResourcesPath(plan.layout.home),target};
+ }
  activate(plan:ShadowMountPlan):void {
   const home=plan.layout.homeSource,link=runnerResourcesPath(home);
   const target=join(RESOURCE_VERSIONS_DIR,basename(plan.resourceSource));
