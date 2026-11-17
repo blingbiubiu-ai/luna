@@ -6,7 +6,7 @@ import { createRoot } from "react-dom/client";
 
 import { dashboardTheme, ThemeProvider } from "@/components/theme-provider";
 
-import { AgentHome } from "./agent-home";
+import { PlatformShell } from "./platform-shell";
 import { routeTree } from "./routeTree.gen";
 
 const queryClient = new QueryClient({
@@ -34,7 +34,7 @@ createRoot(document.getElementById("root")!).render(
   <StrictMode>
     <QueryClientProvider client={queryClient}>
       <ThemeProvider {...dashboardTheme}>
-        <LocaleProvider>{location.pathname === "/" ? <AgentHome /> : <RouterProvider router={router} />}</LocaleProvider>
+        <LocaleProvider>{location.pathname.startsWith("/agent/") ? <RouterProvider router={router} /> : <PlatformShell pathname={location.pathname} />}</LocaleProvider>
       </ThemeProvider>
     </QueryClientProvider>
   </StrictMode>,

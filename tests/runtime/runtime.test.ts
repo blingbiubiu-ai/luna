@@ -1522,7 +1522,12 @@ describe("agent runtime package shell", () => {
           id: "local-dashboard-user",
           displayName: "Local dashboard user",
         },
+        isPlatformAdmin: false,
       });
+      // The Dashboard shows platform pages from this flag.
+      fixturePlatformAdmin(runtime.database.db, "local-dashboard-user");
+      expect(await (await server.app.fetch(new Request("http://luna.test/api/auth/me", { headers: { cookie } }))).json())
+        .toMatchObject({ isPlatformAdmin: true });
 
       const bearerConfirm = await server.app.fetch(
         new Request("http://luna.test/api/auth/cli/confirm", {

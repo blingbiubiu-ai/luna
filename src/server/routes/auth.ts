@@ -15,6 +15,7 @@ import {
   requireAuthenticated,
   requireDashboardOnly,
 } from "../auth/guards";
+import { isPlatformAdministrator } from "../policy/platform-administrator";
 import { getKernel } from "./kernel";
 
 interface AuthRouteOptions {
@@ -57,6 +58,11 @@ export function createAuthRoutes(
           displayName: current.user.name,
           provider: current.user.provider,
         },
+        // Lets the Dashboard show platform pages; the platform APIs enforce it themselves.
+        isPlatformAdmin: (() => {
+          const db = authDb(options);
+          return db !== undefined && isPlatformAdministrator(db, current.user.id);
+        })(),
         ...(current.authKind === "luna-access-token"
           ? {
               token: {

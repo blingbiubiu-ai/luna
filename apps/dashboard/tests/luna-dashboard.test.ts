@@ -1485,7 +1485,8 @@ describe("luna dashboard api", () => {
     expect(routeTree).toContain("'/$agentId/knowledge/'");
     expect(routeTree).not.toContain("'/operations/'");
     expect(routeTree).toContain("'/$agentId/plugins/'");
-    expect(routeTree).toContain("'/$agentId/plugins/$pluginId'");
+    // Plugin installation lives on the platform shell, not inside an Agent.
+    expect(routeTree).not.toContain("'/$agentId/plugins/$pluginId'");
     expect(routeTree).toContain("'/$agentId/groups/'");
     expect(routeTree).toContain("'/$agentId/groups/$groupId'");
     expect(routeTree).toContain("'/$agentId/settings/tokens/'");
@@ -1683,7 +1684,7 @@ describe("luna dashboard api", () => {
     );
 
     expect(html).toContain("Details");
-    expect(html).toContain("/agent/plugins/echo");
+    expect(html).toContain("/platform/plugins/echo");
   });
 
   test("Marketplace dashboard renders the latest version action for each plugin", async () => {

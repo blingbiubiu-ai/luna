@@ -24,7 +24,6 @@ import { Route as SettingsChannelsRouteImport } from './app/settings/channels'
 import { Route as SkillsIndexRouteImport } from './app/skills/index'
 import { Route as MemoryIndexRouteImport } from './app/memory/index'
 import { Route as PluginsIndexRouteImport } from './app/plugins/index'
-import { Route as PluginsPluginIdRouteImport } from './app/plugins/$pluginId'
 import { Route as SessionsIndexRouteImport } from './app/sessions/index'
 import { Route as TasksIndexRouteImport } from './app/tasks/index'
 import { Route as SchedulesIndexRouteImport } from './app/schedules/index'
@@ -101,11 +100,6 @@ const PluginsIndexRoute = PluginsIndexRouteImport.update({
   path: '/plugins/',
   getParentRoute: () => AgentIdRoute,
 } as any)
-const PluginsPluginIdRoute = PluginsPluginIdRouteImport.update({
-  id: '/plugins/$pluginId',
-  path: '/plugins/$pluginId',
-  getParentRoute: () => AgentIdRoute,
-} as any)
 const SessionsIndexRoute = SessionsIndexRouteImport.update({
   id: '/sessions/',
   path: '/sessions/',
@@ -148,7 +142,6 @@ export interface FileRoutesByFullPath {
   '/$agentId/sessions/': typeof SessionsIndexRoute
   '/$agentId/memory/': typeof MemoryIndexRoute
   '/$agentId/plugins/': typeof PluginsIndexRoute
-  '/$agentId/plugins/$pluginId': typeof PluginsPluginIdRoute
   '/$agentId/skills/': typeof SkillsIndexRoute
   '/$agentId/knowledge/': typeof KnowledgeIndexRoute
   '/$agentId/settings/tokens/': typeof SettingsTokensRoute
@@ -170,7 +163,6 @@ export interface FileRoutesByTo {
   '/$agentId/sessions': typeof SessionsIndexRoute
   '/$agentId/memory': typeof MemoryIndexRoute
   '/$agentId/plugins': typeof PluginsIndexRoute
-  '/$agentId/plugins/$pluginId': typeof PluginsPluginIdRoute
   '/$agentId/skills': typeof SkillsIndexRoute
   '/$agentId/knowledge': typeof KnowledgeIndexRoute
   '/$agentId/settings/tokens': typeof SettingsTokensRoute
@@ -194,7 +186,6 @@ export interface FileRoutesById {
   '/$agentId/sessions/': typeof SessionsIndexRoute
   '/$agentId/memory/': typeof MemoryIndexRoute
   '/$agentId/plugins/': typeof PluginsIndexRoute
-  '/$agentId/plugins/$pluginId': typeof PluginsPluginIdRoute
   '/$agentId/skills/': typeof SkillsIndexRoute
   '/$agentId/knowledge/': typeof KnowledgeIndexRoute
   '/$agentId/settings/tokens/': typeof SettingsTokensRoute
@@ -219,7 +210,6 @@ export interface FileRouteTypes {
     | '/$agentId/sessions/'
     | '/$agentId/memory/'
     | '/$agentId/plugins/'
-    | '/$agentId/plugins/$pluginId'
     | '/$agentId/skills/'
     | '/$agentId/knowledge/'
     | '/$agentId/settings/tokens/'
@@ -241,7 +231,6 @@ export interface FileRouteTypes {
     | '/$agentId/sessions'
     | '/$agentId/memory'
     | '/$agentId/plugins'
-    | '/$agentId/plugins/$pluginId'
     | '/$agentId/skills'
     | '/$agentId/knowledge'
     | '/$agentId/settings/tokens'
@@ -264,7 +253,6 @@ export interface FileRouteTypes {
     | '/$agentId/sessions/'
     | '/$agentId/memory/'
     | '/$agentId/plugins/'
-    | '/$agentId/plugins/$pluginId'
     | '/$agentId/skills/'
     | '/$agentId/knowledge/'
     | '/$agentId/settings/tokens/'
@@ -287,7 +275,6 @@ interface AgentRouteChildren {
   SessionsIndexRoute: typeof SessionsIndexRoute
   MemoryIndexRoute: typeof MemoryIndexRoute
   PluginsIndexRoute: typeof PluginsIndexRoute
-  PluginsPluginIdRoute: typeof PluginsPluginIdRoute
   SkillsIndexRoute: typeof SkillsIndexRoute
   KnowledgeIndexRoute: typeof KnowledgeIndexRoute
   SettingsTokensRoute: typeof SettingsTokensRoute
@@ -357,13 +344,6 @@ declare module '@tanstack/react-router' {
       path: '/plugins'
       fullPath: '/$agentId/plugins/'
       preLoaderRoute: typeof PluginsIndexRouteImport
-      parentRoute: typeof AgentIdRoute
-    }
-    '/$agentId/plugins/$pluginId': {
-      id: '/$agentId/plugins/$pluginId'
-      path: '/plugins/$pluginId'
-      fullPath: '/$agentId/plugins/$pluginId'
-      preLoaderRoute: typeof PluginsPluginIdRouteImport
       parentRoute: typeof AgentIdRoute
     }
     '/$agentId/knowledge/': {
@@ -462,7 +442,6 @@ const agentRouteChildren: AgentRouteChildren = {
   SessionsIndexRoute: SessionsIndexRoute,
   MemoryIndexRoute: MemoryIndexRoute,
   PluginsIndexRoute: PluginsIndexRoute,
-  PluginsPluginIdRoute: PluginsPluginIdRoute,
   SkillsIndexRoute: SkillsIndexRoute,
   KnowledgeIndexRoute: KnowledgeIndexRoute,
   SettingsTokensRoute: SettingsTokensRoute,

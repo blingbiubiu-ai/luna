@@ -191,8 +191,9 @@ signed-in user. `GET /api/agents/:agentId/plugins` returns the loaded version,
 compatibility and Agent enablement. The editor saves ordinary configuration and
 write-only secret changes against the revision it loaded. Agent and plugin
 selection determine the cache and draft lifetime. A stale revision requires an
-explicit reload. The platform marketplace retains its platform administrator
-checks for installation and version changes. Personal CLI tokens select scope
+explicit reload. It lists installed plugins only. Installation and version changes
+live on the platform 插件管理 page outside any Agent, shown to and enforced for
+platform administrators. Personal CLI tokens select scope
 with `LUNA_AGENT_ID` and `LUNA_SHADOW_ID`. Runner tokens derive scope from
 their active invocation.
 

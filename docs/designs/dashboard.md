@@ -17,9 +17,21 @@ Dashboard pages consume projections from Service routes:
 
 Projection code should prepare stable UI data while keeping authorization and signing in Service.
 
+## Platform Shell
+
+Pages outside an Agent (`/` and `/platform/*`) share the Agent pages' sidebar
+layout. The sidebar shows 工作台 → 我的 Agent (the Agent list, with a 新建 Agent
+dialog) to everyone, and 平台管理 → 插件管理 only when `GET /api/auth/me` reports
+`isPlatformAdmin`. Platform pages check the same flag and the platform APIs enforce
+administrator authority themselves; `/agent/*` paths use the Agent router.
+
 ## Plugins View
 
-The Plugins page presents a searchable list of compact plugin cards and an overview
+Plugin installation is a platform page: 插件管理 (`/platform/plugins`, detail at
+`/platform/plugins/:pluginId`) for platform administrators. Inside an Agent, the
+Plugins page only enables and configures already-installed plugins.
+
+The platform plugin page presents a searchable list of compact plugin cards and an overview
 of available, running, and pending-restart counts. Running state comes from
 installation `activeState`; the enable switch represents `desiredState`. A
 pending change never implies that the running plugin has already changed.

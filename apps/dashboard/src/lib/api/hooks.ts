@@ -481,6 +481,14 @@ export interface CreatedAccessToken {
   readonly token: DashboardAccessToken;
 }
 
+/** Signed-in user with platform role; platform APIs still enforce it themselves. */
+export function useDashboardMe() {
+  return useQuery({
+    queryKey: ["luna", "auth", "me"],
+    queryFn: () => apiFetch<{ user: { id: string; displayName: string }; isPlatformAdmin: boolean }>("/auth/me"),
+  });
+}
+
 export function useDashboardAuthSession() {
   return useQuery({
     queryKey: ["luna", "auth", "session"],

@@ -319,6 +319,8 @@ export class HonoServer {
         );
 
       this._app.get("/", serveAgentShell);
+      // Platform pages (outside any Agent) share the Dashboard shell.
+      this._app.get("/platform/*", serveAgentShell);
       this._app.get("/artifacts/:id/preview", serveArtifactPreviewShell);
       const serveAgentAsset = serveStatic({
         root: webRoot,

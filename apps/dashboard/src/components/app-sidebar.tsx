@@ -49,6 +49,7 @@ import {
   type DashboardAuthSession,
 } from "@/lib/api";
 import { cn } from "@/lib/utils";
+import type { ReactNode } from "react";
 
 const navGroups = [
   { title: "Operate", items: [
@@ -306,9 +307,10 @@ export function SidebarBrandForTest({ open }: { readonly open: boolean }) {
 }
 
 /**
- * Main application sidebar with navigation and user info.
+ * Main application sidebar with navigation and user info. Agent pages use the Agent
+ * navigation; the platform shell (home, platform pages) passes its own `nav`.
  */
-export function AppSidebar() {
+export function AppSidebar({ nav }: { readonly nav?: ReactNode } = {}) {
   const { open } = useSidebar();
   return (
     <Sidebar collapsible="icon">
@@ -328,7 +330,7 @@ export function AppSidebar() {
       <SidebarSeparator className="data-[orientation=horizontal]:w-auto" />
 
       <SidebarContent>
-        <NavSidebarGroup />
+        {nav ?? <NavSidebarGroup />}
       </SidebarContent>
 
       <SidebarFooter className="border-t border-sidebar-border">

@@ -31,6 +31,7 @@ export {
   useWorkspaceGlob,
   useWorkspaceGrep,
   useDashboardAuthSession,
+  useDashboardMe,
   useAccessTokenCreateMutation,
   useAccessTokenRevokeMutation,
   useAccessTokens,

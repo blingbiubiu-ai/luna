@@ -1,4 +1,3 @@
-import { useAgentBasePath } from "@/lib/agent-route";
 import { UiText } from "@/lib/i18n";
 import { useTranslation } from "@/lib/i18n";
 import { useMemo, useState } from "react";
@@ -118,7 +117,6 @@ function needsRestart(installation: DashboardPluginInstallation | null | undefin
 }
 
 function PluginCard({ item, ...actions }: PluginActions & { readonly item: DashboardPluginMarketplaceSummary }) {
-  const base = useAgentBasePath();
   const { t } = useTranslation();
   const installation = item.installation ?? undefined;
   const release = item.latestRelease;
@@ -168,7 +166,7 @@ function PluginCard({ item, ...actions }: PluginActions & { readonly item: Dashb
             </Button>
           ) : null}
           <Button size="sm" variant="outline" asChild>
-            <a href={`${base}/plugins/${encodeURIComponent(item.id)}`} aria-label={`${t("Details for")} ${item.displayName}`}>{t("Details")}<ChevronRightIcon className="size-3.5" />
+            <a href={`/platform/plugins/${encodeURIComponent(item.id)}`} aria-label={`${t("Details for")} ${item.displayName}`}>{t("Details")}<ChevronRightIcon className="size-3.5" />
             </a>
           </Button>
           {actions.pendingPluginId === item.id ? <span role="status" className="text-xs text-muted-foreground">{t("Saving...")}</span> : null}
