@@ -2,7 +2,7 @@ import { Hono } from "hono";
 import type { PluginManifest } from "@luna/plugin-contracts";
 
 import type { DrizzleDB } from "@/data";
-import { PluginMarketplaceService } from "@/plugins/marketplace/marketplace-service";
+import { PluginMarketplaceService, PluginMarketplaceUnconfiguredError } from "@/plugins/marketplace/marketplace-service";
 import type { PluginReleaseSummary } from "@/plugins/marketplace/marketplace-store";
 import { isGuardResponse, requireAdmin } from "../auth/guards";
 
@@ -25,6 +25,14 @@ export function createPluginMarketplaceRoutes(
   };
 
   return new Hono()
+    // A missing plugin source is a configuration state, not a server failure.
+    .onError((error, c) => {
+      if (error instanceof PluginMarketplaceUnconfiguredError) {
+        return c.json({ status: "error", code: error.code,
+          message: "未配置插件源：请在 Service 的 config.yaml 中设置 plugins.marketplace.gitUrl 后重启。" }, 503);
+      }
+      throw error;
+    })
     .get("/", (c) => {
       const admin = requireAdmin(c);
       if (isGuardResponse(admin)) {

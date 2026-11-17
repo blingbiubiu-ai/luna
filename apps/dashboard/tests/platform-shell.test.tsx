@@ -24,3 +24,10 @@ test("the home page lists Agents with a create action", () => {
   expect(html).toContain("我的 Agent");
   expect(html).toContain("新建 Agent");
 });
+
+test("the platform plugin page explains a missing plugin source", async () => {
+  const { PluginSourceUnconfigured } = await import("../src/platform-shell");
+  const html = renderToStaticMarkup(createElement(PluginSourceUnconfigured));
+  expect(html).toContain("未配置插件源");
+  expect(html).toContain("plugins.marketplace.gitUrl");
+});

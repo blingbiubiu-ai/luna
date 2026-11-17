@@ -43,6 +43,12 @@ export interface PluginActionResult {
   readonly installation: PluginInstallationSummary;
 }
 
+/** No plugin source is configured (`plugins.marketplace.gitUrl` in config.yaml). */
+export class PluginMarketplaceUnconfiguredError extends Error {
+  readonly code = "plugin_marketplace_unconfigured";
+  constructor() { super("plugins.marketplace.gitUrl is not configured."); }
+}
+
 export class PluginMarketplaceService {
   private readonly _marketplace: PluginMarketplaceConfig;
   private readonly _store: PluginMarketplaceStore;
@@ -272,7 +278,7 @@ export class PluginMarketplaceService {
 function defaultMarketplace(): PluginMarketplaceConfig {
   const gitUrl = config.plugins.marketplace.gitUrl;
   if (gitUrl === undefined) {
-    throw new Error("plugins.marketplace.gitUrl is not configured.");
+    throw new PluginMarketplaceUnconfiguredError();
   }
   return {
     id: "trusted",

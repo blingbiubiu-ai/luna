@@ -20,7 +20,7 @@ import {
   useDashboardAgents, useDashboardMe, useDisablePlugin, useEnablePlugin, usePlugin, usePlugins,
   useRefreshPlugins, useRollbackPlugin, useUpgradePlugin,
 } from "@/lib/api";
-import { apiFetch } from "@/lib/api/client";
+import { ApiFetchError, apiFetch } from "@/lib/api/client";
 import type { DashboardAgentChoice } from "@/lib/api/hooks";
 
 /** Pages outside any Agent: the Agent list and, for platform administrators, platform management. */
@@ -171,6 +171,9 @@ function PlatformPlugins() {
     try { await refresh.mutateAsync(); }
     catch (error) { setActionError(error); }
   }
+  if (plugins.error instanceof ApiFetchError && plugins.error.code === "plugin_marketplace_unconfigured") {
+    return <PluginSourceUnconfigured />;
+  }
   return (
     <PluginsDashboard
       error={plugins.error}
@@ -202,5 +205,19 @@ function PlatformPluginDetail({ pluginId }: { readonly pluginId: string }) {
       onRollbackPlugin={(id, version) => rollback.mutate({ pluginId: id, version })}
       onUpgradePlugin={(id, version) => upgrade.mutate({ pluginId: id, version })}
     />
+  );
+}
+
+export function PluginSourceUnconfigured() {
+  return (
+    <main className="mx-auto w-full max-w-3xl p-6">
+      <div role="status" className="space-y-2 rounded-xl border border-dashed bg-card p-6 text-sm">
+        <h1 className="text-base font-semibold">未配置插件源</h1>
+        <p className="text-muted-foreground">平台还没有可拉取插件的来源，所以插件列表为空。</p>
+        <p className="text-muted-foreground">
+          在 Service 的 <code>config.yaml</code> 中设置 <code>plugins.marketplace.gitUrl</code>（可选 <code>branch</code>），重启 Service 后即可在这里刷新、安装插件。
+        </p>
+      </div>
+    </main>
   );
 }
