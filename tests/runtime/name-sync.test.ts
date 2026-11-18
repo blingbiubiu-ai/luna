@@ -125,3 +125,18 @@ test("an @ updates the bot's Shadow; a person follows the name their messages ca
   directory.applyMentionDisplayName(stored.id, "张三");
   expect(user(zhang).displayName).toBe("老张");
 });
+
+test("a channel is called what its bot is called, even after the owner names the Shadow", async () => {
+  const { IdentityDirectory } = await import("../../src/identity/identity-directory");
+  const channelName = () => db().select({ name: schema.channelConfigs.name }).from(schema.channelConfigs).where(eq(schema.channelConfigs.id, "feishu-main")).get()!.name;
+  expect(channelName()).toBe("feishu-main");
+  recordShadowBotIdentity(db(), "feishu-main", { externalId: "ou_bot", kind: "bot", displayName: "桑果‌" });
+  expect(channelName()).toBe("桑果");
+  new AgentStore(db()).renameShadow("fixture-owner", { agentId, shadowId }, { name: "齐天大圣" });
+  recordShadowBotIdentity(db(), "feishu-main", { externalId: "ou_bot", kind: "bot", displayName: "悟空" });
+  expect(channelName()).toBe("悟空");
+  expect(shadow().name).toBe("齐天大圣");
+  const bot = db().select().from(schema.channelIdentities).where(eq(schema.channelIdentities.externalId, "ou_bot")).get()!;
+  new IdentityDirectory(db()).applyMentionDisplayName(bot.id, "@美猴王");
+  expect(channelName()).toBe("美猴王");
+});

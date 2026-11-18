@@ -41,7 +41,8 @@ test("verified bots use distinct Shadow identities and keep credentials encrypte
 });
 test("blank secret preserves credentials, invalid changes are not persisted, offline disable works",async()=>{
  await store.save(scoped(),actor);await store.save({...scoped(),appSecret:"",name:"Renamed"},actor);expect(verified.at(-1)).toBe(input.appSecret);
- await expect(store.save({...scoped(),appSecret:"invalid"},actor)).rejects.toThrow();expect(store.list()[0]?.name).toBe("Renamed");
+ // A verified bot names its channel; a name typed in the form does not stick.
+ await expect(store.save({...scoped(),appSecret:"invalid"},actor)).rejects.toThrow();expect(store.list()[0]?.name).toBe("Feishu Name");
  const count=verified.length;await store.save({...scoped(),appSecret:"",enabled:false},actor);expect(verified.length).toBe(count);expect(store.runtimeConfigs()).toHaveLength(0);
 });
 test("binding retirement preserves history and stops runtime loading until explicitly rebound",async()=>{
