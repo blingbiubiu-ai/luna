@@ -114,6 +114,8 @@ test("Codex reads every generated AGENTS.md to its end, root rules included", ()
     expect(doc.toString()).toContain("Never use root to read or send credentials");
     // Leave room for the instructions to grow before anything is cut off again.
     expect(doc.length).toBeLessThan(limit * 0.75);
+    // Command manuals live in skills: even Codex's default 32 KiB limit reads the whole file.
+    expect(doc.length).toBeLessThan(28 * 1024);
   }
 });
 
@@ -190,7 +192,7 @@ test("all generated Runner entrypoints use the current command/report protocol",
       expect(content).toContain(`Your starting working directory is \`${runnerRootPath}\``);
       expect(content).toContain(join(runnerRootPath, ".luna", "runner-context.json"));
       expect(content).toContain(join(config.paths.home, ".luna-resources", "commands"));
-      expect(content).toContain("luna memory add --type persona");
+      expect(content).toContain("Read the `luna-memory` skill before writing");
       expect(content).not.toContain(".luna-resources/config/");
       expect(content).toContain("luna memory get <id>");
       expect(content).not.toMatch(/\$HOME\/\.luna-resources\/memory\/(SOUL|USER|MAIN|TASK|WORK)\.md/);
@@ -205,5 +207,21 @@ test("all generated Runner entrypoints use the current command/report protocol",
         expect(content).toContain("LUNA_NOTHING_TO_SEND");
       }
     }
+  }
+});
+
+test("every skill the instructions point to ships with Luna and holds the manual moved out of them", () => {
+  const skills = join(import.meta.dir, "../../skills");
+  const main = renderRunnerInstructions({ home: "/home/luna", promptsRoot: join(import.meta.dir, "../../src/prompts"), runnerKind: "main", runnerRootPath });
+  const manuals: Record<string, string> = {
+    "luna-schedules": "--repeat", "luna-users": "luna users search", "luna-topics-groups": "luna session create-thread",
+    "luna-status-card": "luna task status-card", "luna-memory": "luna memory add --type persona",
+  };
+  for (const [name, command] of Object.entries(manuals)) {
+    expect(main).toContain(`\`${name}\``);
+    expect(main).not.toContain(command === "luna task status-card" ? "--resend --style card" : command);
+    const skill = readFileSync(join(skills, name, "SKILL.md"), "utf-8");
+    expect(skill.startsWith(`---\nname: ${name}\ndescription: `)).toBe(true);
+    expect(skill).toContain(command);
   }
 });

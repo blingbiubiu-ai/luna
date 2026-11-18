@@ -2241,7 +2241,7 @@ describe("executeTaskRun", () => {
       "Reference the file only through that ref",
     );
     const agentsMd = readFileSync(agentsMdPath, "utf-8");
-    expect(agentsMd).toContain("luna memory add --type persona");
+    expect(agentsMd).toContain("Read the `luna-memory` skill before writing");
     expect(agentsMd).toContain("luna memory get <id>");
     expect(agentsMd).toContain("Stable runner context is available");
     expect(agentsMd).toContain(".luna/runner-context.json");
