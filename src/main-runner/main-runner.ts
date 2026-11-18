@@ -413,9 +413,18 @@ export function renderMainRunnerPrompt(input: MainRunnerInput, options: MainRunn
     dataBlock("memory", { text: options.memory ?? "" }),
     Object.keys(history).length ? dataBlock("history", { json: history }) : "",
     Object.keys(tasks).length ? dataBlock("tasks", { json: tasks }) : "",
-    context.clarification ? dataBlock("clarification", { json: context.clarification }) : "",
+    context.clarification ? dataBlock("clarification", { json: clarificationFacts(context.clarification) }) : "",
     mainTurnBlock(input, clock, options.people),
   ]);
+}
+
+/**
+ * What is still missing, without the question that was asked: the provider session already
+ * holds it, and a fresh session gets it again through `launchSeed`.
+ */
+function clarificationFacts(clarification: NonNullable<MainRunnerInput["context"]["clarification"]>) {
+  const { lastReply: _lastReply, ...facts } = clarification;
+  return facts;
 }
 
 function mainTurnBlock(input: MainRunnerInput, clock: ReturnType<typeof turnClock>, people: PeopleResolver | undefined): string {
