@@ -17,6 +17,8 @@ export interface ContainerStreamHandle { write(bytes: Uint8Array): void; resize(
 export type ContainerStreamRequest = Omit<ContainerStreamOpen, "type" | "streamId" | "token">;
 export interface WorkerStreamSocketData { kind: "worker-stream"; streamId: string; gateway: WorkerGateway }
 export const CONTAINER_STREAMS_CAPABILITY = "container-streams-v1";
+/** Workers that write Dashboard uploads into a Shadow's HOME. */
+export const HOME_UPLOAD_CAPABILITY = "home-upload-v1";
 const MAX_STREAMS_PER_WORKER = 32;
 const STREAM_ATTACH_TIMEOUT_MS = 15000;
 const MAX_PENDING_STREAM_BYTES = 1024 * 1024;

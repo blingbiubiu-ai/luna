@@ -14,6 +14,8 @@ import { EnvironmentStore, environmentKey, type ReservationRecord, type Environm
 import { DockerEnvironmentDriver } from "./docker-driver";
 import { ProjectMounts } from "./project-mounts";
 import { PruneRequest, ScopeReconcile, WorkerOrphans, scopeKey } from "./orphans";
+import { HomeUploads, UploadChunk, type UploadResult } from "./home-upload";
+import { join } from "node:path";
 import type { ResourceScope } from "@luna/host-runtime/scoped-runner-resources";
 
 export interface ReconcileResult { stopped: ResourceScope[]; purged: ResourceScope[]; busy: ResourceScope[]; }
@@ -40,6 +42,7 @@ export class EnvironmentManager {
   private readonly streamCounts = new Map<string, number>();
   private streamCloser?: (environmentId: string, reason: string) => void;
   readonly orphans: WorkerOrphans;
+  private uploads?: HomeUploads;
   constructor(readonly store: EnvironmentStore, readonly driver: DockerEnvironmentDriver) { this.orphans = new WorkerOrphans(store.db); }
 
   setStreamCloser(closer: (environmentId: string, reason: string) => void): void { this.streamCloser = closer; }
@@ -358,6 +361,18 @@ export class EnvironmentManager {
       });
     }
     await this.driver.purgeShadowFiles(scope);
+  }
+
+  /**
+   * Write a piece of a file the owner uploads into this environment's Shadow HOME. The
+   * container need not run: HOME is a host directory it mounts at the same path.
+   */
+  upload(id: string, raw: unknown): UploadResult {
+    const chunk = UploadChunk.parse(raw);
+    const environment = this.store.require(id);
+    if (environment.spec.scope.agentId !== chunk.agentId || environment.spec.scope.shadowId !== chunk.shadowId) throw new ExecutionError(403, "environment_agent_mismatch");
+    this.uploads ??= new HomeUploads(join(this.driver.config.dataRoot, ".home-uploads"));
+    return this.uploads.write(this.driver.home(environment), chunk);
   }
 
   /** Every Shadow this Worker holds data for: its environments and its HOME layouts. */

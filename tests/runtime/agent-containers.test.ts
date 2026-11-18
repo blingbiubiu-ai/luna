@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { Hono } from "hono";
+import { eq } from "drizzle-orm";
 import { DataConnection } from "@/data";
 import * as schema from "@/data/schema";
 import { setLunaHome } from "@/shared";
@@ -196,4 +197,42 @@ test("cold-start provision, desktop stop, and host nosuid root-terminal gate enf
   expect((await app("alice", fake.gateway).request(`/${alice.agentId}/containers/worker-2/env_other/desktop/stop`, { method: "POST" })).status).toBe(404);
   expect((await app("alice", fake.gateway).request(`/${alice.agentId}/containers/worker-1/env_shadow/desktop/stop`, { method: "POST" })).status).toBe(200);
   expect(fake.calls.at(-1)).toBe(`worker-1 POST /v1/environments/env_shadow/desktop-stop ${JSON.stringify({ agentId: alice.agentId })}`);
+});
+
+test("uploads go to an assigned upload-capable Worker for a live Shadow, as base64 pieces", async () => {
+  const fake = fakeGateway();
+  const gateway = fake.gateway as unknown as { list: () => unknown[]; scheduler: { workers: { client: (id: string) => unknown } } };
+  const sent: { workerId: string; path: string; body: Record<string, unknown> }[] = [];
+  let capabilities = ["container-streams-v1"];
+  gateway.list = () => ["worker-1", "worker-2"].map(workerId => ({ workerId, connected: true, revoked: false, health: { capabilities } }));
+  gateway.scheduler.workers.client = (workerId: string) => ({ call: async (_method: string, path: string, body: Record<string, unknown>) => {
+    sent.push({ workerId, path, body });
+    return { done: true, path: "/home/x/uploads/a.txt", size: 3 };
+  } });
+  const uploadId = "00000000-0000-4000-8000-000000000001";
+  const upload = (actor: string, worker: string, shadow: string, bytes: Uint8Array = new TextEncoder().encode("abc")) =>
+    app(actor, fake.gateway).request(`/${alice.agentId}/containers/${worker}/env_shadow/upload?${new URLSearchParams({ shadowId: shadow, uploadId, dir: "~/uploads", name: "a.txt", offset: "0", final: "1" })}`,
+      { method: "POST", headers: { "content-type": "application/octet-stream" }, body: bytes });
+
+  // An older Worker cannot take uploads.
+  const old = await upload("alice", "worker-1", shadowId);
+  expect(old.status).toBe(409);
+  expect(await old.json()).toMatchObject({ code: "worker_upload_unsupported" });
+  capabilities = ["container-streams-v1", "home-upload-v1"];
+
+  expect((await upload("bob", "worker-1", shadowId)).status).not.toBe(200);
+  expect((await upload("alice", "worker-2", shadowId)).status).toBe(404);
+  expect((await upload("alice", "worker-1", shadowId, new Uint8Array(4 * 1024 * 1024 + 1))).status).toBe(413);
+  expect(sent).toEqual([]);
+
+  const ok = await upload("alice", "worker-1", shadowId);
+  expect(ok.status).toBe(200);
+  expect(await ok.json()).toEqual({ done: true, path: "/home/x/uploads/a.txt", size: 3 });
+  expect(sent).toEqual([{ workerId: "worker-1", path: "/v1/environments/env_shadow/upload", body: {
+    agentId: alice.agentId, shadowId, uploadId, dir: "~/uploads", name: "a.txt", offset: 0, content: Buffer.from("abc").toString("base64"), final: true } }]);
+
+  // A deleted Shadow takes no new files.
+  connection.db.update(schema.agentShadows).set({ status: "deleted" }).where(eq(schema.agentShadows.id, shadowId)).run();
+  expect((await upload("alice", "worker-1", shadowId)).status).toBe(409);
+  expect(sent).toHaveLength(1);
 });

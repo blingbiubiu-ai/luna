@@ -6,7 +6,7 @@ import { AgentError, AgentStore } from "@/agents/agent-store";
 import { AgentWorkerAccessStore } from "@/agents/agent-worker-access-store";
 import { ShadowRootAccessStore } from "@/agents/shadow-root-access-store";
 import type { AgentResourceBuilder } from "@/runners/agent-resource-builder";
-import { CONTAINER_STREAMS_CAPABILITY, type WorkerGateway } from "@/runtime/worker-gateway";
+import { CONTAINER_STREAMS_CAPABILITY, HOME_UPLOAD_CAPABILITY, type WorkerGateway } from "@/runtime/worker-gateway";
 import { ContainerConsoleSession, type ContainerConsoleSocketData } from "../container-console";
 import { isGuardResponse, requireDashboardOnly } from "../auth/guards";
 import { getKernel } from "./kernel";
@@ -30,6 +30,12 @@ const StreamQuery = z.object({
   cols: z.coerce.number().int().min(1).max(1000).default(80), rows: z.coerce.number().int().min(1).max(1000).default(24),
 });
 const ProvisionBody = z.object({ shadowId: Id, workerId: Id.optional() }).strict();
+/** One piece of an upload; the bytes are the request body. The Worker checks name and directory. */
+const UploadQuery = z.object({
+  shadowId: Id, uploadId: z.string().uuid(), dir: z.string().max(1024), name: z.string().min(1).max(255),
+  offset: z.coerce.number().int().min(0), final: z.enum(["0", "1"]),
+});
+const MAX_UPLOAD_CHUNK_BYTES = 4 * 1024 * 1024;
 
 /** Dashboard container management: list an Agent's Shadow containers, provision cold ones, and open terminal/VNC streams. */
 export function createAgentContainerRoutes(
@@ -58,12 +64,13 @@ export function createAgentContainerRoutes(
     const workers = gateway.list().filter(worker => assigned.has(worker.workerId) && worker.connected && !worker.revoked);
     const results = await Promise.all(workers.map(async worker => {
       const supported = worker.health?.capabilities?.includes(CONTAINER_STREAMS_CAPABILITY) === true;
+      const uploadSupported = worker.health?.capabilities?.includes(HOME_UPLOAD_CAPABILITY) === true;
       let imageDigest: string | undefined;
       try { imageDigest = gateway.scheduler.workers.imageDigest(worker.workerId); } catch { /* not ready: image unknown */ }
       try {
         const body = await gateway.scheduler.workers.client(worker.workerId)
           .call<{ containers: unknown[] }>("GET", `/v1/containers?agentId=${encodeURIComponent(agent.id)}`, undefined, AbortSignal.timeout(10000));
-        return { worker: { workerId: worker.workerId, supported, ...(imageDigest ? { imageDigest } : {}) }, containers: z.array(Summary).parse(body.containers).map(item => ({ ...item, workerId: worker.workerId, shadowName: names.get(item.shadowId) ?? null, supported })) };
+        return { worker: { workerId: worker.workerId, supported, ...(imageDigest ? { imageDigest } : {}) }, containers: z.array(Summary).parse(body.containers).map(item => ({ ...item, workerId: worker.workerId, shadowName: names.get(item.shadowId) ?? null, supported, uploadSupported })) };
       } catch {
         return { worker: { workerId: worker.workerId, supported, error: "worker_unreachable" }, containers: [] };
       }
@@ -132,6 +139,37 @@ export function createAgentContainerRoutes(
     }
     logger.info({ event: "reset", accountId: auth.account.id, agentId: agent.id, workerId, environmentId }, "container_system_disk_reset");
     return c.json({ ok: true });
+  }).post("/:agentId/containers/:workerId/:environmentId/upload", async c => {
+    // A piece of a file the owner uploads into the Shadow's HOME; the container need not run.
+    const auth = requireDashboardOnly(c); if (isGuardResponse(auth)) return auth;
+    const agent = agents.requireOwner(auth.account.id, c.req.param("agentId"));
+    const workerId = Id.parse(c.req.param("workerId"));
+    const environmentId = Id.parse(c.req.param("environmentId"));
+    const query = UploadQuery.parse(c.req.query());
+    if (!assignedWorkers(auth.account.id, agent.id).has(workerId)) throw new AgentError("worker_assignment_not_found", 404);
+    // Deleted Shadows take no new files.
+    agents.requireScope(agents.ownerUserId(agent.id), { agentId: agent.id, shadowId: query.shadowId });
+    const bytes = new Uint8Array(await c.req.arrayBuffer());
+    if (bytes.length > MAX_UPLOAD_CHUNK_BYTES) return c.json({ status: "error", code: "upload_chunk_too_large" }, 413);
+    const gateway = getGateway();
+    if (!gateway) return c.json({ status: "error", code: "runtime_not_ready" }, 503);
+    const worker = gateway.list().find(item => item.workerId === workerId && item.connected && !item.revoked);
+    if (!worker?.health?.capabilities?.includes(HOME_UPLOAD_CAPABILITY)) {
+      return c.json({ status: "error", code: "worker_upload_unsupported", message: uploadMessages.worker_upload_unsupported }, 409);
+    }
+    try {
+      const result = await gateway.scheduler.workers.client(workerId).call<{ done: boolean; path?: string; size?: number; received?: number }>(
+        "POST", `/v1/environments/${encodeURIComponent(environmentId)}/upload`, {
+          agentId: agent.id, shadowId: query.shadowId, uploadId: query.uploadId, dir: query.dir, name: query.name,
+          offset: query.offset, content: Buffer.from(bytes).toString("base64"), final: query.final === "1",
+        }, AbortSignal.timeout(60000));
+      if (result.done) logger.info({ event: "upload", accountId: auth.account.id, agentId: agent.id, workerId, environmentId, size: result.size }, "container_file_uploaded");
+      return c.json(result);
+    } catch (error) {
+      const code = error instanceof ExecutionError ? error.code : "worker_unreachable";
+      const status = error instanceof ExecutionError && [400, 403, 404, 409, 413].includes(error.status) ? error.status as 400 | 403 | 404 | 409 | 413 : 503;
+      return c.json({ status: "error", code, message: uploadMessages[code] ?? resetMessages[code] ?? code }, status);
+    }
   }).post("/:agentId/containers/:workerId/:environmentId/desktop/stop", async c => {
     const auth = requireDashboardOnly(c); if (isGuardResponse(auth)) return auth;
     const agent = agents.requireOwner(auth.account.id, c.req.param("agentId"));
@@ -184,6 +222,17 @@ export function createAgentContainerRoutes(
     return new Response(null);
   });
 }
+
+const uploadMessages: Record<string, string> = {
+  worker_upload_unsupported: "该 Worker 版本不支持上传文件，请升级 Worker",
+  upload_too_large: "单个文件不能超过 100 MB",
+  upload_chunk_too_large: "上传分片过大",
+  upload_name_invalid: "文件名不合法",
+  upload_directory_outside_home: "目标目录必须在分身的 HOME 内",
+  upload_directory_invalid: "目标目录不合法",
+  upload_directory_unsafe: "目标目录包含符号链接或同名文件，已拒绝",
+  upload_offset_mismatch: "上传中断，请重新上传",
+};
 
 const resetMessages: Record<string, string> = {
   environment_occupied: "容器里还有任务在运行，请等任务结束后再重置",

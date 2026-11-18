@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { ClipboardIcon, MaximizeIcon, MinimizeIcon, PanelLeftOpenIcon, PowerOffIcon, XIcon } from "lucide-react";
+import { ClipboardIcon, MaximizeIcon, MinimizeIcon, PanelLeftOpenIcon, PowerOffIcon, UploadIcon, XIcon } from "lucide-react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { apiFetch } from "@/lib/api/client";
 import { randomId } from "@/lib/random-id";
+import { UploadDialog } from "@/components/container-upload";
 import { consoleLabels, primaryContainer, type ConsoleKind, type ContainerList, type ContainerRow, type OpenConsole } from "@/lib/containers";
 
 /** Close reasons sent by Service/Worker, shown when a console ends. */
@@ -102,6 +103,11 @@ export function Workspace({ agentId, consoles, active, onActivate, onClose, list
   const [statuses, setStatuses] = useState<Record<string, string>>({});
   const [generations, setGenerations] = useState<Record<string, number>>({});
   const [clipboardOpen, setClipboardOpen] = useState(false);
+  const [uploadOpen, setUploadOpen] = useState(false);
+  const [droppedFiles, setDroppedFiles] = useState<File[] | undefined>();
+  const [dragging, setDragging] = useState(false);
+  // The dialog renders outside the console, so it would be hidden behind a fullscreen console.
+  const openUpload = () => { if (document.fullscreenElement) void document.exitFullscreen(); setUploadOpen(true); };
   useEffect(() => {
     const update = () => setFullscreen(document.fullscreenElement === ref.current);
     document.addEventListener("fullscreenchange", update);
@@ -134,6 +140,12 @@ export function Workspace({ agentId, consoles, active, onActivate, onClose, list
       </div>
       {current && <div className="flex shrink-0 items-center gap-1 pl-2">
         <span className="hidden max-w-64 truncate text-xs text-muted-foreground lg:inline">{status(current.key)}</span>
+        <Button size="xs" variant="outline" disabled={current.row.uploadSupported !== true}
+          title={current.row.uploadSupported ? "上传文件到分身的 HOME（也可以把文件拖到控制台上）" : "该 Worker 版本不支持上传文件，请升级 Worker"}
+          onClick={() => { setDroppedFiles(undefined); openUpload(); }}>
+          <UploadIcon className="size-3.5" />
+          上传文件
+        </Button>
         {current.kind === "vnc" && <>
           <Button size="xs" variant={clipboardOpen ? "secondary" : "outline"} onClick={() => setClipboardOpen(open => !open)}
             title="向远程桌面发送密码、网址或中文到剪贴板，或查看桌面复制的内容">
@@ -163,7 +175,17 @@ export function Workspace({ agentId, consoles, active, onActivate, onClose, list
     {current && current.kind === "vnc" && <p className="border-b bg-muted/20 px-3 py-1 text-xs text-muted-foreground">
       登录完成后请关闭桌面内的 Chrome 窗口（或点击右上角「关闭桌面后台」），释放浏览器配置锁以便分身任务直接复用登录态。
     </p>}
-    <div className="relative min-h-0 flex-1">
+    <div className="relative min-h-0 flex-1"
+      onDragOver={event => { if (current?.row.uploadSupported && event.dataTransfer.types.includes("Files")) { event.preventDefault(); setDragging(true); } }}
+      onDragLeave={event => { if (event.currentTarget === event.target) setDragging(false); }}
+      onDrop={event => {
+        setDragging(false);
+        const files = Array.from(event.dataTransfer.files);
+        if (!current?.row.uploadSupported || !files.length) return;
+        event.preventDefault();
+        setDroppedFiles(files); openUpload();
+      }}>
+      {dragging && <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center bg-background/70 text-sm font-medium">松开以上传到分身的 HOME</div>}
       {consoles.map(item => {
         const onStatus = (value: string) => setStatuses(map => ({ ...map, [item.key]: value }));
         const generation = generations[item.key] ?? 0;
@@ -174,6 +196,8 @@ export function Workspace({ agentId, consoles, active, onActivate, onClose, list
         </div>;
       })}
     </div>
+    {current && <UploadDialog agentId={agentId} row={current.row} open={uploadOpen} initialFiles={droppedFiles}
+      onOpenChange={next => { setUploadOpen(next); if (!next) setDroppedFiles(undefined); }} />}
   </section>;
 }
 

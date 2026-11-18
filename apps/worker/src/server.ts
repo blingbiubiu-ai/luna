@@ -42,7 +42,7 @@ export function workerServer(authority: TokenAuthority, manager: EnvironmentMana
     if (request.method === "DELETE" && shadow) {
       await manager.purgeShadow({ agentId: Id.parse(shadow[1]), shadowId: Id.parse(shadow[2]) }); json(response, 204); return;
     }
-    const environment = /^\/v1\/environments\/([^/]+)(?:\/(release|drain|reset|desktop-stop))?$/.exec(url.pathname);
+    const environment = /^\/v1\/environments\/([^/]+)(?:\/(release|drain|reset|desktop-stop|upload))?$/.exec(url.pathname);
     if (!environment)throw new ExecutionError(404, "route_not_found");
     const id = Id.parse(environment[1]);
     if (request.method === "GET" && !environment[2]) {
@@ -60,6 +60,7 @@ export function workerServer(authority: TokenAuthority, manager: EnvironmentMana
       const { agentId } = z.object({ agentId: Id }).strict().parse(await readJson(request));
       await manager.stopDesktop(id, agentId); json(response, 204); return;
     }
+    if (request.method === "POST" && environment[2] === "upload") { json(response, 200, manager.upload(id, await readJson(request, 8 * 1024 * 1024))); return; }
     if (request.method === "POST" && environment[2] === "drain") { await manager.drain(id); json(response, 200, manager.store.require(id)); return; }
     if (request.method === "DELETE" && !environment[2]) { await manager.destroy(id); json(response, 204); return; }
     throw new ExecutionError(405, "method_not_allowed");

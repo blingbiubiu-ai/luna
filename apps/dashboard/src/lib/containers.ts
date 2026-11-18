@@ -13,6 +13,8 @@ export interface ContainerRow {
   imageDigest?: string;
   root?: { requested: boolean; effective: boolean; hostAllowed?: boolean; reason?: string };
   supported: boolean;
+  /** The Worker writes Dashboard uploads into the Shadow's HOME. */
+  uploadSupported?: boolean;
 }
 
 export interface ShadowItem {
