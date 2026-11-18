@@ -31,13 +31,12 @@ export class DockerEnvironmentDriver {
   }
   /** Worker resolves a context inside its immutable Shadow layout; caller paths only assert equality. */
   async prepareContext(scope:ResourceScope,contextId:string,scopeKey:string,projectId?:string,requestedCwd?:string):Promise<WorkerContext> {
-    const layout=this.layouts.ensure(scope);
-    const expected=join(layout.runners,contextId);
-    if(requestedCwd!==undefined && requestedCwd!==expected)throw new ExecutionError(409,"context_directory_conflict");
+    this.layouts.ensure(scope);
+    // Preparation already chose the context's directory; this only checks the caller agrees.
     const {cwd}=this.layouts.context(scope,contextId);
+    if(requestedCwd!==undefined && requestedCwd!==cwd)throw new ExecutionError(409,"context_directory_conflict");
     const context=this.contexts.ensure(contextId,scopeKey);
     new ProjectMounts(this.db,this.config).bind(contextId,projectId);
-    if(cwd!==expected)throw new ExecutionError(409,"context_directory_conflict");
     return context;
   }
   contextPath(contextId:string):string|undefined {

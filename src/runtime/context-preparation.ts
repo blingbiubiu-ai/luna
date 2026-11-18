@@ -4,6 +4,9 @@ import type {RuntimeScheduler} from "./scheduler";
 import {retryableDelivery} from "./delivery";
 import type {ShadowPlacement} from "./shadow-placements";
 
+/** Workers that put each context in its owner's directory, shared by the owner's contexts. */
+export const OWNER_WORKSPACE_CAPABILITY="owner-workspace-v1";
+
 interface PreparationIntent {invocation_id:string;input_json:string;worker_id:string;generation:number;state:string}
 
 /** Prepare on the context’s current Worker, with failover before execution is reserved. */
@@ -107,12 +110,14 @@ export class ContextPreparationManager {
  }
  private async deliver(input:ContextPreparation,placement:ShadowPlacement,signal?:AbortSignal):Promise<unknown> {
   this.scheduler.placements.bindContext(input.scope,input.contextId,input.scopeKey,this.scheduler.allowedWorkers!(input.scope),input.projectId);
+  // Older Workers name every context's directory after the context and refuse anything else.
+  const shared=this.scheduler.workers.list().find(worker=>worker.workerId===placement.workerId)?.health?.capabilities?.includes(OWNER_WORKSPACE_CAPABILITY)===true;
   let lastError:unknown;
   for(let attempt=0;attempt<2;attempt++){
    signal?.throwIfAborted();
    try{
     return await this.scheduler.workers.client(placement.workerId).call("POST","/v2/context-prepare",{
-     ...input,scope:{...input.scope,placementGeneration:placement.generation},
+     ...input,...(shared ? {} : {runnerId:input.contextId}),scope:{...input.scope,placementGeneration:placement.generation},
     },AbortSignal.any([AbortSignal.timeout(10000),...(signal ? [signal] : [])]));
    }catch(error){
     signal?.throwIfAborted();

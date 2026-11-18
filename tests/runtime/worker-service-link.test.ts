@@ -26,7 +26,7 @@ test("reverse Worker becomes ready with v2 handshake and local health, without g
   for(let i=0;i<100 && !heartbeats.some(x=>x.health?.ready);i++)await Bun.sleep(10);
   expect(link.ready).toBe(true);
   const ready=heartbeats.find(x=>x.health?.ready).health;
-  expect(ready.capabilities).toEqual(["shadow-scope-v2","container-streams-v1","scope-reconcile-v1","home-upload-v1"]);
+  expect(ready.capabilities).toEqual(["shadow-scope-v2","container-streams-v1","scope-reconcile-v1","home-upload-v1","owner-workspace-v1"]);
   expect(ready.revision).toBeUndefined();expect(ready.desiredRevision).toBeUndefined();expect(globalDownloads).toBe(0);
   expect(db.prepare("SELECT name FROM sqlite_master WHERE name IN ('worker_resource_state','worker_prepared_inputs')").all()).toEqual([]);
  }finally{finishHealth();link.stop();server.stop(true);db.close();rmSync(root,{recursive:true,force:true});}

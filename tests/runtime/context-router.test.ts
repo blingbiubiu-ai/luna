@@ -210,3 +210,21 @@ test("eight slots admit only eight of ten jobs and the queue survives scheduler 
     expect(restarted.jobs.require("job-9").placementState).toBe("queued");
   } finally { db.close(); }
 });
+
+test("an owner directory goes only to Workers that share it; older ones get the context's own", async () => {
+  for (const capabilities of [["shadow-scope-v2", "owner-workspace-v1"], ["shadow-scope-v2"]]) {
+    const { db, scheduler } = fixture();
+    try {
+      scheduler.workers.heartbeat("home", { workerId: "home", capacity: 8, occupied: 0, imageDigest: `sha256:${"a".repeat(64)}`, ready: true, capabilities, projects: ["project"] });
+      const requests: { workerId: string; path: string; body: unknown }[] = [];
+      attachWorker(scheduler, "home", requests);
+      const selection = fixtureJobScope("agent", "shadow");
+      await scheduler.preparation.prepare({
+        protocolVersion: 2, scope: { agentId: "agent", shadowId: "shadow" }, resources: selection.resources,
+        invocationId: "inv", contextId: "ctx", runnerId: "session-one", scopeKey: "session:ctx", runnerKind: "main",
+      });
+      const sent = requests.find(request => request.path === "/v2/context-prepare")!.body as { runnerId: string };
+      expect(sent.runnerId).toBe(capabilities.includes("owner-workspace-v1") ? "session-one" : "ctx");
+    } finally { db.close(); }
+  }
+});

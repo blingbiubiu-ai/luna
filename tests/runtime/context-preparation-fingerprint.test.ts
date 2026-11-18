@@ -17,7 +17,7 @@ function harness(workerId = "worker") {
       boundWorkerId: () => workerId, context: () => ({ workerId }), applyRouting: () => {},
       bindContext: () => ({ workerId, generation: 1 }), require: () => {},
     },
-    workers: { client: () => ({ call: async (_method: string, _path: string, body: { scope: unknown; resources: typeof resources }) => ({
+    workers: { list: () => [], client: () => ({ call: async (_method: string, _path: string, body: { scope: unknown; resources: typeof resources }) => ({
       protocolVersion: 2, scope: body.scope, workerId, home: "/home/luna", cwd: "/home/luna/runners/context",
       instructionFingerprint: instructions, resources: body.resources, resourceRevision: body.resources.digest, env: {},
     }) }) },

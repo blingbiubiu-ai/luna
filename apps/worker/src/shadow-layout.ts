@@ -1,5 +1,5 @@
 import {lstatSync,mkdirSync,realpathSync} from "node:fs";
-import {join,sep} from "node:path";
+import {dirname,join,sep} from "node:path";
 import {ExecutionError,transaction,type SqlDatabase} from "@luna/execution-store";
 import type {ResourceScope} from "@luna/host-runtime/scoped-runner-resources";
 
@@ -17,14 +17,21 @@ export class WorkerShadowLayouts {
  constructor(private readonly db:SqlDatabase,workerHome:string){
   this.root=realpathSync(workerHome);
   if(this.root.includes(",") || /[\x00-\x1f]/.test(this.root))throw new ExecutionError(400,"runner_path_invalid");
+  // Contexts of one owner (a session or a task) share its directory, so cwd is no longer unique.
+  const legacy=db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='worker_shadow_context_paths'").get() as {sql:string}|undefined;
+  const shared=legacy?.sql.includes("cwd TEXT UNIQUE")===true;
+  if(shared)db.exec(`BEGIN; DROP TRIGGER IF EXISTS worker_shadow_context_path_immutable;
+   ALTER TABLE worker_shadow_context_paths RENAME TO worker_shadow_context_paths_v1;`);
   db.exec(`CREATE TABLE IF NOT EXISTS worker_shadow_layouts (
    shadow_id TEXT PRIMARY KEY, agent_id TEXT NOT NULL, home TEXT UNIQUE NOT NULL, runners TEXT UNIQUE NOT NULL);
    CREATE TABLE IF NOT EXISTS worker_shadow_context_paths (
-   context_id TEXT PRIMARY KEY, shadow_id TEXT NOT NULL REFERENCES worker_shadow_layouts(shadow_id), cwd TEXT UNIQUE NOT NULL);
+   context_id TEXT PRIMARY KEY, shadow_id TEXT NOT NULL REFERENCES worker_shadow_layouts(shadow_id), cwd TEXT NOT NULL);
    CREATE TRIGGER IF NOT EXISTS worker_shadow_layout_immutable BEFORE UPDATE ON worker_shadow_layouts
    BEGIN SELECT RAISE(ABORT,'shadow_layout_immutable'); END;
    CREATE TRIGGER IF NOT EXISTS worker_shadow_context_path_immutable BEFORE UPDATE ON worker_shadow_context_paths
    BEGIN SELECT RAISE(ABORT,'shadow_context_path_immutable'); END;`);
+  if(shared)db.exec(`INSERT INTO worker_shadow_context_paths SELECT context_id,shadow_id,cwd FROM worker_shadow_context_paths_v1;
+   DROP TABLE worker_shadow_context_paths_v1; COMMIT;`);
  }
 
  ensure(scope:ResourceScope):ShadowLayout {
@@ -83,16 +90,21 @@ export class WorkerShadowLayouts {
   return join(this.root,"agents",scope.agentId,"shadow-resources",scope.shadowId);
  }
 
- /** Context IDs stay bound to their original Shadow and direct-child directory across restarts. */
- context(scope:ResourceScope,contextId:string):{layout:ShadowLayout;cwd:string} {
-  validateId(contextId);
+ /**
+  * Context IDs stay bound to their original Shadow and directory across restarts. A new
+  * context gets `runners/<directory>`: its owner's directory (`session-<id>`, `task-<id>`),
+  * shared with the owner's other contexts, e.g. after a switch from Codex to Claude.
+  * Without one it is named after the context, as contexts created before were.
+  */
+ context(scope:ResourceScope,contextId:string,directory=contextId):{layout:ShadowLayout;cwd:string} {
+  validateId(contextId);validateId(directory);
   return transaction(this.db,()=>{
    if(!this.db.prepare("SELECT 1 FROM worker_shadow_layouts WHERE shadow_id=?").get(scope.shadowId))
     throw new ExecutionError(409,"shadow_layout_missing");
    const layout=this.ensure(scope);
-   const cwd=join(layout.runners,contextId);
    const prior=this.db.prepare("SELECT shadow_id,cwd FROM worker_shadow_context_paths WHERE context_id=?").get(contextId) as {shadow_id:string;cwd:string}|undefined;
-   if(prior && (prior.shadow_id!==scope.shadowId || prior.cwd!==cwd))throw new ExecutionError(409,"context_shadow_conflict");
+   if(prior && (prior.shadow_id!==scope.shadowId || dirname(prior.cwd)!==layout.runners))throw new ExecutionError(409,"context_shadow_conflict");
+   const cwd=prior?.cwd ?? join(layout.runners,directory);
    if(prior && !stat(cwd))throw new ExecutionError(409,"context_storage_missing");
    safeDirectory(layout.runners,cwd);
    this.db.prepare("INSERT OR IGNORE INTO worker_shadow_context_paths VALUES (?,?,?)").run(contextId,scope.shadowId,cwd);

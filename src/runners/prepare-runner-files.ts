@@ -11,12 +11,30 @@ import { writeRunnerContextFile } from "./runner-context-file";
 import { ensureRunnerWorkspaceInstructionFiles } from "./workspace-instruction-files";
 import { shadowSoul } from "@/agents/shadow-soul";
 import type { DrizzleDB } from "@/data";
+import { runnerContexts } from "@/data/schema";
+import { eq } from "drizzle-orm";
 
 const LOCAL_SESSION_FINGERPRINT = "local-runner-session";
 
 function soulField(db: DrizzleDB, scope: { agentId: string; shadowId: string }) {
   const soul = shadowSoul(db, scope);
   return soul ? { soul: { ...soul, owner: { ...soul.owner }, persona: [...soul.persona] } } : {};
+}
+
+/**
+ * A context works in its owner's directory, `session-<id>` or `task-<id>`, so switching the
+ * Runner (Codex to Claude) keeps the files. Only the CLI session stays per Runner.
+ */
+export function ownerDirectory(db: DrizzleDB, contextId: string): string {
+  const row = db.select({ ownerType: runnerContexts.owner_type, ownerId: runnerContexts.owner_id }).from(runnerContexts)
+    .where(eq(runnerContexts.id, contextId)).get();
+  return row ? ownerDirectoryName(row.ownerType, row.ownerId, contextId) : contextId;
+}
+
+/** `<owner type>-<owner id>`, or the context ID when that is not a valid directory name. */
+export function ownerDirectoryName(ownerType: string, ownerId: string, contextId: string): string {
+  const name = `${ownerType}-${ownerId}`;
+  return /^[A-Za-z0-9_-]{1,128}$/.test(name) ? name : contextId;
 }
 
 /** Worker owns filesystem rendering; the local fallback supports non-runtime test adapters. */
@@ -35,7 +53,7 @@ export async function prepareRunnerFiles(input: {
         const resources=new InvocationResources(db,config.paths.home).read(invocationId);
         const prepared = await runtime.prepareContext({
           protocolVersion:2,invocationId,scope:{agentId:invocation.agentId,shadowId:invocation.shadowId},resources:resources.selection,
-          contextId: input.id, runnerId: input.id,
+          contextId: input.id, runnerId: ownerDirectory(db, input.id),
           scopeKey: context?.runnerKind === "task" ? `task:${context.owner.id}:${input.runner_type}` : `session:${input.id}`,
           runnerKind: context?.runnerKind ?? "main", ...(context ? { context: { ...context } } : {}),
           ...(runtime.sharedProject ? { projectId: runtime.sharedProject.projectId } : {}),

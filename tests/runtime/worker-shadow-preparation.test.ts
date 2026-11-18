@@ -35,9 +35,9 @@ test("preparation keeps context ownership and rejects resource replacement while
  await expect(preparer.prepare({...input,invocationId:"next",contextId:"next",runnerId:"next",resources:next.selection})).rejects.toMatchObject({code:"shadow_resources_pending"});
  expect(downloads).toBe(1);
 });
-test("legacy and mismatched context IDs fail before downloading or writing",async()=>{
+test("legacy and invalid preparations fail before downloading or writing",async()=>{
  await expect(preparer.prepare({...input,protocolVersion:1})).rejects.toMatchObject({code:"invalid_context_preparation"});
- await expect(preparer.prepare({...input,runnerId:"other"})).rejects.toMatchObject({code:"runner_context_mismatch"});
+ await expect(preparer.prepare({...input,runnerId:"../escape"})).rejects.toMatchObject({code:"invalid_context_preparation"});
  expect(downloads).toBe(0);
  expect(db.prepare("SELECT count(*) AS n FROM worker_shadow_preparations").get()).toEqual({n:0});
 });
@@ -85,4 +85,35 @@ test("the soul sent with a preparation heads the Runner instructions",async()=>{
  const reply=await preparer.prepare({...input,soul:{name:"影小黑",agent:"悟空",owner:{id:"owner",name:"王华杰"},persona:["说话干脆。"]}});
  const agents=readFileSync(join(reply.cwd,"AGENTS.md"),"utf8");
  expect(agents.startsWith('<soul>\n{"name":"影小黑","agent":"悟空","owner":{"id":"owner","name":"王华杰"}}\n\n说话干脆。\n</soul>')).toBe(true);
+});
+
+test("contexts of one owner share its directory, so a Runner switch keeps the files",async()=>{
+ const codex=await preparer.prepare({...input,runnerId:"session-one"});
+ expect(codex.cwd).toBe(join(codex.home,"runners/session-one"));
+ await Bun.write(join(codex.cwd,"workspace/notes.md"),"kept");
+ preparer.store.release({invocationId:"inv",contextId:"ctx",scope,resourceRevision:bundle.selection.digest});
+ const claude=await preparer.prepare({...input,invocationId:"claude",contextId:"ctx-claude",runnerId:"session-one",runnerKind:"main"});
+ expect(claude.cwd).toBe(codex.cwd);
+ expect(readFileSync(join(claude.cwd,"workspace/notes.md"),"utf8")).toBe("kept");
+});
+
+test("a context created before keeps its own directory; a legacy table loses its unique cwd",async()=>{
+ const legacy=join(root,"legacy");
+ const old=new Database(join(root,"legacy.sqlite"));
+ old.exec(`CREATE TABLE worker_shadow_layouts (shadow_id TEXT PRIMARY KEY, agent_id TEXT NOT NULL, home TEXT UNIQUE NOT NULL, runners TEXT UNIQUE NOT NULL);
+  CREATE TABLE worker_shadow_context_paths (context_id TEXT PRIMARY KEY, shadow_id TEXT NOT NULL REFERENCES worker_shadow_layouts(shadow_id), cwd TEXT UNIQUE NOT NULL);
+  CREATE TRIGGER worker_shadow_context_path_immutable BEFORE UPDATE ON worker_shadow_context_paths BEGIN SELECT RAISE(ABORT,'shadow_context_path_immutable'); END;`);
+ const {mkdirSync}=await import("node:fs");
+ const home=join(legacy,"agents/agent/shadows/shadow"),before=join(home,"runners/old-ctx");
+ mkdirSync(before,{recursive:true});mkdirSync(join(legacy,"agents/agent/shadow-resources/shadow/credentials"),{recursive:true});
+ old.prepare("INSERT INTO worker_shadow_layouts VALUES (?,?,?,?)").run("shadow","agent",home,join(home,"runners"));
+ old.prepare("INSERT INTO worker_shadow_context_paths VALUES (?,?,?)").run("old-ctx","shadow",before);
+ const {WorkerShadowLayouts}=await import("../../apps/worker/src/shadow-layout");
+ // Opening migrates the table; the old context keeps its directory, new ones share the owner's.
+ const layouts=new WorkerShadowLayouts(old,legacy);
+ expect((old.prepare("SELECT sql FROM sqlite_master WHERE name='worker_shadow_context_paths'").get() as {sql:string}).sql).not.toContain("UNIQUE");
+ expect(layouts.context(scope,"old-ctx","session-one").cwd).toBe(before);
+ expect(layouts.context(scope,"a","session-one").cwd).toBe(layouts.context(scope,"b","session-one").cwd);
+ expect(()=>old.exec("UPDATE worker_shadow_context_paths SET cwd='x'")).toThrow("shadow_context_path_immutable");
+ old.close();
 });

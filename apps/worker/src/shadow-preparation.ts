@@ -27,7 +27,6 @@ export class ShadowPreparation {
   const parsed=WorkerContextPreparation.safeParse(raw);
   if(!parsed.success)throw new ExecutionError(422,"invalid_context_preparation");
   const input=parsed.data,key=input.scope.shadowId;
-  if(input.runnerId!==input.contextId)throw new ExecutionError(409,"runner_context_mismatch");
   if(this.busy.has(key))throw new ExecutionError(503,"shadow_preparation_busy");
   this.busy.add(key);
   try{
@@ -35,7 +34,7 @@ export class ShadowPreparation {
    // Repeat authorization even after a lost reply; cached bytes are not an access grant.
    await this.download.sync(input.scope,input.resources);
    const prior=this.store.requireLive(input.invocationId);
-   const plan=this.mounts.prepare(input.scope,input.resources),{cwd}=this.layouts.context(input.scope,input.contextId);
+   const plan=this.mounts.prepare(input.scope,input.resources),{cwd}=this.layouts.context(input.scope,input.contextId,input.runnerId);
    if(prior.state==="prepared" && prior.reply){
     const reply=WorkerPreparedContext.parse(JSON.parse(prior.reply));
     return {...reply,env:{LUNA_SERVICE_URL:this.origin}};
