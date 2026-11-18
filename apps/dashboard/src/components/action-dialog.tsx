@@ -25,6 +25,8 @@ export function ActionDialog({
   submitLabel,
   title,
   trigger,
+  open: controlledOpen,
+  onOpenChange,
 }: {
   readonly children: ReactNode;
   readonly description?: string;
@@ -35,10 +37,14 @@ export function ActionDialog({
   readonly submitDisabled?: boolean;
   readonly submitLabel: string;
   readonly title: string;
-  readonly trigger: ReactNode;
+  readonly trigger?: ReactNode;
+  readonly open?: boolean;
+  readonly onOpenChange?: (open: boolean) => void;
 }) {
   const { t } = useTranslation();
-  const [open, setOpen] = useState(false);
+  const [ownOpen, setOwnOpen] = useState(false);
+  const open = controlledOpen ?? ownOpen;
+  const setOpen = (value: boolean) => { setOwnOpen(value); onOpenChange?.(value); };
   const errorText = formatDialogError(error);
 
   async function handleSubmit() {
@@ -49,7 +55,7 @@ export function ActionDialog({
 
   return (
     <Dialog open={open} onOpenChange={setOpen}>
-      <DialogTrigger asChild>{trigger}</DialogTrigger>
+      {trigger ? <DialogTrigger asChild>{trigger}</DialogTrigger> : null}
       <DialogContent
         className="min-w-0 overflow-visible sm:max-w-2xl"
         data-testid="action-dialog-content"

@@ -4,10 +4,14 @@ import { ModelSelectionField, type ShadowModelChoice } from "@/components/model-
 import { createFileRoute } from "@tanstack/react-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState, type FormEvent } from "react";
-import { RadioIcon, PlusIcon, PencilIcon, Loader2Icon } from "lucide-react";
-import { AgentLifecycleActions } from "@/app/agents/agent-lifecycle-actions";
+import { PlusIcon, Loader2Icon, MoreHorizontalIcon, PanelLeftCloseIcon } from "lucide-react";
+import { AgentLifecycleActions, type LifecycleRequest } from "@/app/agents/agent-lifecycle-actions";
 import { useAgentShadows } from "@/components/shadow-picker";
-import { ShadowRootAccess } from "@/components/shadow-root-access";
+import { ShadowRootSwitch } from "@/components/shadow-root-access";
+import { ShadowCard, type ShadowEnvironment } from "@/components/shadow-card";
+import { useContainerConsoles, Workspace } from "@/components/container-console";
+import { imageCurrent, isBlocked, kindBlockedHint, primaryContainer, rootReasons, type ConsoleKind, type ContainerRow } from "@/lib/containers";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { useRouteAgent } from "@/lib/agent-route";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -47,11 +51,9 @@ function ShadowsPage() {
   const auth = useDashboardAuthSession();
   const agent = useRouteAgent();
   return (
-    <main className="mx-auto w-full max-w-5xl space-y-6 p-6">
-      {auth.error ? <p role="alert" className="text-destructive">无法加载登录用户。</p>
-        : auth.isLoading ? <p>正在加载…</p>
-        : auth.data?.account?.id === agent.ownerAccountId && <AgentShadows agent={agent} />}
-    </main>
+    auth.error ? <main className="mx-auto w-full max-w-5xl p-6"><p role="alert" className="text-destructive">无法加载登录用户。</p></main>
+      : auth.isLoading ? <main className="mx-auto w-full max-w-5xl p-6"><p>正在加载…</p></main>
+      : auth.data?.account?.id === agent.ownerAccountId ? <AgentShadows key={agent.id} agent={agent} /> : null
   );
 }
 
@@ -116,6 +118,9 @@ function AgentShadows({ agent }: { agent: DashboardAgentChoice }) {
   const [notice, setNotice] = useState<string | null>(null);
   const [unbinding, setUnbinding] = useState<Channel | null>(null);
   const [unbindError, setUnbindError] = useState<string | null>(null);
+  const [lifecycle, setLifecycle] = useState<{ shadowId: string; request: LifecycleRequest } | null>(null);
+  const [listOpen, setListOpen] = useState(true);
+  const consoles = useContainerConsoles(agent.id);
   const channels = query.data?.channels ?? [];
   const channelsByShadow = new Map(channels.flatMap(row => row.shadow ? [[row.shadow.id, row] as const] : []));
   const shadowsById = new Map(shadows.data?.shadows.map(shadow => [shadow.id, shadow]));
@@ -123,6 +128,7 @@ function AgentShadows({ agent }: { agent: DashboardAgentChoice }) {
     (shadowsById.get(row.shadow.id)?.status ?? row.shadow.status) === "deleted");
   const body = shadows.data?.shadows.find(shadow => shadow.id === agent.defaultShadowId);
   const digitalShadows = shadows.data?.shadows.filter(shadow => shadow.id !== agent.defaultShadowId && shadow.status !== "deleted") ?? [];
+  const cards = [...(body ? [body] : []), ...digitalShadows];
   const agentActive = agent.status === "active";
   const savedBot = channels.find(row => row.id === form.id);
   const targetStatus = target && (shadowsById.get(target.id)?.status ?? target.status);
@@ -240,58 +246,115 @@ function AgentShadows({ agent }: { agent: DashboardAgentChoice }) {
     }
   }
 
+  const containers = consoles.query.data?.containers ?? [];
+  const containerWorkers = consoles.query.data?.workers ?? [];
+  const running = cards.filter(shadow => primaryContainer(containers, shadow.id)?.running).length;
+  const consoleOpen = consoles.consoles.length > 0;
+  const selectedShadow = consoles.consoles.find(item => item.key === consoles.active)?.row.shadowId;
+  const unreachable = containerWorkers.filter(worker => worker.error);
+
+  function environmentOf(shadow: ChannelShadow): { env: ShadowEnvironment; row?: ContainerRow } {
+    const row = primaryContainer(containers, shadow.id);
+    if (!row) return { env: { state: "cold" } };
+    return { row, env: {
+      state: row.running ? "running" : "stopped", workerId: row.workerId, cpus: row.resources.cpus, memory: row.resources.memory,
+      imageCurrent: imageCurrent(row, containerWorkers), activeJobs: row.activeJobs, activeStreams: row.activeStreams,
+      elsewhere: containers.filter(other => other.shadowId === shadow.id && other !== row).map(other => ({ workerId: other.workerId, running: other.running })),
+    } };
+  }
+
+  function card(shadow: ChannelShadow, compact: boolean) {
+    const isBody = shadow.id === agent.defaultShadowId;
+    const bot = channelsByShadow.get(shadow.id);
+    const { env, row } = environmentOf(shadow);
+    const active = agentActive && shadow.status === "active";
+    const subtitle = [
+      bot ? `飞书 · ${bot.botIdentity?.displayName ?? bot.name}${bot.enabled ? "" : "（已停用）"}` : isBody ? "Dashboard 对话 · 未绑定飞书机器人" : "未绑定飞书机器人",
+      shadow.workerRouting?.mode === "bound" ? `绑定 Worker ${shadow.workerRouting.workerId}` : undefined,
+      shadow.modelSelection?.mode === "fixed" ? `模型 ${shadow.modelSelection.name} · ${shadow.modelSelection.model}` : undefined,
+    ].filter(Boolean).join(" · ");
+    const openBlocked = (kind: ConsoleKind) => {
+      if (consoles.provision.isPending) return "正在启动容器…";
+      if (row?.running) return kindBlockedHint(row, kind);
+      if (!active) return "分身已停用，恢复后才能启动容器";
+      if (row && isBlocked(row)) return kindBlockedHint(row, kind);
+      return consoles.coldHint;
+    };
+    const lifecycleRequest = lifecycle?.shadowId === shadow.id ? lifecycle.request : null;
+    const menu = <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button size="icon-sm" variant="ghost" aria-label={`${shadow.name} 的更多操作`} disabled={busy}><MoreHorizontalIcon /></Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="w-44">
+        <DropdownMenuItem disabled={!agentActive} onSelect={() => openEditor(shadow, bot)}>编辑设置</DropdownMenuItem>
+        {row && <DropdownMenuItem disabled={isBlocked(row) || consoles.reset.isPending}
+          onSelect={() => consoles.confirmReset(row, shadow.name)}>重置系统盘…</DropdownMenuItem>}
+        {agentActive && <>
+          <DropdownMenuSeparator />
+          <DropdownMenuItem onSelect={() => setLifecycle({ shadowId: shadow.id, request: "status" })}>
+            {shadow.status === "active" ? "停用" : "恢复"}{isBody ? "本体" : "分身"}
+          </DropdownMenuItem>
+          {!isBody && <DropdownMenuItem variant="destructive" onSelect={() => setLifecycle({ shadowId: shadow.id, request: "delete" })}>删除分身…</DropdownMenuItem>}
+        </>}
+      </DropdownMenuContent>
+    </DropdownMenu>;
+    return <ShadowCard key={shadow.id} id={shadow.id} name={shadow.name} isBody={isBody} subtitle={subtitle}
+      statusTag={!agentActive ? "Agent 已停用" : shadow.status !== "active" ? "已停用" : undefined}
+      environment={env} coldHint={consoles.coldHint} compact={compact} selected={compact && selectedShadow === shadow.id}
+      root={<ShadowRootSwitch agentId={agent.id} shadowId={shadow.id} disabled={!active}
+        hostRefusal={row?.root?.hostAllowed === false ? rootReasons[row.root.reason ?? ""] ?? "当前 Worker 主机不允许使用容器 Root" : undefined} />}
+      menu={menu}
+      footer={agentActive && <AgentLifecycleActions agentId={agent.id} shadowId={shadow.id} name={shadow.name} status={shadow.status}
+        entityLabel={isBody ? "本体" : "分身"} canDelete={!isBody} request={lifecycleRequest}
+        onRequestChange={request => setLifecycle(request ? { shadowId: shadow.id, request } : null)} />}
+      onOpen={kind => consoles.openShadow(shadow.id, kind)} openBlocked={openBlocked} />;
+  }
+
+  const alerts = <>
+    {notice && <p role="status" className="text-sm text-emerald-600">{notice}</p>}
+    {(query.error || shadows.error) && <p role="alert" className="text-destructive">加载失败，请刷新重试。</p>}
+    {consoles.query.error && <p role="alert" className="text-sm text-destructive">无法加载运行环境。{consoles.query.error.message}</p>}
+    {unreachable.length > 0 && <p role="alert" className="text-sm text-destructive">以下 Worker 暂时无法访问：{unreachable.map(worker => worker.workerId).join("、")}</p>}
+    {consoles.reset.error && <p role="alert" className="text-sm text-destructive">无法重置系统盘。{consoles.reset.error.message}</p>}
+    {consoles.provision.error && <p role="alert" className="text-sm text-destructive">无法启动容器。{consoles.provision.error.message}</p>}
+    {consoles.stopDesktop.error && <p role="alert" className="text-sm text-destructive">无法关闭桌面后台。{consoles.stopDesktop.error.message}</p>}
+  </>;
+
   return (
     <>
-      <header className="flex flex-wrap items-start justify-between gap-4">
-        <div>
-          <h1 className="text-2xl font-semibold">数字分身</h1>
-          <p className="mt-2 text-sm text-muted-foreground">每个分身可绑定一个飞书机器人。</p>
-        </div>
-        <Button disabled={!agentActive || busy || !query.data} onClick={() => openEditor()}>
-          <PlusIcon className="size-4" />添加分身
-        </Button>
-      </header>
-      <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border bg-card p-5">
-        <div>
-          <h2 className="font-medium">{agent.name}</h2>
-          <p className="mt-1 text-sm text-muted-foreground">本体 · Dashboard 对话</p>
-          <p className="mt-1 text-xs text-muted-foreground">{body?.workerRouting?.mode === "bound" ? `绑定 Worker：${body.workerRouting.workerId}` : "自动分流"}</p>
-          <p className="mt-1 text-xs text-muted-foreground">{body?.modelSelection?.mode==="fixed" ? `模型：${body.modelSelection.name} · ${body.modelSelection.model}` : "模型：跟随当前激活配置"}</p>
-        </div>
-        <div className="flex flex-wrap gap-2">
-          {body && <Button variant="outline" size="sm" disabled={busy || !agentActive} onClick={() => openEditor(body)}>编辑本体设置</Button>}
-          {body && agentActive && <AgentLifecycleActions agentId={agent.id} shadowId={body.id}
-            name="本体" status={body.status} entityLabel="本体" canDelete={false} />}
-        </div>
-      </div>
-      {notice && <p role="status" className="text-sm text-emerald-600">{notice}</p>}
-      {(query.error || shadows.error) && <p role="alert" className="text-destructive">加载失败，请刷新重试。</p>}
-      {query.isLoading || shadows.isLoading ? <p>正在加载…</p> : query.data && shadows.data && (
-        digitalShadows.length === 0 ? <p className="rounded-xl border border-dashed p-10 text-center text-muted-foreground">尚未添加分身。</p>
-          : <div className="space-y-3">{digitalShadows.map(shadow => {
-            const bot = channelsByShadow.get(shadow.id);
-            const status = !agentActive ? "Agent 已停用" : shadow.status !== "active" ? "分身已停用"
-              : bot ? (bot.enabled ? "机器人已启用" : "机器人已停用") : "未绑定机器人";
-            return (
-              <section key={shadow.id} className="flex flex-wrap items-center justify-between gap-4 rounded-xl border bg-card p-5">
-                <div className="flex gap-4">
-                  <RadioIcon className="mt-1 size-5 text-muted-foreground" />
-                  <div>
-                    <h2 className="font-medium">{shadow.name}<span className="ml-3 text-xs text-muted-foreground">{status}</span></h2>
-                    <p className="mt-1 break-all text-xs text-muted-foreground">{shadow.workerRouting?.mode === "bound" ? `绑定 Worker：${shadow.workerRouting.workerId}` : "自动分流"}</p>
-                    <p className="mt-1 text-xs text-muted-foreground">{shadow.modelSelection?.mode==="fixed" ? `模型：${shadow.modelSelection.name} · ${shadow.modelSelection.model}` : "模型：跟随当前激活配置"}</p>
-                    {bot && <p className="mt-1 text-sm text-muted-foreground">
-                      {bot.botIdentity?.displayName ?? bot.name} · {bot.appId}
-                    </p>}
-                  </div>
-                </div>
-                <Button variant="outline" size="sm" disabled={busy} onClick={() => openEditor(shadow, bot)}>
-                  <PencilIcon className="size-4" />编辑
-                </Button>
-              </section>
-            );
-          })}</div>
-      )}
+      {consoleOpen ? <main className="flex min-h-0 w-full min-w-0 flex-1 gap-3 p-3">
+        {listOpen && <aside aria-label="分身" className="flex w-72 shrink-0 flex-col gap-2 overflow-y-auto">
+          <div className="flex items-center justify-between px-1">
+            <span className="text-sm font-medium">数字分身</span>
+            <Button size="icon-xs" variant="ghost" aria-label="收起分身列表" title="收起分身列表" onClick={() => setListOpen(false)}>
+              <PanelLeftCloseIcon />
+            </Button>
+          </div>
+          {alerts}
+          {cards.map(shadow => card(shadow, true))}
+        </aside>}
+        <Workspace agentId={agent.id} consoles={consoles.consoles} active={consoles.active} onActivate={consoles.setActive} onClose={consoles.close}
+          listOpen={listOpen} onOpenList={() => setListOpen(true)}
+          onStopDesktop={async item => { await consoles.stopDesktop.mutateAsync(item.row); consoles.close(item.key); }}
+          stoppingDesktop={consoles.stopDesktop.isPending} />
+      </main> : <main className="mx-auto w-full max-w-5xl space-y-5 p-6">
+        <header className="flex flex-wrap items-start justify-between gap-4">
+          <div>
+            <h1 className="text-2xl font-semibold">数字分身</h1>
+            <p className="mt-2 text-sm text-muted-foreground">
+              {cards.length} 个分身 · {running} 个运行中。每个分身有自己的运行环境，可打开终端或桌面；可绑定一个飞书机器人。
+            </p>
+          </div>
+          <Button disabled={!agentActive || busy || !query.data} onClick={() => openEditor()}>
+            <PlusIcon className="size-4" />添加分身
+          </Button>
+        </header>
+        {alerts}
+        {query.isLoading || shadows.isLoading ? <p>正在加载…</p> : query.data && shadows.data && <div className="space-y-3">
+          {cards.map(shadow => card(shadow, false))}
+          {digitalShadows.length === 0 && <p className="rounded-xl border border-dashed p-6 text-center text-sm text-muted-foreground">尚未添加分身。</p>}
+        </div>}
+      </main>}
       <AlertDialog open={Boolean(unbinding)} onOpenChange={value => { if (!value && !busy) setUnbinding(null); }}>
         <AlertDialogContent>
           <AlertDialogHeader>
@@ -362,17 +425,12 @@ function AgentShadows({ agent }: { agent: DashboardAgentChoice }) {
               {busy ? "正在保存…" : creation && !creation.shadow ? "创建分身" : "保存并应用"}
             </Button>
           </form>
-          {target && <ShadowRootAccess agentId={agent.id} shadowId={target.id} disabled={!agentActive || busy} />}
-          {target && <div className="flex flex-wrap gap-2 border-t px-6 py-4">
-            {editing?.bindingId && <Button variant="outline" size="sm" disabled={busy} onClick={() => {
+          {target && editing?.bindingId && <div className="flex flex-wrap gap-2 border-t px-6 py-4">
+            <Button variant="outline" size="sm" disabled={busy} onClick={() => {
               setNotice(null);
               setUnbindError(null);
               setUnbinding(editing);
-            }}>移除飞书机器人</Button>}
-            <AgentLifecycleActions agentId={agent.id} shadowId={target.id} name={target.name}
-              canDelete={target.id !== agent.defaultShadowId} entityLabel={target.id === agent.defaultShadowId ? "本体" : "分身"}
-              status={targetStatus ?? target.status} showStatusAction={targetStatus === "disabled"}
-              disabled={!agentActive || busy} />
+            }}>移除飞书机器人</Button>
           </div>}
         </SheetContent>
       </Sheet>

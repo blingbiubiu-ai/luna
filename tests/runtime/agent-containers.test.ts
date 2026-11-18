@@ -93,7 +93,7 @@ test("lists only the owner's assigned Workers, scoped to the Agent, with Shadow 
   const body = await response.json() as { containers: { environmentId: string; shadowName: string | null; workerId: string; supported: boolean }[]; workers: unknown[] };
   expect(body.containers.map(item => [item.environmentId, item.shadowName, item.workerId, item.supported])).toEqual([
     ["env_shadow", "研究员", "worker-1", true], ["env_default", expect.any(String), "worker-1", true]]);
-  expect(body.workers).toEqual([{ workerId: "worker-1", supported: true }]);
+  expect(body.workers).toEqual([{ workerId: "worker-1", supported: true, imageDigest: `sha256:${"a".repeat(64)}` }]);
   expect(fake.calls).toEqual([`worker-1 /v1/containers?agentId=${alice.agentId}`]);
   expect((await app("bob", fake.gateway).request(`/${alice.agentId}/containers`)).status).not.toBe(200);
   expect(fake.calls).toHaveLength(1);

@@ -10,7 +10,6 @@ import {
   BriefcaseBusinessIcon,
   CheckIcon,
   ChevronsUpDownIcon,
-  ContainerIcon,
   KeyRoundIcon,
   MessagesSquareIcon,
   PlusIcon,
@@ -66,7 +65,6 @@ const navGroups = [
   { title: "Runtime", items: [
     { title: "Model Configuration", icon: BotIcon, to: "/$agentId/settings/agents" },
     { title: "Workers", icon: BotIcon, to: "/$agentId/settings/workers" },
-    { title: "Containers", icon: ContainerIcon, to: "/$agentId/settings/containers" },
     { title: "Digital Shadows", icon: BotIcon, to: "/$agentId/settings/channels" },
   ] },
 ] as const;

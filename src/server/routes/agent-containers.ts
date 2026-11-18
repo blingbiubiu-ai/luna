@@ -58,10 +58,12 @@ export function createAgentContainerRoutes(
     const workers = gateway.list().filter(worker => assigned.has(worker.workerId) && worker.connected && !worker.revoked);
     const results = await Promise.all(workers.map(async worker => {
       const supported = worker.health?.capabilities?.includes(CONTAINER_STREAMS_CAPABILITY) === true;
+      let imageDigest: string | undefined;
+      try { imageDigest = gateway.scheduler.workers.imageDigest(worker.workerId); } catch { /* not ready: image unknown */ }
       try {
         const body = await gateway.scheduler.workers.client(worker.workerId)
           .call<{ containers: unknown[] }>("GET", `/v1/containers?agentId=${encodeURIComponent(agent.id)}`, undefined, AbortSignal.timeout(10000));
-        return { worker: { workerId: worker.workerId, supported }, containers: z.array(Summary).parse(body.containers).map(item => ({ ...item, workerId: worker.workerId, shadowName: names.get(item.shadowId) ?? null, supported })) };
+        return { worker: { workerId: worker.workerId, supported, ...(imageDigest ? { imageDigest } : {}) }, containers: z.array(Summary).parse(body.containers).map(item => ({ ...item, workerId: worker.workerId, shadowName: names.get(item.shadowId) ?? null, supported })) };
       } catch {
         return { worker: { workerId: worker.workerId, supported, error: "worker_unreachable" }, containers: [] };
       }

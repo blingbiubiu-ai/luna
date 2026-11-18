@@ -10,7 +10,13 @@ import { dashboardAgentsKey } from "@/lib/api/hooks";
 type Status = "active" | "disabled" | "deleted";
 type JobStatus = {status: "pending" | "completed"; lastError: string | null};
 
-export function AgentLifecycleActions({ agentId, shadowId, name, status, entityLabel, showStatusAction = true, canDelete = true, disabled = false }: {
+export type LifecycleRequest = "status" | "delete" | null;
+
+/**
+ * Status and delete actions. With `request`/`onRequestChange` the buttons are left out and the
+ * dialogs open on request, so a menu elsewhere (the Shadow card's "⋯") can drive them.
+ */
+export function AgentLifecycleActions({ agentId, shadowId, name, status, entityLabel, showStatusAction = true, canDelete = true, disabled = false, request: openRequest, onRequestChange }: {
   agentId: string;
   shadowId?: string;
   name: string;
@@ -19,6 +25,8 @@ export function AgentLifecycleActions({ agentId, shadowId, name, status, entityL
   showStatusAction?: boolean;
   canDelete?: boolean;
   disabled?: boolean;
+  request?: LifecycleRequest;
+  onRequestChange?: (request: LifecycleRequest) => void;
 }) {
   const client = useQueryClient();
   const base = `/agents/${encodeURIComponent(agentId)}`;
@@ -51,13 +59,17 @@ export function AgentLifecycleActions({ agentId, shadowId, name, status, entityL
   const action = next === "disabled" ? "停用" : "恢复";
   const entity = entityLabel ?? (shadowId ? "分身" : "Agent");
   const statusLabel = action + entity;
+  const controlled = onRequestChange !== undefined;
+  const dialog = (kind: Exclude<LifecycleRequest, null>, button: string) => controlled
+    ? { open: openRequest === kind, onOpenChange: (open: boolean) => { if (!open) onRequestChange(null); } }
+    : { trigger: <Button variant="outline" size="sm" disabled={busy}>{button}</Button> };
 
   return <div className="flex flex-wrap items-center gap-2">
     {showStatusAction && <ActionDialog title={statusLabel} description={name} submitLabel={statusLabel}
-      trigger={<Button variant="outline" size="sm" disabled={busy}>{statusLabel}</Button>}
+      {...dialog("status", statusLabel)}
       onSubmit={() => change.mutateAsync(next)} isSubmitting={change.isPending} error={change.error} children={null} />}
     {canDelete && <ActionDialog title={"删除" + entity} submitLabel={"永久删除" + entity} submitDisabled={confirmName !== name}
-      trigger={<Button variant="outline" size="sm" disabled={busy}>{"删除" + entity}</Button>}
+      {...dialog("delete", "删除" + entity)}
       onSubmit={() => change.mutateAsync("deleted")} isSubmitting={change.isPending} error={change.error}>
       <DeleteWarning name={name} entity={entity} wholeAgent={!shadowId} confirmName={confirmName} onConfirmName={setConfirmName} />
     </ActionDialog>}

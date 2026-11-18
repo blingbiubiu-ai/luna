@@ -262,6 +262,7 @@
 .worker-presence-dot { position: relative; width: 8px; height: 8px; flex: none; border-radius: 50%; background: currentColor; }
 .worker-presence[data-online="true"] { background: #34c75915; color: #22863d; }
 .dark .worker-presence[data-online="true"] { color: #70de88; }
+.worker-presence[data-cold="true"] { background: transparent; box-shadow: inset 0 0 0 1px var(--border); }
 .worker-presence[data-online="true"] .worker-presence-dot { background: #34c759; box-shadow: 0 0 0 3px #34c75933; }
 .worker-presence[data-online="true"] .worker-presence-dot::after { content: ""; position: absolute; inset: -3px; border: 1px solid #34c759; border-radius: 50%; animation: worker-presence 2.4s cubic-bezier(.32, .72, 0, 1) infinite; }
 @keyframes worker-presence {
