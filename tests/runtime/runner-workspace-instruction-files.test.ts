@@ -15,6 +15,8 @@ import {
   ensureRunnerWorkspaceInstructionFiles,
   type EnsureRunnerWorkspaceInstructionFilesInput,
 } from "../../src/runners/workspace-instruction-files";
+import { resolveContainerRunnerProvider } from "@luna/executor/providers";
+import { ensureRunnerWorkspaceInstructionFiles as ensureRunnerInstructionFiles } from "@luna/host-runtime/runner-instructions";
 import { config, setLunaHome } from "../../src/shared";
 import { defaultRunnerPromptsDirectory } from "../../src/runners/runner-prompts";
 
@@ -97,6 +99,22 @@ test("materializes task runner instructions without a .luna-prompts workspace pa
   expect(agentsMd).toContain("# Task Runner Runtime Prompt");
   expect(agentsMd).toContain("luna artifacts materialize artifact:<id> --json");
   expect(agentsMd).not.toContain("@.luna-prompts/task-runner/instructions.md");
+});
+
+test("Codex reads every generated AGENTS.md to its end, root rules included", () => {
+  const limit = Number(resolveContainerRunnerProvider("codex")
+    .buildCliArgs({ prompt: "hi", runnerType: "codex" })
+    .find((arg) => arg.startsWith("project_doc_max_bytes="))?.split("=")[1]);
+  for (const runnerKind of ["main", "task", "work"] as const) {
+    ensureRunnerInstructionFiles({
+      home: "/home/luna", promptsRoot: join(import.meta.dir, "../../src/prompts"), runnerKind,
+      runnerRootPath, previousFingerprint: null, runnerSudo: true,
+    });
+    const doc = readFileSync(join(runnerRootPath, "AGENTS.md"));
+    expect(doc.toString()).toContain("Never use root to read or send credentials");
+    // Leave room for the instructions to grow before anything is cut off again.
+    expect(doc.length).toBeLessThan(limit * 0.75);
+  }
 });
 
 test("every runner and provider receives the shared confidentiality policy", () => {

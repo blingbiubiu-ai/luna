@@ -110,11 +110,18 @@ function parseCodexStreamLine(line: string): ParsedRunnerLine | null {
   return null;
 }
 
+/**
+ * Codex reads at most this much of AGENTS.md and silently drops the rest. Its default
+ * (32 KiB) is smaller than the Main Runner instructions, which cut off the root-access
+ * limits and the directory section at the end of the file.
+ */
+export const CODEX_PROJECT_DOC_MAX_BYTES = 64 * 1024;
+
 export const codexContainerRunnerProvider: ContainerRunnerProvider = {
   family: "codex",
   buildCliArgs(input: ContainerInput, sessionId?: string): string[] {
     // Avoid waiting for best-effort analytics uploads after the turn completes.
-    const args = ["codex", "-c", "analytics.enabled=false"];
+    const args = ["codex", "-c", "analytics.enabled=false", "-c", `project_doc_max_bytes=${CODEX_PROJECT_DOC_MAX_BYTES}`];
     if (input.env?.CODEX_PROVIDER_MODE === "gateway") {
       const baseUrl = input.env.OPENAI_BASE_URL;
       if (!baseUrl || !input.env.OPENAI_API_KEY?.trim()) {
