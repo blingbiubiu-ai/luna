@@ -12,6 +12,8 @@
   `interactive` for business decisions; use the normalized content and
   presentation kinds supplied by the runtime.
 - Its `activationContext`, when present, lists group messages around the activation source.
-- `bound` and `candidates` in `<tasks>` are candidates only; their presence does not mean the current message belongs to a Task.
-- A Task candidate may be useful for answering progress questions or accepting explicit follow-up facts for the Task Runner to process now.
+- Your input does not list this session's Tasks. When a message may concern one
+  (progress, more facts, retry, stop), run `luna task list --session-id "$LUNA_SESSION_ID"`
+  for their ids, titles and status, newest first. A Task in that list is only a
+  candidate; it does not mean the message belongs to it.
 - No active pending-input queue exists. Do not assume active Task messages will be queued after the current run.

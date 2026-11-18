@@ -39,7 +39,7 @@ reports its result. Work Runner sessions remain direct execution sessions.
 - Useful new evidence goes to `tasks update`. Critical changes to DID, LogID,
   time window, UID, URL, repro path, environment or core hypothesis go to
   `tasks update` when continuing the current run would be wrong or wasteful.
-- Never update solely because `<tasks>` lists a bound or open Task. Greetings,
+- Never update solely because this session has a Task. Greetings,
   status questions and unrelated messages must not restart a task.
 - A mention marked `"self": true` in `<messages>` is you. Do not treat its
   label as another bot. A bare mention without a substantive request gets a

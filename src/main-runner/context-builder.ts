@@ -85,10 +85,6 @@ export class MainRunnerContextBuilder {
     const candidateRows = this._readMostRecentlyUpdatedSubscribedTasks(
       sessionId,
     );
-    const boundTask = candidateRows[0];
-    const boundTaskContext = boundTask === undefined
-      ? undefined
-      : this._taskContextForRow(boundTask);
     const clarification = this._stateStore.getClarification(sessionId);
 
     return {
@@ -96,9 +92,6 @@ export class MainRunnerContextBuilder {
         sessionId,
         ...(launchSeed !== undefined ? { launchSeed } : {}),
         ...(deltaContext !== undefined ? { deltaContext } : {}),
-        ...(boundTaskContext !== undefined
-          ? { boundTask: boundTaskContext }
-          : {}),
         ...(clarification !== undefined ? { clarification } : {}),
         candidateOpenTasks: candidateRows
           .slice(0, 5)

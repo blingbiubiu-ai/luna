@@ -42,6 +42,18 @@ export interface TasksRouteOptions {
   readonly db?: DrizzleDB;
 }
 
+/**
+ * Tasks bound to a session, newest activity first, one short line each: what Main needs to
+ * update, restart or cancel one. Details come from `GET /api/tasks/:id`.
+ */
+function sessionTasks(db: DrizzleDB, sessionId: string) {
+  const rows = db.select({id: tasks.id, type: tasks.type, status: tasks.status, title: tasks.title, updatedAt: tasks.updated_at})
+    .from(tasks)
+    .where(sql`${tasks.id} IN (SELECT ${taskSubscriptions.task_id} FROM ${taskSubscriptions} WHERE ${taskSubscriptions.session_id} = ${sessionId})`)
+    .orderBy(desc(tasks.updated_at), asc(tasks.id)).limit(20).all();
+  return rows.map(row => ({taskId: row.id, taskType: row.type, status: row.status, title: row.title, updatedAt: new Date(row.updatedAt).toISOString()}));
+}
+
 export function createTasksRoutes(options: TasksRouteOptions = {}) {
   const routeDb = () => options.db ?? getKernel().database.db;
   const access=(c:Context)=>new ResourceRouteAccess(routeDb());
@@ -57,6 +69,12 @@ export function createTasksRoutes(options: TasksRouteOptions = {}) {
     .delete("/:id", c => { deleteDashboardTask(routeDb(), c.req.param("id")); return c.json({ status: "ok" }); })
     .get("/", (c) => {
       const db = routeDb();
+      const sessionId = c.req.query("sessionId");
+      if (sessionId) {
+        // A Runner may read only its own session; the Task list follows the same rule.
+        access(c).require(c, "session", sessionId);
+        return c.json(sessionTasks(db, sessionId));
+      }
       const artifactSigner = dashboardArtifactSignerForContext(c, db);
       const taskRows = selectDashboardTaskRows(db,access(c).listPredicate(c,"task"));
       return c.json(

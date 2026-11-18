@@ -389,3 +389,19 @@ test("a pending clarification tells Main what is missing, not the question it al
   expect(blockJson(prompt, "clarification")).toEqual({ pendingIntent: "question", missingFields: ["城市"], collectedFacts: ["用户想了解今天的天气"], reason: "需要城市" });
   expect(prompt).not.toContain("你想查哪个城市今天的天气？");
 });
+
+test("Main turn input never lists the session's Tasks; Main looks them up when it needs them", () => {
+  const rawMessage = normalizedInbound({ id: "m-3", text: "你好啊", addressing: { addressedToBot: true, reason: "p2p" } });
+  const task = { taskId: "task-1", taskType: "question" as const, status: "completed" as const, title: "查询广州今日天气", summary: "s" };
+  const prompt = renderMainRunnerPrompt({
+    type: "user_messages",
+    messages: [mainRunnerMessageItem({ messageId: "m-3", text: "你好啊", createdAt: 1794992549000, rawMessage })],
+    latestMessage: rawMessage,
+    context: { sessionId: "session-1", candidateOpenTasks: [task] },
+  } satisfies MainRunnerInput);
+  expect(prompt).not.toContain("<tasks>");
+  expect(prompt).not.toContain("查询广州今日天气");
+  const rules = renderRunnerInstructions({ home: "/home/luna", promptsRoot: join(import.meta.dir, "../../src/prompts"), runnerKind: "main", runnerRootPath: "/home/luna/runners/r" });
+  expect(rules).toContain('luna task list --session-id "$LUNA_SESSION_ID"');
+  expect(rules).not.toContain("<tasks>");
+});

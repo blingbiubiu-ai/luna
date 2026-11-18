@@ -141,15 +141,6 @@ export interface MainRunnerSessionContext {
   readonly sessionId: string;
   readonly launchSeed?: MainRunnerContextPack;
   readonly deltaContext?: MainRunnerContextPack;
-  readonly boundTask?: {
-    readonly taskId: string;
-    readonly taskType: TaskType;
-    readonly status: TaskStatus;
-    readonly title: string;
-    readonly summary: string;
-    readonly conclusion?: string;
-    readonly latestCardState?: string;
-  };
   readonly clarification?: SessionClarificationState;
   readonly candidateOpenTasks: readonly {
     readonly taskId: string;

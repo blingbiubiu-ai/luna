@@ -16,6 +16,7 @@ describe("client-only Luna CLI", () => {
       const env = { LUNA_SERVICE_URL: "http://service.test", LUNA_AGENT_ID: "agent-1" };
       for (const command of [
         ["task", "list"],
+        ["task", "list", "--session-id", "session-1"],
         ["task", "get", "--task-id", "task-1"],
         ["task", "status", "command-1"],
         ["session", "messages", "--session-id", "session-1"],
@@ -23,6 +24,7 @@ describe("client-only Luna CLI", () => {
       ]) expect((await runClientCli(command, env)).status).toBe("ok");
       expect(captured.map(({url}) => url)).toEqual([
         "http://service.test/api/tasks?agentId=agent-1",
+        "http://service.test/api/tasks?sessionId=session-1",
         "http://service.test/api/tasks/task-1",
         "http://service.test/api/runner/operations/command-1",
         "http://service.test/api/sessions/session-1/messages",

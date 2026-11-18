@@ -278,10 +278,8 @@ function buildMainRunnerServiceEnv(
   agentId: string,
   agentConfig?: AgentExecutionSnapshot,
 ): Record<string, string> {
-  const taskId =
-    input.input.type === "task_result"
-      ? input.input.taskId
-      : input.input.context.boundTask?.taskId;
+  // Only a Task result turn acts for one Task; other turns read the session's Tasks by session access.
+  const taskId = input.input.type === "task_result" ? input.input.taskId : undefined;
   const requestedByIdentity =
     input.input.type === "user_messages"
       ? requestedIdentityFromInbound(input.input.latestMessage)
@@ -408,11 +406,9 @@ export function renderMainRunnerPrompt(input: MainRunnerInput, options: MainRunn
   };
   const activation = input.type === "user_messages" ? input.activationContextMessages?.map((message) => activationItem(message, options.people)) : undefined;
   const history = compact({ launchSeed: pack(context.launchSeed), deltaContext: pack(context.deltaContext), activationContext: activation });
-  const tasks = compact({ bound: context.boundTask, candidates: context.candidateOpenTasks });
   return joinBlocks([
     dataBlock("memory", { text: options.memory ?? "" }),
     Object.keys(history).length ? dataBlock("history", { json: history }) : "",
-    Object.keys(tasks).length ? dataBlock("tasks", { json: tasks }) : "",
     context.clarification ? dataBlock("clarification", { json: clarificationFacts(context.clarification) }) : "",
     mainTurnBlock(input, clock, options.people),
   ]);

@@ -2,7 +2,7 @@ import {and,eq,sql} from "drizzle-orm";
 import type {Context} from "hono";
 import {HTTPException} from "hono/http-exception";
 import type {DrizzleDB} from "@/data";
-import {sessions,tasks} from "@/data/schema";
+import {sessions,taskSubscriptions,tasks} from "@/data/schema";
 import {AgentError,AgentStore} from "@/agents/agent-store";
 import {SessionAccessPolicy} from "@/agents/session-access";
 import {TaskAccessPolicy} from "@/agents/task-access";
@@ -10,6 +10,14 @@ import {requireAuthenticated,requireDashboardOnly,isGuardResponse} from "../auth
 import {actorFor} from "../auth/agent-actor";
 
 type ResourceType="session"|"task";
+type RunnerClaims={runnerKind?:string;sessionId?:string;taskId?:string};
+
+/** Main and Work act for a session, so they may read the Tasks bound to it; a Task Runner reads only its own Task. */
+function sessionRunner(token:RunnerClaims):string|undefined{
+  return (token.runnerKind==="main"||token.runnerKind==="work") ? token.sessionId : undefined;
+}
+
+const tasksOfSession=(sessionId:string)=>sql`${tasks.id} IN (SELECT ${taskSubscriptions.task_id} FROM ${taskSubscriptions} WHERE ${taskSubscriptions.session_id} = ${sessionId})`;
 
 /** Shared HTTP boundary; a Runner never inherits its human owner's broad management view. */
 export class ResourceRouteAccess {
@@ -22,7 +30,7 @@ export class ResourceRouteAccess {
   require(c:Context,type:ResourceType,id:string){
     const auth=this.actor(c);
     if(auth.authKind==="luna-access-token"&&auth.token.source==="runner"){
-      if((type==="session"?auth.token.sessionId:auth.token.taskId)!==id)throw new AgentError("runner_resource_access_denied",403);
+      if(!this.runnerMayRead(auth.token,type,id))throw new AgentError("runner_resource_access_denied",403);
     }
     const options = {readHistory: auth.authKind === "dashboard-cookie" && c.req.method === "GET"};
     const agentId = this.agentOf(type, id);
@@ -72,14 +80,25 @@ export class ResourceRouteAccess {
     const predicate=type==="session"?new SessionAccessPolicy(this.db).listPredicate(userId,agentId,options):new TaskAccessPolicy(this.db).listPredicate(userId,agentId,options);
     const shadowId=c.req.query("shadowId");
     if(shadowId)new AgentStore(this.db).requireScope(userId,{agentId,shadowId},options);
-    let runnerId:string|undefined;
-    if(auth.authKind==="luna-access-token"&&auth.token.source==="runner"){
+    let runnerId:string|undefined,runnerSession:string|undefined;
+    if(auth.authKind==="luna-access-token"&&auth.token.source==="runner"&&type==="task"&&sessionRunner(auth.token)){
+      runnerSession=sessionRunner(auth.token)!;
+      const row=this.require(c,"session",runnerSession);
+      if(row.agent_id!==agentId)throw new AgentError("scope_mismatch",403);
+    }else if(auth.authKind==="luna-access-token"&&auth.token.source==="runner"){
       runnerId=type==="session"?auth.token.sessionId:auth.token.taskId;
       if(!runnerId)throw new AgentError("runner_resource_access_denied",403);
       const row=this.require(c,type,runnerId);
       if(row.agent_id!==agentId)throw new AgentError("scope_mismatch",403);
     }
     return and(predicate,shadowId?eq(type==="session"?sessions.shadow_id:tasks.shadow_id,shadowId):undefined,
-      runnerId?eq(type==="session"?sessions.id:tasks.id,runnerId):undefined);
+      runnerId?eq(type==="session"?sessions.id:tasks.id,runnerId):undefined,
+      runnerSession?tasksOfSession(runnerSession):undefined);
+  }
+  private runnerMayRead(token:RunnerClaims,type:ResourceType,id:string):boolean{
+    if(type==="session")return token.sessionId===id;
+    if(token.taskId===id)return true;
+    const session=sessionRunner(token);
+    return session!==undefined && Boolean(this.db.select({id:tasks.id}).from(tasks).where(and(eq(tasks.id,id),tasksOfSession(session))).get());
   }
 }

@@ -7,10 +7,15 @@ export async function runRunnerOperationsCli(scope: "task" | "session", argv: re
   const command = argv[0];
   if (!command || command === "help" || hasFlag(argv, "--help") || hasFlag(argv, "-h")) {
     return {status: "ok", output: scope === "task"
-      ? "luna task list [--agent-id ID] | get --task-id ID | create|update|restart|cancel|status-card|report|status"
+      ? "luna task list [--agent-id ID | --session-id ID] | get --task-id ID | create|update|restart|cancel|status-card|report|status"
       : "luna session messages|read_session_timeline --session-id ID | create-thread|clarify|release|status"};
   }
   try {
+    if (scope === "task" && command === "list" && argv.includes("--session-id")) {
+      const sessionId = readOption(argv, "--session-id")?.trim() || env.LUNA_SESSION_ID?.trim();
+      if (!sessionId) return {status: "error", code: "missing_session_id", message: "missing --session-id"};
+      return callUnifiedService(env, {method: "GET", path: servicePathWithQuery("/api/tasks", {sessionId})});
+    }
     if (scope === "task" && command === "list") {
       const agentId = (readOption(argv, "--agent-id") ?? env.LUNA_AGENT_ID)?.trim();
       if (!agentId) return {status: "error", code: "agent_scope_required", message: "Use --agent-id or set LUNA_AGENT_ID"};

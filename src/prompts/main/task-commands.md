@@ -24,6 +24,8 @@ and summaries as your final reply. Supported commands:
 - `luna task restart`: `taskId`; optional `sourceMessageIds`. Retries with
   existing task information unchanged. Use update when changing information.
 - `luna task status-card`: progress cards; see the `luna-status-card` skill.
+- `luna task list --session-id "$LUNA_SESSION_ID"`: this session's Tasks, newest first.
+  The receipt of `create` already gives the new Task's id in `taskIds`.
 - `luna task status COMMAND_ID`: inspect the operation receipt. To read a task's
   progress use `luna task get --task-id TASK_ID`.
 

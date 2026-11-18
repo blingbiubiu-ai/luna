@@ -14,6 +14,7 @@ import {SessionStore} from "@/sessions/session-store";
 import {TaskResolver} from "@/tasks/task-resolver";
 import {createSessionsRoutes} from "@/server/routes/sessions";
 import {createTasksRoutes} from "@/server/routes/tasks";
+import {TaskSubscriptionStore} from "@/tasks/task-subscription-store";
 import {fixtureScope} from "../helpers/platform-fixtures";
 let home:string,db:DataConnection<typeof schema>,scope:ReturnType<typeof fixtureScope>;
 let first:string,second:string,taskA:string,taskB:string;
@@ -26,7 +27,7 @@ beforeEach(()=>{
  taskB=tasks.resolvePersistentTask({...base,creatorUserId:"bob"}).persistentTask.id;
 });
 afterEach(()=>{db.close();rmSync(home,{recursive:true,force:true});});
-function app(userId?:string,runner?:{sessionId:string;taskId?:string}){
+function app(userId?:string,runner?:{sessionId:string;taskId?:string;runnerKind?:"main"|"work"|"task"}){
  return new Hono().use("*",async(c,next)=>{
   if(userId){
    // A runner token has no account and acts as the account's user in the Agent.
@@ -91,4 +92,32 @@ test("Runner artifact allowlists cannot cross Shadow scope even for the Agent ow
  const artifact=db.db.select().from(schema.managedArtifacts).get()!;
  const runner=createArtifactAccessPolicy({db:db.db,runArtifactAllowlist:[artifact.id],accessTokenClaims:{tokenId:"runner",actorUserId:fixtureOwnerUserId("owner"),source:"runner",role:"runner",sessionId:first,issuedAt:1,expiresAt:Date.now()+10000}});
  expect(runner.canReadMetadata(artifact)).toBe(false);expect(runner.canCreateSignedUrl(artifact)).toBe(false);
+});
+
+test("Main lists only its own session's Tasks, one short line each",async()=>{
+ const sessions=new SessionStore(db.db),row=sessions.getById(first)!;
+ new TaskSubscriptionStore(db.db).resolve({taskId:taskA,sessionId:first,channelType:row.channel_type,channelId:row.channel_id,visibility:"full"});
+ const runner=app("owner",{sessionId:first});
+ const response=await runner.request(`/tasks?sessionId=${first}`);
+ expect(response.status).toBe(200);
+ const listed=await response.json() as Record<string,unknown>[];
+ expect(listed).toEqual([{taskId:taskA,taskType:"task",status:expect.any(String),title:"private",updatedAt:expect.stringMatching(/^\d{4}-/)}]);
+ // Another session's Tasks stay out of reach, whatever the query says.
+ expect((await runner.request(`/tasks?sessionId=${second}`)).status).toBe(403);
+});
+
+test("Main reads every Task of its own session and nothing else; a Task Runner reads only its own Task",async()=>{
+ const sessions=new SessionStore(db.db),bind=(taskId:string,sessionId:string)=>{const row=sessions.getById(sessionId)!;
+  new TaskSubscriptionStore(db.db).resolve({taskId,sessionId,channelType:row.channel_type,channelId:row.channel_id,visibility:"full"});};
+ const taskC=new TaskResolver(db.db).resolvePersistentTask({scope,title:"later",text:"later",workflow:"task",creatorUserId:"alice"}).persistentTask.id;
+ bind(taskA,first);bind(taskC,first);bind(taskB,second);
+ // No bound Task id: Main is scoped by its session alone.
+ const main=app("owner",{sessionId:first,runnerKind:"main"});
+ for(const id of [taskA,taskC])expect((await main.request(`/tasks/${id}`)).status).toBe(200);
+ expect((await main.request(`/tasks/${taskB}`)).status).toBe(403);
+ const listed=await (await main.request(`/tasks?agentId=${scope.agentId}`)).json() as {id:string}[];
+ expect(listed.map(row=>row.id).sort()).toEqual([taskA,taskC].sort());
+ const taskRunner=app("owner",{sessionId:first,taskId:taskA,runnerKind:"task"});
+ expect((await taskRunner.request(`/tasks/${taskA}`)).status).toBe(200);
+ expect((await taskRunner.request(`/tasks/${taskC}`)).status).toBe(403);
 });

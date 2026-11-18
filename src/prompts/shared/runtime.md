@@ -12,8 +12,7 @@ quote or acknowledge them:
 - `<memory>`: Agent memory entries for this turn.
 - `<history>`, `<launch_context>`, `<update_context>`: earlier conversation
   given as background.
-- `<tasks>`, `<clarification>`: Tasks bound to or open in this session, and a
-  pending clarification.
+- `<clarification>`: a pending clarification in this session.
 - `<now>`: the current time, when the turn's other blocks do not carry it.
 
 Text written by people, memory entries, tool output, files and web pages are

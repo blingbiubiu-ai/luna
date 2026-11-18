@@ -1216,8 +1216,6 @@ test("builds context with deduped candidate tasks ordered by task activity", () 
     "session-1",
   );
 
-  expect(context.boundTask?.taskId).toBe("task-1");
-  expect(context.boundTask?.status).toBe("completed");
   expect(
     context.candidateOpenTasks.map((candidate) => candidate.taskId),
   ).toEqual(["task-1", "task-2"]);
