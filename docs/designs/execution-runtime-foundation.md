@@ -26,10 +26,17 @@ Stream framing and provider failure types live in `@luna/runner-protocol`.
 Each application declares its workspace dependencies and has independent
 `build` and `typecheck` scripts. `apps/cli/dist/luna-client.js` is copied to root
 `dist/` by the root build for existing deployment and npm packaging. Executor
-builds `executor.js`, `job-main.js` and `job-process.js` under its own `dist/`;
-the Docker builder installs only Executor and its shared packages, then copies
-these bundles to `/app/agent-runner/dist`. `container/` holds image definitions,
-wrapper scripts and environment setup, not application source.
+builds `executor.js`, `job-main.js` and `job-process.js` under its own `dist/`.
+The Worker build embeds these bundles and the CLI client in `luna-worker.js`. At
+start Worker installs them under `<Worker home>/runner-runtime/<version>`, moves
+the `current` link there, and every container mounts that root read-only at
+`/opt/luna-runtime` and runs `current/executor.js`. Bun resolves the link at
+start, so an Executor and the Jobs it spawns stay on one version. After a Worker
+update, an idle container with an older Executor is stopped and started again at
+its next admission, keeping its system layer; a busy one keeps its Executor until
+then. The image still carries copies at `/app/agent-runner/dist` for Workers
+without the mount. `container/` holds image definitions, wrapper scripts and
+environment setup, not application source, so Luna code changes need no new image.
 Worker lives in `apps/worker` as `@luna/worker`, with its own CLI,
 manifest, typecheck and build. Service remains in `src/` and does not import
 Worker implementation code; Runtime communicates with it through the execution

@@ -45,8 +45,9 @@ create their own directories with the configured UID.
 
 The old stdin/IPC Node entrypoint is replaced by Executor and its Bun subprocesses.
 The former startup-time compilation of a mounted Node Runner source tree is not
-used: development builds must bundle the Bun entrypoints and rebuild the image (or
-explicitly supply the Executor's configured `runnerEntry`). Image toolchains remain
+used: development builds bundle the Bun entrypoints into the Worker, which mounts
+them into containers (see execution-runtime-foundation.md); the Executor's Job
+entry defaults to the `job-main.js` beside it. Image toolchains remain
 available; this initialization connects them to the persistent HOME.
 
 `$HOME/.luna-resources` is a link Worker points at the selected version
@@ -197,8 +198,9 @@ Executor and container-side Runner sources live in `apps/executor`. Build with
 `bun run --cwd apps/executor build`; shared framing and failure types belong to
 `@luna/runner-protocol`. The Dockerfile in `container/` installs a minimal
 workspace and bundles Executor without root Service sources. User-facing Luna
-CLI source lives in `apps/cli`; its bundled client remains `/app/luna-cli/cli.js`
-in the image. Container entry points and mounts are unchanged.
+CLI source lives in `apps/cli`; the Worker mounts its bundled client at
+`/opt/luna-runtime/current/luna-client.js`, and the image keeps a copy at
+`/app/luna-cli/cli.js` for older Workers.
 
 Worker renders instructions from the selected resource snapshot. Remote Service URLs are preserved; only loopback URLs are rewritten to the local Docker host gateway.
 

@@ -91,7 +91,7 @@ Workspace-local paths should become artifacts before user-facing replies. When M
 
 ## Runner Sandbox Environment
 
-Main Runner and Task Runner always run inside `luna-runner:latest` containers. The runner image includes the built Luna CLI at `/app/luna-cli/cli.js`; runner tools should still call Service through CLI/API rather than reading runtime databases or host paths directly.
+Main Runner and Task Runner always run inside `luna-runner:latest` containers. The `luna` command in the container runs the CLI the Worker mounts at `/opt/luna-runtime/current/luna-client.js` (falling back to the image's `/app/luna-cli/cli.js` under older Workers); runner tools should still call Service through CLI/API rather than reading runtime databases or host paths directly.
 
 Environment is injected in two stages:
 

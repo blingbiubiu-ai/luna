@@ -360,7 +360,7 @@ no longer upgraded: the schema is a single baseline, and
 bots, models, plugins) into a new database, not memory. Resource selections
 have no `agentMemoryRevision` or `shadowConfigRevision`, and snapshots no
 longer have `agent/memory/` or `shadow/config/` parts, so Service, Worker and
-the runner image's Executor must be upgraded together.
+the Executor (shipped with the Worker) must be upgraded together.
 
 ## Known limits
 
