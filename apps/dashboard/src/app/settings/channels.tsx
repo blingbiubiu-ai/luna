@@ -263,7 +263,7 @@ function AgentShadows({ agent }: { agent: DashboardAgentChoice }) {
     } };
   }
 
-  function card(shadow: ChannelShadow, compact: boolean) {
+  function card(shadow: ChannelShadow, compact: boolean, index: number) {
     const isBody = shadow.id === agent.defaultShadowId;
     const bot = channelsByShadow.get(shadow.id);
     const { env, row } = environmentOf(shadow);
@@ -298,7 +298,7 @@ function AgentShadows({ agent }: { agent: DashboardAgentChoice }) {
         </>}
       </DropdownMenuContent>
     </DropdownMenu>;
-    return <ShadowCard key={shadow.id} id={shadow.id} name={shadow.name} isBody={isBody} subtitle={subtitle}
+    return <ShadowCard key={shadow.id} id={shadow.id} paletteIndex={index} name={shadow.name} isBody={isBody} subtitle={subtitle}
       statusTag={!agentActive ? "Agent 已停用" : shadow.status !== "active" ? "已停用" : undefined}
       environment={env} coldHint={consoles.coldHint} compact={compact} selected={compact && selectedShadow === shadow.id}
       root={<ShadowRootSwitch agentId={agent.id} shadowId={shadow.id} disabled={!active}
@@ -331,7 +331,7 @@ function AgentShadows({ agent }: { agent: DashboardAgentChoice }) {
             </Button>
           </div>
           {alerts}
-          {cards.map(shadow => card(shadow, true))}
+          {cards.map((shadow, index) => card(shadow, true, index))}
         </aside>}
         <Workspace agentId={agent.id} consoles={consoles.consoles} active={consoles.active} onActivate={consoles.setActive} onClose={consoles.close}
           listOpen={listOpen} onOpenList={() => setListOpen(true)}
@@ -351,7 +351,7 @@ function AgentShadows({ agent }: { agent: DashboardAgentChoice }) {
         </header>
         {alerts}
         {query.isLoading || shadows.isLoading ? <p>正在加载…</p> : query.data && shadows.data && <div className="space-y-3">
-          {cards.map(shadow => card(shadow, false))}
+          {cards.map((shadow, index) => card(shadow, false, index))}
           {digitalShadows.length === 0 && <p className="rounded-xl border border-dashed p-6 text-center text-sm text-muted-foreground">尚未添加分身。</p>}
         </div>}
       </main>}
