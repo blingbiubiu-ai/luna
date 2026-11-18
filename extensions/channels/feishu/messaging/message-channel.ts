@@ -2901,8 +2901,8 @@ export class FeishuMessageChannel
           message_id: replyTarget,
         },
         data: {
-          msg_type: "text",
-          content: JSON.stringify({ text: this._operationContent(operation) }),
+          msg_type: "post",
+          content: markdownPostContent(this._operationContent(operation)),
           reply_in_thread: true,
         },
       });
@@ -3011,14 +3011,12 @@ export class FeishuMessageChannel
               this._operationContent(operation),
               operation.assetBasePath,
             )
-          : JSON.stringify({ text: this._operationContent(operation) });
+          : markdownPostContent(this._operationContent(operation));
     const msgType = operation.batchSummaryCard
       ? "interactive"
       : statusCard
         ? "interactive"
-        : this._operationHasMarkdownImage(operation)
-          ? "post"
-          : "text";
+        : "post";
     const replyTargetMessageId =
       testInjectReplyTargetMessageId(inbound) ??
       operation.targetMessageId ??
@@ -3146,7 +3144,7 @@ export class FeishuMessageChannel
     }
     if (this._operationHasMarkdownImage(operation)) return { msg_type: "post",
       content: await this._renderPostContentWithImages(this._operationContent(operation), operation.assetBasePath) };
-    return { msg_type: "text", content: JSON.stringify({ text: this._operationContent(operation) }) };
+    return { msg_type: "post", content: markdownPostContent(this._operationContent(operation)) };
   }
 
   private _operationContent(
@@ -3325,7 +3323,7 @@ export class FeishuMessageChannel
       if (normalized === "") {
         return;
       }
-      paragraphs.push([{ tag: "text", text: normalized }]);
+      paragraphs.push([{ tag: "md", text: normalized }]);
     };
 
     for (const match of text.matchAll(imageRegex)) {
@@ -3361,7 +3359,7 @@ export class FeishuMessageChannel
 }
 
 type FeishuPostParagraph = Array<
-  | { readonly tag: "text"; readonly text: string }
+  | { readonly tag: "md"; readonly text: string }
   | { readonly tag: "img"; readonly image_key: string }
 >;
 
@@ -3978,4 +3976,12 @@ async function readDownloadedImageDimensions(path: string): Promise<{
     // A missing or unsupported image can still be represented by its reference.
     return {};
   }
+}
+
+/**
+ * Replies go out as a rich-text post with one `md` element: Feishu renders its Markdown (bold,
+ * lists, code, links, @ mentions), while a `text` message would show the asterisks and backticks.
+ */
+export function markdownPostContent(markdown: string): string {
+  return JSON.stringify({ zh_cn: { content: [[{ tag: "md", text: markdown }]] } });
 }

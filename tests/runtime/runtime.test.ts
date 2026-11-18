@@ -3931,8 +3931,8 @@ describe("agent runtime lifecycle boundaries", () => {
       {
         path: { message_id: "om_message_1" },
         data: {
-          msg_type: "text",
-          content: JSON.stringify({ text: "hello" }),
+          msg_type: "post",
+          content: JSON.stringify({ zh_cn: { content: [[{ tag: "md", text: "hello" }]] } }),
         },
       },
     ]);
@@ -4222,7 +4222,7 @@ describe("agent runtime lifecycle boundaries", () => {
     ).toBe(true);
   });
 
-  test("Feishu message channel sends ordinary thread replies as text", async () => {
+  test("Feishu message channel sends ordinary thread replies as Markdown posts", async () => {
     const channel = new FeishuMessageChannel(
       "test-feishu",
       {
@@ -4264,10 +4264,10 @@ describe("agent runtime lifecycle boundaries", () => {
       {
         path: { message_id: "om_message_1" },
         data: {
-          msg_type: "text",
-          content: JSON.stringify({
+          msg_type: "post",
+          content: JSON.stringify({ zh_cn: { content: [[{ tag: "md",
             text: "请补充反馈时间点、did/uid 和失败表现。",
-          }),
+          }]] } }),
           reply_in_thread: true,
         },
       },
@@ -4352,7 +4352,7 @@ describe("agent runtime lifecycle boundaries", () => {
         content: [
           [
             {
-              tag: "text",
+              tag: "md",
               text: "原图：",
             },
           ],
@@ -4550,7 +4550,7 @@ describe("agent runtime lifecycle boundaries", () => {
         content: [
           [
             {
-              tag: "text",
+              tag: "md",
               text: "老大，收到这张图：",
             },
           ],
@@ -4648,7 +4648,7 @@ describe("agent runtime lifecycle boundaries", () => {
     expect(JSON.parse(reply.data.content)).toEqual({
       zh_cn: {
         content: [
-          [{ tag: "text", text: "收到：" }],
+          [{ tag: "md", text: "收到：" }],
           [{ tag: "img", image_key: "uploaded-artifact-image-key" }],
         ],
       },
