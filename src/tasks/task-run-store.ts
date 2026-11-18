@@ -1,4 +1,4 @@
-import { and, desc, eq, inArray } from "drizzle-orm";
+import { and, desc, eq, inArray, sql } from "drizzle-orm";
 
 import type { DrizzleDB } from "@/data";
 import { taskRuns } from "@/data/schema";
@@ -144,6 +144,14 @@ export class TaskRunStore {
       .from(taskRuns)
       .where(and(eq(taskRuns.task_id, taskId), eq(taskRuns.status, "running")))
       .get();
+    return row ? _toTaskRun(row) : undefined;
+  }
+
+  getRunForOperation(input: { readonly taskId: string; readonly operationId: string; readonly reason: TaskRunReason }): TaskRun | undefined {
+    const row = this._db.select().from(taskRuns)
+      .where(and(eq(taskRuns.task_id, input.taskId), eq(taskRuns.reason, input.reason),
+        sql`json_extract(${taskRuns.input_snapshot}, '$.operationId') = ${input.operationId}`))
+      .orderBy(desc(taskRuns.run_index)).limit(1).get();
     return row ? _toTaskRun(row) : undefined;
   }
 

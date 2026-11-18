@@ -524,7 +524,7 @@ export class TaskRunNotificationService {
         .where(eq(messages.id, sourceMessageId))
         .get();
     const replyAnchorId = notification.rootMessageKey ??
-      (sourceMessage?.externalMessageId.startsWith("runner-operation:") ? undefined : sourceMessage?.externalMessageId) ??
+      sourceMessage?.externalMessageId ??
       notification.statusMessageId ??
       notification.taskRunId;
     return {

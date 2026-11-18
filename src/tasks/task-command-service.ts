@@ -7,7 +7,6 @@ import type { DrizzleDB } from "@/data";
 import { tasks, taskParticipants, taskSubscriptions, sessionTimelineEntries, messages } from "@/data/schema";
 import { ContextPackStore } from "@/context";
 import { canonicalUserIdForRequestedIdentity, requestedIdentityFromInbound } from "@/identity/requested-identity";
-import { MessageStore } from "@/sessions/message-store";
 import { SessionStateStore } from "@/main-runner/session-state-store";
 import { TimelineStore } from "@/timeline/timeline-store";
 import { GatewayError } from "@/server/gateway-error";
@@ -71,14 +70,9 @@ export class TaskCommandService {
         created_at: now, updated_at: now, last_activity_at: now}).run();
       new SessionStateStore(db).clearClarification(sessionId);
     }
-    // A distinct internal source per operation lets multiple commands in one turn
-    // dispatch independently while retaining original user messages as provenance.
-    const commandSource = new MessageStore(db).appendOnce({sessionId: target.id, channelMessageKey: `runner-operation:${id}`,
-      role: "user", messageKind: "internal", senderUserId: actorUserId,
-      content: [{type: "text", text: request.kind === "task.create" ? request.payload.summary : request.kind === "task.update" ? request.payload.updateSummary : "Restart with existing task context"}],
-      channel: inbound.channel, rawPayload: {origin: "runner_operation", operationId: id, sourceMessageIds}}).row;
+    // The command itself is recorded in runner_operations; the Task's sources are the people's
+    // own messages. Its title, summary and facts live on the Task row.
     const packs = new ContextPackStore(db);
-    packs.appendTaskSourceItem({taskId, sessionId: target.id, messageId: commandSource.id});
     for (const messageId of sourceMessageIds) packs.appendTaskSourceItem({taskId, sessionId, messageId});
     if (request.kind === "task.create") {
       for (const pack of packs.listPacksForOwner("session", target.id).filter(pack => pack.kind === "thread_launch" || pack.kind === "group_launch")) {
@@ -96,14 +90,15 @@ export class TaskCommandService {
       ...(target.root_message_key ? {rootMessageId: target.root_message_key} : {}),
       ...(request.kind === "task.create" ? {statusCardStyle: request.payload.statusCardStyle ?? "native", notificationLevel: (request.payload.sendStatusCard ?? true) ? "major_updates" as const : "none" as const} : {}),
       visibility: "full"});
-    new TimelineStore(db).append({taskId, sessionId, messageId: commandSource.id,
+    // A message may carry several commands, so the event is keyed by the command; its sources are in data.
+    new TimelineStore(db).append({taskId, sessionId,
       type: request.kind === "task.create" ? "task.created" : "message.received",
       summary: request.kind === "task.create" ? request.payload.title : request.kind === "task.update" ? request.payload.updateSummary : "Restart with existing task context",
       data: {operationId: id, sourceMessageIds, ...(assumptions ? {assumptions: assumptions} : {})}});
-    return {taskId, sourceMessageId: commandSource.id, taskSessionId: target.id};
+    return {taskId, ...(sourceMessageId ? {sourceMessageId} : {}), taskSessionId: target.id};
   }
 
-  dispatch(request: TaskRequest, context: OperationContext, result: OperationResult): OperationResult {
+  dispatch(operationId: string, request: TaskRequest, context: OperationContext, result: OperationResult): OperationResult {
     const taskId = result.taskId!;
     const task = this.db.select().from(tasks).where(eq(tasks.id, taskId)).get();
     if (!task) throw new GatewayError("task_not_found", "Task no longer exists", 404);
@@ -116,12 +111,13 @@ export class TaskCommandService {
       const run = result.runId ? this.supervisor.cancelTaskRun({taskId, runId: result.runId, reason: request.payload.reason}) : undefined;
       return {...result, cancelled: run?.status === "cancelled"};
     }
-    const inputSnapshot = {operation: request.kind, sessionId: result.taskSessionId ?? context.sessionId, messageRowId: result.sourceMessageId,
+    const inputSnapshot = {operation: request.kind, operationId, sessionId: result.taskSessionId ?? context.sessionId, messageRowId: result.sourceMessageId,
       messageRowIds: context.sourceMessageIds, inbound: context.inbound,
       requestedByIdentity: requestedIdentityFromInbound(context.inbound) ?? {provider: "local", externalUserId: context.actorUserId, canonicalUserId: context.actorUserId}};
+    const source = result.sourceMessageId ? {sourceMessageId: result.sourceMessageId} : {};
     const run = request.kind === "task.create"
-      ? this.supervisor.startInitialRun({taskId, inputSnapshot, sourceMessageId: result.sourceMessageId!})
-      : this.supervisor.restartTaskRun({taskId, inputSnapshot, sourceMessageId: result.sourceMessageId!,
+      ? this.supervisor.startInitialRun({taskId, inputSnapshot, operationId, ...source})
+      : this.supervisor.restartTaskRun({taskId, inputSnapshot, operationId, ...source,
           ...(request.kind === "task.update" ? {
             updatedTaskSummary: request.payload.updatedTaskSummary ?? task.summary ?? "",
             updateSummary: request.payload.updateSummary,

@@ -63,8 +63,9 @@ async function executePlan(db: DrizzleDB, input: MainRunnerRunInput, plan: TestM
   else request={kind:'task.restart',payload:{taskId:plan.taskId}};
   const context: OperationContext={sessionId,actorUserId:userId,originId,sourceMessageIds:input.input.messages.map(m=>m.messageId),inbound:input.input.latestMessage};
   const service=new TaskCommandService(db,state.supervisor);
-  const result=db.transaction(()=>service.prepare(randomUUID(),request,context));
-  service.dispatch(request,context,result);
+  const operationId=randomUUID();
+  const result=db.transaction(()=>service.prepare(operationId,request,context));
+  service.dispatch(operationId,request,context,result);
   reply=plan.dispatchReply;
  }else reply=plan.reply;
  if(reply){const accepted=commands.accept({userId,sourceSessionId:sessionId,originId},sessionId,'message.send',randomUUID(),{content:reply,purpose:'answer'});await commands.waitForIdle();const settled=commands.get(accepted.id);if(settled && ['failed','unknown','cancelled'].includes(settled.status))throw new Error(settled.error ?? 'Message command failed');}

@@ -1,4 +1,4 @@
-import { and, desc, eq } from "drizzle-orm";
+import { and, desc, eq, sql } from "drizzle-orm";
 
 import type { DrizzleDB } from "@/data";
 import { timelineEvents } from "@/data/schema";
@@ -67,6 +67,12 @@ export class TimelineStore {
   private _findExistingMessageEvent(
     input: AppendTimelineEventInput,
   ): TimelineEvent | undefined {
+    const operationId = input.data?.operationId;
+    if (typeof operationId === "string") {
+      return this._db.select().from(timelineEvents).where(and(
+        eq(timelineEvents.task_id, input.taskId), eq(timelineEvents.type, input.type),
+        sql`json_extract(${timelineEvents.data}, '$.operationId') = ${operationId}`)).get();
+    }
     if (input.messageId === undefined) {
       return undefined;
     }

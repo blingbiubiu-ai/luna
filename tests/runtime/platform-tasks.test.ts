@@ -74,5 +74,5 @@ test("task commands cannot redirect work or late dispatch to another Shadow",()=
  expect(()=>commands.prepare("cross",request,context)).toThrow("task_scope_mismatch");
  expect(connection.db.select().from(schema.tasks).all()).toHaveLength(0);
  const task=resolver.resolvePersistentTask({...base,source:source(second)}).persistentTask;
- expect(()=>commands.dispatch({kind:"task.restart",payload:{taskId:task.id}},context,{taskId:task.id,taskSessionId:second})).toThrow("task_scope_mismatch");
+ expect(()=>commands.dispatch("cross-restart",{kind:"task.restart",payload:{taskId:task.id}},context,{taskId:task.id,taskSessionId:second})).toThrow("task_scope_mismatch");
 });

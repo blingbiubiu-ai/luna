@@ -119,7 +119,7 @@ export class RunnerOperationService {
       const result = row.request.kind === "task.status_card"
         ? await (this.cards ?? new TaskRunNotificationService({db: this.db, channelForNotification: () => undefined})).applyStatusCardCommand(row.id, row.result!, row.request.payload.resend, row.request.payload.style)
         : row.request.kind === "session.create_thread" || row.request.kind === "session.clarify" || row.request.kind === "session.release" ? row.result! :
-        new TaskCommandService(this.db, this.supervisor).dispatch(row.request, row.context, row.result!);
+        new TaskCommandService(this.db, this.supervisor).dispatch(row.id, row.request, row.context, row.result!);
       row = this.db.update(runnerOperations).set({result, status: "applied", error: null, updatedAt: Date.now()}).where(eq(runnerOperations.id, row.id)).returning().get()!;
       return this.receipt(row);
     } catch (error) {

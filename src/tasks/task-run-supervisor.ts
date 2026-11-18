@@ -75,6 +75,8 @@ export interface StartInitialTaskRunInput {
   readonly taskId: string;
   readonly inputSnapshot: unknown;
   readonly sourceMessageId?: string;
+  /** The Main command that started this run; a replay of it returns the same run. */
+  readonly operationId?: string;
 }
 
 /**
@@ -89,6 +91,8 @@ export interface RestartTaskRunInput {
   readonly inputSnapshot: unknown;
   readonly assumptions?: readonly string[];
   readonly sourceMessageId?: string;
+  /** The Main command behind this run; one message may carry several commands. */
+  readonly operationId?: string;
   readonly cancelReason?: string;
 }
 
@@ -113,7 +117,7 @@ export class TaskRunSupervisor {
   }
 
   startInitialRun(input: StartInitialTaskRunInput): TaskRun {
-    const duplicateRun = this._existingRunForSource(input.taskId, "initial", input.sourceMessageId);
+    const duplicateRun = this._existingRunForSource(input.taskId, "initial", input);
     if (duplicateRun !== undefined) {
       return duplicateRun;
     }
@@ -124,7 +128,7 @@ export class TaskRunSupervisor {
   }
 
   restartTaskRun(input: RestartTaskRunInput): TaskRun {
-    const duplicateRun = this._existingRunForSource(input.taskId, "restart", input.sourceMessageId);
+    const duplicateRun = this._existingRunForSource(input.taskId, "restart", input);
     if (duplicateRun !== undefined) {
       return duplicateRun;
     }
@@ -177,7 +181,8 @@ export class TaskRunSupervisor {
       ...(contextPackIds.length > 0 ? { contextPackIds } : {}),
       runnerType: input.runnerType,
       runnerContextId: input.runnerContext.id,
-      ...(input.sourceMessageId !== undefined ? { sourceMessageId: input.sourceMessageId } : {}),
+      // A command's run is identified by the command (input snapshot); one message may carry several.
+      ...(input.sourceMessageId !== undefined && !_hasOperationId(input.inputSnapshot) ? { sourceMessageId: input.sourceMessageId } : {}),
     });
     const controller = new AbortController();
     this._controllers.set(run.id, controller);
@@ -539,14 +544,17 @@ export class TaskRunSupervisor {
     return this._taskRuns.getActiveRunForTask(run.taskId)?.id === run.id;
   }
 
-  /** A source message replay returns its existing run instead of starting another. */
-  private _existingRunForSource(taskId: string, reason: "initial" | "restart", sourceMessageId: string | undefined): TaskRun | undefined {
-    return sourceMessageId === undefined ? undefined
-      : this._taskRuns.getRunForTaskSourceMessage({taskId, sourceMessageId, reason});
+  /** A replayed command, or else a replayed source message, returns its existing run instead of starting another. */
+  private _existingRunForSource(taskId: string, reason: "initial" | "restart",
+    input: { readonly sourceMessageId?: string; readonly operationId?: string }): TaskRun | undefined {
+    if (input.operationId !== undefined) return this._taskRuns.getRunForOperation({taskId, operationId: input.operationId, reason});
+    return input.sourceMessageId === undefined ? undefined
+      : this._taskRuns.getRunForTaskSourceMessage({taskId, sourceMessageId: input.sourceMessageId, reason});
   }
 
   private _appendContextUpdatedEvent(input: RestartTaskRunInput): void {
     if (
+      input.operationId === undefined &&
       input.sourceMessageId !== undefined &&
       this._timeline.hasMessageEvent({
         taskId: input.taskId,
@@ -559,7 +567,8 @@ export class TaskRunSupervisor {
 
     this._timeline.append({
       taskId: input.taskId,
-      ...(input.sourceMessageId !== undefined
+      // A command's event is keyed by the command; one message may carry several.
+      ...(input.sourceMessageId !== undefined && input.operationId === undefined
         ? { messageId: input.sourceMessageId }
         : {}),
       type: "context.updated",
@@ -576,6 +585,7 @@ export class TaskRunSupervisor {
         ...(input.sourceMessageId !== undefined
           ? { sourceMessageId: input.sourceMessageId }
           : {}),
+        ...(input.operationId !== undefined ? { operationId: input.operationId } : {}),
       },
     });
   }
@@ -586,6 +596,9 @@ export class TaskRunSupervisor {
       .find((pack) => {
         if (pack.kind !== "task_update") {
           return false;
+        }
+        if (input.operationId !== undefined) {
+          return _isRecord(pack.metadataJson) && pack.metadataJson.operationId === input.operationId;
         }
         if (input.sourceMessageId !== undefined) {
           return pack.triggerMessageId === input.sourceMessageId;
@@ -608,6 +621,7 @@ export class TaskRunSupervisor {
         triggerMessageId: input.sourceMessageId ?? null,
         metadataJson: {
           updateSummary: input.updateSummary,
+          ...(input.operationId !== undefined ? { operationId: input.operationId } : {}),
           ...(input.updatedTaskTitle !== undefined
             ? { updatedTaskTitle: input.updatedTaskTitle }
             : {}),
@@ -822,4 +836,8 @@ function _stableHash(value: unknown): string {
     hash = Math.imul(hash, 0x01000193);
   }
   return `fnv1a:${(hash >>> 0).toString(16).padStart(8, "0")}`;
+}
+
+function _hasOperationId(snapshot: unknown): boolean {
+  return _isRecord(snapshot) && typeof snapshot.operationId === "string";
 }

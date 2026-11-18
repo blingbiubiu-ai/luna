@@ -1539,7 +1539,8 @@ describe("session inbound router", () => {
         {
           reason: "restart",
           status: "completed",
-          sourceMessageId: expect.any(String),
+          // A run started by a Main command is identified by that command, not by a message.
+          inputSnapshot: expect.objectContaining({ operation: "task.update", operationId: expect.any(String) }),
         },
       ]);
     const statusOutbounds = channel.outbound.filter(

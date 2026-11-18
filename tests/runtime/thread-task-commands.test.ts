@@ -343,7 +343,7 @@ test("cancel preparation snapshots the run and completed/foreign tasks are not c
     const domain = new TaskCommandService(f.db, f.supervisor);
     const prepared = domain.prepare("cancel-operation", request, context);
     release(); await f.supervisor.waitForIdle();
-    expect(domain.dispatch(request, context, prepared)).toMatchObject({cancelled: false});
+    expect(domain.dispatch("cancel-operation", request, context, prepared)).toMatchObject({cancelled: false});
     expect(f.db.select().from(schema.tasks).get()?.status).toBe("completed");
     fixtureSessionOwnership(f.db,"test","other");
     const foreign = f.sessions.resolveByChannelSurface({channelType: "test", channelId: "other", groupId: "other"});
@@ -445,4 +445,42 @@ test("topic creation restores the automatic five-message window and explicit sup
   store.append({sessionId: f.session.id, channelMessageKey: "om_late", role: "user", senderUserId: "user", channel: f.inbound.channel, content: [{type: "text", text: "Later"}]});
   expect(await f.service.execute(f.claims, "session.create_thread", "window-topic", payload)).toEqual(receipt);
   expect(packs.listPacksForOwner("session", receipt.targetSessionId!)).toHaveLength(1);
+});
+
+test("a Task command writes no message of its own: the Task points at the people's messages",async()=>{
+  const f=fixture();
+  const before=f.db.select().from(schema.messages).all().length;
+  const created=await f.service.execute(f.claims,"task.create","no-record",{title:"Look",summary:"Look into playback",facts:[],sendStatusCard:false});
+  const taskId=created.taskIds[0]!;
+  expect(f.db.select().from(schema.messages).all()).toHaveLength(before);
+  const sources=new ContextPackStore(f.db).listTaskSourceItems().filter(item=>item.taskId===taskId).map(item=>item.sourceMessageId);
+  expect(sources).toEqual([f.anchor.id]);
+  const [run]=f.db.select().from(schema.taskRuns).where(eq(schema.taskRuns.task_id,taskId)).all();
+  expect(run?.source_message_id).toBeNull();
+  expect((run?.input_snapshot as {messageRowIds:string[]}).messageRowIds).toEqual([f.anchor.id]);
+  const events=f.db.select().from(schema.timelineEvents).where(eq(schema.timelineEvents.task_id,taskId)).all().filter(e=>e.type==="task.created");
+  expect(events.map(e=>(e.data as {sourceMessageIds:string[]}).sourceMessageIds)).toEqual([[f.anchor.id]]);
+  await f.supervisor.waitForIdle();
+});
+
+test("several commands from one message each take effect, and a retried command reuses its run",async()=>{
+  const f=fixture();
+  const created=await f.service.execute(f.claims,"task.create","base",{title:"Look",summary:"Look",facts:[],sendStatusCard:false});
+  const taskId=created.taskIds[0]!;
+  await f.supervisor.waitForIdle();
+  const first=await f.service.execute(f.claims,"task.update","update-1",{taskId,updateSummary:"Only Android"});
+  await f.supervisor.waitForIdle();
+  const second=await f.service.execute(f.claims,"task.update","update-2",{taskId,updateSummary:"Only since Nov 17"});
+  await f.supervisor.waitForIdle();
+  // Both updates come from the same user message, yet each starts its own run and context.
+  expect(first.runId).toBeDefined();expect(second.runId).toBeDefined();expect(second.runId).not.toBe(first.runId);
+  const updates=f.db.select().from(schema.timelineEvents).where(eq(schema.timelineEvents.task_id,taskId)).all().filter(e=>e.type==="context.updated").map(e=>e.summary);
+  expect(updates).toEqual(["Only Android","Only since Nov 17"]);
+  const facts=(f.db.select().from(schema.tasks).where(eq(schema.tasks.id,taskId)).get()?.context_json as {knownFacts:string[]}).knownFacts;
+  expect(facts).toEqual(expect.arrayContaining(["Only Android","Only since Nov 17"]));
+  // Replaying a command returns its receipt and run; nothing new starts.
+  const runs=f.db.select().from(schema.taskRuns).where(eq(schema.taskRuns.task_id,taskId)).all().length;
+  expect((await f.service.execute(f.claims,"task.update","update-1",{taskId,updateSummary:"Only Android"})).runId).toBe(first.runId);
+  expect(f.db.select().from(schema.taskRuns).where(eq(schema.taskRuns.task_id,taskId)).all().length).toBe(runs);
+  await f.supervisor.waitForIdle();
 });

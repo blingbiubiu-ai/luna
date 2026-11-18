@@ -22,7 +22,7 @@ export function selectLaunchMessages(db: DrizzleDB, input: {
     const raw = message.rawPayloadJson as Record<string, unknown> | null;
     return (input.anchorMessageId !== undefined || input.before === undefined || entry.createdAt <= input.before) &&
       (!raw?.deliveryStatus || raw.deliveryStatus === "sent") &&
-      raw?.origin !== "runner_operation" && raw?.origin !== "session_trigger";
+      raw?.origin !== "session_trigger";
   });
   const anchor = input.anchorMessageId ? requireMessage(input.anchorMessageId) : candidates.at(-1);
   const index = anchor ? candidates.findIndex(row => row.message.id === anchor.message.id) : -1;
