@@ -90,11 +90,12 @@ test("remote Worker binds once, downloads its scoped snapshot and renders its ow
     const client = scheduler.workers.client(bound.workerId);
     const prepared = await scheduler.preparation.prepare({protocolVersion:2,invocationId:"invocation",scope,resources:bundle.selection,
       contextId:"context",runnerId:"context",scopeKey:"session:context",runnerKind:"work",context:{schemaVersion:1,owner:{type:"session",id:"session"}}});
-    expect(prepared.cwd).toBe(join(workerHome,"agents/agent/shadows/shadow/runners/context"));
-    const instructions = readFileSync(join(prepared.cwd, "AGENTS.md"), "utf8");
-    expect(instructions).toContain(workerHome); expect(instructions).not.toContain(serviceHome);
+    expect(prepared.cwd).toBe("/home/luna/runners/context");
+    expect(prepared.hostCwd).toBe(join(workerHome,"agents/agent/shadows/shadow/runners/context"));
+    const instructions = readFileSync(join(prepared.hostCwd!, "AGENTS.md"), "utf8");
+    expect(instructions).toContain(prepared.cwd); expect(instructions).not.toContain(serviceHome); expect(instructions).not.toContain(workerHome);
     expect(prepared.instructionFingerprint).toMatch(/^[a-f0-9]{64}$/);
-    expect(JSON.parse(readFileSync(join(prepared.cwd, ".luna/runner-context.json"), "utf8")).owner.id).toBe("session");
+    expect(JSON.parse(readFileSync(join(prepared.hostCwd!, ".luna/runner-context.json"), "utf8")).owner.id).toBe("session");
     if (dockerEnabled) {
       scheduler.submit({ version: 2, scope:prepared.scope,resources:bundle.selection, jobId: "remote-job", invocationId: "invocation", environmentId: "environment", runnerContextId: "context", scopeKey: "session:context", runnerKind: "work", sessionId: "session", resourceRevision: bundle.selection.digest, input: { runnerType: "codex", prompt: "test" }, credentialsRevision: 1, timeoutMs: 30000 });
       await scheduler.tick();
@@ -121,15 +122,15 @@ test("remote Worker binds once, downloads its scoped snapshot and renders its ow
       for(const environment of environments){
         expect(manager.store.active(environment.id)).toHaveLength(0);
         const container=await manager.driver.inspect(environment);expect(container?.State.Running).toBe(true);
-        const home=join(workerHome,"agents",environment.spec.scope.agentId,"shadows",environment.spec.scope.shadowId);
-        expect(container!.Mounts.some(m=>m.Destination===home && m.RW)).toBe(true);
+        const hostHome=join(workerHome,"agents",environment.spec.scope.agentId,"shadows",environment.spec.scope.shadowId),home="/home/luna";
+        expect(container!.Mounts.some(m=>m.Destination===home && m.RW && [hostHome,`/host_mnt${hostHome}`].includes(m.Source))).toBe(true);
         for(const other of environments.filter(e=>e.id!==environment.id)){
           const foreign=join(workerHome,"agents",other.spec.scope.agentId,"shadows",other.spec.scope.shadowId);
           expect(container!.Mounts.some(m=>m.Destination===foreign)).toBe(false);
           execFileSync("docker",["exec",container!.Id,"test","!","-e",foreign]);
         }
         execFileSync("docker",["exec",container!.Id,"touch",join(home,"own-write")]);
-        expect(readFileSync(join(home,"own-write"),"utf8")).toBe("");
+        expect(readFileSync(join(hostHome,"own-write"),"utf8")).toBe("");
         // Snapshot versions are mounted read-only; .luna-resources is a link into them.
         expect(container!.Mounts.some(m=>m.Destination===join(home,".luna-resource-versions") && !m.RW)).toBe(true);
         expect(()=>execFileSync("docker",["exec",container!.Id,"touch",join(home,".luna-resources/forbidden-write")],{stdio:"ignore"})).toThrow();
@@ -189,7 +190,7 @@ test("remote Worker binds once, downloads its scoped snapshot and renders its ow
       await runtime.drainShadow(scope);
       expect(await manager.driver.inspect(manager.store.require(previous.id))).toBeNull();
       expect(manager.store.require(previous.id).state).toBe("stopped");
-      expect(readFileSync(join(context.home, "own-write"), "utf8")).toBe("");
+      expect(readFileSync(join(workerHome, "agents/agent/shadows/shadow/own-write"), "utf8")).toBe("");
       for (const other of environments.filter(environment => environment.id !== previous.id)) {
         expect((await manager.driver.inspect(other))?.Id).toBe(other.containerId ?? undefined);
       }

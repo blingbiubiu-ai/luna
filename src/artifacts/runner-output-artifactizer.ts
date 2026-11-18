@@ -116,7 +116,7 @@ export function artifactizeRunnerOutputValue<T>(input: {
       // A same-named Service file is never evidence of a remote Runner output.
       return markUnuploadedRemoteFiles(input.value);
     }
-    if (prepared?.local) runnerWorkspacePath = join(prepared.cwd, "workspace");
+    if (prepared?.local) runnerWorkspacePath = join(prepared.hostCwd ?? prepared.cwd, "workspace");
   }
   const registry = new ArtifactRegistry(input.db);
   return artifactizeRunnerOutputLocalFileReferencesInValue({

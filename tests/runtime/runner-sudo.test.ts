@@ -71,3 +71,23 @@ test("Worker startup warns with the fix when its data root is not nosuid", () =>
   expect(nosuidStartupWarning("/w", "darwin")).toBeUndefined();
   expect(nosuidStartupWarning("/w", "win32")).toBeUndefined();
 });
+
+test("the Runner UID is always the account luna with the Shadow HOME, root access or not", async () => {
+  const { ensureRunnerAccount } = await import("../../apps/executor/src/executor/runner-sudo");
+  expect(ensureRunnerAccount({ root, uid: 502, gid: 20, home: "/home/luna" })).toBe("luna");
+  expect(readFileSync(join(root, "etc/passwd"), "utf8")).toContain("luna:x:502:20:Luna Runner:/home/luna:/bin/bash\n");
+  expect(existsSync(join(root, RUNNER_SUDOERS))).toBe(false);
+  ensureRunnerAccount({ root, uid: 502, gid: 20, home: "/home/luna" });
+  expect(readFileSync(join(root, "etc/passwd"), "utf8").match(/:502:/g)).toHaveLength(1);
+});
+
+test("the image's own account for the Runner UID becomes luna; root stays root", async () => {
+  const { ensureRunnerAccount } = await import("../../apps/executor/src/executor/runner-sudo");
+  expect(ensureRunnerAccount({ root, uid: 1000, gid: 1000, home: "/home/luna" })).toBe("luna");
+  const passwd = readFileSync(join(root, "etc/passwd"), "utf8");
+  expect(passwd).toContain("luna:x:1000:1000:Luna Runner:/home/luna:/bin/bash\n");
+  expect(passwd).not.toContain("runner:");
+  expect(readFileSync(join(root, "etc/group"), "utf8")).toContain("luna:x:1000:\n");
+  expect(ensureRunnerAccount({ root, uid: 0, gid: 0, home: "/home/luna" })).toBe("root");
+  expect(readFileSync(join(root, "etc/passwd"), "utf8")).toStartWith("root:x:0:0:root:/root:/bin/bash\n");
+});

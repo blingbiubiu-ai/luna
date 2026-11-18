@@ -1,4 +1,4 @@
-import {WorkerShadowLayouts} from "./shadow-layout";
+import {CONTAINER_HOME,WorkerShadowLayouts,containerPath} from "./shadow-layout";
 import {WorkerShadowMounts,type ShadowMountPlan} from "./shadow-mounts";
 import type {ResourceScope} from "@luna/host-runtime/scoped-runner-resources";
 import { execFile } from "node:child_process";
@@ -41,14 +41,16 @@ export class DockerEnvironmentDriver {
   async prepareContext(scope:ResourceScope,contextId:string,scopeKey:string,projectId?:string,requestedCwd?:string):Promise<WorkerContext> {
     this.layouts.ensure(scope);
     // Preparation already chose the context's directory; this only checks the caller agrees.
-    const {cwd}=this.layouts.context(scope,contextId);
-    if(requestedCwd!==undefined && requestedCwd!==cwd)throw new ExecutionError(409,"context_directory_conflict");
+    const {containerCwd}=this.layouts.context(scope,contextId);
+    if(requestedCwd!==undefined && requestedCwd!==containerCwd)throw new ExecutionError(409,"context_directory_conflict");
     const context=this.contexts.ensure(contextId,scopeKey);
     new ProjectMounts(this.db,this.config).bind(contextId,projectId);
     return context;
   }
+  /** A context's working directory as its container sees it. */
   contextPath(contextId:string):string|undefined {
-    return (this.db.prepare("SELECT cwd FROM worker_shadow_context_paths WHERE context_id=?").get(contextId) as {cwd:string}|undefined)?.cwd;
+    const row=this.db.prepare("SELECT p.cwd, l.home FROM worker_shadow_context_paths p JOIN worker_shadow_layouts l ON l.shadow_id=p.shadow_id WHERE p.context_id=?").get(contextId) as {cwd:string;home:string}|undefined;
+    return row && containerPath({home:CONTAINER_HOME,homeSource:row.home},row.cwd);
   }
   /** Build the scoped bind set used by ensure. */
   mountPlan(environment:EnvironmentRecord,requiredContextId?:string):ShadowMountPlan {
@@ -254,6 +256,8 @@ export class DockerEnvironmentDriver {
   }
   /** The Shadow HOME as mounted inside its container. */
   home(environment: EnvironmentRecord): string { return this.layouts.ensure(environment.spec.scope).home; }
+  /** The Shadow HOME on this host, which the container mounts at `home`. */
+  homeSource(environment: EnvironmentRecord): string { return this.layouts.ensure(environment.spec.scope).homeSource; }
   /** One Docker call for all of this Worker's containers: name -> running. */
   async containerStates(): Promise<Map<string, boolean>> {
     const output = await this.docker(["container", "ls", "--all", "--filter", `label=luna.worker=${this.config.workerId}`, "--format", "{{.Names}}\t{{.State}}"]);

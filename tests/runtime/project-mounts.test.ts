@@ -53,7 +53,8 @@ test("Worker prepares a context in its Shadow and enforces its scope", async () 
     new ProjectMounts(f.db, f.config).prepare();
     driver.contexts.ensure("context", "session:context");
     const scope={agentId:"agent",shadowId:"shadow"};
-    const cwd = join(f.config.dataRoot,"agents/agent/shadows/shadow/runners/context");
+    // The working directory as the container sees it.
+    const cwd = "/home/luna/runners/context";
     expect(await driver.prepareContext(scope,"context", "session:context", "project", cwd)).toEqual({ contextId: "context", scopeKey: "session:context" });
     expect(driver.contextPath("context")).toBe(cwd);
     await expect(driver.prepareContext(scope,"context", "session:wrong", "project", cwd)).rejects.toMatchObject({ code: "context_scope_conflict" });

@@ -23,6 +23,8 @@ export const ContextPreparation=z.object({
 export const WorkerContextPreparation=ContextPreparation.extend({scope:ExecutionScope}).strict();
 export const WorkerPreparedContext=z.object({
  protocolVersion:z.literal(2),scope:ExecutionScope,workerId:Id,home:absoluteRunnerPath,cwd:absoluteRunnerPath,
+ /** The working directory on the Worker host (`cwd` is where the container sees it); used only when Service shares that host. */
+ hostCwd:absoluteRunnerPath.optional(),
  instructionFingerprint:z.string().min(1),resources:ResourceSelection,resourceRevision:ResourceSelection.shape.digest,env:z.record(z.string(),z.string()),
 }).strict().refine(value=>value.resourceRevision===value.resources.digest,"Resource revision mismatch");
 export const PreparedContext=WorkerPreparedContext.safeExtend({local:z.boolean()});

@@ -321,8 +321,9 @@ function resolvePluginExecutionRoot(
   let physicalRoot: string;
   let expectedRoot: string;
   try {
-    physicalRoot = realpathSync(prepared?.cwd ?? context.runner_root_path);
-    expectedRoot = prepared?.cwd ?? join(realpathSync(runnerRootBase), relative(runnerRootBase, context.runner_root_path));
+    // A Worker on this host reports where the directory is here as well as in its container.
+    physicalRoot = realpathSync(prepared?.hostCwd ?? prepared?.cwd ?? context.runner_root_path);
+    expectedRoot = prepared?.hostCwd ?? prepared?.cwd ?? join(realpathSync(runnerRootBase), relative(runnerRootBase, context.runner_root_path));
     if (!statSync(physicalRoot).isDirectory()) {
       throw new Error("not a directory");
     }

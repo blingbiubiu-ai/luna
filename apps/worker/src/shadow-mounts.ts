@@ -28,7 +28,7 @@ export class WorkerShadowMounts {
   const versionsSource=dirname(resourceSource);
   if(!realpathSync(versionsSource).startsWith(realpathSync(layout.resourceRoot)+sep+"mounts"+sep))throw new ExecutionError(409,"shadow_mount_target_invalid");
   const versions=join(layout.home,RESOURCE_VERSIONS_DIR);
-  directoryTarget(layout.homeSource,versions);
+  directoryTarget(layout.homeSource,join(layout.homeSource,RESOURCE_VERSIONS_DIR));
   return {layout,resourceSource,mounts:[
    {source:layout.homeSource,destination:layout.home,readonly:false},
    {source:versionsSource,destination:versions,readonly:true},

@@ -34,7 +34,7 @@ export class ShadowPreparation {
    // Repeat authorization even after a lost reply; cached bytes are not an access grant.
    await this.download.sync(input.scope,input.resources);
    const prior=this.store.requireLive(input.invocationId);
-   const plan=this.mounts.prepare(input.scope,input.resources),{cwd}=this.layouts.context(input.scope,input.contextId,input.runnerId);
+   const plan=this.mounts.prepare(input.scope,input.resources),{cwd,containerCwd}=this.layouts.context(input.scope,input.contextId,input.runnerId);
    if(prior.state==="prepared" && prior.reply){
     const reply=WorkerPreparedContext.parse(JSON.parse(prior.reply));
     return {...reply,env:{LUNA_SERVICE_URL:this.origin}};
@@ -49,7 +49,7 @@ export class ShadowPreparation {
     if(info && (!info.isFile() || info.isSymbolicLink() || info.nlink!==1))throw new ExecutionError(409,"invalid_context_target");
    }
    const rendered=ensureRunnerWorkspaceInstructionFiles({home:plan.layout.home,promptsRoot:join(plan.resourceSource,"prompts"),
-    runnerRootPath:cwd,runnerKind:input.runnerKind,previousFingerprint:null,
+    runnerRootPath:containerCwd,writeRoot:cwd,runnerKind:input.runnerKind,previousFingerprint:null,
     // The rules accompany the Shadow switch only where this host lets the container use sudo.
     runnerSudo:input.rootAccess===true && rootHostCheck(plan.layout.homeSource).allowed,
     ...(input.soul ? {soul:input.soul} : {})});
@@ -57,7 +57,7 @@ export class ShadowPreparation {
    try{writeFileSync(temp,JSON.stringify(input.context??{},null,2)+"\n",{flag:"wx",mode:0o600});renameSync(temp,target);}
    finally{rmSync(temp,{force:true});}
    const reply=WorkerPreparedContext.parse({protocolVersion:2,scope:input.scope,resources:input.resources,workerId:this.workerId,
-    home:plan.layout.home,cwd,instructionFingerprint:rendered.instructionFingerprint,resourceRevision:input.resources.digest,
+    home:plan.layout.home,cwd:containerCwd,hostCwd:cwd,instructionFingerprint:rendered.instructionFingerprint,resourceRevision:input.resources.digest,
     env:{LUNA_SERVICE_URL:this.origin}});
    this.store.complete(input.invocationId,reply);
    return reply;

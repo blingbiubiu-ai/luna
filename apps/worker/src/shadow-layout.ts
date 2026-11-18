@@ -1,12 +1,17 @@
 import {lstatSync,mkdirSync,realpathSync} from "node:fs";
-import {dirname,join,sep} from "node:path";
+import {dirname,join,relative,sep} from "node:path";
 import {ExecutionError,transaction,type SqlDatabase} from "@luna/execution-store";
 import type {ResourceScope} from "@luna/host-runtime/scoped-runner-resources";
 
+/** Every container sees its Shadow's HOME here; each container belongs to one Shadow. */
+export const CONTAINER_HOME="/home/luna";
+
+/** `home` and `runners` are the paths inside the container; the `Source` ones are on this host. */
 export interface ShadowLayout extends ResourceScope {
  home:string;
  homeSource:string;
  runners:string;
+ runnersSource:string;
  resourceRoot:string;
  credentials:string;
 }
@@ -47,7 +52,7 @@ export class WorkerShadowLayouts {
    safeDirectory(this.root,join(resourceRoot,"credentials"));
    safeDirectory(this.root,runners);
    this.db.prepare("INSERT OR IGNORE INTO worker_shadow_layouts(shadow_id,agent_id,home,runners) VALUES (?,?,?,?)").run(scope.shadowId,scope.agentId,home,runners);
-   return {...scope,home,homeSource:home,runners,resourceRoot,credentials:join(resourceRoot,"credentials")};
+   return {...scope,home:CONTAINER_HOME,homeSource:home,runners:join(CONTAINER_HOME,"runners"),runnersSource:runners,resourceRoot,credentials:join(resourceRoot,"credentials")};
   });
  }
 
@@ -96,21 +101,29 @@ export class WorkerShadowLayouts {
   * shared with the owner's other contexts, e.g. after a switch from Codex to Claude.
   * Without one it is named after the context, as contexts created before were.
   */
- context(scope:ResourceScope,contextId:string,directory=contextId):{layout:ShadowLayout;cwd:string} {
+ context(scope:ResourceScope,contextId:string,directory=contextId):{layout:ShadowLayout;cwd:string;containerCwd:string} {
   validateId(contextId);validateId(directory);
   return transaction(this.db,()=>{
    if(!this.db.prepare("SELECT 1 FROM worker_shadow_layouts WHERE shadow_id=?").get(scope.shadowId))
     throw new ExecutionError(409,"shadow_layout_missing");
    const layout=this.ensure(scope);
    const prior=this.db.prepare("SELECT shadow_id,cwd FROM worker_shadow_context_paths WHERE context_id=?").get(contextId) as {shadow_id:string;cwd:string}|undefined;
-   if(prior && (prior.shadow_id!==scope.shadowId || dirname(prior.cwd)!==layout.runners))throw new ExecutionError(409,"context_shadow_conflict");
-   const cwd=prior?.cwd ?? join(layout.runners,directory);
+   if(prior && (prior.shadow_id!==scope.shadowId || dirname(prior.cwd)!==layout.runnersSource))throw new ExecutionError(409,"context_shadow_conflict");
+   const cwd=prior?.cwd ?? join(layout.runnersSource,directory);
    if(prior && !stat(cwd))throw new ExecutionError(409,"context_storage_missing");
-   safeDirectory(layout.runners,cwd);
+   safeDirectory(layout.runnersSource,cwd);
    this.db.prepare("INSERT OR IGNORE INTO worker_shadow_context_paths VALUES (?,?,?)").run(contextId,scope.shadowId,cwd);
-   return {layout,cwd};
+   return {layout,cwd,containerCwd:containerPath(layout,cwd)};
   });
  }
+}
+
+/** Where the container sees a path under the Shadow's HOME on this host. */
+export function containerPath(layout:Pick<ShadowLayout,"home"|"homeSource">,hostPath:string):string {
+ const rel=relative(layout.homeSource,hostPath);
+ if(rel==="..")throw new ExecutionError(409,"shadow_directory_unsafe");
+ if(rel.startsWith(".."+sep) || rel.startsWith("/"))throw new ExecutionError(409,"shadow_directory_unsafe");
+ return rel ? join(layout.home,rel) : layout.home;
 }
 
 function validateId(value:string):void {

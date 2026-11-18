@@ -11,18 +11,20 @@ afterEach(()=>{db.close();rmSync(root,{recursive:true,force:true});});
 test("three Shadows have separate HOME, nested runners and sibling protected resources",()=>{
  const results=[a,b,c].map(scope=>layouts.ensure(scope));
  for(const layout of results){
-  expect(layout.home).toBe(join(root,"agents",layout.agentId,"shadows",layout.shadowId));
-  expect(layout.homeSource).toBe(layout.home);expect(layout.runners).toBe(join(layout.home,"runners"));
-  expect(layout.credentials.startsWith(layout.home+"/")).toBe(false);
+  expect(layout.homeSource).toBe(join(root,"agents",layout.agentId,"shadows",layout.shadowId));
+  expect(layout.home).toBe("/home/luna");expect(layout.runners).toBe("/home/luna/runners");
+  expect(layout.runnersSource).toBe(join(layout.homeSource,"runners"));
+  expect(layout.credentials.startsWith(layout.homeSource+"/")).toBe(false);
   expect(layout.resourceRoot).toBe(join(root,"agents",layout.agentId,"shadow-resources",layout.shadowId));
   expect(layouts.executorDirectory(layout,"env_test")).toBe(join(layout.resourceRoot,"environments","env_test"));
  }
- expect(new Set(results.map(x=>x.home)).size).toBe(3);
- expect(existsSync(join(results[0]!.home,"runner-home"))).toBe(false);
+ expect(new Set(results.map(x=>x.homeSource)).size).toBe(3);
+ expect(existsSync(join(results[0]!.homeSource,"runner-home"))).toBe(false);
 });
 test("persists fixed context ownership and refuses cross-Shadow reuse after restart",()=>{
  layouts.ensure(a);layouts.ensure(b);
- const first=layouts.context(a,"ctx-a");expect(first.cwd).toBe(join(first.layout.runners,"ctx-a"));
+ const first=layouts.context(a,"ctx-a");expect(first.cwd).toBe(join(first.layout.runnersSource,"ctx-a"));
+ expect(first.containerCwd).toBe("/home/luna/runners/ctx-a");
  expect(layouts.context(a,"ctx-b").cwd).not.toBe(first.cwd);
  db.close();db=new Database(join(root,"worker.sqlite"));layouts=new WorkerShadowLayouts(db,root);
  expect(layouts.context(a,"ctx-a")).toEqual(first);
@@ -31,17 +33,25 @@ test("persists fixed context ownership and refuses cross-Shadow reuse after rest
  rmSync(first.cwd,{recursive:true});expect(()=>layouts.context(a,"ctx-a")).toThrow("context_storage_missing");
 });
 test("missing persisted HOME is an error, not a silent empty replacement",()=>{
- const first=layouts.ensure(a);rmSync(first.home,{recursive:true});
+ const first=layouts.ensure(a);rmSync(first.homeSource,{recursive:true});
  expect(()=>layouts.ensure(a)).toThrow("shadow_storage_missing");
- expect(existsSync(first.home)).toBe(false);
+ expect(existsSync(first.homeSource)).toBe(false);
+});
+test("container paths map only paths inside the Shadow HOME",async()=>{
+ const {containerPath}=await import("../../apps/worker/src/shadow-layout");
+ const layout=layouts.ensure(a);
+ expect(containerPath(layout,layout.homeSource)).toBe("/home/luna");
+ expect(containerPath(layout,join(layout.homeSource,"runners/x"))).toBe("/home/luna/runners/x");
+ expect(()=>containerPath(layout,layout.resourceRoot)).toThrow("shadow_directory_unsafe");
+ expect(()=>containerPath(layout,join(layout.homeSource,".."))).toThrow("shadow_directory_unsafe");
 });
 test("rejects traversal and symlinked HOME, contexts and control directories",()=>{
  expect(()=>layouts.ensure({...a,shadowId:"../bad"})).toThrow("invalid_shadow_path_id");
  expect(()=>layouts.executorDirectory(a,"../bad")).toThrow("invalid_shadow_path_id");
  const first=layouts.ensure(a);layouts.ensure(b);
- symlinkSync(layouts.ensure(b).home,join(first.runners,"ctx"));
+ symlinkSync(layouts.ensure(b).homeSource,join(first.runnersSource,"ctx"));
  expect(()=>layouts.context(a,"ctx")).toThrow("shadow_directory_unsafe");
- rmSync(first.home,{recursive:true});symlinkSync(layouts.ensure(b).home,first.home);
+ rmSync(first.homeSource,{recursive:true});symlinkSync(layouts.ensure(b).homeSource,first.homeSource);
  expect(()=>layouts.ensure(a)).toThrow("shadow_directory_unsafe");
  rmSync(join(root,"agents"),{recursive:true});symlinkSync(tmpdir(),join(root,"agents"));
  expect(()=>layouts.ensure(c)).toThrow("shadow_directory_unsafe");

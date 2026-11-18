@@ -19,15 +19,15 @@ test("three Shadow plans each mount their own version directory read-only and li
  for(const scope of [a,b,c]){
   const result=planner.prepare(scope,snapshot(scope));
   expect(result.mounts).toEqual([
-   {source:result.layout.home,destination:result.layout.home,readonly:false},
+   {source:result.layout.homeSource,destination:result.layout.home,readonly:false},
    {source:dirname(result.resourceSource),destination:join(result.layout.home,".luna-resource-versions"),readonly:true},
   ]);
   expect(result.resourceSource.startsWith(result.layout.resourceRoot+"/mounts/")).toBe(true);
   expect(readFileSync(join(result.resourceSource,"commands","whoami"),"utf8")).toBe(scope.shadowId);
   // Preparing a plan never switches the link; only the container owner activates it.
-  expect(lstatSync(join(result.layout.home,".luna-resources"),{throwIfNoEntry:false})).toBeUndefined();
+  expect(lstatSync(join(result.layout.homeSource,".luna-resources"),{throwIfNoEntry:false})).toBeUndefined();
   planner.activate(result);
-  expect(readlinkSync(join(result.layout.home,".luna-resources"))).toBe(`.luna-resource-versions/${basename(result.resourceSource)}`);
+  expect(readlinkSync(join(result.layout.homeSource,".luna-resources"))).toBe(`.luna-resource-versions/${basename(result.resourceSource)}`);
  }
 });
 test("scope substitution fails before HOME creation; resource revisions never change writable HOME",()=>{
@@ -44,26 +44,26 @@ test("a new snapshot switches the link while the mounted version directory stays
  const old=planner.prepare(a,snapshot(a)),next=planner.prepare(a,snapshot(a,"changed"));
  expect(next.mounts).toEqual(old.mounts);
  planner.activate(old);planner.activate(next);
- expect(readlinkSync(join(next.layout.home,".luna-resources"))).toBe(`.luna-resource-versions/${basename(next.resourceSource)}`);
+ expect(readlinkSync(join(next.layout.homeSource,".luna-resources"))).toBe(`.luna-resource-versions/${basename(next.resourceSource)}`);
  expect(readFileSync(join(old.resourceSource,"prompts","note.md"),"utf8")).toBe("prompt");
 });
 test("Runner edits to the resource link are repaired, but real content there is refused",()=>{
  const first=planner.prepare(a,snapshot(a)),other=planner.prepare(b,snapshot(b));
- const link=join(first.layout.home,".luna-resources");
- planner.activate(first);rmSync(link);symlinkSync(other.layout.home,link);
+ const link=join(first.layout.homeSource,".luna-resources");
+ planner.activate(first);rmSync(link);symlinkSync(other.layout.homeSource,link);
  planner.activate(first);
  expect(readlinkSync(link)).toBe(`.luna-resource-versions/${basename(first.resourceSource)}`);
  rmSync(link);mkdirSync(link);writeFileSync(join(link,"fake"),"x");
  expect(()=>planner.activate(first)).toThrow("shadow_mount_target_invalid");
 });
 test("the empty mount point left by a per-version container is migrated to a link",()=>{
- const plan=planner.prepare(a,snapshot(a)),link=join(plan.layout.home,".luna-resources");
+ const plan=planner.prepare(a,snapshot(a)),link=join(plan.layout.homeSource,".luna-resources");
  mkdirSync(link);
  planner.activate(plan);
  expect(lstatSync(link).isSymbolicLink()).toBe(true);
 });
 test("a Runner symlink cannot redirect the version mount target",()=>{
- const plan=planner.prepare(a,snapshot(a)),versions=join(plan.layout.home,".luna-resource-versions");
- rmSync(versions,{recursive:true});symlinkSync(planner.prepare(b,snapshot(b)).layout.home,versions);
+ const plan=planner.prepare(a,snapshot(a)),versions=join(plan.layout.homeSource,".luna-resource-versions");
+ rmSync(versions,{recursive:true});symlinkSync(planner.prepare(b,snapshot(b)).layout.homeSource,versions);
  expect(()=>planner.prepare(a,snapshot(a))).toThrow("shadow_mount_target_invalid");
 });

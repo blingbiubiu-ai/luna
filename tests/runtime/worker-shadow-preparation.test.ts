@@ -19,10 +19,14 @@ afterEach(()=>{server.stop(true);db.close();rmSync(root,{recursive:true,force:tr
 test("v2 prepare downloads fixed resources, writes scoped context, and persists replay without rewriting",async()=>{
  const reply=await preparer.prepare(input);
  expect(reply.scope).toEqual(scope);expect(reply.resources).toEqual(bundle.selection);
- expect(reply.home).toBe(join(root,"agents/agent/shadows/shadow"));
- expect(reply.cwd).toBe(join(reply.home,"runners/ctx"));
- expect(JSON.parse(readFileSync(join(reply.cwd,".luna/runner-context.json"),"utf8"))).toEqual(input.context);
- expect(readFileSync(join(reply.cwd,"AGENTS.md"),"utf8")).toContain("public/prompts/main/role.md");
+ // The container sees HOME at /home/luna; the files are written to the Worker's host directory.
+ expect(reply.home).toBe("/home/luna");
+ expect(reply.cwd).toBe("/home/luna/runners/ctx");
+ expect(reply.hostCwd).toBe(join(root,"agents/agent/shadows/shadow/runners/ctx"));
+ expect(JSON.parse(readFileSync(join(reply.hostCwd!,".luna/runner-context.json"),"utf8"))).toEqual(input.context);
+ const agents=readFileSync(join(reply.hostCwd!,"AGENTS.md"),"utf8");
+ expect(agents).toContain("public/prompts/main/role.md");
+ expect(agents).toContain("/home/luna/runners/ctx");expect(agents).not.toContain(root);
  const restarted=new ShadowPreparation(db,root,"worker",server.url.origin,"t".repeat(43));
  expect(await restarted.prepare(input)).toEqual(reply);expect(downloads).toBe(2);
  deny=true;await expect(restarted.prepare(input)).rejects.toMatchObject({code:"scoped_resource_download_failed"});
@@ -43,7 +47,7 @@ test("legacy and invalid preparations fail before downloading or writing",async(
 });
 
 test("replay rejects missing historical HOME instead of returning stale paths",async()=>{
- const first=await preparer.prepare(input);rmSync(first.home,{recursive:true});
+ await preparer.prepare(input);rmSync(join(root,"agents/agent/shadows/shadow"),{recursive:true});
  await expect(preparer.prepare(input)).rejects.toMatchObject({code:"shadow_storage_missing"});
 });
 
@@ -56,7 +60,7 @@ test("settled preparation leaves a tombstone while the next invocation can reuse
  const next={...input,invocationId:"next",context:{sessionId:"next"}};const reply=await preparer.prepare(next);
  preparer.store.release(release);
  expect(preparer.store.requireLive("next").state).toBe("prepared");
- expect(JSON.parse(readFileSync(join(reply.cwd,".luna/runner-context.json"),"utf8"))).toEqual(next.context);
+ expect(JSON.parse(readFileSync(join(reply.hostCwd!,".luna/runner-context.json"),"utf8"))).toEqual(next.context);
 });
 test("cancellation before prepare fences late requests and active Job reservations prevent release",async()=>{
  const release={invocationId:"inv",contextId:"ctx",scope,resourceRevision:bundle.selection.digest};
@@ -83,18 +87,18 @@ test("release during download fences the in-flight preparation before HOME or co
 
 test("the soul sent with a preparation heads the Runner instructions",async()=>{
  const reply=await preparer.prepare({...input,soul:{name:"影小黑",agent:"悟空",owner:{id:"owner",name:"王华杰"},persona:["说话干脆。"]}});
- const agents=readFileSync(join(reply.cwd,"AGENTS.md"),"utf8");
+ const agents=readFileSync(join(reply.hostCwd!,"AGENTS.md"),"utf8");
  expect(agents.startsWith('<soul>\n{"name":"影小黑","agent":"悟空","owner":{"id":"owner","name":"王华杰"}}\n\n说话干脆。\n</soul>')).toBe(true);
 });
 
 test("contexts of one owner share its directory, so a Runner switch keeps the files",async()=>{
  const codex=await preparer.prepare({...input,runnerId:"session-one"});
  expect(codex.cwd).toBe(join(codex.home,"runners/session-one"));
- await Bun.write(join(codex.cwd,"workspace/notes.md"),"kept");
+ await Bun.write(join(codex.hostCwd!,"workspace/notes.md"),"kept");
  preparer.store.release({invocationId:"inv",contextId:"ctx",scope,resourceRevision:bundle.selection.digest});
  const claude=await preparer.prepare({...input,invocationId:"claude",contextId:"ctx-claude",runnerId:"session-one",runnerKind:"main"});
  expect(claude.cwd).toBe(codex.cwd);
- expect(readFileSync(join(claude.cwd,"workspace/notes.md"),"utf8")).toBe("kept");
+ expect(readFileSync(join(claude.hostCwd!,"workspace/notes.md"),"utf8")).toBe("kept");
 });
 
 test("a context created before keeps its own directory; a legacy table loses its unique cwd",async()=>{

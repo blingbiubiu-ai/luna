@@ -1,5 +1,5 @@
 import { appendFileSync, chmodSync, copyFileSync, lstatSync, mkdirSync, readdirSync, renameSync, rmSync, statSync } from "node:fs";
-import { extname, join, sep } from "node:path";
+import { extname, join, relative, sep } from "node:path";
 import { z } from "zod";
 import { ExecutionError } from "@luna/execution-store";
 import { Id } from "@luna/runner-protocol";
@@ -32,9 +32,10 @@ export type UploadResult = { done: false; received: number } | { done: true; pat
 export class HomeUploads {
   constructor(private readonly root: string) {}
 
-  write(home: string, chunk: UploadChunk): UploadResult {
+  /** `home` is the Shadow HOME on this host; `containerHome` is where the container (and the owner) sees it. */
+  write(home: string, containerHome: string, chunk: UploadChunk): UploadResult {
     const name = fileName(chunk.name);
-    const target = targetDirectory(home, chunk.dir);
+    const target = targetDirectory(containerHome, chunk.dir);
     mkdirSync(this.root, { recursive: true, mode: 0o700 });
     if (chunk.offset === 0) this.sweep();
     const partial = join(this.root, chunk.uploadId);
@@ -54,7 +55,7 @@ export class HomeUploads {
     }
     // Pieces are private to the Worker; the finished file reads like any other in HOME.
     chmodSync(path, 0o644);
-    return { done: true, path, size: received + bytes.length };
+    return { done: true, path: join(containerHome, relative(home, path)), size: received + bytes.length };
   }
 
   /** Drop pieces of uploads abandoned long ago. */

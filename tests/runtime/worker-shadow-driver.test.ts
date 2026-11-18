@@ -29,13 +29,15 @@ test("Docker mount plans use distinct Shadow HOME and resources without mounting
  for(const [agent,shadow] of [["agent","one"],["agent","two"],["other","three"]] as const){
   const env=environment(agent,shadow);await driver.prepareContext(env.spec.scope,shadow,env.spec.scopeKey,"project");
   const plan=driver.mountPlan(env,shadow);plans.push(plan);
-  expect(plan.layout.home).toBe(join(driver.config.dataRoot,"agents",agent,"shadows",shadow));
+  expect(plan.layout.homeSource).toBe(join(driver.config.dataRoot,"agents",agent,"shadows",shadow));
+  expect(plan.layout.home).toBe("/home/luna");
+  expect(plan.mounts).toContainEqual({source:plan.layout.homeSource,destination:"/home/luna",readonly:false});
   expect(driver.contextPath(shadow)).toBe(join(plan.layout.home,"runners",shadow));
   expect(plan.mounts.some(m=>m.source===driver.config.dataRoot)).toBe(false);
   expect(plan.mounts.find(m=>m.destination===join(plan.layout.home,".luna-resource-versions"))?.readonly).toBe(true);
   expect(plan.mounts.some(m=>m.destination===join(plan.layout.home,"projects") || m.source===join(root,"projects"))).toBe(false);
  }
- expect(new Set(plans.map(plan=>plan.layout.home)).size).toBe(3);
+ expect(new Set(plans.map(plan=>plan.layout.homeSource)).size).toBe(3);
  for(const plan of plans)expect(plan.mounts.some(m=>["/.ssh","/.runner-gitconfig","/etc/passwd"].some(path=>m.destination.endsWith(path)))).toBe(false);
 });
 test("Driver rejects foreign contexts",async()=>{

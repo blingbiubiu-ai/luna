@@ -386,7 +386,7 @@ export class EnvironmentManager {
     const environment = this.store.require(id);
     if (environment.spec.scope.agentId !== chunk.agentId || environment.spec.scope.shadowId !== chunk.shadowId) throw new ExecutionError(403, "environment_agent_mismatch");
     this.uploads ??= new HomeUploads(join(this.driver.config.dataRoot, ".home-uploads"));
-    return this.uploads.write(this.driver.home(environment), chunk);
+    return this.uploads.write(this.driver.homeSource(environment), this.driver.home(environment), chunk);
   }
 
   /** Every Shadow this Worker holds data for: its environments and its HOME layouts. */

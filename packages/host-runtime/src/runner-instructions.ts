@@ -26,7 +26,10 @@ export interface EnsureRunnerWorkspaceInstructionFilesInput {
   readonly home: string;
   readonly promptsRoot: string;
   readonly runnerKind: RunnerInstructionKind;
+  /** The working directory as the Runner sees it, written into the instructions. */
   readonly runnerRootPath: string;
+  /** Where to write the files when that differs from `runnerRootPath` (a Worker host path). */
+  readonly writeRoot?: string;
   readonly previousFingerprint: string | null;
   /** Worker grants Jobs sudo: add the root-access rules from the prompts directory. */
   readonly runnerSudo?: boolean;
@@ -153,10 +156,11 @@ export function ensureRunnerWorkspaceInstructionFiles(
     .update(source)
     .digest("hex");
 
-  mkdirSync(input.runnerRootPath, { recursive: true });
+  const writeRoot = input.writeRoot ?? input.runnerRootPath;
+  mkdirSync(writeRoot, { recursive: true });
 
-  const claudePath = _instructionFilePath(input.runnerRootPath, "claude");
-  const agentsPath = _instructionFilePath(input.runnerRootPath, "codex");
+  const claudePath = _instructionFilePath(writeRoot, "claude");
+  const agentsPath = _instructionFilePath(writeRoot, "codex");
   const filesMissing = !existsSync(claudePath) || !existsSync(agentsPath);
 
   if (input.previousFingerprint === instructionFingerprint && !filesMissing) {
