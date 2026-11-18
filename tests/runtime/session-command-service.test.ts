@@ -549,3 +549,20 @@ test("invalid group context is atomic and deleted queued context fails before pr
     await service.waitForIdle();
     expect(service.get(command.id)?.status).toBe("failed"); expect(creates).toBe(0);
 });
+test("a trigger that runs on the Work Runner settles its invocation with the command", async () => {
+    const { InvocationStore } = await import("../../src/runners/invocation-store");
+    const { RunnerContextStore } = await import("../../src/runners/runner-context-store");
+    let invocationId = "";
+    const { service } = runtime(async (command) => {
+        const context = new RunnerContextStore(connection.db).resolveForSession(command.sessionId, "codex");
+        // Work snapshots carry their kind, which the declared snapshot type leaves open.
+        const inputSnapshot = { version: 1 as const, kind: "work", input: { sessionId: command.sessionId, runnerContextId: context.id, turnId: command.id } };
+        invocationId = new InvocationStore(connection.db).register({ id: "work-trigger", runnerKind: "work", actorUserId: command.actorUserId, runnerContextId: context.id,
+            sessionId: command.sessionId, taskId: null, taskRunId: null, originId: command.id, contextPackIds: [],
+            inputSnapshot }).id;
+    });
+    const command = service.accept(actor(), target, "session.invoke", "work-reflection", { content: "reflect" });
+    await service.waitForIdle();
+    expect(service.get(command.id)?.status).toBe("completed");
+    expect(new InvocationStore(connection.db).require(invocationId).state).toBe("settled");
+});

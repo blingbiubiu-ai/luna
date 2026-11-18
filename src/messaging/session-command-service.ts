@@ -253,7 +253,8 @@ export class SessionCommandService {
             this.running.set(command.id, controller);
             const finish = (status: string, error: string | null = null, providerMessageId?: string) => {
                 db.transaction(tx => {
-                    if (command.kind === "session.invoke") new InvocationStore(db).finishOrigin({ originId: command.id, sessionId: command.sessionId, runnerKind: "main" }, () => {});
+                    // A Work session runs its trigger on the Work Runner, so its invocation is not Main's.
+                    if (command.kind === "session.invoke") new InvocationStore(db).finishOrigin({ originId: command.id, sessionId: command.sessionId }, () => {});
                     tx.update(sessionCommands).set({ status, error, claim: null, updatedAt: Date.now(), ...(providerMessageId ? { providerMessageId } : {}) }).where(and(eq(sessionCommands.id, command.id), eq(sessionCommands.claim, claim))).run();
                     if (command.messageId)
                         tx.update(messages).set({ rawPayloadJson: { commandId: command.id, sourceSessionId: command.sourceSessionId, deliveryStatus: status, providerMessageId } }).where(eq(messages.id, command.messageId)).run();
@@ -266,7 +267,8 @@ export class SessionCommandService {
                     finish("cancelled");
                     return;
                 }
-                const recovering = command.kind === "session.invoke" && new InvocationStore(db).findActive({ runnerKind: "main", originId: command.id, sessionId: command.sessionId });
+                const recovering = command.kind === "session.invoke" && (["main", "work"] as const).some(runnerKind =>
+                    new InvocationStore(db).findActive({ runnerKind, originId: command.id, sessionId: command.sessionId }));
                 if (!recovering && command.expiresAt !== null && command.expiresAt <= now) {
                     finish("skipped", "Expired");
                     return;
