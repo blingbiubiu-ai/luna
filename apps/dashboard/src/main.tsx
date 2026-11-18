@@ -6,7 +6,7 @@ import { createRoot } from "react-dom/client";
 
 import { PlatformRail } from "@/components/platform-rail";
 import { dashboardTheme, ThemeProvider } from "@/components/theme-provider";
-import { agentRouterHistory, appHistory } from "@/lib/app-history";
+import { agentRouterHistory, appHistory, followInAppLink } from "@/lib/app-history";
 
 import { PlatformShell } from "./platform-shell";
 import { routeTree } from "./routeTree.gen";
@@ -37,7 +37,7 @@ declare module "@tanstack/react-router" {
 function AppFrame() {
   const pathname = useSyncExternalStore(appHistory.subscribe, () => appHistory.location.pathname);
   return (
-    <div className="flex min-h-svh w-full">
+    <div className="flex min-h-svh w-full" onClick={followInAppLink}>
       <PlatformRail path={pathname} />
       {pathname.startsWith("/agent/") ? <RouterProvider router={router} /> : <PlatformShell pathname={pathname} />}
     </div>

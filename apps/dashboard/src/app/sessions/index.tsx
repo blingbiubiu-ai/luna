@@ -4,6 +4,7 @@ import { useState } from "react";
 
 import { ShadowPicker, useShadowScope } from "@/components/shadow-picker";
 import { useAgentBasePath } from "@/lib/agent-route";
+import { appHistory } from "@/lib/app-history";
 import { useSessions } from "@/lib/api";
 import { SessionsList } from "./sessions-list";
 
@@ -27,7 +28,7 @@ function SessionsPage() {
         method: "POST",
         body: JSON.stringify(selection.scope),
       });
-      window.location.assign(`${base}/sessions/${encodeURIComponent(result.sessionId)}`);
+      appHistory.push(`${base}/sessions/${encodeURIComponent(result.sessionId)}`);
     } catch (error) {
       setCreateError(error);
       setCreating(false);

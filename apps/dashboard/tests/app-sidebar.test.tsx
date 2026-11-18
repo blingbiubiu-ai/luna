@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
 import { AgentSwitcherView } from "../src/components/app-sidebar";
 import {
@@ -44,8 +45,8 @@ test("rail brand uses the Luna moon icon instead of an emoji", () => {
 
 test("Agent sidebar header shows the current Agent as a switcher", () => {
   const agent = { id: "agent-1", name: "容器测试", ownerUserId: "u", defaultShadowId: "s", status: "active" };
-  const html = renderToStaticMarkup(createElement(SidebarProvider, null,
-    createElement(AgentSwitcherView, { current: agent, agentId: agent.id, agents: [agent] })));
+  const html = renderToStaticMarkup(createElement(QueryClientProvider, { client: new QueryClient() }, createElement(SidebarProvider, null,
+    createElement(AgentSwitcherView, { current: agent, agentId: agent.id, agents: [agent] }))));
   expect(html).toContain("容器测试");
   expect(html).toContain('aria-label="Switch Agent"');
 });

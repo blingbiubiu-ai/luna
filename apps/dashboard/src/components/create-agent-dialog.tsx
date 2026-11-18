@@ -1,18 +1,24 @@
 import { CreateNameForm } from "@/components/create-name-form";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { apiFetch } from "@/lib/api/client";
-import type { DashboardAgentChoice } from "@/lib/api/hooks";
+import { useQueryClient } from "@tanstack/react-query";
+import { dashboardAgentsKey, type DashboardAgentChoice } from "@/lib/api/hooks";
+import { appHistory } from "@/lib/app-history";
 
 /** Creates an Agent and opens its workspace. */
 export function CreateAgentDialog({ open, onOpenChange }: {
   readonly open: boolean;
   readonly onOpenChange: (open: boolean) => void;
 }) {
+  const queryClient = useQueryClient();
   async function createAgent(name: string, key: string) {
     const { agent } = await apiFetch<{ agent: DashboardAgentChoice }>("/agents", {
       method: "POST", headers: { "Idempotency-Key": key }, body: JSON.stringify({ name }),
     });
-    window.location.assign(`/agent/${encodeURIComponent(agent.id)}`);
+    // The Agent switcher must list it before its page opens.
+    await queryClient.invalidateQueries({ queryKey: dashboardAgentsKey });
+    onOpenChange(false);
+    appHistory.push(`/agent/${encodeURIComponent(agent.id)}`);
   }
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>

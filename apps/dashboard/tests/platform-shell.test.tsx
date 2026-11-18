@@ -30,7 +30,7 @@ test("the Agents entry lands on the first Agent", () => {
 });
 
 test("with no Agent the landing offers to create one", () => {
-  const html = renderToStaticMarkup(createElement(NoAgents));
+  const html = renderToStaticMarkup(createElement(QueryClientProvider, { client: new QueryClient() }, createElement(NoAgents)));
   expect(html).toContain("还没有 Agent");
   expect(html).toContain("新建 Agent");
 });

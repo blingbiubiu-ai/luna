@@ -1,4 +1,5 @@
 import { useAgentBasePath } from "@/lib/agent-route";
+import { appHistory } from "@/lib/app-history";
 import { UiText } from "@/lib/i18n";
 import { useTranslation } from "@/lib/i18n";
 import { createFileRoute } from "@tanstack/react-router";
@@ -50,7 +51,7 @@ function UserDetailPage() {
     if (user === undefined || user.id === userId) {
       return;
     }
-    window.location.replace(`${base}/users/${encodeURIComponent(user.id)}`);
+    appHistory.replace(`${base}/users/${encodeURIComponent(user.id)}`);
   }, [base, user, userId]);
 
   return (
@@ -93,7 +94,7 @@ function UserDetailPage() {
             }}>{user.status === "blocked" ? "取消拉黑" : "拉黑"}</Button>
             <Button variant="ghost" size="sm" className="text-destructive hover:text-destructive" disabled={pending} onClick={() => {
               if (window.confirm(`把「${user.displayName}」从此 Agent 的用户列表移除？历史记录保留；TA 再发消息会重新出现。`)) {
-                remove.mutate(undefined, { onSuccess: () => { window.location.assign(`${base}/users`); } });
+                remove.mutate(undefined, { onSuccess: () => { appHistory.push(`${base}/users`); } });
               }
             }}>移除</Button>
           </div>
