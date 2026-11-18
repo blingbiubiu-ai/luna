@@ -226,11 +226,6 @@ export type DashboardSessionMessagePresentation =
     }
   | {
       kind: "rich_markdown_card";
-    }
-  | {
-      kind: "task_command";
-      action: "create" | "update";
-      task: DashboardSessionMessagePresentationTask | null;
     };
 
 export interface DashboardSessionMessageIngest {

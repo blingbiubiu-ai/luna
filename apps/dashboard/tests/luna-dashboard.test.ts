@@ -3363,69 +3363,6 @@ describe("luna dashboard api", () => {
     }
   });
 
-  test("session detail shows a Task command record as one muted line linking the Task", () => {
-    const commandRecord = {
-      id: "msg-task-command",
-      session_id: "conv-primary",
-      owning_session_id: "conv-primary",
-      channel_message_key: "runner-operation:op-1",
-      senderUserId: "directory-user-requester",
-      senderUser: { id: "directory-user-requester", kind: "human", displayName: "示例用户", avatarUrl: null, status: "active", profileSource: "channel" },
-      role: "user",
-      content: [{ type: "text", text: "查询广州今天天气，给出出行建议。" }],
-      mentions: [],
-      presentation: { kind: "task_command", action: "create", task: { id: "task_op-1", title: "查询广州今天天气" } },
-      linked_tasks: [],
-      linkedTasks: [],
-      created_at: now,
-    } as unknown as DashboardSessionMessage;
-    const html = renderToStaticMarkup(
-      createElement(SessionDetailView, {
-        sessionId: "conv-primary",
-        session: {
-          id: "conv-primary",
-          channel_type: "feishu",
-          channelType: "feishu",
-          channel_id: "chat",
-          group_id: "group-primary",
-          thread_id: null,
-          root_message_id: null,
-          title: "Mention session",
-          workerId: "worker-1",
-          display_title: "Mention session",
-          displayTitle: "Mention session",
-          surface: null,
-          message_count: 1,
-          thread_anchor_preview: null,
-          threadAnchorPreview: null,
-          latest_message_preview: null,
-          latestMessagePreview: null,
-          latestSender: null,
-          latest_message_at: null,
-          latestMessageAt: null,
-          linked_tasks: [],
-          linkedTasks: [],
-          contextPacks: [],
-          launchContextPacks: [],
-          seedRecords: [],
-          created_at: now,
-          updated_at: now,
-        } as DashboardSession,
-        messages: [commandRecord],
-        turns: [],
-        loading: false,
-        error: null,
-        showNotFound: false,
-      }),
-    );
-    expect(html).toContain('data-testid="session-task-command-msg-task-command"');
-    expect(html).toContain("创建任务：");
-    expect(html).toContain("/tasks/task_op-1");
-    expect(html).toContain("查询广州今天天气");
-    // Not a chat bubble from the person who asked.
-    expect(html).not.toContain('data-testid="session-message-msg-task-command"');
-  });
-
   test("session detail preserves duplicate mention labels as separate identity links", () => {
     const duplicateLabelMessage: DashboardSessionMessage = {
       id: "msg-duplicate-label-mentions",

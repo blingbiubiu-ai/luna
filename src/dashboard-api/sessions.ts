@@ -150,12 +150,6 @@ export type DashboardSessionMessagePresentation =
     }
   | {
       readonly kind: "rich_markdown_card";
-    }
-  | {
-      /** The record Luna keeps when Main creates or updates a Task; never delivered to the channel. */
-      readonly kind: "task_command";
-      readonly action: "create" | "update";
-      readonly task: DashboardSessionMessagePresentationTask | null;
     };
 
 export interface DashboardSession {
@@ -623,7 +617,7 @@ export function toDashboardSessionMessage(
   const linkedTasks = taskBadgesForMessage(row, input);
   const sender = messageSenderForRow(row, input);
   const mentions = mentionsForMessage(row.id, input);
-  let presentation = taskCommandPresentation(row, input) ?? presentationForMessage(row, input.taskRows);
+  let presentation = presentationForMessage(row, input.taskRows);
   const deletedTask = linkedTasks.find(task => task.status === "deleted" && task.id === sourceTaskIdForMessage(row));
   if (deletedTask && presentation && "task" in presentation) presentation = { ...presentation, task: deletedTask };
   const turnEntries = input.turnEntryRows.filter(
@@ -726,22 +720,6 @@ function threadForMessage(
     rootMessageExternalId,
     parentMessageExternalId,
     hasReplies,
-  };
-}
-
-export function taskCommandPresentation(
-  row: MessageRow,
-  input: { readonly taskRows: readonly TaskRow[]; readonly sourceContextItems: readonly TaskSourceContextItem[] },
-): DashboardSessionMessagePresentation | undefined {
-  const payload = row.rawPayloadJson;
-  if (!isRecord(payload) || payload.origin !== "runner_operation") return undefined;
-  const taskId = input.sourceContextItems.find((item) => item.sourceMessageId === row.id)?.taskId;
-  const task = taskId === undefined ? undefined : input.taskRows.find((candidate) => candidate.id === taskId);
-  return {
-    kind: "task_command",
-    // A created Task takes its id from the operation that created it.
-    action: taskId !== undefined && taskId === `task_${String(payload.operationId)}` ? "create" : "update",
-    task: task ? { id: task.id, title: task.title } : taskId ? { id: taskId, title: "" } : null,
   };
 }
 
