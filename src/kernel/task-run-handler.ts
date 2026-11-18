@@ -110,7 +110,7 @@ export async function executeTaskRun(
 ): Promise<ExecuteTaskRunResult> {
   const timeline = new TimelineStore(input.db);
   const artifacts = new ArtifactStore(input.db);
-  const pendingText = _inputSnapshotText(input.inputSnapshot);
+  const pendingText = taskRunInputText(input.inputSnapshot);
   _throwIfAborted(input.signal);
   const activeInvocation = new InvocationStore(input.db).findActive({ runnerKind: "task", taskRunId: input.taskRunId });
   const agentConfig=input.runnerType === "mock" ? undefined : getKernel().resolveAgentExecutionSnapshot(
@@ -835,6 +835,18 @@ function _stringList(value: unknown): string[] {
   return Array.isArray(value)
     ? value.filter((item): item is string => typeof item === "string")
     : [];
+}
+
+/**
+ * The new user input of a Task Run. A run started by a Main task command has none beyond its
+ * context: the messages it names already reach the run as launch or update context, so the
+ * command snapshot (raw inbound payload, sender profile) is never shown to the Runner.
+ */
+export function taskRunInputText(inputSnapshot: unknown): string {
+  if (inputSnapshot !== null && typeof inputSnapshot === "object" && typeof (inputSnapshot as {operation?: unknown}).operation === "string") {
+    return "";
+  }
+  return _inputSnapshotText(inputSnapshot);
 }
 
 function _inputSnapshotText(inputSnapshot: unknown): string {
