@@ -206,3 +206,29 @@ test("a saved bot can move to an existing Shadow after its original Shadow is de
  expect(agents.shadow(shadowId).status).toBe("deleted");
  expect(store.runtimeConfigs()).toHaveLength(1);
 });
+test("a channel whose secret cannot be decrypted is reported on its own; the others still run",async()=>{
+ await store.save(scoped(),actor);
+ const second=new AgentStore(db.db).createShadow(actor,agentId,{name:"Second"},"second-bot");
+ await store.save({...scoped(),shadowId:second.id,id:"second",appId:"cli_second"},actor);
+ // Corrupt one saved secret, as a lost or changed master key would.
+ db.db.update(schema.channelConfigs).set({secret:{...db.db.select().from(schema.channelConfigs).where(eq(schema.channelConfigs.id,input.id)).get()!.secret,authTag:Buffer.alloc(16).toString("base64")}}).where(eq(schema.channelConfigs.id,input.id)).run();
+ const runtime=store.runtimeChannels();
+ expect(runtime.unreadable).toEqual([{id:input.id,type:"feishu"}]);
+ expect(runtime.configs.map(config=>config.id)).toEqual(["second"]);
+ // Saving without a new secret says so instead of failing vaguely.
+ await expect(store.save({...scoped(),appSecret:""},actor)).rejects.toMatchObject({code:"channel_secret_unreadable"});
+ await expect(store.setEnabled(actor,agentId,input.id,true)).rejects.toMatchObject({code:"channel_secret_unreadable"});
+});
+test("turning a bot off and on leaves its Shadow active and re-checks the bot with Feishu",async()=>{
+ await store.save(scoped(),actor);
+ await store.setEnabled(actor,agentId,input.id,false);
+ expect(store.list()[0]?.enabled).toBe(false);
+ expect(new AgentStore(db.db).shadow(shadowId).status).toBe("active");
+ expect(store.runtimeConfigs()).toHaveLength(0);
+ const count=verified.length;
+ await store.setEnabled(actor,agentId,input.id,true);
+ expect(verified.length).toBe(count+1);
+ expect(store.list()[0]?.enabled).toBe(true);
+ expect(store.runtimeConfigs()).toHaveLength(1);
+ await expect(store.setEnabled("someone-else",agentId,input.id,false)).rejects.toThrow();
+});

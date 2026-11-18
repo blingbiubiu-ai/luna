@@ -2,6 +2,7 @@ import { IdentityAvatar } from "@/components/identity-link";
 import type { ReactNode } from "react";
 import { Button } from "@/components/ui/button";
 import { consoleLabels, type ConsoleKind } from "@/lib/containers";
+import type { BotStatus } from "@/lib/bot-status";
 import { cn } from "@/lib/utils";
 
 /** A Shadow's runtime environment as shown on its card. */
@@ -24,15 +25,17 @@ const order: ConsoleKind[] = ["terminal", "vnc", "root"];
  * One Shadow: who it is (name, bot binding) and its runtime environment (state, root switch,
  * facts, console buttons). `compact` is the narrow column shown beside open consoles.
  */
-export function ShadowCard({ id, avatarUrl, name, isBody, subtitle, statusTag, environment, coldHint, root, menu, footer, compact, selected, onOpen, openBlocked }: {
+export function ShadowCard({ id, avatarUrl, name, isBody, subtitle, statusTag, bot, environment, coldHint, root, menu, footer, compact, selected, onOpen, openBlocked }: {
   id: string;
   /** The Shadow user's avatar (its bot's, once a bot is bound). */
   avatarUrl?: string | null;
   name: string;
   isBody: boolean;
-  subtitle: string;
-  /** Shown beside the name when the Shadow is not simply active (e.g. 已停用). */
+  subtitle?: string;
+  /** The Shadow's own status, shown beside its name only when it is not active (e.g. 分身已停用). */
   statusTag?: string;
+  /** The channel bot row: its own status, separate from the Shadow's. */
+  bot?: ReactNode;
   environment: ShadowEnvironment;
   coldHint?: string;
   root: ReactNode;
@@ -68,10 +71,11 @@ export function ShadowCard({ id, avatarUrl, name, isBody, subtitle, statusTag, e
             {isBody && <span className="shrink-0 rounded-full bg-muted px-2 text-[11px] text-muted-foreground">本体</span>}
             {statusTag && <span className="shrink-0 rounded-full bg-amber-500/10 px-2 text-[11px] text-amber-700 dark:text-amber-400">{statusTag}</span>}
           </div>
-          {!compact && <p className="mt-0.5 truncate text-[12.5px] text-muted-foreground">{subtitle}</p>}
+          {!compact && subtitle && <p className="mt-0.5 truncate text-[12.5px] text-muted-foreground">{subtitle}</p>}
         </div>
         {menu}
       </div>
+      {!compact && bot}
       <div className={cn("grid gap-2 rounded-[10px] bg-muted", compact ? "mx-2 mb-2 px-2.5 py-2" : "mx-2.5 mb-2.5 px-3 py-2.5")}>
         <div className="flex items-center gap-2">
           <EnvironmentState state={env.state} />
@@ -106,4 +110,30 @@ function EnvironmentState({ state }: { state: ShadowEnvironment["state"] }) {
     <span className="worker-presence-dot" aria-hidden="true" />
     {state === "running" ? "运行中" : state === "stopped" ? "已停止" : "未创建"}
   </span>;
+}
+
+const toneClass: Record<BotStatus["tone"], string> = {
+  ok: "bg-emerald-500/10 text-emerald-700 dark:text-emerald-400",
+  pending: "bg-muted text-muted-foreground",
+  warn: "bg-amber-500/10 text-amber-700 dark:text-amber-400",
+  error: "bg-destructive/10 text-destructive",
+  off: "bg-muted text-muted-foreground",
+};
+const actionLabel: Record<NonNullable<BotStatus["action"]>, string> = { enable: "启用机器人", retry: "重试连接", resecret: "重新填写 App Secret" };
+
+/**
+ * The channel bot row on a Shadow card, labelled 渠道机器人 so its status is never read as the
+ * Shadow's. `name` is null when no bot is bound.
+ */
+export function ShadowBotRow({ channel, name, status, busy, onAction }: {
+  channel: string; name: string | null; status?: BotStatus; busy?: boolean; onAction?: (action: NonNullable<BotStatus["action"]>) => void;
+}) {
+  return <div className="mx-2.5 mb-2 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 px-1.5 text-[12.5px]">
+    <span className="shrink-0 text-muted-foreground">渠道机器人</span>
+    {name === null ? <span className="text-muted-foreground">未绑定</span> : <>
+      <span className="min-w-0 truncate">{channel} · {name}</span>
+      {status && <span title={status.detail} className={cn("shrink-0 rounded-full px-2 text-[11.5px]", toneClass[status.tone])}>{status.label}</span>}
+      {status?.action && onAction && <Button size="xs" variant="outline" disabled={busy} onClick={() => onAction(status.action!)}>{actionLabel[status.action]}</Button>}
+    </>}
+  </div>;
 }

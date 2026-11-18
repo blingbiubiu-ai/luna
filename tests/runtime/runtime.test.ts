@@ -6204,7 +6204,7 @@ messaging:
     );
 
     expect(source).toContain("ChannelAdapterRegistry");
-    expect(source).toContain("channelStore.runtimeConfigs()");
+    expect(source).toContain("new ChannelConfigStore(this._database.db).runtimeChannels()");
     expect(source).toContain("this._channelAdapterRegistry.create");
     expect(source).toContain("this._lunaMessageIngress.registerChannel");
     expect(source).toContain("registerFeishuChannelAdapterFactory");

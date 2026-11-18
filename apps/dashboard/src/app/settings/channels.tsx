@@ -2,22 +2,23 @@ import { randomId } from "@/lib/random-id";
 import { WorkerRoutingFields } from "@/components/worker-routing-fields";
 import { ModelSelectionField, type ShadowModelChoice } from "@/components/model-selection-field";
 import { createFileRoute } from "@tanstack/react-router";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState, type FormEvent } from "react";
 import { PlusIcon, Loader2Icon, MoreHorizontalIcon, PanelLeftCloseIcon } from "lucide-react";
 import { AgentLifecycleActions, type LifecycleRequest } from "@/app/agents/agent-lifecycle-actions";
 import { useAgentShadows } from "@/components/shadow-picker";
 import { ShadowRootSwitch } from "@/components/shadow-root-access";
-import { ShadowCard, type ShadowEnvironment } from "@/components/shadow-card";
+import { ShadowBotRow, ShadowCard, type ShadowEnvironment } from "@/components/shadow-card";
+import { botStatus } from "@/lib/bot-status";
 import { useContainerConsoles, Workspace } from "@/components/container-console";
 import { imageCurrent, isBlocked, kindBlockedHint, primaryContainer, rootReasons, type ConsoleKind, type ContainerRow } from "@/lib/containers";
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { useRouteAgent } from "@/lib/agent-route";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from "@/components/ui/sheet";
 import { AlertDialog, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
-import { useDashboardAuthSession } from "@/lib/api";
+import { useDashboardAuthSession, useRuntimeStatus } from "@/lib/api";
 import { apiFetch } from "@/lib/api/client";
 import type { DashboardAgentChoice } from "@/lib/api/hooks";
 
@@ -122,6 +123,14 @@ function AgentShadows({ agent }: { agent: DashboardAgentChoice }) {
   const [lifecycle, setLifecycle] = useState<{ shadowId: string; request: LifecycleRequest } | null>(null);
   const [listOpen, setListOpen] = useState(true);
   const consoles = useContainerConsoles(agent.id);
+  const runtime = useRuntimeStatus(agent.id);
+  const runtimeChannels = new Map(runtime.data?.channels.map(channel => [channel.id, channel]));
+  const botToggle = useMutation({
+    mutationFn: (input: { id: string; enabled: boolean }) => apiFetch(`/channel-config/${encodeURIComponent(input.id)}/enabled`, {
+      method: "PUT", body: JSON.stringify({ agentId: agent.id, enabled: input.enabled }),
+    }),
+    onSettled: () => Promise.all([client.invalidateQueries({ queryKey }), runtime.refetch()]),
+  });
   const channels = query.data?.channels ?? [];
   const channelsByShadow = new Map(channels.flatMap(row => row.shadow ? [[row.shadow.id, row] as const] : []));
   const shadowsById = new Map(shadows.data?.shadows.map(shadow => [shadow.id, shadow]));
@@ -269,8 +278,9 @@ function AgentShadows({ agent }: { agent: DashboardAgentChoice }) {
     const bot = channelsByShadow.get(shadow.id);
     const { env, row } = environmentOf(shadow);
     const active = agentActive && shadow.status === "active";
+    const status = bot && botStatus({ enabled: bot.enabled, shadowActive: active, runtime: runtimeChannels.get(bot.id) });
     const subtitle = [
-      bot ? `飞书 · ${bot.botIdentity?.displayName ?? bot.name}${bot.enabled ? "" : "（已停用）"}` : isBody ? "Dashboard 对话 · 未绑定飞书机器人" : "未绑定飞书机器人",
+      isBody ? "Dashboard 对话" : undefined,
       shadow.workerRouting?.mode === "bound" ? `绑定 Worker ${shadow.workerRouting.workerId}` : undefined,
       shadow.modelSelection?.mode === "fixed" ? `模型 ${shadow.modelSelection.name} · ${shadow.modelSelection.model}` : undefined,
     ].filter(Boolean).join(" · ");
@@ -286,12 +296,19 @@ function AgentShadows({ agent }: { agent: DashboardAgentChoice }) {
       <DropdownMenuTrigger asChild>
         <Button size="icon-sm" variant="ghost" aria-label={`${shadow.name} 的更多操作`} disabled={busy}><MoreHorizontalIcon /></Button>
       </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" className="w-44">
+      <DropdownMenuContent align="end" className="w-48">
+        {bot && agentActive && <>
+          <DropdownMenuLabel className="text-xs text-muted-foreground">渠道机器人</DropdownMenuLabel>
+          <DropdownMenuItem disabled={botToggle.isPending} onSelect={() => botToggle.mutate({ id: bot.id, enabled: !bot.enabled })}>
+            {bot.enabled ? "停用机器人" : "启用机器人"}
+          </DropdownMenuItem>
+          <DropdownMenuSeparator />
+        </>}
+        <DropdownMenuLabel className="text-xs text-muted-foreground">{isBody ? "本体" : "分身"}</DropdownMenuLabel>
         <DropdownMenuItem disabled={!agentActive} onSelect={() => openEditor(shadow, bot)}>编辑设置</DropdownMenuItem>
         {row && <DropdownMenuItem disabled={isBlocked(row) || consoles.reset.isPending}
           onSelect={() => consoles.confirmReset(row, shadow.name)}>重置系统盘…</DropdownMenuItem>}
         {agentActive && <>
-          <DropdownMenuSeparator />
           <DropdownMenuItem onSelect={() => setLifecycle({ shadowId: shadow.id, request: "status" })}>
             {shadow.status === "active" ? "停用" : "恢复"}{isBody ? "本体" : "分身"}
           </DropdownMenuItem>
@@ -300,7 +317,10 @@ function AgentShadows({ agent }: { agent: DashboardAgentChoice }) {
       </DropdownMenuContent>
     </DropdownMenu>;
     return <ShadowCard key={shadow.id} id={shadow.id} avatarUrl={shadow.avatarUrl} name={shadow.name} isBody={isBody} subtitle={subtitle}
-      statusTag={!agentActive ? "Agent 已停用" : shadow.status !== "active" ? "已停用" : undefined}
+      statusTag={!agentActive ? "Agent 已停用" : shadow.status !== "active" ? `${isBody ? "本体" : "分身"}已停用` : undefined}
+      bot={<ShadowBotRow channel="飞书" name={bot ? bot.botIdentity?.displayName ?? bot.name : null} status={status ?? undefined}
+        busy={botToggle.isPending || !agentActive}
+        onAction={action => { if (action === "resecret") openEditor(shadow, bot); else if (bot) botToggle.mutate({ id: bot.id, enabled: true }); }} />}
       environment={env} coldHint={consoles.coldHint} compact={compact} selected={compact && selectedShadow === shadow.id}
       root={<ShadowRootSwitch agentId={agent.id} shadowId={shadow.id} disabled={!active}
         hostRefusal={row?.root?.hostAllowed === false ? rootReasons[row.root.reason ?? ""] ?? "当前 Worker 主机不允许使用容器 Root" : undefined} />}
@@ -317,6 +337,7 @@ function AgentShadows({ agent }: { agent: DashboardAgentChoice }) {
     {consoles.query.error && <p role="alert" className="text-sm text-destructive">无法加载运行环境。{consoles.query.error.message}</p>}
     {unreachable.length > 0 && <p role="alert" className="text-sm text-destructive">以下 Worker 暂时无法访问：{unreachable.map(worker => worker.workerId).join("、")}</p>}
     {consoles.reset.error && <p role="alert" className="text-sm text-destructive">无法重置系统盘。{consoles.reset.error.message}</p>}
+    {botToggle.error && <p role="alert" className="text-sm text-destructive">机器人开关未能应用：{botToggle.error.message}</p>}
     {consoles.provision.error && <p role="alert" className="text-sm text-destructive">无法启动容器。{consoles.provision.error.message}</p>}
     {consoles.stopDesktop.error && <p role="alert" className="text-sm text-destructive">无法关闭桌面后台。{consoles.stopDesktop.error.message}</p>}
   </>;

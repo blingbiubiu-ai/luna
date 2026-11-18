@@ -145,6 +145,8 @@ class Kernel {
   private _channelReloadsClosed = false;
   private _lifecycleTimer?: ReturnType<typeof setInterval>;
   private _lifecycleWork: Promise<void> | undefined;
+  /** Enabled channels skipped because their saved App Secret cannot be decrypted. */
+  private readonly _unreadableChannels = new Map<string, string>();
   private _lastShadowPurgeSweep = 0;
 
   reloadChannel(id: string): Promise<void> {
@@ -157,7 +159,10 @@ class Kernel {
   }
 
   private async _reloadChannel(id: string): Promise<void> {
-    const configured = new ChannelConfigStore(this._database.db).runtimeConfigs().find(row => row.id === id);
+    const runtime = new ChannelConfigStore(this._database.db).runtimeChannels();
+    const configured = runtime.configs.find(row => row.id === id);
+    const unreadable = runtime.unreadable.find(row => row.id === id);
+    if (unreadable) this._unreadableChannels.set(id, unreadable.type); else this._unreadableChannels.delete(id);
     const adapter = configured ? this._channelAdapterRegistry.create({type:configured.type,id,options:configured.params},{db:this._database.db,logger:this._logger}) : undefined;
     const previous = this._lunaChannels.get(id);
     if(adapter)this._lunaChannels.set(id,adapter);else this._lunaChannels.delete(id);
@@ -168,7 +173,9 @@ class Kernel {
   }
 
   channelStatuses(): RegisteredChannelRuntimeStatus[] {
-    return this._lunaMessageIngress.channelStatuses();
+    return [...this._lunaMessageIngress.channelStatuses(), ...[...this._unreadableChannels].map(([id, type]) => ({
+      id, type, inbound: { state: "credentials_invalid", lastError: "已保存的 App Secret 无法解密" },
+    }))];
   }
 
   prepareForRuntimeStart(): void {
@@ -418,8 +425,12 @@ class Kernel {
   private async _registerConfiguredLunaChannels(): Promise<void> {
     await this.registerLunaInboundChannel(new DashboardChannel(this._database.db));
 
-    const channelStore = new ChannelConfigStore(this._database.db);
-    for (const channelConfig of channelStore.runtimeConfigs()) {
+    const runtime = new ChannelConfigStore(this._database.db).runtimeChannels();
+    for (const row of runtime.unreadable) {
+      this._unreadableChannels.set(row.id, row.type);
+      this._logger.error({ channel_id: row.id }, "channel App Secret cannot be decrypted; this channel stays offline");
+    }
+    for (const channelConfig of runtime.configs) {
       const adapter = this._channelAdapterRegistry.create(
         {
           type: channelConfig.type,

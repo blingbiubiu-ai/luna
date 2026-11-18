@@ -68,11 +68,39 @@ export class ChannelConfigStore {
    tx.update(channelConfigs).set({enabled: false, updatedAt: Date.now()}).where(eq(channelConfigs.id, channelId)).run();
   });
  }
- runtimeConfigs():ChannelConfig[]{return this.db.select({channel:channelConfigs}).from(channelConfigs)
- .innerJoin(shadowBotBindings,and(eq(shadowBotBindings.channelConfigId,channelConfigs.id),eq(shadowBotBindings.status,"active")))
- .innerJoin(agentShadows,and(eq(agentShadows.id,shadowBotBindings.shadowId),eq(agentShadows.status,"active")))
- .innerJoin(lunaAgents,and(eq(lunaAgents.id,channelConfigs.agentId),eq(lunaAgents.status,"active")))
- .where(eq(channelConfigs.enabled,true)).all().map(({channel:row})=>({id:row.id,type:row.type,name:row.name,description:"Database-managed channel",params:{app_id:row.appId,app_secret:this.decrypt(row),chat_id:row.chatId,...(row.botIdentity?{bot_open_id:row.botIdentity.externalId}:{})}}));}
+ /** Enabled, bound and active channels to run, and those whose saved App Secret can no longer be decrypted. */
+ runtimeChannels():{configs:ChannelConfig[];unreadable:{id:string;type:string}[]}{
+  const rows=this.db.select({channel:channelConfigs}).from(channelConfigs)
+   .innerJoin(shadowBotBindings,and(eq(shadowBotBindings.channelConfigId,channelConfigs.id),eq(shadowBotBindings.status,"active")))
+   .innerJoin(agentShadows,and(eq(agentShadows.id,shadowBotBindings.shadowId),eq(agentShadows.status,"active")))
+   .innerJoin(lunaAgents,and(eq(lunaAgents.id,channelConfigs.agentId),eq(lunaAgents.status,"active")))
+   .where(eq(channelConfigs.enabled,true)).all().map(({channel})=>channel);
+  const configs:ChannelConfig[]=[],unreadable:{id:string;type:string}[]=[];
+  for(const row of rows){
+   // One bot's unreadable secret (e.g. a lost master key) must not stop the other channels.
+   const secret=this.tryDecrypt(row);
+   if(secret===undefined){unreadable.push({id:row.id,type:row.type});continue;}
+   configs.push({id:row.id,type:row.type,name:row.name,description:"Database-managed channel",params:{app_id:row.appId,app_secret:secret,chat_id:row.chatId,...(row.botIdentity?{bot_open_id:row.botIdentity.externalId}:{})}});
+  }
+  return {configs,unreadable};
+ }
+ runtimeConfigs():ChannelConfig[]{return this.runtimeChannels().configs;}
+ /** Turn a bot on or off without touching its Shadow. Turning on checks the saved secret with Feishu. */
+ async setEnabled(accountId:string,agentId:string,id:string,enabled:boolean){
+  new AgentStore(this.db).requireOwner(accountId,agentId);
+  const row=this.db.select().from(channelConfigs).where(eq(channelConfigs.id,id)).get();
+  if(row?.agentId!==agentId)throw new AgentError("channel_not_found",404);
+  if(!new BotBindingStore(this.db).activeForChannel(id))throw new AgentError("bot_binding_retired",409);
+  if(!enabled){this.db.update(channelConfigs).set({enabled:false,updatedAt:Date.now()}).where(eq(channelConfigs.id,id)).run();return;}
+  const secret=this.tryDecrypt(row);
+  if(secret===undefined)throw new AgentError("channel_secret_unreadable",409);
+  const identity=await this.verify(row.appId,secret);
+  this.db.transaction(tx=>{
+   tx.update(channelConfigs).set({enabled:true,botIdentity:identity,updatedAt:Date.now()}).where(eq(channelConfigs.id,id)).run();
+   recordShadowBotIdentity(tx as unknown as DrizzleDB,id,identity);
+  });
+ }
+ private tryDecrypt(row:typeof channelConfigs.$inferSelect):string|undefined{try{return this.decrypt(row);}catch{return undefined;}}
  private decrypt(row:typeof channelConfigs.$inferSelect){return this.cipher.decrypt({...row.secret,profileId:row.id,revisionId:"channel-v1",key:"app_secret"});}
  async save(raw:unknown,accountId:string){
   const input=feishuConfigInput.parse(raw);
@@ -84,7 +112,9 @@ export class ChannelConfigStore {
   if(old&&old.appId!==input.appId)throw new Error("已有通道不能更换 App ID，请新建通道。");
   const duplicate=this.db.select().from(channelConfigs).where(eq(channelConfigs.appId,input.appId)).get();
   if(duplicate&&duplicate.id!==input.id)throw new Error("此飞书应用已配置，请编辑已有通道。");
-  const secret=input.appSecret?.trim() || (old?this.decrypt(old):"");if(!secret)throw new Error("请输入 App Secret。");
+  const secret=input.appSecret?.trim() || (old?this.tryDecrypt(old):"");
+  if(secret===undefined)throw new AgentError("channel_secret_unreadable",409);
+  if(!secret)throw new Error("请输入 App Secret。");
   const identity=!input.enabled&&old&&!input.appSecret ? old.botIdentity : await this.verify(input.appId,secret);
   if(identity && identity.kind!=="bot")throw new Error("应用不是机器人。");
   const encrypted=this.cipher.encrypt({profileId:input.id,revisionId:"channel-v1",key:"app_secret",plaintext:secret});

@@ -424,6 +424,8 @@ export interface DashboardRuntimeChannelInboundStatus {
   lastConnectAt?: number;
   nextConnectAt?: number;
   reconnectAttempts?: number;
+  lastErrorAt?: number;
+  lastError?: string;
 }
 
 export interface DashboardRuntimeChannelStatus {

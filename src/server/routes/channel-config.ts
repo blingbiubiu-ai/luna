@@ -32,6 +32,22 @@ export function createChannelConfigRoutes(options:{db:DrizzleDB;store?:ChannelCo
    return c.json({channel:saved,saved:true});
   });
  })
+ .put("/:channelId/enabled",async c=>{
+  const auth=requireDashboardOnly(c);if(isGuardResponse(auth))return auth;
+  const body=await c.req.json().catch(()=>null) as {agentId?:unknown;enabled?:unknown}|null;
+  if(typeof body?.agentId!=="string"||typeof body.enabled!=="boolean")return c.json({code:"invalid_request"},400);
+  const {agentId,enabled}=body,channelId=c.req.param("channelId");
+  return enqueue(async()=>{
+   try{await store.setEnabled(auth.account.id,agentId,channelId,enabled);}
+   catch(error){
+    if(error instanceof AgentError)return c.json({code:error.code,message:error.code==="channel_secret_unreadable"?"已保存的 App Secret 无法解密，请在编辑设置中重新填写。":undefined},error.status);
+    return c.json({message:error instanceof Error?error.message:"无法启用机器人。"},400);
+   }
+   try{await reload(channelId);}
+   catch{return c.json({saved:true,message:"已保存，但运行时应用失败。请重试或重启服务。"},503);}
+   return c.json({saved:true});
+  });
+ })
  .delete("/:channelId/bindings/:bindingId",async c=>{
   const auth=requireDashboardOnly(c);if(isGuardResponse(auth))return auth;
   const agentId=c.req.query("agentId");if(!agentId)return c.json({code:"agent_scope_required"},400);
