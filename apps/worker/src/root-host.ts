@@ -20,3 +20,16 @@ export function rootHostCheck(path: string, platform: NodeJS.Platform = process.
 function findmntOptions(path: string): string {
   return execFileSync("findmnt", ["--noheadings", "--output", "OPTIONS", "--target", path], { encoding: "utf8", timeout: 5000 }).trim();
 }
+
+/**
+ * Startup advice when Shadow root cannot take effect on this host: the Worker data root (which
+ * holds every Shadow HOME) is not on a nosuid mount. Undefined when root can work.
+ */
+export function nosuidStartupWarning(dataRoot: string, platform: NodeJS.Platform = process.platform,
+  mountOptions: (path: string) => string = findmntOptions): string | undefined {
+  const check = rootHostCheck(dataRoot, platform, mountOptions);
+  if (check.allowed || check.reason !== "home_requires_nosuid") return undefined;
+  return `Worker data root ${dataRoot} is not mounted nosuid, so Shadow root access stays off on this host. `
+    + `To enable it, run as root: mount --bind ${dataRoot} ${dataRoot} && mount -o remount,bind,nosuid ${dataRoot}; `
+    + `add "${dataRoot} ${dataRoot} none bind,nosuid 0 0" to /etc/fstab; then reset the system disk of root-enabled Shadows.`;
+}

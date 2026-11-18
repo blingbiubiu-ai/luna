@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { configureRunnerSudo, RUNNER_SUDOERS, runnerSetprivArgs } from "../../apps/executor/src/executor/runner-sudo";
 import { ensureRunnerWorkspaceInstructionFiles } from "@luna/host-runtime/runner-instructions";
-import { rootHostCheck } from "../../apps/worker/src/root-host";
+import { nosuidStartupWarning, rootHostCheck } from "../../apps/worker/src/root-host";
 
 let root: string;
 beforeEach(() => {
@@ -61,4 +61,13 @@ test("root needs a nosuid HOME on Linux, is allowed on Docker Desktop and refuse
   expect(rootHostCheck("/h", "linux", () => "rw,relatime")).toEqual({ allowed: false, reason: "home_requires_nosuid" });
   expect(rootHostCheck("/h", "linux", () => { throw new Error("findmnt missing"); })).toEqual({ allowed: false, reason: "home_requires_nosuid" });
   expect(rootHostCheck("/h", "win32")).toEqual({ allowed: false, reason: "unsupported_host" });
+});
+
+test("Worker startup warns with the fix when its data root is not nosuid", () => {
+  const warning = nosuidStartupWarning("/var/lib/luna-worker", "linux", () => "rw,relatime");
+  expect(warning).toContain("mount -o remount,bind,nosuid /var/lib/luna-worker");
+  expect(warning).toContain("/var/lib/luna-worker /var/lib/luna-worker none bind,nosuid 0 0");
+  expect(nosuidStartupWarning("/var/lib/luna-worker", "linux", () => "rw,nosuid,relatime")).toBeUndefined();
+  expect(nosuidStartupWarning("/w", "darwin")).toBeUndefined();
+  expect(nosuidStartupWarning("/w", "win32")).toBeUndefined();
 });

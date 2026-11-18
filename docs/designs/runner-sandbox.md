@@ -157,7 +157,9 @@ their other grants.
   the HOME's filesystem is mounted `nosuid` (`findmnt`); Docker Desktop (macOS)
   maps container root to the host user and is allowed; other hosts are refused.
   A refused switch keeps the container without sudo, blocks root terminals, and
-  reports the reason on the Containers page.
+  shows 「root 未生效」 with the reason on the Shadow card. Worker start logs a
+  warning with the mount commands when its data root is not `nosuid` (see the
+  deployment runbook); existing containers need a system-disk reset afterwards.
 - **Jobs.** With the switch on, every Job of the Shadow carries `rootAccess` so the
   container is not recreated per turn, while Service sets `privileged: true` only
   when the invocation's actor or at least one user-message sender in the turn is

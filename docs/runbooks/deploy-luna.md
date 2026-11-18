@@ -214,6 +214,28 @@ Additional Agent assignments must use the same Service origin and existing
 Worker identity. Remote Workers do not need Service databases, private Runtime
 configuration or management credentials.
 
+### Prepare the data root for Shadow root access
+
+A Shadow with root enabled gets `sudo` in its container only if the Worker data
+root, which holds every Shadow HOME, is mounted `nosuid` on a Linux host. Without
+it, container root could leave setuid programs in a HOME that host users could
+run. Prepare it once per Worker host, before start:
+
+```bash
+sudo mount --bind /var/lib/luna-worker /var/lib/luna-worker
+sudo mount -o remount,bind,nosuid /var/lib/luna-worker
+echo '/var/lib/luna-worker /var/lib/luna-worker none bind,nosuid 0 0' | sudo tee -a /etc/fstab
+sudo systemctl daemon-reload
+findmnt -n -o OPTIONS /var/lib/luna-worker   # must include nosuid
+```
+
+Run the bind only once; repeating it stacks mounts. If the data root is already
+its own filesystem, add `nosuid` to its existing fstab options instead. Worker
+start logs a warning with these commands when the data root is not `nosuid`; it
+still starts, and root-enabled Shadows show 「root 未生效」. After fixing a
+running host, reset the system disk of root-enabled Shadows so their containers
+are recreated with root. Docker Desktop (macOS) needs no preparation.
+
 ## Start and verify Worker
 
 ```bash
@@ -296,6 +318,7 @@ Stop and drain work before restoring a prior digest or compatible data snapshot.
 | No task admission | Agent assignment, pause/drain, capacity and context ownership |
 | Non-loopback startup rejected | Set a unique token or use loopback with a secured proxy |
 | Environment changes not applied | Check the component home and restart it |
+| Shadow card shows 「root 未生效」 | Data root not `nosuid`: see *Prepare the data root for Shadow root access*, then reset the Shadow's system disk |
 
 ```bash
 sudo journalctl -u luna.service -n 100 --no-pager

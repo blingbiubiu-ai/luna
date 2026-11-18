@@ -7,6 +7,7 @@ import { EnvironmentStore } from "./environment-store";
 import { DockerEnvironmentDriver } from "./docker-driver";
 import { EnvironmentManager } from "./environment-manager";
 import { workerServer, executorCallbackServer } from "./server";
+import { nosuidStartupWarning } from "./root-host";
 
 export async function runWorker(config: WorkerConfig): Promise<void> {
   const db = openPlatformExecutionDatabase(join(config.dataRoot, "worker.sqlite"));
@@ -16,6 +17,9 @@ export async function runWorker(config: WorkerConfig): Promise<void> {
   if (callbackPort && (callbackPort > 65535 || callbackPort === config.port)) throw new Error("Invalid Worker callback port");
   if (config.serviceUrl) config = { ...config, runtimeEndpoint: `http://host.docker.internal:${callbackPort ?? config.port}` };
   const driver = new DockerEnvironmentDriver(db, config); await driver.preflight();
+  // Not fatal: Shadows without root run normally; root ones show "root 未生效" until fixed.
+  const nosuid = nosuidStartupWarning(config.dataRoot);
+  if (nosuid) console.error(JSON.stringify({ level: "warn", msg: nosuid }));
   const manager = new EnvironmentManager(new EnvironmentStore(db), driver);
   const link = config.serviceUrl ? new ServiceLink(manager, grants, config.serviceUrl, config.controlToken) : undefined;
   const server = workerServer(grants, manager, link ? (job, instance, body) => link.events(job, instance, body) : undefined);
