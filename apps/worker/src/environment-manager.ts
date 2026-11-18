@@ -155,10 +155,33 @@ export class EnvironmentManager {
    */
   private async updateExecutor(environment: EnvironmentRecord): Promise<void> {
     if (!await this.driver.executorOutdated(environment)) return;
-    if (this.store.active(environment.id).some(item => item.state !== "preparing") || this.activeStreams(environment.id) > 0) return;
-    const health = await this.executor(environment.id).call<ExecutorHealth>("GET", "/v1/health");
-    if (health.instanceId !== environment.instanceId || health.activeJobs) return;
+    if (!await this.idle(environment)) return;
     await this.driver.stop(environment);
+  }
+
+  /** No reserved work, open console or running Job in the environment's container. */
+  private async idle(environment: EnvironmentRecord): Promise<boolean> {
+    if (this.store.active(environment.id).some(item => item.state !== "preparing") || this.activeStreams(environment.id) > 0) return false;
+    const health = await this.executor(environment.id).call<ExecutorHealth>("GET", "/v1/health").catch(() => undefined);
+    return health?.instanceId === environment.instanceId && !health.activeJobs;
+  }
+
+  /**
+   * Bring an idle running container up to this Worker before a console or provisioning uses it,
+   * as a Job's admission would: a container launched with other mounts or configuration (e.g.
+   * HOME moved) is replaced, one with an older Executor restarted. Returns the running
+   * container, or undefined when none runs any more. A busy container is left as it is.
+   */
+  private async refreshIdle(environment: EnvironmentRecord): Promise<{ Id: string; home: string } | undefined> {
+    const actual = await this.driver.inspect(environment);
+    if (!actual?.State.Running) return undefined;
+    const outdated = !this.driver.current(environment, actual);
+    if ((outdated || await this.driver.executorOutdated(environment)) && await this.idle(environment)) {
+      if (outdated) { this.store.drain(environment.id); await this.driver.remove(environment); this.store.stopped(environment.id); }
+      else await this.driver.stop(environment);
+      return undefined;
+    }
+    return { Id: actual.Id, home: this.driver.mountedHome(environment, actual) };
   }
 
   async cancelPreparation(requestId: string): Promise<{ state: string; handle?: EnvironmentHandle; controlCredential?: PreparedEnvironment["controlCredential"] }> {
@@ -296,8 +319,8 @@ export class EnvironmentManager {
           return created;
         });
       }
-      const actual = await this.driver.inspect(environment);
-      if (!actual?.State.Running) {
+      if (!await this.refreshIdle(environment)) {
+        environment = this.store.require(id);
         environment.containerId = await this.driver.ensure(environment);
         environment.endpoint = this.driver.endpoint(id);
         environment.bootId = (await this.waitReady(id, environment.instanceId)).bootId;
@@ -320,8 +343,10 @@ export class EnvironmentManager {
         const hostRoot = this.driver.hostRootStatus(environment);
         if (!hostRoot.allowed) throw new ExecutionError(403, hostRoot.reason);
       }
-      const actual = await this.driver.inspect(environment);
-      if (actual?.State.Running) return { containerId: actual.Id, home: this.driver.home(environment) };
+      // A busy container keeps its launch layout, so the console uses the HOME it really mounts.
+      const running = await this.refreshIdle(environment);
+      if (running) return { containerId: running.Id, home: running.home };
+      environment = this.store.require(id);
       // The Worker moved to another image while this container was stopped: like a Job would,
       // replace it (a new system disk) instead of refusing the console.
       const { imageDigest, runtimeId } = this.driver.config;

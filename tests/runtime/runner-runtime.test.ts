@@ -45,7 +45,7 @@ test("old versions beyond the three newest are removed, along with abandoned sta
 /** A Docker that keeps containers in memory: created by run, then started and stopped. */
 function fakeDocker(driver:DockerEnvironmentDriver){
  const containers=new Map<string,{id:string;running:boolean;labels:Record<string,string>;mounts:{Type:string;Source:string;Destination:string;RW:boolean}[];command:string[]}>();
- const calls:string[]=[];
+ const calls:string[]=[];let created=0;
  (driver as unknown as {docker:(args:string[])=>Promise<string>}).docker=async args=>{
   calls.push(args.slice(0,2).join(" "));
   if(args[0]==="info")return "4";
@@ -58,6 +58,9 @@ function fakeDocker(driver:DockerEnvironmentDriver){
   if(args[0]==="container" && ["start","stop"].includes(args[1]!)){
    for(const container of containers.values())if(container.id===args.at(-1))container.running=args[1]==="start";return "";
   }
+  if(args[0]==="container" && args[1]==="rm"){
+   for(const [name,container] of containers)if(container.id===args.at(-1))containers.delete(name);return "";
+  }
   if(args[0]==="run"){
    const labels:Record<string,string>={},mounts:{Type:string;Source:string;Destination:string;RW:boolean}[]=[];
    for(let i=0;i<args.length;i++){
@@ -65,7 +68,7 @@ function fakeDocker(driver:DockerEnvironmentDriver){
     if(args[i]==="--mount"){const fields=Object.fromEntries(args[i+1]!.split(",").map(part=>part.includes("=")?part.split("="):[part,"true"]));
      mounts.push({Type:fields.type,Source:fields.src,Destination:fields.dst,RW:fields.readonly!=="true"});}
    }
-   const name=args[args.indexOf("--name")+1]!,id=`id-${containers.size+1}`;
+   const name=args[args.indexOf("--name")+1]!,id=`id-${++created}`;
    containers.set(name,{id,running:true,labels,mounts,command:args.slice(args.indexOf("--entrypoint"))});
    return id;
   }
@@ -130,4 +133,31 @@ test("the Executor starts Jobs from the job-main beside it, wherever it is insta
  const config=ExecutorDeployment.parse({protocolVersion:2,scope:{agentId:"a",shadowId:"s",placementGeneration:1},instanceId:"i",runtimeId:"r",workerId:"w",
   runtimeEndpoint:"http://127.0.0.1:1",runnerUid:1000,runnerGid:1000,capacity:1,controlToken:"t".repeat(43),maintenanceToken:"m".repeat(43),runnerLayout:{home:"/h",runners:"/h/runners"}});
  expect(config.runnerEntry).toBe(join(import.meta.dir,"../../apps/executor/src/executor/job-main.ts"));
+});
+
+test("a console on an idle container launched with an older layout replaces it; a busy one keeps it and its HOME",async()=>{
+ const driver=driverWith(installRunnerRuntime(home,files("one"))),docker=fakeDocker(driver),env=environment(driver);
+ const store=new EnvironmentStore(db);
+ store.cancelPreparation("r",true);
+ await driver.ensure(env);
+ // The container was launched before HOME moved: another mount target and configuration.
+ const old=[...docker.containers.values()][0]!;
+ old.labels["luna.configuration"]="old";
+ for(const mount of old.mounts)if(mount.Destination==="/home/luna")mount.Destination="/var/lib/luna-worker/agents/agent/shadows/shadow";
+ const manager=new EnvironmentManager(store,driver);
+ let activeJobs=0;
+ (manager as unknown as {executor:()=>unknown}).executor=()=>({call:async()=>({instanceId:env.instanceId,bootId:"boot",scope:env.spec.scope,activeJobs})});
+ activeJobs=1;
+ expect(await manager.streamTarget(env.id,"agent")).toEqual({containerId:old.id,home:"/var/lib/luna-worker/agents/agent/shadows/shadow"});
+ expect(docker.calls).not.toContain("container rm");
+ activeJobs=0;
+ const target=await manager.streamTarget(env.id,"agent");
+ expect(docker.calls).toContain("container rm");
+ expect(target.home).toBe("/home/luna");expect(target.containerId).not.toBe(old.id);
+ const fresh=[...docker.containers.values()][0]!;
+ expect(fresh.mounts.some(mount=>mount.Destination==="/home/luna")).toBe(true);
+ // Now current: a further console reuses it.
+ docker.calls.length=0;
+ expect(await manager.streamTarget(env.id,"agent")).toEqual({containerId:fresh.id,home:"/home/luna"});
+ expect(docker.calls).not.toContain("container rm");
 });

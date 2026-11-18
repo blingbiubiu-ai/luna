@@ -97,9 +97,8 @@ export class DockerEnvironmentDriver {
       || inspection.Config.Labels["luna.placement"]!==String(environment.spec.scope.placementGeneration)) throw new ExecutionError(409, "container_identity_conflict");
     return inspection;
   }
-  async ensure(environment: EnvironmentRecord, requiredContextId?: string): Promise<string> {
-    if (environment.spec.imageDigest !== this.config.imageDigest || environment.spec.callbackRuntimeId !== this.config.runtimeId) throw new ExecutionError(409, "worker_configuration_conflict");
-    const prior = await this.inspect(environment);
+  /** The container this Worker would launch now: its arguments, Executor configuration and their hash. */
+  private launchSpec(environment: EnvironmentRecord, requiredContextId?: string) {
     const plan=this.mountPlan(environment,requiredContextId),{layout,mounts}=plan;
     const deployment = this.deployment(environment.id);
     const configFile = join(this.executorDirectory(environment), "executor.json");
@@ -129,10 +128,23 @@ export class DockerEnvironmentDriver {
     const command = ["--entrypoint", "bun", this.config.imageDigest,
       this.runtime ? `${RUNNER_RUNTIME_MOUNT}/current/executor.js` : "/app/agent-runner/dist/executor.js"];
     const configuration = contentHash({ args, command, executorConfig });
-    const mountsMatch = prior && mounts.every(({ source, destination, readonly }) =>
-      prior.Mounts.some(mount => mount.Type === "bind" && mount.Destination === destination &&
-        mount.RW === !readonly && hostSourceNames(source).includes(mount.Source)));
-    if (prior && mountsMatch && prior.Config.Labels["luna.configuration"] === configuration) {
+    return { plan, mounts, configFile, executorConfig, volume, args, command, configuration };
+  }
+  /** Whether a container was launched with the mounts and configuration this Worker uses now. */
+  current(environment: EnvironmentRecord, prior: DockerInspection): boolean {
+    const { mounts, configuration } = this.launchSpec(environment);
+    return launchedWith(prior, mounts, configuration);
+  }
+  /** Where a container mounts the Shadow HOME, which an older container may have at another path. */
+  mountedHome(environment: EnvironmentRecord, prior: DockerInspection): string {
+    const source = this.layouts.ensure(environment.spec.scope).homeSource;
+    return prior.Mounts.find(mount => mount.Type === "bind" && hostSourceNames(source).includes(mount.Source))?.Destination ?? this.home(environment);
+  }
+  async ensure(environment: EnvironmentRecord, requiredContextId?: string): Promise<string> {
+    if (environment.spec.imageDigest !== this.config.imageDigest || environment.spec.callbackRuntimeId !== this.config.runtimeId) throw new ExecutionError(409, "worker_configuration_conflict");
+    const prior = await this.inspect(environment);
+    const { plan, mounts, configFile, executorConfig, volume, args, command, configuration } = this.launchSpec(environment, requiredContextId);
+    if (prior && launchedWith(prior, mounts, configuration)) {
       const resourceMounts = new WorkerShadowMounts(this.db, this.config.dataRoot);
       if (prior.State.Running) await this.switchResourcesInside(prior.Id, resourceMounts.pendingSwitch(plan));
       else { resourceMounts.activate(plan); await this.docker(["container", "start", prior.Id]); this.startedExecutor(environment); }
@@ -294,6 +306,13 @@ export function memoryBytes(value: string): number {
   if (!match) throw new ExecutionError(422, "invalid_memory_limit");
   const unit = { "": 1, b: 1, k: 1024, m: 1024 ** 2, g: 1024 ** 3 }[match[2]!.toLowerCase() as "" | "b" | "k" | "m" | "g"];
   return Math.round(Number(match[1]) * unit);
+}
+
+function launchedWith(prior: DockerInspection, mounts: ShadowMountPlan["mounts"], configuration: string): boolean {
+  return mounts.every(({ source, destination, readonly }) =>
+    prior.Mounts.some(mount => mount.Type === "bind" && mount.Destination === destination &&
+      mount.RW === !readonly && hostSourceNames(source).includes(mount.Source)))
+    && prior.Config.Labels["luna.configuration"] === configuration;
 }
 
 /** Docker Desktop may report its VM-side /host_mnt path after starting a bind mount. */
