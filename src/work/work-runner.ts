@@ -1,4 +1,6 @@
 import { memoryInjection } from "@/agents/agent-memory-injection";
+import { addressingFacts, compact, dataBlock, joinBlocks, messageItem, turnClock, type PeopleResolver } from "@/runners/turn-envelope";
+import { shadowPeople } from "@/runners/shadow-people";
 import type {AgentExecutionSnapshot} from "@/agent-config";
 import { prepareRunnerFiles } from "@/runners/prepare-runner-files";
 import { RuntimeDetachedError } from "@/runners/runtime-detach";
@@ -99,18 +101,6 @@ function workSessionInboundFallback(session: SessionRow): NormalizedInboundFallb
         }
       : {}),
   };
-}
-
-interface WorkRunnerTurnPromptInput {
-  readonly type: "work_turn";
-  readonly sessionId: string;
-  readonly latestMessageAddressing?: NormalizedInboundMessage["addressing"];
-  readonly activationFollowupAddressing?: {
-    readonly sessionSourceMessageId: string;
-    readonly followupCount?: number;
-  };
-  readonly launchContextMessages?: readonly RunnerMessageEnvelope[];
-  readonly orderedMessages: readonly RunnerMessageEnvelope[];
 }
 
 /**
@@ -219,12 +209,8 @@ export class WorkRunner {
     }, "Prepared work runner prompt");
 
     const prompt = buildWorkTurnPrompt({
-      inputJson: buildWorkTurnInputJson({
-        sessionId: session.id,
-        inbound,
-        orderedMessages: turnMessages,
-        launchContextMessages: includeLaunchContext ? historyMessages : [],
-      }),
+      inbound,
+      people: shadowPeople(this._options.db, { agentId: session.agent_id, shadowId: session.shadow_id }),
       currentTurnMessages: turnMessages,
       launchContext: historyMessages,
       includeLaunchContext,
@@ -316,12 +302,12 @@ export class WorkRunner {
         );
         const instructions=await prepareRunnerFiles(runnerContext,buildWorkRunnerContextFile(session,inbound),signal,invocationId);
         runnerContext=this._runnerContexts.syncInstructionFingerprint(runnerContext.id,instructions.instructionFingerprint).runnerContext;
-        // After the fingerprint sync: a changed fingerprint starts a new provider session, which must be told persona and standing memory.
+        // After the fingerprint sync: a new provider session must be told standing memory.
         const memoryActor = this._requestedByUserIdForWorkRunner(latestMessageRow, session);
         const memory = memoryActor === undefined ? undefined : memoryInjection(this._options.db,
           {agentId: session.agent_id, shadowId: session.shadow_id, actorUserId: memoryActor, sessionId: session.id, taskId: null, runnerContextId: runnerContext.id},
           turnMessages.map(message => message.text).join("\n"));
-        const turnPrompt = memory?.text ? `${prompt}\n\n${memory.text}` : prompt;
+        const turnPrompt = joinBlocks([dataBlock("memory", { text: memory?.text ?? "" }), prompt]);
         if (turnPrompt !== prompt) this._attemptStore.updateInputPrompt(attempt.id, turnPrompt);
         let pendingAssistantStep: string | undefined;
         const invocation = await invokeSessionAgent({
@@ -474,7 +460,7 @@ export class WorkRunner {
       }
       const memory = memoryInjection(db, {agentId: session.agent_id, shadowId: session.shadow_id, actorUserId: command.actorUserId,
         sessionId: session.id, taskId: null, runnerContextId: runnerContext.id});
-      const prompt = memory.text ? `${command.instruction}\n\n${memory.text}` : command.instruction;
+      const prompt = joinBlocks([command.instruction, dataBlock("memory", { text: memory.text ?? "" }), dataBlock("now", { json: turnClock() })]);
       if (prompt !== command.instruction) this._attemptStore.updateInputPrompt(attempt.id, prompt);
       const invocation = await invokeSessionAgent({
         runner, runnerContext, runnerContextStore: this._runnerContexts, runnerKind: "work",
@@ -721,55 +707,25 @@ export class WorkRunner {
   }
 }
 
+/** The Work turn input: earlier messages on a fresh provider session, then this turn's messages. */
 function buildWorkTurnPrompt(input: {
-  readonly inputJson: WorkRunnerTurnPromptInput;
+  readonly inbound: NormalizedInboundMessage;
   readonly currentTurnMessages: readonly RunnerMessageEnvelope[];
   readonly launchContext: readonly RunnerMessageEnvelope[];
   readonly includeLaunchContext: boolean;
+  readonly people?: PeopleResolver;
 }): string {
-  const sections = [
-    "# Work Session Turn",
-    "",
-    "## Work Runner Input",
-    "```json",
-    JSON.stringify(input.inputJson, null, 2),
-    "```",
-    "",
-  ];
-  if (input.includeLaunchContext) {
-    sections.push(
-      "## Work Launch Context",
-      input.launchContext.length > 0
-        ? "See launchContextMessages in the JSON input above."
-        : "(no prior messages)",
-      "",
-    );
-  }
-  sections.push(
-    "## Current Turn Messages",
-    input.currentTurnMessages.length > 0
-      ? "See orderedMessages in the JSON input above."
-      : "(no current messages)",
-  );
-  return sections.join("\n");
-}
-
-function buildWorkTurnInputJson(input: {
-  readonly sessionId: string;
-  readonly inbound: NormalizedInboundMessage;
-  readonly launchContextMessages: readonly RunnerMessageEnvelope[];
-  readonly orderedMessages: readonly RunnerMessageEnvelope[];
-}): WorkRunnerTurnPromptInput {
-  return {
-    type: "work_turn",
-    sessionId: input.sessionId,
-    latestMessageAddressing: input.inbound.addressing,
-    ...activationFollowupAddressing(input.inbound),
-    ...(input.launchContextMessages.length > 0
-      ? { launchContextMessages: input.launchContextMessages }
-      : {}),
-    orderedMessages: input.orderedMessages,
-  };
+  const history = input.includeLaunchContext ? input.launchContext.map((message) => messageItem(message, input.people)) : [];
+  return joinBlocks([
+    history.length ? dataBlock("history", { json: { launchContext: history } }) : "",
+    dataBlock("messages", {
+      json: {
+        ...turnClock(),
+        addressing: compact({ ...addressingFacts(input.inbound), ...activationFollowupAddressing(input.inbound) }),
+        items: input.currentTurnMessages.map((message) => messageItem(message, input.people)),
+      },
+    }),
+  ]);
 }
 
 function buildWorkRunnerContextFile(
@@ -802,7 +758,7 @@ function sanitizedSurface(
 
 function activationFollowupAddressing(
   inbound: NormalizedInboundMessage,
-): Pick<WorkRunnerTurnPromptInput, "activationFollowupAddressing"> {
+): { readonly activationSource?: string; readonly followupCount?: number } {
   const inboundRecord = inbound as unknown as Record<string, unknown>;
   const activationFollowup = inboundRecord.activationFollowup;
   if (!isRecord(activationFollowup)) {
@@ -814,10 +770,8 @@ function activationFollowupAddressing(
   }
   const followupCount = activationFollowup.followupCount;
   return {
-    activationFollowupAddressing: {
-      sessionSourceMessageId,
-      ...(typeof followupCount === "number" ? { followupCount } : {}),
-    },
+    activationSource: sessionSourceMessageId,
+    ...(typeof followupCount === "number" ? { followupCount } : {}),
   };
 }
 

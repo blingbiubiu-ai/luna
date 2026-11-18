@@ -9,6 +9,15 @@ import { config } from "@/shared";
 import type { RunnerContextFile } from "./runner-context-file";
 import { writeRunnerContextFile } from "./runner-context-file";
 import { ensureRunnerWorkspaceInstructionFiles } from "./workspace-instruction-files";
+import { shadowSoul } from "@/agents/shadow-soul";
+import type { DrizzleDB } from "@/data";
+
+const LOCAL_SESSION_FINGERPRINT = "local-runner-session";
+
+function soulField(db: DrizzleDB, scope: { agentId: string; shadowId: string }) {
+  const soul = shadowSoul(db, scope);
+  return soul ? { soul: { ...soul, owner: { ...soul.owner }, persona: [...soul.persona] } } : {};
+}
 
 /** Worker owns filesystem rendering; the local fallback supports non-runtime test adapters. */
 export async function prepareRunnerFiles(input: {
@@ -32,6 +41,7 @@ export async function prepareRunnerFiles(input: {
           ...(runtime.sharedProject ? { projectId: runtime.sharedProject.projectId } : {}),
           ...(config.git ? { git: config.git } : {}),
           ...(new ShadowRootAccessStore(db).enabled(invocation.shadowId) ? { rootAccess: true } : {}),
+          ...soulField(db, invocation),
         }, signal);
         const current=new InvocationStore(db).require(invocationId);
         if(current.state!=="active" || current.settledAt!==null)throw new ExecutionError(409,"invocation_preparation_mismatch");
@@ -44,7 +54,8 @@ export async function prepareRunnerFiles(input: {
       }
     }
   }
-  const result = ensureRunnerWorkspaceInstructionFiles({ runnerKind: context?.runnerKind ?? "main", runnerRootPath: input.runner_root_path, previousFingerprint: input.instruction_fingerprint });
+  const result = ensureRunnerWorkspaceInstructionFiles({ runnerKind: context?.runnerKind ?? "main", runnerRootPath: input.runner_root_path, previousFingerprint: null });
   if (context) writeRunnerContextFile(input.runner_root_path, context);
-  return result;
+  // Instruction changes reach a resumed provider session, so they never require a fresh one.
+  return { instructionFingerprint: LOCAL_SESSION_FINGERPRINT, changed: result.changed };
 }

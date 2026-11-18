@@ -382,7 +382,7 @@ describe("session inbound router", () => {
     await router.waitForIdle();
 
     const turn = database.db.select().from(sessionTurns).get();
-    expect(turn?.materialized_prompt).toContain("# Luna Main Runner Turn Input");
+    expect(turn?.materialized_prompt).toContain("<messages>\n");
     expect(turn?.materialized_prompt).toContain("广州明天天气怎么样");
     expect(turn?.materialized_prompt).not.toContain("Allowed Action Contract");
   });
@@ -957,7 +957,7 @@ describe("session inbound router", () => {
       attemptKind: "primary",
       attemptIndex: 0,
       status: "parsed",
-      inputPrompt: expect.stringContaining("# Luna Main Runner Turn Input"),
+      inputPrompt: expect.stringContaining("<messages>\n"),
       rawOutput: "LUNA_NOTHING_TO_SEND",
       rawOutputTruncated: false,
       parsedActionJson: expect.objectContaining({ status: "completed", followupReleased: false }),
@@ -1073,9 +1073,8 @@ describe("session inbound router", () => {
       sessionRow.id,
       "mock",
     );
-    expect(persistedRunnerContext.instruction_fingerprint).toMatch(
-      /^[0-9a-f]{64}$/,
-    );
+    // Without a Worker the session fingerprint is fixed: instruction content never forces a fresh launch.
+    expect(persistedRunnerContext.instruction_fingerprint).toBe("local-runner-session");
     expect(persistedRunnerContext.instruction_fingerprint).not.toBe(
       "stale-fingerprint",
     );
@@ -2798,9 +2797,14 @@ function extractMainRunnerTurnInputJson(prompt: string): {
   };
   readonly orderedMessages: readonly { readonly text: string }[];
 } {
-  const match = prompt.match(/```json\n([\s\S]*?)\n```/);
-  expect(match?.[1]).toBeString();
-  return JSON.parse(match![1]!) as {
+  const block = (tag: string) => prompt.match(new RegExp(`<${tag}>\\n([\\s\\S]*?)\\n</${tag}>`))?.[1];
+  const messages = block("messages");
+  expect(messages).toBeString();
+  const history = block("history");
+  return {
+    context: { launchSeed: history ? JSON.parse(history).launchSeed : undefined },
+    orderedMessages: JSON.parse(messages!).items,
+  } as {
     readonly context: {
       readonly launchSeed?: {
         readonly items: readonly { readonly text: string }[];

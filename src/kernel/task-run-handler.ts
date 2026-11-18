@@ -1,4 +1,6 @@
 import { memoryInjection } from "@/agents/agent-memory-injection";
+import { compact, dataBlock, joinBlocks, turnClock, zonedIso } from "@/runners/turn-envelope";
+import { promptBlock } from "@luna/host-runtime/prompt-blocks";
 import type {AgentExecutionSnapshot} from "@/agent-config";
 import {TaskScopeResolver} from "@/agents/task-scope";
 import { prepareRunnerFiles } from "@/runners/prepare-runner-files";
@@ -466,8 +468,9 @@ async function _runAgentTask(input: {
   const memory = memoryInjection(input.db, {agentId: runnerContext.agent_id, shadowId: runnerContext.shadow_id, actorUserId: actor,
     sessionId: taskRow?.primary_session_id ?? null, taskId: input.taskId, runnerContextId: runnerContext.id},
     input.pendingText.trim() || [taskRow?.title, taskRow?.summary].filter(Boolean).join("\n"));
-  const turnMessage: UserMessage = memory.text
-    ? {...userMessage, content: [{type: "text", text: `${input.materializedPrompt}\n\n${memory.text}`}]} : userMessage;
+  const turnMessage: UserMessage = {...userMessage, content: [{type: "text", text: joinBlocks([
+    input.materializedPrompt, dataBlock("memory", {text: memory.text ?? ""}), dataBlock("now", {json: turnClock()}),
+  ])}]};
   for await (const event of runner.stream(turnMessage, {
     cwd: runnerContext.runner_root_path,
     isNewSession: runnerContext.runner_session_id === null,
@@ -540,25 +543,23 @@ async function _runAgentTask(input: {
  * Builds the Task Runner prompt from the durable Task record instead of assuming
  * every Task follows one domain-specific workflow.
  */
+/** The persisted input of one Task Run. The current time and memory are added when it is sent. */
 export function buildTaskRunPrompt(input: BuildTaskRunPromptInput): string {
-  return [
-    `You are handling a Luna ${input.taskType} Task.`,
-    `Run reason: ${input.reason}`,
-    `Title: ${input.title}`,
-    `Summary: ${input.summary}`,
-    "",
-    _contextSection("Launch context", input.launchContext ?? []),
-    _contextSection("Update context", input.updateContext ?? []),
-    _bulletSection("Confirmed facts", input.facts),
-    _bulletSection("Launch assumptions", input.assumptions),
-    input.pendingText ? `New user input:\n${input.pendingText}` : "",
-    "",
-    "Submit these report sections through luna task report --request-id final-report --stdin, then end with LUNA_NOTHING_TO_SEND:",
-    "Output requirements:",
-    ..._outputRequirements(input.taskType),
-  ]
-    .filter((line) => line.length > 0)
-    .join("\n");
+  const context = (items: readonly TaskRunPromptContextItem[] | undefined) => (items ?? []).map((item) => compact({
+    role: item.role, source: item.source, reason: item.reason, at: item.occurredAt === undefined ? undefined : zonedIso(new Date(item.occurredAt)),
+    text: item.text.trim(),
+  }));
+  const launch = context(input.launchContext), update = context(input.updateContext);
+  return joinBlocks([
+    dataBlock("task", { json: { type: input.taskType, reason: input.reason, title: input.title, summary: input.summary, facts: input.facts, assumptions: input.assumptions } }),
+    launch.length ? dataBlock("launch_context", { json: launch }) : "",
+    update.length ? dataBlock("update_context", { json: update }) : "",
+    dataBlock("user_input", { text: input.pendingText }),
+    promptBlock("report_sections", [
+      "Submit a report with these sections through `luna task report --request-id final-report --stdin`, then end with LUNA_NOTHING_TO_SEND:",
+      ..._outputRequirements(input.taskType),
+    ].join("\n")),
+  ]);
 }
 
 export function buildTaskRunPromptForRunner(
@@ -566,28 +567,6 @@ export function buildTaskRunPromptForRunner(
   _runnerWorkspacePath: string,
 ): string {
   return buildTaskRunPrompt(input);
-}
-
-function _contextSection(
-  title: string,
-  items: readonly TaskRunPromptContextItem[],
-): string {
-  if (items.length === 0) {
-    return "";
-  }
-  return [
-    `${title}:`,
-    ...items.map((item) => {
-      const header =
-        `- role=${item.role} source=${item.source} reason=${item.reason}`;
-      const text = _indentMultiline(item.text.trim());
-      return text.length > 0 ? `${header}\n  ${text}` : header;
-    }),
-  ].join("\n");
-}
-
-function _indentMultiline(text: string): string {
-  return text.replace(/\n/g, "\n  ");
 }
 
 function _taskRunContextPacks(input: {
@@ -817,18 +796,6 @@ function _stableStringify(value: unknown): string {
     .sort()
     .map((key) => `${JSON.stringify(key)}:${_stableStringify(record[key])}`)
     .join(",")}}`;
-}
-
-function _bulletSection(title: string, values: readonly string[]): string {
-  const cleanValues = values
-    .map((value) => value.trim())
-    .filter((value) => value.length > 0);
-  if (cleanValues.length === 0) {
-    return "";
-  }
-  return [title + ":", ...cleanValues.map((value) => `- ${value}`)].join(
-    "\n",
-  );
 }
 
 function _outputRequirements(taskType: string): string[] {

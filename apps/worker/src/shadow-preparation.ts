@@ -52,7 +52,8 @@ export class ShadowPreparation {
    const rendered=ensureRunnerWorkspaceInstructionFiles({home:plan.layout.home,promptsRoot:join(plan.resourceSource,"prompts"),
     runnerRootPath:cwd,runnerKind:input.runnerKind,previousFingerprint:null,
     // The rules accompany the Shadow switch only where this host lets the container use sudo.
-    runnerSudo:input.rootAccess===true && rootHostCheck(plan.layout.homeSource).allowed});
+    runnerSudo:input.rootAccess===true && rootHostCheck(plan.layout.homeSource).allowed,
+    ...(input.soul ? {soul:input.soul} : {})});
    const target=join(cwd,".luna/runner-context.json"),temp=join(cwd,".luna",`.context-${randomUUID()}`);
    try{writeFileSync(temp,JSON.stringify(input.context??{},null,2)+"\n",{flag:"wx",mode:0o600});renameSync(temp,target);}
    finally{rmSync(temp,{force:true});}

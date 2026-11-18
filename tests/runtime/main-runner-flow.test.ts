@@ -1374,12 +1374,13 @@ test("Main Runner accepts sentinel completion and injects runtime context", asyn
   expect(prompt).toContain("clarification");
   expect(prompt).toContain("播放页竖屏");
   expect(prompt).toContain("uid");
-  expect(prompt).toContain("# Luna Main Runner Turn Input");
-  expect(prompt).toContain("## Agent memory: always in effect");
+  expect(prompt).toContain("<messages>\n");
+  expect(prompt).toContain("<memory>\n## Agent memory: always in effect");
   expect(prompt).toContain("(project) 发布冻结: 11-20 前冻结发布");
   expect(prompt).not.toContain("memory body is fetched on demand");
   expect(prompt).not.toContain("Allowed Action Contract");
-  expect(prompt).toContain("JSON Input");
+  expect(prompt).toContain("<history>\n");
+  expect(prompt).not.toContain("JSON Input");
   expect(prompt).not.toContain("# Luna Main Runner Prompt");
   expect(prompt).not.toContain(
     "The current user turn is provided as `user_messages`",
@@ -1396,7 +1397,7 @@ test("Main Runner accepts sentinel completion and injects runtime context", asyn
   const claudeMdPath = join(runnerContext.runner_root_path, "CLAUDE.md");
   expect(existsSync(claudeMdPath)).toBe(true);
   expect(readFileSync(claudeMdPath, "utf-8")).toContain(
-    "# Main Runner Runtime Prompt",
+    "<role>\nYou are the session-level dispatcher",
   );
   expect(readFileSync(claudeMdPath, "utf-8")).not.toContain(
     "@.luna-prompts/main-runner/instructions.md",
@@ -1490,14 +1491,15 @@ test("Main Runner service env does not use Feishu external id as local fallback 
 test("Main Runner prompts are managed as Markdown assets", () => {
   expect(
     existsSync(
-      join(import.meta.dir, "../../src/prompts/main-runner/instructions.md"),
+      join(import.meta.dir, "../../src/prompts/main/role.md"),
     ),
   ).toBe(true);
+  // Turn input carries data only; its rules live in the instruction files.
   expect(
     existsSync(
       join(import.meta.dir, "../../src/prompts/main-runner/user-turn-template.md"),
     ),
-  ).toBe(true);
+  ).toBe(false);
 });
 
 test("Main Runner persists provider session id from system init and resumes next run", async () => {

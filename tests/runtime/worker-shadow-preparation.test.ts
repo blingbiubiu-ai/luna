@@ -7,7 +7,7 @@ import {ShadowPreparation} from "../../apps/worker/src/shadow-preparation";
 import {createScopedResources} from "@luna/host-runtime/scoped-runner-resources";
 let root:string,db:Database,server:ReturnType<typeof Bun.serve>,preparer:ShadowPreparation,downloads:number,deny:boolean;
 const scope={agentId:"agent",shadowId:"shadow",placementGeneration:1};
-const files=["public/prompts/main-runner/instructions.md","public/prompts/runtime-confidentiality.md","public/prompts/extra.md"].map(path=>({path,content:Buffer.from(path).toString("base64"),mode:0o644}));
+const files=["public/prompts/main/filesystem.md","public/prompts/main/input.md","public/prompts/main/messaging.md","public/prompts/main/reply.md","public/prompts/main/role.md","public/prompts/main/routing.md","public/prompts/main/session-commands.md","public/prompts/main/task-commands.md","public/prompts/shared/artifacts.md","public/prompts/shared/confidentiality.md","public/prompts/shared/identity.md","public/prompts/shared/memory.md","public/prompts/shared/reply-protocol.md","public/prompts/shared/root-access.md","public/prompts/shared/runner-context.md","public/prompts/shared/runtime.md","public/prompts/task/evidence.md","public/prompts/task/role.md","public/prompts/work/reply.md","public/prompts/work/role.md","public/prompts/extra.md"].map(path=>({path,content:Buffer.from(path).toString("base64"),mode:0o644}));
 const bundle=createScopedResources(scope,files);
 const input={invocationId:"inv",protocolVersion:2,scope,resources:bundle.selection,contextId:"ctx",runnerId:"ctx",scopeKey:"session:one",runnerKind:"main",context:{sessionId:"one"}};
 beforeEach(()=>{
@@ -22,7 +22,7 @@ test("v2 prepare downloads fixed resources, writes scoped context, and persists 
  expect(reply.home).toBe(join(root,"agents/agent/shadows/shadow"));
  expect(reply.cwd).toBe(join(reply.home,"runners/ctx"));
  expect(JSON.parse(readFileSync(join(reply.cwd,".luna/runner-context.json"),"utf8"))).toEqual(input.context);
- expect(readFileSync(join(reply.cwd,"AGENTS.md"),"utf8")).toContain("public/prompts/main-runner/instructions.md");
+ expect(readFileSync(join(reply.cwd,"AGENTS.md"),"utf8")).toContain("public/prompts/main/role.md");
  const restarted=new ShadowPreparation(db,root,"worker",server.url.origin,"t".repeat(43));
  expect(await restarted.prepare(input)).toEqual(reply);expect(downloads).toBe(2);
  deny=true;await expect(restarted.prepare(input)).rejects.toMatchObject({code:"scoped_resource_download_failed"});
@@ -79,4 +79,10 @@ test("release during download fences the in-flight preparation before HOME or co
  await expect(preparer.prepare(input)).rejects.toMatchObject({code:"context_preparation_released"});
  expect(existsSync(join(root,"agents/agent/shadows/shadow"))).toBe(false);
  expect(preparer.store.get("inv")?.state).toBe("released");
+});
+
+test("the soul sent with a preparation heads the Runner instructions",async()=>{
+ const reply=await preparer.prepare({...input,soul:{name:"影小黑",agent:"悟空",owner:{id:"owner",name:"王华杰"},persona:["说话干脆。"]}});
+ const agents=readFileSync(join(reply.cwd,"AGENTS.md"),"utf8");
+ expect(agents.startsWith('<soul>\n{"name":"影小黑","agent":"悟空","owner":{"id":"owner","name":"王华杰"}}\n\n说话干脆。\n</soul>')).toBe(true);
 });

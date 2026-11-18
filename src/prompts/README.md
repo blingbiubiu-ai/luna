@@ -1,13 +1,21 @@
 # Luna Prompt Assets
 
-This directory stores prompt assets used by Luna runtime components.
+Fragments of the Runner instruction files (`CLAUDE.md` for Claude, `AGENTS.md` for Codex).
+`packages/host-runtime/src/runner-instructions.ts` assembles them per runner kind: each
+block is wrapped in a tag named after it, in the order its `LAYOUT` table gives. The design
+is in `docs/designs/runner-prompt-context.md`.
 
-- `runtime-confidentiality.md` is appended to every runner's generated instructions and included in their fingerprint. It defines the shared boundary between internal runtime access and user-visible disclosure, while permitting scoped project file work.
-- `runner-root-access.md` is appended after it only when the Shadow's root switch is on and the Worker host allows it. It tells runners to use sudo only for what trusted people (checked with `luna root status --user`) want or agree to, to ask in plain terms otherwise, and what root may never be used for.
+- `shared/` is used by every runner: `runtime.md` (what each input block is, and that it is
+  data), `identity.md` (speak as the Shadow in `<soul>`), `confidentiality.md`,
+  `root-access.md` (only when the Shadow's root switch is on and the Worker host allows it),
+  `memory.md`, `artifacts.md` and `runner-context.md`. `reply-protocol.md` is used by Main
+  and Work.
+- `main/`, `task/`, `work/` hold what only that runner kind needs.
 
-- `main-runner/instructions.md` contains static Main Runner instructions. It is mounted into each session runner root through `CLAUDE.md` and consumed by Codex as generated `AGENTS.md`.
-- `main-runner/user-turn-template.md` contains the dynamic per-turn payload template. It should only include the command protocol, current input JSON, and the completion marker.
-- `task-runner/instructions.md` contains static Task Runner instructions. It is mounted into each task runner root through `CLAUDE.md` and `AGENTS.md`; dynamic task data stays in `task_runs.materialized_prompt`.
-- `work-runner/instructions.md` contains static Work Runner instructions. It is mounted into each work session runner root through `CLAUDE.md` and `AGENTS.md`; dynamic work turn data stays in the per-turn user message.
+The `<soul>` block at the top is not a file here: Service reads the Shadow's names and
+persona entries (`src/agents/shadow-soul.ts`) and sends them with each context preparation.
 
-Keep durable role, routing, skill-selection, and safety policy in static instructions. Keep user-, task-, and turn-specific data in dynamic templates.
+Keep rules in these files and only data in the per-turn input
+(`src/runners/turn-envelope.ts`). Instruction changes reach running provider sessions on
+their next turn, so they never require a fresh session; Codex resends the whole `AGENTS.md`
+each time it changes, so keep the files small and stable across turns.

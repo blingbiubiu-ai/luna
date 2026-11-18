@@ -92,6 +92,8 @@ test("Worker preparation rejects missing snapshot before dispatch and rechecks i
   calls++;
   expect(request.protocolVersion).toBe(2);expect(request.scope).toEqual({agentId:scope.agentId,shadowId:scope.shadowId});
   expect(request.resources).toEqual(pinned!.selection);
+  // Who the Shadow is travels with every preparation, so the Worker renders it into the instructions.
+  expect(request.soul).toMatchObject({persona:[],owner:{id:expect.any(String)}});
   if(revokeDuringPrepare)store.revoke("first","during preparation");
   expect(resources.read("first").selection.digest).toBe(pinned!.selection.digest);
   return {instructionFingerprint:"prepared"};

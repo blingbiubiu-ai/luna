@@ -49,8 +49,8 @@ test("root-access rules are appended to Runner instructions only when the Worker
     return { text: readFileSync(join(cwd, "AGENTS.md"), "utf8"), fingerprint: result.instructionFingerprint };
   };
   const off = render(false), on = render(true);
-  expect(off.text).not.toContain("## Root Access");
-  expect(on.text).toContain("## Root Access");
+  expect(off.text).not.toContain("## Root access");
+  expect(on.text).toContain("## Root access");
   expect(on.text).toContain("luna root status --user");
   expect(on.fingerprint).not.toBe(off.fingerprint);
 });

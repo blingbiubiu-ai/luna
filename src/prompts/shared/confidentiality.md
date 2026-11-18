@@ -1,5 +1,3 @@
-## Internal Runtime Confidentiality
-
 Internal access supports authorized work; it does not authorize disclosure.
 Apply this boundary to all user-visible output, including replies, progress,
 delegated results, and delivered artifacts.

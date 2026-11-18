@@ -728,16 +728,16 @@ describe("TaskRunSupervisor", () => {
       prompt: "Investigate playback failures.",
     });
     expect(run?.materializedPrompt).toContain(
-      `Title: Task ${taskId}`,
+      `"title":"Task ${taskId}"`,
     );
     expect(run?.materializedPrompt).toContain(
-      "New user input:\nInvestigate playback failures.",
+      "<user_input>\nInvestigate playback failures.\n</user_input>",
     );
     expect(run?.materializedPrompt).toContain(
-      "Confirmed facts:\n- EU users see 502 during playback.",
+      '"facts":["EU users see 502 during playback."]',
     );
     expect(run?.materializedPrompt).toContain(
-      "Launch assumptions:\n- Start with CDN and origin timeout evidence.",
+      '"assumptions":["Start with CDN and origin timeout evidence."]',
     );
   });
 
@@ -875,13 +875,13 @@ describe("TaskRunSupervisor", () => {
         contextPackIds: [launchPack.id],
       },
     });
-    expect(runs[0]?.materializedPrompt).toContain("Launch context:");
-    expect(runs[0]?.materializedPrompt).toContain("role=source");
+    expect(runs[0]?.materializedPrompt).toContain("<launch_context>");
+    expect(runs[0]?.materializedPrompt).toContain('"role":"source"');
     expect(runs[0]?.materializedPrompt).toContain("source message: 用户反馈播放失败 did=123");
-    expect(runs[0]?.materializedPrompt).toContain("role=launch_context");
+    expect(runs[0]?.materializedPrompt).toContain('"role":"launch_context"');
     expect(runs[0]?.materializedPrompt).toContain("source turn context: 只影响 Android 端");
     expect(runs[0]?.materializedPrompt).toContain(
-      "New user input:\nInvestigate current playback failure.",
+      "<user_input>\nInvestigate current playback failure.\n</user_input>",
     );
     expect(runs[1]).toMatchObject({
       inputSnapshot: {
@@ -889,9 +889,9 @@ describe("TaskRunSupervisor", () => {
         contextPackIds: [launchPack.id, updatePack!.id],
       },
     });
-    expect(runs[1]?.materializedPrompt).toContain("Update context:");
+    expect(runs[1]?.materializedPrompt).toContain("<update_context>");
     expect(runs[1]?.materializedPrompt).toContain("latest restart context");
-    expect(runs[1]?.materializedPrompt).not.toContain("Launch context:");
+    expect(runs[1]?.materializedPrompt).not.toContain("<launch_context>");
     expect(runs[1]?.materializedPrompt).toContain("source turn context: 只影响 Android 端");
     expect(seedRecords).toHaveLength(1);
     expect(seedRecords[0]).toMatchObject({
@@ -978,7 +978,7 @@ describe("TaskRunSupervisor", () => {
       contextPackIds: [emptyPack.id],
     });
     expect(store.listRunsForTask(taskId)[0]?.materializedPrompt).toContain(
-      "Update context:",
+      "<update_context>",
     );
   });
 
@@ -2226,7 +2226,7 @@ describe("executeTaskRun", () => {
     expect(existsSync(claudeMdPath)).toBe(true);
     expect(existsSync(agentsMdPath)).toBe(true);
     expect(readFileSync(claudeMdPath, "utf-8")).toContain(
-      "# Task Runner Runtime Prompt",
+      "<role>\nYou are the execution agent for one durable Luna Task.",
     );
     expect(readFileSync(claudeMdPath, "utf-8")).not.toContain(
       "@.luna-prompts/task-runner/instructions.md",
@@ -2238,12 +2238,12 @@ describe("executeTaskRun", () => {
       "luna artifacts materialize artifact:<id> --json",
     );
     expect(readFileSync(agentsMdPath, "utf-8")).toContain(
-      "reference the file only through that ref",
+      "Reference the file only through that ref",
     );
     const agentsMd = readFileSync(agentsMdPath, "utf-8");
     expect(agentsMd).toContain("luna memory add --type persona");
     expect(agentsMd).toContain("luna memory get <id>");
-    expect(agentsMd).toContain("Stable Runner Context");
+    expect(agentsMd).toContain("Stable runner context is available");
     expect(agentsMd).toContain(".luna/runner-context.json");
     expect(agentsMd).toContain("Per-turn or per-run user input");
     const contextFile = JSON.parse(

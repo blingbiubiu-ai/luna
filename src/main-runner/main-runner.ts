@@ -9,7 +9,6 @@ import { InvocationStore } from "@/runners/invocation-store";
 import { decodeInvocation } from "@/runners/invocation-codec";
 import { randomUUID } from "node:crypto";
 import { mainInvocations, mainMessageOrigin } from "@/runners/main-invocation-registry";
-import type { ChannelMention } from "@/channels";
 import type { AgentExecutionSnapshot } from "@/agent-config";
 import type { DrizzleDB } from "@/data";
 import { runnerOperations, tasks } from "@/data/schema";
@@ -35,15 +34,10 @@ import {
   type SessionRunnerAttemptStore,
 } from "@/sessions/session-runner-attempt-store";
 import { and, eq } from "drizzle-orm";
-import { existsSync, readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
 
-const userTurnTemplateText = readFileSync(
-  resolvePromptAssetPath("main-runner/user-turn-template.md"),
-  "utf-8",
-);
-import type { MainRunnerCompletion, MainRunnerInput } from "./types";
+import type { ActivationContextMessage, MainRunnerCompletion, MainRunnerContextPack, MainRunnerInput } from "./types";
+import { addressingFacts, compact, dataBlock, joinBlocks, messageItem, turnClock, zonedIso, type PeopleResolver } from "@/runners/turn-envelope";
+import { shadowPeople } from "@/runners/shadow-people";
 import { ensureMainRunnerWorkspaceInstructions } from "./workspace-instructions";
 import { runnerArtifactAllowlistFromInput } from "./artifact-allowlist";
 
@@ -153,7 +147,10 @@ export class MainRunner {
       ? memoryInjection(this._options.serviceAuthDb, {...scope, actorUserId: invocation.actorUserId, sessionId: input.input.context.sessionId, taskId: null, runnerContextId: runnerContext.id},
         input.input.type === "user_messages" ? input.input.messages.map(message => message.text).join("\n") : undefined)
       : undefined;
-    const prompt = buildPrompt(input.input) + (memory?.text ? `\n\n${memory.text}` : "");
+    const prompt = renderMainRunnerPrompt(input.input, {
+      ...(memory?.text ? { memory: memory.text } : {}),
+      ...(this._options.serviceAuthDb ? { people: shadowPeople(this._options.serviceAuthDb, scope) } : {}),
+    });
     const primaryAttempt = this._createAttempt(input, {
       attemptKind: "primary",
       inputPrompt: prompt,
@@ -390,175 +387,67 @@ function sanitizedMainSurface(
   return rest;
 }
 
-function buildPrompt(input: MainRunnerInput): string {
-  return renderMainRunnerPrompt(input);
+export interface MainRunnerPromptOptions {
+  /** Agent memory sections for this turn, already rendered as text. */
+  readonly memory?: string;
+  /** Relation of each sender to this Shadow. */
+  readonly people?: PeopleResolver;
+  readonly now?: Date;
 }
 
-export function renderMainRunnerPrompt(input: MainRunnerInput): string {
-  return renderPromptTemplate({
-    inputJson: JSON.stringify(renderMainRunnerInput(input), null, 2),
+/** The turn input for Main: background blocks first, this turn's input last. */
+export function renderMainRunnerPrompt(input: MainRunnerInput, options: MainRunnerPromptOptions = {}): string {
+  const clock = turnClock(options.now);
+  const context = input.context;
+  const pack = (value: MainRunnerContextPack | undefined) => value && {
+    kind: value.kind,
+    items: value.items.map((item) => compact({
+      role: item.messageRole, text: item.text, entryId: item.entryId, messageId: item.messageId,
+      source: item.source, sourceSessionId: item.sourceSessionId, reason: item.reason,
+    })),
+  };
+  const activation = input.type === "user_messages" ? input.activationContextMessages?.map((message) => activationItem(message, options.people)) : undefined;
+  const history = compact({ launchSeed: pack(context.launchSeed), deltaContext: pack(context.deltaContext), activationContext: activation });
+  const tasks = compact({ bound: context.boundTask, candidates: context.candidateOpenTasks });
+  return joinBlocks([
+    dataBlock("memory", { text: options.memory ?? "" }),
+    Object.keys(history).length ? dataBlock("history", { json: history }) : "",
+    Object.keys(tasks).length ? dataBlock("tasks", { json: tasks }) : "",
+    context.clarification ? dataBlock("clarification", { json: context.clarification }) : "",
+    mainTurnBlock(input, clock, options.people),
+  ]);
+}
+
+function mainTurnBlock(input: MainRunnerInput, clock: ReturnType<typeof turnClock>, people: PeopleResolver | undefined): string {
+  if (input.type === "task_result") {
+    const { userVisibleReport, artifactIds, ...result } = input.result;
+    // Timeline IDs remain in business persistence, never masquerade as download IDs.
+    const visible = input.result.artifactRefs !== undefined ? result : { ...result, artifactIds };
+    return dataBlock("task_result", { json: { ...clock, sessionId: input.sessionId, ...visible }, text: userVisibleReport });
+  }
+  if (input.type === "session_trigger") {
+    const { instruction, context: _context, type: _type, ...trigger } = input;
+    return dataBlock("trigger", { json: { ...clock, ...trigger }, text: instruction });
+  }
+  const rawById = new Map(input.messages.map((message) => [message.messageId, message.rawMessage]));
+  return dataBlock("messages", {
+    json: compact({
+      ...clock,
+      requesterUserId: input.requesterUserId,
+      addressing: addressingFacts(input.latestMessage),
+      activationSource: input.activationSourceMessage && activationItem(input.activationSourceMessage, people),
+      items: input.messages.map((message) => messageItem(message, people, rawById.get(message.messageId))),
+    }),
   });
 }
 
-function renderMainRunnerInput(input: MainRunnerInput): object {
-  if (input.type === "task_result" && input.result.artifactRefs !== undefined) {
-    // Timeline IDs remain in business persistence, never masquerade as download IDs.
-    const { artifactIds: _timelineIds, ...result } = input.result;
-    return { ...input, result };
-  }
-  if (input.type !== "user_messages") {
-    return input;
-  }
-
-  return {
-    type: input.type,
-    ...(input.requesterUserId !== undefined
-      ? { requesterUserId: input.requesterUserId }
-      : {}),
-    context: input.context,
-    ...(input.activationSourceMessage !== undefined
-      ? { activationSourceMessage: renderActivationContextMessage(input.activationSourceMessage) }
-      : {}),
-    currentAssistantIdentity: currentAssistantIdentity(input.latestMessage),
-    latestMessageAddressing: latestMessageAddressing(input.latestMessage),
-    activationFollowupAddressing: activationFollowupAddressing(input),
-    orderedMessages: input.messages.map((message, index) => ({
-      index: index + 1,
-      messageId: message.messageId,
-      channelMessageKey: message.channelMessageKey,
-      role: message.role,
-      senderUserId: message.senderUserId,
-      sender: message.sender,
-      ...(message.rawMessage.contentKind !== undefined
-        ? { contentKind: message.rawMessage.contentKind }
-        : {}),
-      ...(message.rawMessage.presentationKind !== undefined
-        ? { presentationKind: message.rawMessage.presentationKind }
-        : {}),
-      text: message.text,
-      createdAt: message.createdAt,
-    })),
-    orderedActivationContextMessages: input.activationContextMessages?.map(
-      (message, index) => ({
-        index: index + 1,
-        ...renderActivationContextMessage(message),
-      }),
-    ),
-  };
-}
-
-function currentAssistantIdentity(
-  message: Extract<MainRunnerInput, { readonly type: "user_messages" }>["latestMessage"],
-): object {
-  const currentBotMentions = (message.mentions ?? []).filter(
-    (mention) =>
-      message.addressing.addressedToBot === true &&
-      message.addressing.reason === "mention" &&
-      mention.target.kind === "bot",
-  );
-  return {
-    explicitlyAddressedByLatestMessage:
-      message.addressing.addressedToBot === true &&
-      message.addressing.reason !== "activation_followup",
-    addressingReason: message.addressing.reason,
-    mentionLabels: uniqueStrings(currentBotMentions.map((mention) => mention.label)),
-    displayNames: uniqueStrings(
-      currentBotMentions.flatMap((mention) =>
-        mention.target.displayName !== undefined ? [mention.target.displayName] : [],
-      ),
-    ),
-    instruction:
-      "These labels and display names identify the current assistant when explicitlyAddressedByLatestMessage is true; do not treat them as another bot or as a non-current-assistant target.",
-  };
-}
-
-function latestMessageAddressing(
-  message: Extract<MainRunnerInput, { readonly type: "user_messages" }>["latestMessage"],
-): object {
-  return {
-    addressedToBot: message.addressing.addressedToBot,
-    reason: message.addressing.reason,
-    mentionTargets: summarizeMentionTargets(message.mentions ?? []),
-  };
-}
-
-function renderActivationContextMessage(
-  message: NonNullable<
-    Extract<MainRunnerInput, { readonly type: "user_messages" }>["activationSourceMessage"]
-  >,
-): object {
-  return {
-    messageId: message.messageId,
-    ...(message.channelMessageKey !== undefined
-      ? { channelMessageKey: message.channelMessageKey }
-      : {}),
-    ...(message.senderUserId !== undefined
-      ? { senderUserId: message.senderUserId }
-      : {}),
-    createdAt: message.createdAt,
+function activationItem(message: ActivationContextMessage, people: PeopleResolver | undefined) {
+  return compact({
+    id: message.messageId,
+    from: message.senderUserId ? { id: message.senderUserId, ...people?.(message.senderUserId) } : undefined,
+    at: zonedIso(new Date(message.createdAt)),
     text: message.text,
-  };
-}
-
-function activationFollowupAddressing(input: MainRunnerInput): object | undefined {
-  if (input.type !== "user_messages") {
-    return undefined;
-  }
-  if (input.latestMessage.addressing?.reason !== "activation_followup") {
-    return undefined;
-  }
-
-  const latestMentionTargets = summarizeMentionTargets(
-    input.latestMessage.mentions ?? [],
-  );
-  return {
-    sourceMessageId: input.activationSourceMessage?.messageId,
-    sourceChannelMessageId: input.activationSourceMessage?.channelMessageKey,
-    latestExplicitlyMentionsNonLunaTarget: latestMentionTargets.length > 0,
-    latestMentionTargets,
-  };
-}
-
-function summarizeMentionTargets(
-  mentions: readonly ChannelMention[],
-): readonly object[] {
-  return mentions.map((mention) => ({
-    label: mention.label,
-    targetExternalId: mention.target.externalId,
-    targetKind: mention.target.kind,
-    ...(mention.target.displayName !== undefined
-      ? { targetDisplayName: mention.target.displayName }
-      : {}),
-  }));
-}
-
-function uniqueStrings(values: readonly string[]): readonly string[] {
-  return [...new Set(values.filter((value) => value.length > 0))];
-}
-
-function renderPromptTemplate(input: {
-  readonly inputJson: string;
-}): string {
-  return promptTemplate().replace("{{INPUT_JSON}}", input.inputJson);
-}
-
-function promptTemplate(): string {
-  return userTurnTemplateText;
-}
-
-function resolvePromptAssetPath(relativePath: string): string {
-  const moduleDir = dirname(fileURLToPath(import.meta.url));
-  const candidates = [
-    join(moduleDir, "../prompts", relativePath),
-    join(moduleDir, "../src/prompts", relativePath),
-  ];
-  const found = candidates.find((candidate) => existsSync(candidate));
-  if (found === undefined) {
-    throw new Error(
-      `Prompt asset not found: ${relativePath}. Tried: ${candidates.join(", ")}`,
-    );
-  }
-  return found;
+  });
 }
 
 export class MainRunnerFreshLaunchReplayRequiredError extends Error {

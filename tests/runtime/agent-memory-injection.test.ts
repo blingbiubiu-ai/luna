@@ -8,6 +8,7 @@ import {config, setLunaHome} from "@/shared";
 import {AgentStore} from "@/agents/agent-store";
 import {AgentMemoryStore, type MemoryWriter} from "@/agents/agent-memory-store";
 import {memoryInjection} from "@/agents/agent-memory-injection";
+import {shadowSoul} from "@/agents/shadow-soul";
 import {RunnerContextStore} from "@/runners/runner-context-store";
 import {AuthorizationRuleStore} from "@/server/policy/authorization-rule-store";
 import {fixtureNamedSession, fixtureUser} from "../helpers/platform-fixtures";
@@ -117,24 +118,23 @@ test("injection respects visibility and an explicit deny of memory.read", () => 
   expect(inject("你好").text).toBeUndefined();
 });
 
-test("a conversation is told who this Shadow is in full, and later only when the owner changed it elsewhere", () => {
+test("persona is never told through memory: the Shadow's instruction files carry it, so a change reaches the next turn", () => {
   const ownerHere: MemoryWriter = {...elsewhere(), shadowId: scope.shadowId, owner: true};
   const soul = store.add(ownerHere, {type: "persona", title: "身份", description: "名字和语气", body: "你叫小黑，语气活泼。\n遇到不确定的事先问清楚。"});
   store.add({...ownerHere, shadowId: sibling}, {type: "persona", title: "身份", description: "别的分身", body: "你叫小白。"});
   store.add(elsewhere(), rule);
   const first = turn("你好")!;
-  expect(first.indexOf("## Who you are")).toBe(0);
-  expect(first).toContain(`### 身份 [${soul.id}]\n你叫小黑，语气活泼。\n遇到不确定的事先问清楚。`);
-  expect(first).not.toContain("小白");
-  expect(first.indexOf("## Agent memory: always in effect")).toBeGreaterThan(first.indexOf("小黑"));
-  expect(first.split("## Agent memory: always in effect")[1]).not.toContain("身份");
-  expect(turn("你叫什么名字，语气是什么")).toBeUndefined();
+  expect(first.startsWith("## Agent memory: always in effect")).toBe(true);
+  expect(first).not.toContain("小黑");
+  expect(first).not.toContain("Who you are");
+  expect(shadowSoul(db.db, scope)?.persona).toEqual(["你叫小黑，语气活泼。\n遇到不确定的事先问清楚。"]);
+  expect(shadowSoul(db.db, scope)?.owner.id).toBe(new AgentStore(db.db).ownerUserId(scope.agentId));
   store.update(ownerHere, all, soul.id, {expectedRevision: 1, body: "你叫大黑。"});
-  const delta = turn("继续")!;
-  expect(delta).toContain("## Agent memory updates");
-  expect(delta).toContain(`This part of who you are changed:\n### 身份 [${soul.id}]\n你叫大黑。`);
+  expect(turn("继续")).toBeUndefined();
+  expect(shadowSoul(db.db, scope)?.persona).toEqual(["你叫大黑。"]);
   store.remove(ownerHere, all, soul.id, 2);
-  expect(turn("继续")).toContain(`- removed [${soul.id}] 身份`);
+  expect(turn("继续")).toBeUndefined();
+  expect(shadowSoul(db.db, scope)?.persona).toEqual([]);
 });
 
 test("a conversation is told about people who join it later, and that an entry it was shown is no longer visible", () => {

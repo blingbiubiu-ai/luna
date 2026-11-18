@@ -7,9 +7,20 @@ import {
 import { createHash } from "node:crypto";
 import { join } from "node:path";
 
+import { dataBlock, joinBlocks, promptBlock } from "./prompt-blocks";
+
 
 export type RunnerInstructionKind = "main" | "task" | "work";
 export type RunnerInstructionAdapter = "claude" | "codex";
+
+/** Who this Shadow is, rendered first in every instruction file. Read from Service, never from files. */
+export interface RunnerSoul {
+  readonly name: string;
+  readonly agent: string;
+  readonly owner: { readonly id: string; readonly name: string };
+  /** Bodies of the Shadow's persona entries, oldest first; empty means the default persona. */
+  readonly persona: readonly string[];
+}
 
 export interface EnsureRunnerWorkspaceInstructionFilesInput {
   readonly home: string;
@@ -19,6 +30,7 @@ export interface EnsureRunnerWorkspaceInstructionFilesInput {
   readonly previousFingerprint: string | null;
   /** Worker grants Jobs sudo: add the root-access rules from the prompts directory. */
   readonly runnerSudo?: boolean;
+  readonly soul?: RunnerSoul;
 }
 
 export interface EnsureRunnerWorkspaceInstructionFilesResult {
@@ -26,11 +38,87 @@ export interface EnsureRunnerWorkspaceInstructionFilesResult {
   readonly changed: boolean;
 }
 
-const RUNNER_ENTRY_FILE: Record<RunnerInstructionKind, string> = {
-  main: "main-runner/instructions.md",
-  task: "task-runner/instructions.md",
-  work: "work-runner/instructions.md",
+export const DEFAULT_PERSONA =
+  "Speak concisely, directly and kindly, in the language the person uses. Say so when you do not know; do not make things up.";
+
+/** Persona text beyond this many characters is left out, so instructions stay small enough to be read whole. */
+export const PERSONA_CHAR_LIMIT = 4000;
+
+type Section = readonly [tag: string, files: readonly string[]];
+
+/** Block order is priority order: identity and hard rules first, command manuals last. */
+const LAYOUT: Record<RunnerInstructionKind, readonly Section[]> = {
+  main: [
+    ["role", ["main/role.md"]],
+    ["hard_rules", []],
+    ["routing", ["main/routing.md"]],
+    ["reply_protocol", ["shared/reply-protocol.md", "main/reply.md"]],
+    ["task_commands", ["main/task-commands.md"]],
+    ["session_commands", ["main/session-commands.md"]],
+    ["input_rules", ["main/input.md"]],
+    ["messaging", ["main/messaging.md"]],
+    ["memory_rules", ["shared/memory.md"]],
+    ["artifacts", ["shared/artifacts.md"]],
+    ["environment", ["shared/runner-context.md", "main/filesystem.md"]],
+  ],
+  task: [
+    ["role", ["task/role.md"]],
+    ["hard_rules", []],
+    ["evidence", ["task/evidence.md"]],
+    ["memory_rules", ["shared/memory.md"]],
+    ["artifacts", ["shared/artifacts.md"]],
+    ["environment", ["shared/runner-context.md"]],
+  ],
+  work: [
+    ["role", ["work/role.md"]],
+    ["hard_rules", []],
+    ["reply_protocol", ["shared/reply-protocol.md", "work/reply.md"]],
+    ["memory_rules", ["shared/memory.md"]],
+    ["artifacts", ["shared/artifacts.md"]],
+    ["environment", ["shared/runner-context.md"]],
+  ],
 };
+
+function _soulBlock(soul: RunnerSoul): string {
+  let persona = "", used = 0;
+  for (const body of soul.persona.map((text) => text.trim()).filter(Boolean)) {
+    if (used + body.length > PERSONA_CHAR_LIMIT) {
+      console.error(JSON.stringify({ level: "warn", msg: "Shadow persona exceeds the instruction limit; later entries left out", shadow: soul.name }));
+      break;
+    }
+    persona += (persona ? "\n\n" : "") + body;
+    used += body.length;
+  }
+  const { persona: _, ...who } = soul;
+  return dataBlock("soul", { json: who, text: persona || DEFAULT_PERSONA });
+}
+
+/** Renders the instruction file for one runner kind. Exported for size checks. */
+export function renderRunnerInstructions(input: Omit<EnsureRunnerWorkspaceInstructionFilesInput, "previousFingerprint">): string {
+  const read = (file: string) => readFileSync(join(input.promptsRoot, file), "utf-8").trim();
+  const resources = join(input.home, ".luna-resources");
+  const directories = [
+    `Luna HOME is \`${input.home}\`. It is shared only by Runner processes of this Shadow.`,
+    `Your starting working directory is \`${input.runnerRootPath}\`.`,
+    `Read your execution context from \`${join(input.runnerRootPath, ".luna", "runner-context.json")}\`.`,
+    `Store working files in \`${join(input.runnerRootPath, "workspace")}\`.`,
+    "Agent memory lives in Luna Service, not in files; use `luna memory`.",
+    `Luna Skills are loaded through the provider’s Luna plugin.`,
+    `Shared commands in \`${join(resources, "commands")}\` and user tools in \`${join(input.home, ".local", "bin")}\` are on PATH.`,
+  ].join("\n");
+  const hardRules = [
+    `## Confidentiality\n\n${read("shared/confidentiality.md")}`,
+    ...(input.runnerSudo ? [`## Root access\n\n${read("shared/root-access.md")}`] : []),
+  ].join("\n\n");
+  return joinBlocks([
+    input.soul ? _soulBlock(input.soul) : "",
+    promptBlock("luna_runtime", read("shared/runtime.md")),
+    promptBlock("identity", read("shared/identity.md")),
+    ...LAYOUT[input.runnerKind].map(([tag, files]) => promptBlock(tag,
+      tag === "hard_rules" ? hardRules
+        : [...files.map(read), ...(tag === "environment" ? [directories] : [])].join("\n\n"))),
+  ]) + "\n";
+}
 
 function _instructionFilePath(
   runnerRootPath: string,
@@ -60,25 +148,7 @@ function _writeFileIfChanged(filePath: string, content: string): boolean {
 export function ensureRunnerWorkspaceInstructionFiles(
   input: EnsureRunnerWorkspaceInstructionFilesInput,
 ): EnsureRunnerWorkspaceInstructionFilesResult {
-  const promptsRoot = input.promptsRoot;
-  const entryPath = join(promptsRoot, RUNNER_ENTRY_FILE[input.runnerKind]);
-  const resources = join(input.home, ".luna-resources");
-  const paths = { commands: join(resources, "commands") };
-  const source = [
-    readFileSync(entryPath, "utf-8").trimEnd(),
-    readFileSync(join(promptsRoot, "runtime-confidentiality.md"), "utf-8").trimEnd(),
-    ...(input.runnerSudo ? [readFileSync(join(promptsRoot, "runner-root-access.md"), "utf-8").trimEnd()] : []),
-    [
-      "## Execution directories",
-      `Luna HOME is \`${input.home}\`. It is shared only by Runner processes of this Shadow.`,
-      `Your starting working directory is \`${input.runnerRootPath}\`.`,
-      `Read your execution context from \`${join(input.runnerRootPath, ".luna", "runner-context.json")}\`.`,
-      `Store working files in \`${join(input.runnerRootPath, "workspace")}\`.`,
-      "Agent memory and this Shadow's persona live in Luna Service, not in files; use `luna memory`.",
-      `Luna Skills are loaded through the provider’s Luna plugin.`,
-      `Shared commands in \`${paths.commands}\` and user tools in \`${join(input.home, ".local", "bin")}\` are on PATH.`,
-    ].join("\n"),
-  ].join("\n\n") + "\n";
+  const source = renderRunnerInstructions(input);
   const instructionFingerprint = createHash("sha256")
     .update(source)
     .digest("hex");

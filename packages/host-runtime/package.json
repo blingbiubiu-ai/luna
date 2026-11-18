@@ -10,6 +10,7 @@
     "./defaults": "./src/defaults.ts",
     "./runner-resources": "./src/runner-resources.ts",
     "./runner-instructions": "./src/runner-instructions.ts",
+    "./prompt-blocks": "./src/prompt-blocks.ts",
     "./scoped-runner-resources": "./src/scoped-runner-resources.ts",
     "./scoped-resource-store": "./src/scoped-resource-store.ts",
     "./shadow-resource-mounts": "./src/shadow-resource-mounts.ts"

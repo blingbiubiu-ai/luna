@@ -189,7 +189,7 @@ describe("Luna context pack FakeFeishu flow", () => {
     expect(turnItem.messages).toHaveLength(1);
     expect(kernel.database.db.select().from(sessionCommands).all()).toMatchObject([{kind: "message.send", payload: {content: "收到，我会结合群聊上下文处理。"}}]);
     expect(turnItem.turn.materializedPrompt).toContain(
-      "# Luna Main Runner Turn Input",
+      "<messages>\n",
     );
     expect(turnItem.turn.materializedPrompt).toContain("@Luna 帮忙处理一下");
   });
@@ -408,13 +408,12 @@ describe("Luna context pack FakeFeishu flow", () => {
     );
     const [run] = kernel.database.db.select().from(taskRuns).all();
     const materializedPrompt = run?.materialized_prompt ?? "";
-    expect(materializedPrompt).toContain("Launch context:");
-    expect(materializedPrompt).toContain("role=source");
+    expect(materializedPrompt).toContain("<launch_context>");
+    expect(materializedPrompt).toContain('"role":"source"');
     expect(materializedPrompt).toContain("播放失败 did=4453477614363128");
     expect(materializedPrompt).toContain("只影响 Android 端");
-    expect(
-      materializedPrompt.indexOf("只影响 Android 端"),
-    ).toBeLessThan(materializedPrompt.indexOf("播放失败 did=4453477614363128"));
+    const launchContext = materializedPrompt.slice(materializedPrompt.indexOf("<launch_context>"));
+    expect(launchContext.indexOf("只影响 Android 端")).toBeLessThan(launchContext.indexOf("播放失败 did=4453477614363128"));
     expect(materializedPrompt).toContain(
       "![image](workspace/uploads/images/android-playback.png)",
     );
@@ -433,7 +432,7 @@ describe("Luna context pack FakeFeishu flow", () => {
 
     const taskDetail = await getJson<DashboardTask>(`/api/tasks/${task!.id}`);
     expect(taskDetail.contextPacks.map((item) => item.id)).toContain(pack.id);
-    expect(taskDetail.runs[0]?.materializedPrompt).toContain("Launch context:");
+    expect(taskDetail.runs[0]?.materializedPrompt).toContain("<launch_context>");
     expect(taskDetail.runs[0]?.contextPacks.map((item) => item.id)).toContain(
       pack.id,
     );

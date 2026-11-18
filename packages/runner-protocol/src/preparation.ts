@@ -11,6 +11,12 @@ export const ContextPreparation=z.object({
  git:z.object({authorName:z.string(),authorEmail:z.string()}).strict().optional(),
  /** The Shadow's root switch: Worker adds the Root Access rules to Runner instructions. */
  rootAccess:z.boolean().optional(),
+ /** Who the Shadow is, rendered at the top of Runner instructions. */
+ soul:z.object({
+  name:z.string().max(256),agent:z.string().max(256),
+  owner:z.object({id:Id,name:z.string().max(256)}).strict(),
+  persona:z.array(z.string().max(64*1024)).max(32),
+ }).strict().optional(),
 }).strict();
 export const WorkerContextPreparation=ContextPreparation.extend({scope:ExecutionScope}).strict();
 export const WorkerPreparedContext=z.object({

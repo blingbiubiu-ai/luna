@@ -38,13 +38,13 @@ test("writes both Claude and Codex instruction entrypoints directly from .runner
   const claudeMd = readFileSync(join(workspacePath, "CLAUDE.md"), "utf-8");
   const agentsMd = readFileSync(join(workspacePath, "AGENTS.md"), "utf-8");
 
-  expect(claudeMd).toContain("# Main Runner Runtime Prompt");
+  expect(claudeMd).toContain("<role>\nYou are the session-level dispatcher");
   expect(claudeMd).not.toContain("@.luna-prompts/main-runner/instructions.md");
-  expect(agentsMd).toContain("# Main Runner Runtime Prompt");
+  expect(agentsMd).toContain("<role>\nYou are the session-level dispatcher");
   expect(agentsMd).toContain("Main Runner");
-  expect(agentsMd).toContain("Task commands");
+  expect(agentsMd).toContain("<task_commands>");
   expect(agentsMd).toContain("luna messages send");
-  expect(agentsMd).toContain("Stable Runner Context");
+  expect(agentsMd).toContain("Stable runner context is available");
   expect(agentsMd).toContain(".luna/runner-context.json");
   expect(agentsMd).toContain("Per-turn or per-run user input");
   expect(existsSync(join(workspacePath, ".luna-prompts"))).toBe(false);

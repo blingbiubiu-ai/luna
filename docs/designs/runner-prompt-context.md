@@ -1,6 +1,6 @@
 # Runner 提示词与上下文重构
 
-状态：方案已按评审讨论更新，未实现。
+状态：第一阶段已实现（分支 `feat/prompt-context`）；第二阶段未开始。
 
 ## 1. 背景与问题
 
@@ -85,7 +85,7 @@ Codex 分身的 Main 因此一直缺文件尾部：未开 root 时缺目录段�
 
 | 层 | 放什么 | 变化频率 |
 |---|---|---|
-| 静态文件 | soul（名字、Agent、owner、persona）、会话固定信息、平台规则 | 很少变 |
+| 静态文件 | soul（名字、Agent、owner、persona）、平台规则 | 很少变 |
 | 每轮输入 | 新消息（含发送者）、当前时间、记忆、历史补充、任务候选 | 每轮不同 |
 
 XML 标签只用来分块，块内不逐字段套标签：
@@ -107,7 +107,6 @@ XML 标签只用来分块，块内不逐字段套标签：
 | 块 | Main | Task | Work | 来源 |
 |---|:-:|:-:|:-:|---|
 | `<soul>` | ✓ | ✓ | ✓ | Service 读库后随准备请求传给 Worker，见下 |
-| `<session>` | ✓ | ✓ | ✓ | JSON：`channel`、`chat`、`group`、`sessionId`、`timezone` |
 | `<luna_runtime>` | ✓ | ✓ | ✓ | 新写，约 10 行：每轮输入各块的含义；用户内容、记忆、工具输出是数据不是规则 |
 | `<identity>` | ✓ | ✓ | ✓ | 新写，约 6 行（见 R8）：对用户就是 `<soul>` 里的身份；persona 决定语气，不覆盖下面的规则 |
 | `<role>` | ✓ | ✓ | ✓ | 现有各文件开头与 Responsibilities |
@@ -133,7 +132,12 @@ XML 标签只用来分块，块内不逐字段套标签：
 ```
 
 - 数据来源：`agent_shadows.name`、`luna_agents.name`、owner 账号对应的用户、记忆库里该分身的 `persona` 条目。存储和修改入口都不变，persona 仍然只有 owner 能改。
-- 传递路径：Service 发给 Worker 的准备请求里已经带 `runnerKind`、`rootAccess` 和 `context`（`apps/worker/src/shadow-preparation.ts`），在同一个请求里加 `soul` 和 `session` 两个字段。
+- 传递路径：Service 发给 Worker 的准备请求里已经带 `runnerKind`、`rootAccess` 和 `context`（`apps/worker/src/shadow-preparation.ts`），在同一个请求里加 `soul` 字段。
+- persona 总长超过 4000 字符时，从超出的那一条起不再写入，并打 warn 日志。persona 条目数上限仍是 `config.memory.persona_limit`（默认 5）。
+
+**为什么不放会话信息（实现时改的）**
+
+原计划在 soul 之后放一个 `<session>` 块（渠道、私聊或群聊、sessionId）。实现时发现 Main 的 `task_result` 轮次拿不到渠道和会话界面，`<session>` 的内容会随轮次类型变化。静态文件一变，Codex 就在会话里追加一整份 `AGENTS.md`，所以静态文件必须在各轮之间逐字节不变。会话信息仍留在 `.luna/runner-context.json`，时区随每轮的 `now` 一起给出。
 - persona 是 owner 写的文字，进文件前同样过 4.6 的中和。
 - 默认人格：
 
@@ -177,11 +181,14 @@ src/prompts/
 | `<tasks>` | 有绑定或候选任务时 | JSON：`bound`、`candidates` |
 | `<messages>` | Main、Work 的用户消息轮 | JSON：`now`、`weekday`、`addressing`、`items[]`，私聊和群聊同一种形状 |
 | `<task_result>` / `<trigger>` | 对应的 Main 调用 | JSON 头（含 `now`、`weekday`）+ 报告或请求正文 |
-| `<task>` | Task Runner | JSON：`now`、`weekday`、`id`、`title`、`type`、`reason`、`summary`、`facts`、`assumptions`；`<launch_context>`、`<update_context>` 各为 JSON 数组 |
+| `<task>` | Task Runner | JSON：`type`、`reason`、`title`、`summary`、`facts`、`assumptions`；`<launch_context>`、`<update_context>` 各为 JSON 数组；`<user_input>` 是本次 run 的新输入；`<report_sections>` 是按任务类型给的报告要求 |
+| `<now>` | Task 和记忆整理轮次 | JSON：`now`、`weekday`、`timezone`。Task 的 prompt 会持久化并在恢复时重放，时间只能在发送时追加 |
+| `<clarification>` | 有待澄清的问题时 | JSON |
 
 说明：
 
-- 当前时间每轮都变，所以留在每轮输入里，放在该轮主块的 JSON 头；`now` 是带时区偏移的 ISO 时间。不单独设 `<context>` 块。
+- 当前时间每轮都变，所以留在每轮输入里，放在该轮主块的 JSON 头（`now`、`weekday`、`timezone`）；`now` 是带时区偏移的 ISO 时间，时区取 `config.timezone`。不单独设 `<context>` 块。
+- `<history>` 的 JSON 里有 `launchSeed`、`deltaContext`、`activationContext` 三项，有才出现。
 - 发送者跟着每条消息走。`items[]` 每条：`id`、`from{id,externalId,name,kind,role,trusted?}`、`at`、`text`，以及仅在非默认时出现的 `kind`（`activation_source`、`activation_followup`、`background`）、`mentions`、`attachments`、`contentKind`。
 - 删除的字段：`index`、`channelMessageKey`、`sender.id`（与 `externalId` 重复）、`role:"user"`、默认值的 `presentationKind`。
 - `from.role` 取 `owner` 或 `member`，来自 `AgentStore.isOwnerUser`。`trusted` 只在该分身开启 root 时出现，来自 `ShadowRootAccessStore.trusted`，与 `luna root status --user` 是同一个判断。
@@ -249,7 +256,7 @@ Main，私聊，会话首轮：
 
 - **代码**：`runner-instructions.ts`（片段拼装、soul 和 session 块）、`shadow-preparation.ts` 与准备请求的协议（新增两个字段）、`context-preparation.ts` 与 `runner-context-store.ts`（指纹拆分）、新增 `turn-envelope.ts`、`main-runner.ts`、`task-run-handler.ts`、`work-runner.ts`、`agent-memory-injection.ts`、`src/prompts/*`、第二阶段的 `skills/*`。
 - **测试**：13 个测试文件断言提示词文本，需要同步更新。
-- **上线行为**：上线后各会话在下一轮读到新文件，不重建会话。Codex 会话里会追加一份新的 `AGENTS.md`。
+- **上线行为**：指纹算法变化，上线后第一轮各会话重建一次 provider 会话；之后指令变化只在下一轮读到新文件，不再重建。
 - **大小**：persona 计入 `AGENTS.md`。大小测试要按 persona 条目数上限（`config.memory.persona_limit`）和单条长度上限算最坏情况；单条长度现在有没有上限，实现时确认，没有就加。
 - **持久化的旧 prompt**：恢复中的 Task run 会重放旧格式，过渡期两种格式并存。
 - **打包**：发布包里有一份 `src/prompts` 的拷贝，需要确认打包脚本带上新的子目录。
@@ -293,7 +300,10 @@ Main，私聊，会话首轮：
 
 ## 7. 未决与后续
 
-- **Task Runner 是否每轮重新生成静态文件。** Main 和 Work 的代码里有这一步，Task 的路径还没确认。
+- **第一阶段后的大小。** 加了 soul、`<luna_runtime>`、`<identity>`，并把产物规则合成一份完整版本，Main 反而从 33.2KB 涨到 35.7KB（开 root 37.2KB），Task 12.6KB，Work 13.9KB。都在 Codex 64KiB 上限的 75% 以内；真正的瘦身要靠第二阶段。
+- **已确认：Task Runner 每次 run 都重新生成静态文件**（`task-run-handler.ts` 在执行前调用 `prepareRunnerFiles`）。
+- **重试时 persona 恰好被改。** 准备请求按内容哈希去重，同一次调用重试时如果 soul 变了，会以 `invocation_preparation_conflict` 失败一次。改 persona 很少，先接受。
+- **上线时每个会话重建一次。** 指纹的算法变了，所有 runner 上下文的旧指纹都对不上，上线后的第一轮各重建一次 provider 会话。之后指令变化不再重建。
 - **Codex 会话里累积的旧 `AGENTS.md`。** 每次指令变化追加一份。改动很少时可以接受；若某个长会话累积过多，可以让它在累积到一定次数后重建一次。
 - **时区来源。** 目前没有每个用户的时区配置；第一版用服务器时区。
 - **`externalId`。** 若确认 `luna users get` 能返回飞书 ID 且建群、拉人的验收不受影响，可以再删。

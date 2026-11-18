@@ -96,8 +96,10 @@ export class ContextPreparationManager {
    // Recheck authorization and placement after the asynchronous Worker operation.
    this.scheduler.placements.bindContext(input.scope,input.contextId,input.scopeKey,this.scheduler.allowedWorkers(input.scope),input.projectId);
    this.scheduler.placements.require(input.scope,placement.workerId,placement.generation,input.contextId);
+   // Only a change here starts a fresh provider session. Instruction content is left out on purpose:
+   // Claude rereads CLAUDE.md and Codex resends a replaced AGENTS.md on every resumed turn.
    const prepared:PreparedContext={...result,local:placement.workerId===this.scheduler.config.homeWorkerId,
-    instructionFingerprint:contentHash({scope,resources:input.resources,workerId:placement.workerId,instructions:result.instructionFingerprint})};
+    instructionFingerprint:contentHash({scope,resources:input.resources,workerId:placement.workerId})};
    transaction(this.db,()=>this.db.prepare("INSERT INTO runtime_prepared_contexts VALUES (?,?,?) ON CONFLICT(context_id) DO UPDATE SET body=excluded.body,input_json=excluded.input_json")
     .run(input.contextId,JSON.stringify(prepared),JSON.stringify(input)));
    return prepared;

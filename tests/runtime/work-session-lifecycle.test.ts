@@ -755,8 +755,9 @@ describe("work session lifecycle", () => {
       }] as never,
     }, session);
 
-    expect(capturedPrompt).toContain("## Work Launch Context");
-    expect(capturedPrompt).toContain("## Current Turn Messages");
+    // A first turn without earlier messages carries no empty history block.
+    expect(capturedPrompt).not.toContain("<history>");
+    expect(capturedPrompt).toContain("<messages>");
     expect(capturedPrompt).toContain("写一个 hello world");
     expect(capturedPrompt).not.toContain("Work Runner Runtime Prompt");
     expect(capturedPrompt).not.toContain("Do not output anything outside the JSON object");
@@ -766,13 +767,13 @@ describe("work session lifecycle", () => {
     expect(existsSync(agentsPath)).toBe(true);
     expect(existsSync(claudePath)).toBe(true);
     expect(readFileSync(claudePath, "utf-8")).toContain(
-      "Work Runner Runtime Prompt",
+      "<role>\nYou are the execution agent for a multi-turn Work Session.",
     );
     expect(readFileSync(claudePath, "utf-8")).not.toContain(
       "@.luna-prompts/work-runner/instructions.md",
     );
     expect(readFileSync(agentsPath, "utf-8")).toContain(
-      "Work Runner Runtime Prompt",
+      "<role>\nYou are the execution agent for a multi-turn Work Session.",
     );
     expect(readFileSync(agentsPath, "utf-8")).not.toContain(
       "@.luna-prompts/work-runner/instructions.md",
@@ -783,7 +784,7 @@ describe("work session lifecycle", () => {
     expect(readFileSync(agentsPath, "utf-8")).toContain("luna memory get <id>");
     expect(readFileSync(agentsPath, "utf-8")).toContain("luna memory add --type persona");
     expect(readFileSync(agentsPath, "utf-8")).toContain(
-      "Stable Runner Context",
+      "Stable runner context is available",
     );
     expect(readFileSync(agentsPath, "utf-8")).toContain(
       ".luna/runner-context.json",
@@ -974,18 +975,18 @@ describe("work session lifecycle", () => {
     expect(options[0]?.isNewSession).toBe(true);
     expect(options[0]?.runnerKind).toBe("work");
     expect(options[0]?.runnerSessionId).toBeUndefined();
-    expect(prompts[0]).toContain("## Work Launch Context");
+    expect(prompts[0]).toContain("<history>");
     expect(prompts[0]).toContain("启动前上下文：先做 Python 版本");
-    expect(prompts[0]).toContain("## Current Turn Messages");
+    expect(prompts[0]).toContain("<messages>");
     expect(prompts[0]).toContain("第一轮：改成 TypeScript 版本");
 
     expect(options[1]?.isNewSession).toBe(false);
     expect(options[1]?.runnerKind).toBe("work");
     expect(options[1]?.runnerSessionId).toBe("provider-work-session-1");
-    expect(prompts[1]).toContain("## Current Turn Messages");
+    expect(prompts[1]).toContain("<messages>");
     expect(prompts[1]).toContain("第二轮：只改输出文案");
     expect(prompts[1]).not.toContain("## Session Timeline");
-    expect(prompts[1]).not.toContain("## Work Launch Context");
+    expect(prompts[1]).not.toContain("<history>");
     expect(prompts[1]).not.toContain("启动前上下文：先做 Python 版本");
     expect(prompts[1]).not.toContain("第一轮：改成 TypeScript 版本");
   });
@@ -1024,7 +1025,7 @@ describe("work session lifecycle", () => {
       }] as never,
     }, session);
 
-    expect(capturedPrompt).toContain("## Current Turn Messages");
+    expect(capturedPrompt).toContain("<messages>");
     expect(capturedPrompt).toContain("写一个 hello world");
     expect(capturedPrompt).not.toContain("#work");
     expect(capturedPrompt).not.toContain("@Luna");
@@ -1160,30 +1161,16 @@ describe("work session lifecycle", () => {
     const inputJson = extractWorkTurnInputJson(capturedPrompt);
     expect(inputJson).not.toHaveProperty("workSession");
     expect(inputJson).toMatchObject({
-      type: "work_turn",
-      sessionId: session.id,
-      latestMessageAddressing: {
-        addressedToBot: true,
-        reason: "mention",
-      },
-      orderedMessages: [{
-        index: 1,
-        messageId: "msg-envelope-row",
-        channelMessageKey: "msg-envelope-channel",
-        role: "user",
-        senderUserId: "ou-envelope",
-        sender: {
-          id: "ou-envelope",
-          externalId: "ou-envelope",
-          kind: "user",
-          displayName: "示例用户",
-        },
-        contentKind: "text",
-        presentationKind: "plain",
+      now: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[+-]\d{2}:\d{2}$/),
+      addressing: { addressed: true, reason: "mention" },
+      items: [{
+        id: "msg-envelope-row",
+        from: { id: "ou-envelope", externalId: "ou-envelope", kind: "user", name: "示例用户" },
         text: "查北京天气",
-        createdAt: 123456,
       }],
     });
+    // Defaults carry no information and Feishu ids appear once, as externalId.
+    expect(JSON.stringify(inputJson)).not.toMatch(/channelMessageKey|presentationKind|contentKind|"index"/);
     const contextFile = JSON.parse(
       readFileSync(runnerContextFilePath(capturedCwd), "utf-8"),
     );
@@ -1280,36 +1267,17 @@ describe("work session lifecycle", () => {
       messageRows: [current],
     }, session);
 
-    expect(capturedPrompt).toContain("## Work Launch Context");
-    expect(capturedPrompt).toContain("## Current Turn Messages");
+    expect(capturedPrompt).toContain("<history>");
+    expect(capturedPrompt).toContain("<messages>");
     expect(capturedPrompt).toContain("这轮改成 TypeScript 版本");
+    expect(extractBlockJson(capturedPrompt, "history")).toMatchObject({
+      launchContext: [
+        expect.objectContaining({ from: expect.objectContaining({ id: "u1" }), text: "上一轮需求：先做 Python 版本" }),
+        expect.objectContaining({ role: "assistant", text: "上一轮完成：Python 版本已完成" }),
+      ],
+    });
     expect(extractWorkTurnInputJson(capturedPrompt)).toMatchObject({
-      type: "work_turn",
-      launchContextMessages: [
-        expect.objectContaining({
-          index: 1,
-          role: "user",
-          channelMessageKey: "history-user",
-          senderUserId: "u1",
-          text: "上一轮需求：先做 Python 版本",
-        }),
-        expect.objectContaining({
-          index: 2,
-          role: "assistant",
-          channelMessageKey: "history-assistant",
-          senderUserId: historyAssistant.senderUserId,
-          text: "上一轮完成：Python 版本已完成",
-        }),
-      ],
-      orderedMessages: [
-        expect.objectContaining({
-          index: 1,
-          role: "user",
-          channelMessageKey: "current-user",
-          senderUserId: "u1",
-          text: "这轮改成 TypeScript 版本",
-        }),
-      ],
+      items: [expect.objectContaining({ from: expect.objectContaining({ id: "u1" }), text: "这轮改成 TypeScript 版本" })],
     });
     expect(capturedPrompt).not.toContain('"steps"');
     expect(capturedPrompt).not.toContain("Do not summarize or invent execution steps");
@@ -1326,7 +1294,11 @@ function setEnv(key: string, value: string): void {
 }
 
 function extractWorkTurnInputJson(prompt: string): Record<string, unknown> {
-  const match = prompt.match(/```json\n([\s\S]*?)\n```/);
+  return extractBlockJson(prompt, "messages");
+}
+
+function extractBlockJson(prompt: string, tag: string): Record<string, unknown> {
+  const match = prompt.match(new RegExp(`<${tag}>\\n([\\s\\S]*?)\\n</${tag}>`));
   expect(match?.[1]).toBeString();
   return JSON.parse(match![1]!) as Record<string, unknown>;
 }

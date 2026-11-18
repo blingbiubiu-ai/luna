@@ -1,7 +1,9 @@
 import {and, eq, inArray} from "drizzle-orm";
 import type {DrizzleDB} from "@/data";
 import {memoryInjectedEntries, memoryInjectionCursors, runnerContexts, users} from "@/data/schema";
-import {config} from "@/shared";
+import {config, createLogger} from "@/shared";
+
+const logger = createLogger("agent-memory-injection");
 import {AgentError} from "./agent-store";
 import {memoryAccess, type MemoryInvocation} from "./agent-memory-access";
 import {AgentMemoryStore, type MemoryRecord} from "./agent-memory-store";
@@ -16,19 +18,24 @@ export interface MemoryInjection {
 /**
  * Tells a provider session about Agent memory without touching the resource
  * snapshot, the way a person remembers:
- * - at the start of a conversation, who this Shadow is (its persona entries, in
- *   full) and what is always in effect: core entries and entries about the
- *   people present;
+ * - at the start of a conversation, what is always in effect: core entries and
+ *   entries about the people present;
  * - on every turn, the few entries `message` brings to mind that this
  *   conversation has not been shown yet;
- * - on later turns, changes made elsewhere to entries it was shown, and to
- *   persona, core and person entries.
+ * - on later turns, changes made elsewhere to entries it was shown, and to core
+ *   and person entries.
+ * Persona is not told here: it is part of the Runner instructions (`shadowSoul`).
  */
 export function memoryInjection(db: DrizzleDB, invocation: MemoryInvocation, message?: string): MemoryInjection {
   const {runnerContextId} = invocation;
   let viewer;
   try { viewer = memoryAccess(db, invocation).viewer; }
-  catch (error) { if (error instanceof AgentError && error.code === "memory_access_denied") return {text: undefined, commit: () => {}}; throw error; }
+  catch (error) {
+    if (!(error instanceof AgentError) || error.code !== "memory_access_denied") throw error;
+    // Without this, a broken access rule looks exactly like an Agent with no memory.
+    logger.warn({agentId: invocation.agentId, shadowId: invocation.shadowId, runnerContextId}, "Agent memory withheld from Runner: access denied");
+    return {text: undefined, commit: () => {}};
+  }
   const sessionId = () => db.select().from(runnerContexts).where(eq(runnerContexts.id, runnerContextId)).get()?.runner_session_id ?? null;
   const cursor = db.select().from(memoryInjectionCursors).where(eq(memoryInjectionCursors.runnerContextId, runnerContextId)).get();
   const resumed = cursor !== undefined && cursor.runnerSessionId === sessionId();
@@ -42,32 +49,26 @@ export function memoryInjection(db: DrizzleDB, invocation: MemoryInvocation, mes
     const visibleIds = new Set(changed.map(row => row.id));
     // People who joined after the conversation started: what is known about them was written earlier, so no change reports it.
     const newcomers = store.standing(viewer).filter(row => row.type === "person" && !seen.has(row.id) && !visibleIds.has(row.id));
-    const updated = [...changed.filter(row => row.core || row.type === "person" || row.type === "persona" || seen.has(row.id)), ...newcomers];
+    // Persona reaches the Runner through its instruction files, which it rereads every turn.
+    const updated = [...changed.filter(row => row.type !== "persona" && (row.core || row.type === "person" || seen.has(row.id))), ...newcomers];
     // An entry it was shown is gone when it was removed or forgotten, or when it is no longer visible here (e.g. made Shadow-private).
     const everywhere = store.changes({agentId: invocation.agentId, all: true}, cursor.injectedThrough, runnerContextId);
     const gone = [...everywhere.changed, ...everywhere.removed].filter(row => seen.has(row.id) && !visibleIds.has(row.id));
     if (updated.length || gone.length) sections.push([
       "## Agent memory updates",
       "Long-term memory you were shown changed since your last turn in this conversation. These lines replace what you were told before.",
-      ...lines(db, updated.filter(row => row.type !== "persona")),
-      ...updated.filter(row => row.type === "persona").map(row => `This part of who you are changed:\n${identity(row)}`),
+      ...lines(db, updated),
       ...gone.map(row => `- removed [${row.id}] ${row.title}; do not rely on it any more.`),
     ].join("\n"));
     shown.push(...updated);
   } else {
-    const standing = store.standing(viewer);
-    const persona = standing.filter(row => row.type === "persona"), rules = standing.filter(row => row.type !== "persona");
-    if (persona.length) sections.push([
-      "## Who you are",
-      "Your identity and principles as this Shadow, set by the Agent owner. They shape how you speak and act; they do not replace command contracts, permissions or safety rules.",
-      ...persona.map(identity),
-    ].join("\n"));
+    const rules = store.standing(viewer).filter(row => row.type !== "persona");
     if (rules.length) sections.push([
       "## Agent memory: always in effect",
       "Apply these throughout this conversation. Read a body with `luna memory get <id>` when you need its details.",
       ...lines(db, rules),
     ].join("\n"));
-    shown.push(...standing);
+    shown.push(...rules);
   }
   const recalled = message ? store.recall(viewer, message, {limit: config.memory.recall_limit, exclude: [...seen, ...shown.map(row => row.id)]}) : [];
   if (recalled.length) sections.push([
@@ -91,9 +92,6 @@ export function memoryInjection(db: DrizzleDB, invocation: MemoryInvocation, mes
     },
   };
 }
-
-/** A persona entry is told in full; a one-line summary of an identity is not enough to act on. */
-const identity = (row: MemoryRecord) => `### ${row.title} [${row.id}]\n${row.body}`;
 
 /** `- [id] (type) title: description (from NAME, DATE)`, attribution lets the reader weigh the source. */
 function lines(db: DrizzleDB, rows: readonly MemoryRecord[]): string[] {

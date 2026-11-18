@@ -132,7 +132,7 @@ describe("Luna context pack service acceptance", () => {
           "@Luna 帮我建个修复任务，播放失败 did=4453477614363128",
       }),
     ]));
-    expect(task!.runs[0]?.materializedPrompt).toContain("Launch context:");
+    expect(task!.runs[0]?.materializedPrompt).toContain("<launch_context>");
     expect(task!.runs[0]?.materializedPrompt).toContain(
       "播放失败 did=4453477614363128",
     );
