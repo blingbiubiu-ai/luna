@@ -6,7 +6,7 @@ import {join} from "node:path";
 import {DataConnection} from "@/data";
 import * as schema from "@/data/schema";
 import {setLunaHome} from "@/shared";
-import {fixtureScope} from "../helpers/platform-fixtures";
+import {fixtureScope,fixtureUser} from "../helpers/platform-fixtures";
 import {AgentStore} from "@/agents/agent-store";
 import {PluginRegistry} from "@/plugins/registry";
 import {AgentPluginStore} from "@/plugins/agent-plugin-store";
@@ -29,54 +29,57 @@ afterEach(()=>{connection.close();rmSync(home,{recursive:true,force:true});});
 const contents=(bundle:ReturnType<AgentResourceBuilder["capture"]>)=>Object.fromEntries(bundle.files.map(f=>[f.path,Buffer.from(f.content,"base64").toString()]));
 test("captures only enabled Agent tools, without global or Agent config and secrets",()=>{
  plugins.put("alice",a.agentId,"alpha",{expectedRevision:null,enabled:true,config:{hidden:"config-private"},secrets:{TOKEN:"alice-secret"}});
- const first=builder.capture("alice",a),second=builder.capture("bob",b);
+ const first=builder.capture(a.ownerUserId,a),second=builder.capture(b.ownerUserId,b);
  expect(Object.keys(contents(first))).toContain("agent/tools/skills/alpha-help/SKILL.md");
  expect(Object.keys(contents(first))).toContain("agent/tools/commands/alpha");
  expect(contents(second)["agent/tools/catalog.json"]).toBe("[]");
  for(const secret of ["global-secret","config-private","alice-secret","ciphertext"]){expect(JSON.stringify(contents(first))).not.toContain(secret);}
  expect(first.selection.publicRevision).toBe(second.selection.publicRevision);
  expect(first.selection.agentToolsRevision).not.toBe(second.selection.agentToolsRevision);
- expect(builder.capture("alice",a)).toEqual(first);
+ expect(builder.capture(a.ownerUserId,a)).toEqual(first);
  const current=plugins.get("alice",a.agentId,"alpha");plugins.put("alice",a.agentId,"alpha",{expectedRevision:current.revision,enabled:false,config:{}});
- expect(Object.keys(contents(builder.capture("alice",a)))).not.toContain("agent/tools/commands/alpha");
+ expect(Object.keys(contents(builder.capture(a.ownerUserId,a)))).not.toContain("agent/tools/commands/alpha");
  expect(Object.keys(contents(first))).toContain("agent/tools/commands/alpha");
 });
 test("Agent memory and Shadow persona entries never enter a snapshot",()=>{
  const shadows=new AgentStore(connection.db),other=shadows.createShadow("alice",a.agentId,{name:"Other"},"other-shadow");
  const scope={agentId:a.agentId,shadowId:other.id};
- const initial=builder.capture("alice",a);
- new AgentMemoryStore(connection.db).add({agentId:a.agentId,kind:"owner",trusted:true,userId:"alice",shadowId:null},
+ const initial=builder.capture(a.ownerUserId,a);
+ new AgentMemoryStore(connection.db).add({agentId:a.agentId,kind:"owner",trusted:true,userId:a.ownerUserId,shadowId:null},
   {type:"project",title:"remember",description:"shared",body:"shared-memory"});
- new AgentMemoryStore(connection.db).add({agentId:a.agentId,kind:"owner",trusted:true,owner:true,userId:"alice",shadowId:other.id},
+ new AgentMemoryStore(connection.db).add({agentId:a.agentId,kind:"owner",trusted:true,owner:true,userId:a.ownerUserId,shadowId:other.id},
   {type:"persona",title:"SOUL",description:"identity",body:"other-soul"});
- const first=builder.capture("alice",a),second=builder.capture("alice",scope);
+ const first=builder.capture(a.ownerUserId,a),second=builder.capture(a.ownerUserId,scope);
  expect(first.selection).toEqual(initial.selection);
  expect(first.selection.agentToolsRevision).toBe(second.selection.agentToolsRevision);
  expect(JSON.stringify(contents(first))).not.toContain("shared-memory");
  // The digest still names the Shadow, so two Shadows never share a snapshot.
  expect(second.selection.digest).not.toBe(first.selection.digest);
  expect(JSON.stringify(contents(second))).not.toContain("other-soul");
- expect(builder.capture("alice",scope).selection).toEqual(second.selection);
+ expect(builder.capture(a.ownerUserId,scope).selection).toEqual(second.selection);
 });
 test("accepts a Feishu participant and requires valid Shadow scope and rejects forged Shadow scope",()=>{
- expect(()=>builder.capture("bob",a)).not.toThrow();
- expect(()=>builder.capture("alice",{agentId:a.agentId,shadowId:b.shadowId})).toThrow("scope_mismatch");
+ const participant=fixtureUser(connection.db,a.agentId,"feishu-participant");
+ expect(()=>builder.capture(participant,a)).not.toThrow();
+ // A user of another Agent is not a participant here.
+ expect(()=>builder.capture(b.ownerUserId,a)).toThrow("agent_access_denied");
+ expect(()=>builder.capture(a.ownerUserId,{agentId:a.agentId,shadowId:b.shadowId})).toThrow("scope_mismatch");
 });
 test("changing plugin configuration changes only tools selection",()=>{
  const saved=plugins.put("alice",a.agentId,"alpha",{expectedRevision:null,enabled:true,config:{}});
- const first=builder.capture("alice",a);
+ const first=builder.capture(a.ownerUserId,a);
  plugins.put("alice",a.agentId,"alpha",{expectedRevision:saved.revision,enabled:true,config:{setting:"new"}});
- const next=builder.capture("alice",a);
+ const next=builder.capture(a.ownerUserId,a);
  expect(first.selection.agentToolsRevision).not.toBe(next.selection.agentToolsRevision);
  expect(first.selection.publicRevision).toBe(next.selection.publicRevision);
 });
 test("rejects symlinks in source trees instead of packaging files outside the explicit source",()=>{
  writeFileSync(join(home,"secret"),"private");symlinkSync(join(home,"secret"),join(home,"public-skills","leak"));
- expect(()=>builder.capture("alice",a)).toThrow("Unsafe runner resource source");
+ expect(()=>builder.capture(a.ownerUserId,a)).toThrow("Unsafe runner resource source");
 });
 
 test("rejects plugin and platform skill collisions before publication",()=>{
  mkdirSync(join(home,"public-skills","alpha-help"));writeFileSync(join(home,"public-skills","alpha-help","SKILL.md"),"public");
  plugins.put("alice",a.agentId,"alpha",{expectedRevision:null,enabled:true,config:{}});
- expect(()=>builder.capture("alice",a)).toThrow("Duplicate bundled/plugin skill");
+ expect(()=>builder.capture(a.ownerUserId,a)).toThrow("Duplicate bundled/plugin skill");
 });

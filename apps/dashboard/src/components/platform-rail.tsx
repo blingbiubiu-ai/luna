@@ -165,7 +165,7 @@ function UserAvatar({ avatarUrl, name, size }: { readonly avatarUrl: string | nu
 }
 
 function railUserInfo(session: DashboardAuthSession | undefined): RailUserInfo {
-  const user = session?.authenticated === true ? session.user : null;
+  const user = session?.authenticated === true ? session.account : null;
   return {
     id: user?.id ?? "unknown-dashboard-user",
     name: user?.name ?? "Dashboard user",

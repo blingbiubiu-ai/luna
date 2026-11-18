@@ -49,7 +49,7 @@ export class AgentPluginStore {
     if(!this.cipher)throw new AgentError("plugin_secret_key_unavailable",409);
     secrets[key]={...this.cipher.encrypt({...this.binding(agentId,pluginId,revision,key),plaintext:replacement}),revision};
    }
-   const values={agentId,pluginId,revision,enabled:input.enabled,config:input.config,secrets:{...secrets},updatedBy:actor,updatedAt:Date.now()};
+   const values={agentId,pluginId,revision,enabled:input.enabled,config:input.config,secrets:{...secrets},updatedByAccountId:actor,updatedAt:Date.now()};
    this.db.insert(agentPluginConfigs).values(values).onConflictDoUpdate({target:[agentPluginConfigs.agentId,agentPluginConfigs.pluginId],set:values}).run();
    return this.get(actor,agentId,pluginId);
   });

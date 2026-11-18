@@ -57,7 +57,7 @@ export class WorkSessionLauncher {
 
     const db = this._options.db;
     const binding = new BotBindingStore(db).requireActive(message.channel.id);
-    const requester = resolveInboundSenderUserId({db, message});
+    const requester = resolveInboundSenderUserId({db, agentId: binding.agentId, message});
     new AgentStore(db).requireAccess(requester, binding.agentId);
 
     const rootSession = this._options.sessionStore.resolveByChannelSurface({

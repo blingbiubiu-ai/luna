@@ -1,4 +1,4 @@
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import type { DrizzleDB } from "@/data";
 import { shadowRootAccess, users } from "@/data/schema";
 import { decodeInvocation } from "@/runners/invocation-codec";
@@ -20,17 +20,17 @@ export interface ShadowRootSettings { shadowId: string; enabled: boolean }
 export class ShadowRootAccessStore {
   constructor(private readonly db: DrizzleDB) {}
 
-  settings(actorUserId: string, scope: { agentId: string; shadowId: string }): ShadowRootSettings {
-    this.requireOwnedShadow(actorUserId, scope);
+  settings(accountId: string, scope: { agentId: string; shadowId: string }): ShadowRootSettings {
+    this.requireOwnedShadow(accountId, scope);
     return { shadowId: scope.shadowId, enabled: this.enabled(scope.shadowId) };
   }
 
-  setEnabled(actorUserId: string, scope: { agentId: string; shadowId: string }, enabled: boolean): ShadowRootSettings {
-    this.requireOwnedShadow(actorUserId, scope);
-    const values = { shadowId: scope.shadowId, agentId: scope.agentId, enabled, updatedBy: actorUserId, updatedAt: Date.now() };
+  setEnabled(accountId: string, scope: { agentId: string; shadowId: string }, enabled: boolean): ShadowRootSettings {
+    this.requireOwnedShadow(accountId, scope);
+    const values = { shadowId: scope.shadowId, agentId: scope.agentId, enabled, updatedByAccountId: accountId, updatedAt: Date.now() };
     this.db.insert(shadowRootAccess).values(values).onConflictDoUpdate({ target: shadowRootAccess.shadowId, set: values }).run();
-    logger.info({ event: enabled ? "enabled" : "disabled", userId: actorUserId, ...scope }, "shadow_root_access");
-    return this.settings(actorUserId, scope);
+    logger.info({ event: enabled ? "enabled" : "disabled", accountId, ...scope }, "shadow_root_access");
+    return this.settings(accountId, scope);
   }
 
   enabled(shadowId: string): boolean {
@@ -43,9 +43,9 @@ export class ShadowRootAccessStore {
    */
   trusted(scope: { agentId: string; shadowId: string }, userId: string | null | undefined): boolean {
     if (!userId) return false;
-    if (new AgentStore(this.db).get(scope.agentId).ownerUserId === userId) return true;
-    // An id that is not a user (a mistyped or foreign sender id) is not trusted.
-    if (!this.db.select({ id: users.id }).from(users).where(eq(users.id, userId)).get()) return false;
+    // An id that is not a user of this Agent (a mistyped or foreign sender id) is not trusted.
+    if (!this.db.select({ id: users.id }).from(users).where(and(eq(users.id, userId), eq(users.agentId, scope.agentId))).get()) return false;
+    if (new AgentStore(this.db).isOwnerUser(scope.agentId, userId)) return true;
     const grants = new AuthorizationRuleStore(this.db, { kind: "agent", agentId: scope.agentId }).getEffectiveGrantsForUser(userId);
     if (grants.some(grant => grant.effect === "deny" && ruleMatchesOperation(grant, ROOT_OPERATION))) return false;
     return grants.some(grant => grant.effect === "allow" && ruleMatchesOperation(grant, ROOT_OPERATION));
@@ -76,8 +76,8 @@ export class ShadowRootAccessStore {
     return { rootAccess: true, privileged };
   }
 
-  private requireOwnedShadow(actorUserId: string, scope: { agentId: string; shadowId: string }): void {
-    new AgentStore(this.db).requireOwner(actorUserId, scope.agentId);
+  private requireOwnedShadow(accountId: string, scope: { agentId: string; shadowId: string }): void {
+    new AgentStore(this.db).requireOwner(accountId, scope.agentId);
     const shadow = new AgentStore(this.db).shadow(scope.shadowId);
     if (shadow.agentId !== scope.agentId) throw new AgentError("scope_mismatch", 409);
   }

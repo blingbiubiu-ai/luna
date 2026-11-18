@@ -26,6 +26,7 @@ import {
   messages,
   sessionInbox,
   sessionTimelineEntries,
+  users,
 } from "@/data/schema";
 import { selectActivationContext } from "@/main-runner/activation-context";
 import { MainRunnerContextBuilder } from "@/main-runner/context-builder";
@@ -64,7 +65,9 @@ import {
   appendInputFromNormalizedInbound,
   artifactizeInboundMessageResources,
   renderNormalizedMentions,
+  resolveInboundSenderUserId,
 } from "./inbound-message-persistence";
+import { BotBindingStore } from "@/agents/bot-binding-store";
 import type { WorkReplyChannel } from "./types";
 
 const logger = createLogger("session-inbound-router");
@@ -158,6 +161,7 @@ export class SessionInboundRouter {
   }
 
   async route(message: NormalizedInboundMessage): Promise<void> {
+    if (this._senderBlocked(message)) return;
     const session = this._sessionResolver.resolveFromNormalizedInbound(message);
     bindSessionBot(this._db, session.id, message.channel, this._channel.getBotIdentity?.());
     this._prepareSession?.(session.id);
@@ -338,6 +342,23 @@ export class SessionInboundRouter {
         channelMessageKeys,
       })
     );
+  }
+
+  /**
+   * A user the Agent owner blocked is not heard: nothing is stored in a session
+   * and no Runner starts. Senders that cannot be resolved here take the normal path.
+   */
+  private _senderBlocked(message: NormalizedInboundMessage): boolean {
+    if (message.sender.kind !== "user" || message.channel.type === "dashboard") return false;
+    try {
+      const agentId = new BotBindingStore(this._db).requireActive(message.channel.id).agentId;
+      const userId = resolveInboundSenderUserId({ db: this._db, agentId, message });
+      const blocked = this._db.select({ status: users.status }).from(users).where(eq(users.id, userId)).get()?.status === "blocked";
+      if (blocked) logger.info({ channelId: message.channel.id, messageId: message.id }, "Message from a blocked user ignored");
+      return blocked;
+    } catch {
+      return false;
+    }
   }
 
   private _appendThreadRootRedeliveryReference(input: {
@@ -644,6 +665,7 @@ export class SessionTurnProcessor {
       const requesterUserId = isAddressedGroupMessage(input.latestInbound)
         ? canonicalUserIdForRequestedIdentity(
             this._db,
+            new TaskScopeResolver(this._db).session(input.sessionId).agentId,
             requestedIdentityFromInbound(input.latestInbound),
           )
         : undefined;

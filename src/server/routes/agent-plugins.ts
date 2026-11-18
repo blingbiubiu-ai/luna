@@ -16,13 +16,13 @@ export function createAgentPluginRoutes(db:DrizzleDB,registry:PluginRegistry){
   throw error;
  }).get("/:agentId/plugins", c => {
   const auth = requireDashboardOnly(c); if (isGuardResponse(auth)) return auth;
-  return c.json({ plugins: store.list(auth.user.id, c.req.param("agentId")) });
+  return c.json({ plugins: store.list(auth.account.id, c.req.param("agentId")) });
  }).get("/:agentId/plugins/:pluginId",c=>{
   const auth=requireDashboardOnly(c);if(isGuardResponse(auth))return auth;
-  return c.json(store.get(auth.user.id,c.req.param("agentId"),c.req.param("pluginId")));
+  return c.json(store.get(auth.account.id,c.req.param("agentId"),c.req.param("pluginId")));
  }).put("/:agentId/plugins/:pluginId",async c=>{
   const auth=requireDashboardOnly(c);if(isGuardResponse(auth))return auth;
   const body=agentPluginWrite.parse(await c.req.json());
-  return c.json(store.put(auth.user.id,c.req.param("agentId"),c.req.param("pluginId"),body));
+  return c.json(store.put(auth.account.id,c.req.param("agentId"),c.req.param("pluginId"),body));
  });
 }

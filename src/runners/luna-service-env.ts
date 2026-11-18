@@ -35,6 +35,8 @@ export interface RunnerAccessTokenIssuer {
 
 export interface BuildLunaServiceRunnerEnvInput {
   readonly agentConfig?: AgentExecutionSnapshot;
+  /** The Agent the Runner acts in; requester identities are resolved among its users. Defaults to `agentConfig.agentId`. */
+  readonly agentId?: string;
   readonly resourceBuilder?: AgentResourceBuilder;
   readonly invocationId?: string;
   readonly runnerKind: LunaRunnerKind;
@@ -181,11 +183,13 @@ function resolveRequestedByUserId(
   if (explicit !== undefined && explicit.length > 0) {
     return explicit;
   }
-  if (db === undefined) {
+  const agentId = input.agentId ?? input.agentConfig?.agentId;
+  if (db === undefined || agentId === undefined) {
     return undefined;
   }
   return canonicalUserIdForRequestedIdentity(
     db,
+    agentId,
     input.requestedByIdentity ?? undefined,
   );
 }

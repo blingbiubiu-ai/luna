@@ -1,5 +1,8 @@
 import {fixtureTaskOwnership} from "../helpers/platform-fixtures";
-import {fixtureNamedSession, fixtureScope, fixtureSessionOwnership} from "../helpers/platform-fixtures";
+import {fixtureNamedSession, fixtureOwnerUserId, fixtureScope, fixtureSessionOwnership} from "../helpers/platform-fixtures";
+
+/** The fixture Agent belongs to account "user-1"; runtime actors are its owner user. */
+const OWNER_USER = fixtureOwnerUserId("user-1");
 import {
   existsSync,
   mkdirSync,
@@ -500,9 +503,9 @@ describe("TaskRunSupervisor", () => {
     const taskId = _createTask("task-invalid-restart-source");
     const {agentId} = fixtureScope(database.db, "user-1");
     const shadow = new AgentStore(database.db).createShadow("user-1", agentId, {name: "Other Shadow"}, "foreign-source");
-    const session = new SessionStore(database.db).createLocalSession("user-1", {agentId, shadowId: shadow.id});
+    const session = new SessionStore(database.db).createLocalSession(OWNER_USER, {agentId, shadowId: shadow.id});
     const source = new MessageStore(database.db).append({
-      sessionId: session.id, senderUserId: "user-1", role: "user",
+      sessionId: session.id, senderUserId: OWNER_USER, role: "user",
       content: [{type: "text", text: "Foreign input"}],
     });
     const supervisor = new TaskRunSupervisor({db: database.db, runnerType: "mock"});
@@ -751,14 +754,14 @@ describe("TaskRunSupervisor", () => {
         root_message_key: null,
         title: "task launch context",
         created_at: 1000,
-        updated_at: 1000, ...fixtureSessionOwnership(database.db,"feishu","task-launch-context")})
+        updated_at: 1000, ...fixtureSessionOwnership(database.db,"feishu","task-launch-context","user-1")})
       .run();
     const taskId = _createTask("task-supervisor-launch-context", "session-task-launch-context");
     const messageStore = new MessageStore(database.db);
     const sourceMessage = messageStore.append({
       sessionId: "session-task-launch-context",
       channelMessageKey: "message-source-context",
-      senderUserId: "user-1",
+      senderUserId: OWNER_USER,
       role: "user",
       content: [{ type: "text", text: "source message: 用户反馈播放失败 did=123" }],
       channel: { type: "feishu", id: "task-launch-context" },
@@ -987,7 +990,7 @@ describe("TaskRunSupervisor", () => {
     const sourceMessage = messageStore.append({
       sessionId: "session-launch-excludes-output",
       channelMessageKey: "message-launch-source",
-      senderUserId: "user-1",
+      senderUserId: OWNER_USER,
       role: "user",
       content: [{ type: "text", text: "source message: 建个任务" }],
       channel: { type: "feishu", id: "launch-excludes-output" },
@@ -997,7 +1000,7 @@ describe("TaskRunSupervisor", () => {
     const coalescedMessage = messageStore.append({
       sessionId: "session-launch-excludes-output",
       channelMessageKey: "message-launch-context",
-      senderUserId: "user-1",
+      senderUserId: OWNER_USER,
       role: "user",
       content: [{ type: "text", text: "input context: 带上这条补充" }],
       channel: { type: "feishu", id: "launch-excludes-output" },
@@ -1032,7 +1035,7 @@ describe("TaskRunSupervisor", () => {
       taskId,
       sessionId: "session-launch-excludes-output",
       messageId: sourceMessage.id,
-      userId: "user-1",
+      userId: OWNER_USER,
     });
 
     const launchPack = contextPackStore
@@ -2254,7 +2257,7 @@ describe("executeTaskRun", () => {
         task: {
           id: taskId,
           type: "task",
-          createdByUserId: "user-1",
+          createdByUserId: OWNER_USER,
         },
         deliverySubscriptions: [
           {
@@ -2366,7 +2369,7 @@ function _createTask(taskId: string, sourceSessionId?: string): string {
       severity: null,
       title: `Task ${taskId}`,
       summary: "Initial task summary",
-      creator_user_id: "user-1",
+      creator_user_id: OWNER_USER,
       context_json: null,
       created_at: now,
       updated_at: now,
@@ -2381,7 +2384,7 @@ function _taskMessage(key: string): string {
   const sessionId = "session-" + key;
   fixtureNamedSession(database.db, sessionId, "user-1");
   return new MessageStore(database.db).append({
-    sessionId, channelMessageKey: key, senderUserId: "user-1", role: "user",
+    sessionId, channelMessageKey: key, senderUserId: OWNER_USER, role: "user",
     content: [{type: "text", text: key}],
   }).id;
 }
@@ -2427,7 +2430,7 @@ test("Runtime recovery attaches the original Task Run without applying legacy in
     const taskId = _createTask("runtime-recover-task");
     const runnerContext = new RunnerContextStore(database.db).resolveForTask(taskId, "mock");
     const run = store.createRun({ taskId, reason: "initial", runnerType: "mock", runnerContextId: runnerContext.id, inputSnapshot: { prompt: "original" } });
-    new InvocationStore(database.db).register({ id: "inv_task_resume", runnerKind: "task", actorUserId: "user-1", runnerContextId: runnerContext.id, sessionId: null, taskId, taskRunId: run.id, originId: run.id,
+    new InvocationStore(database.db).register({ id: "inv_task_resume", runnerKind: "task", actorUserId: OWNER_USER, runnerContextId: runnerContext.id, sessionId: null, taskId, taskRunId: run.id, originId: run.id,
       inputSnapshot: { version: 1, kind: "task", input: { taskId, taskRunId: run.id, runnerContextId: runnerContext.id } } as never, contextPackIds: [] });
     const calls: string[] = [];
     const supervisor = new TaskRunSupervisor({ db: database.db, runnerType: "mock", executeRun: async input => {
@@ -2458,11 +2461,11 @@ test("explicit cancellation aborts the existing process and revokes its authorit
   });
   const run = supervisor.startInitialRun({taskId, inputSnapshot: {}});
   const ledger = new InvocationStore(database.db);
-  ledger.register({id: "cancel-invocation", runnerKind: "task", actorUserId: "user-1", runnerContextId: run.runnerContextId!, sessionId: null,
+  ledger.register({id: "cancel-invocation", runnerKind: "task", actorUserId: OWNER_USER, runnerContextId: run.runnerContextId!, sessionId: null,
     taskId, taskRunId: run.id, originId: run.id,
     inputSnapshot: decodeInvocation({version: 1, kind: "task", input: {taskId, taskRunId: run.id, runnerContextId: run.runnerContextId!}}), contextPackIds: []});
   const token = new AccessTokenService({db: database.db, signingSecret: "task-cancel-fixture"}).issueToken({
-    userId: "user-1", source: "runner", role: "runner", name: "Task", runnerKind: "task",
+    userId: OWNER_USER, source: "runner", role: "runner", name: "Task", runnerKind: "task",
     sourceRunnerJobId: run.runnerContextId!, sourceTaskId: taskId, sourceTaskRunId: run.id, now: Date.now(),
     ttlMs: 60_000, metadata: {invocationId: "cancel-invocation"},
   });
@@ -2484,11 +2487,11 @@ test("explicit cancellation aborts the existing process and revokes its authorit
 function _registerTaskInvocation(id: string, taskId: string, run: {id: string; runnerContextId: string | null}) {
   return import("../../src/runners/invocation-store").then(({InvocationStore}) => {
     const ledger = new InvocationStore(database.db);
-    ledger.register({id, runnerKind: "task", actorUserId: "user-1", runnerContextId: run.runnerContextId!, sessionId: null,
+    ledger.register({id, runnerKind: "task", actorUserId: OWNER_USER, runnerContextId: run.runnerContextId!, sessionId: null,
       taskId, taskRunId: run.id, originId: run.id,
       inputSnapshot: decodeInvocation({version: 1, kind: "task", input: {taskId, taskRunId: run.id, runnerContextId: run.runnerContextId!}}), contextPackIds: []});
     const token = new AccessTokenService({db: database.db, signingSecret: "task-supervisor-fixture"}).issueToken({
-      userId: "user-1", source: "runner", role: "runner", name: "Task", runnerKind: "task",
+      userId: OWNER_USER, source: "runner", role: "runner", name: "Task", runnerKind: "task",
       sourceRunnerJobId: run.runnerContextId!, sourceTaskId: taskId, sourceTaskRunId: run.id, now: Date.now(),
       ttlMs: 60_000, metadata: {invocationId: id},
     });

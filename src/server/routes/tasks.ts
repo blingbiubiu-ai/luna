@@ -29,7 +29,7 @@ import {
   createDashboardArtifactSigner,
 } from "@/dashboard-api/local-paths";
 import {
-  dashboardRequesterUserIdFromContext,
+  requesterAccountIdFromContext,
   lunaAccessTokenClaimsFromContext,
 } from "@/server/auth";
 import { selectDashboardContextBundleRows } from "./dashboard-context-selection";
@@ -151,7 +151,7 @@ function dashboardArtifactSignerForContext(
 ): DashboardArtifactSigner {
   return createDashboardArtifactSigner({
     db,
-    requesterUserId: dashboardRequesterUserIdFromContext(c),
+    requesterAccountId: requesterAccountIdFromContext(c),
     accessTokenClaims: lunaAccessTokenClaimsFromContext(c),
   });
 }

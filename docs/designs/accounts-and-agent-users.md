@@ -1,6 +1,6 @@
 # Platform Accounts And Agent Users (proposal)
 
-Status: agreed plan, not implemented. Based on `main` at `139f987`.
+Status: implemented. Based on `main` at `139f987`.
 
 ## Problem
 

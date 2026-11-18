@@ -47,7 +47,7 @@ export function registerTestRunnerJob(
   store.register({
     id: invocationId,
     runnerKind: inputSnapshot.kind,
-    actorUserId: claims.actorUserId,
+    actorUserId: claims.actorUserId!,
     runnerContextId: claims.runnerJobId!,
     sessionId: claims.sessionId ?? null,
     taskId: claims.taskId ?? null,

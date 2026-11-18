@@ -27,13 +27,13 @@ for (const kind of ["session", "task"] as const) test(`${kind} deletion removes 
   const connection = new DataConnection(schema), db = connection.db;
   const executionDb = new Database(":memory:");
   try {
-    const session = new SessionStore(db).createLocalSession("admin",fixtureScope(db,"admin"));
+    const session = new SessionStore(db).createLocalSession("user:admin",fixtureScope(db,"admin"));
     if (kind === "task") db.insert(schema.tasks).values({ id: "task", type: "task", title: "delete", status: "completed", priority: "medium", created_at: 1, updated_at: 1, last_activity_at: 1 , ...fixtureTaskOwnership(db, session.id)}).run();
     bindRunnerContextsToRuntime(db, "runtime");
     const contexts = new RunnerContextStore(db);
     const context = kind === "session" ? contexts.resolveForSession(session.id, "codex") : contexts.resolveForTask("task", "codex");
     const job: JobRequest = { version: 2, ...fixtureJobScope(session.agent_id, session.shadow_id), jobId: "job", invocationId: "inv", environmentId: "environment", runnerContextId: context.id, scopeKey: "scope", runnerKind: kind === "session" ? "main" : "task", sessionId: session.id, ...(kind === "task" ? { taskId: "task", taskRunId: "run" } : {}), input: { runnerType: "codex", prompt: "deleted input" }, credentialsRevision: 1, timeoutMs: 1000 };
-    db.insert(schema.runnerInvocations).values({ agentId: session.agent_id, shadowId: session.shadow_id, id: "inv", runnerKind: job.runnerKind, actorUserId: "admin", runnerContextId: context.id, sessionId: session.id, ...(kind === "task" ? { taskId: "task" } : {}), originId: "origin", state: "settled", inputSnapshot: { version: 1, input: "deleted input" }, contextPackIds: [], createdAt: 1, settledAt: 2 }).run();
+    db.insert(schema.runnerInvocations).values({ agentId: session.agent_id, shadowId: session.shadow_id, id: "inv", runnerKind: job.runnerKind, actorUserId: "user:admin", runnerContextId: context.id, sessionId: session.id, ...(kind === "task" ? { taskId: "task" } : {}), originId: "origin", state: "settled", inputSnapshot: { version: 1, input: "deleted input" }, contextPackIds: [], createdAt: 1, settledAt: 2 }).run();
     db.insert(schema.runnerJobs).values({ id: job.jobId, runtimeId: "runtime", invocationId: "inv", request: job, requestHash: contentHash(job), state: "settled", createdAt: 1, updatedAt: 2 }).run();
     if (kind === "session") {
       db.insert(schema.tasks).values({
@@ -44,7 +44,7 @@ for (const kind of ["session", "task"] as const) test(`${kind} deletion removes 
       const taskContext = contexts.resolveForTask("survivor", "codex");
       db.insert(schema.runnerInvocations).values({
         id: "task-history", agentId: session.agent_id, shadowId: session.shadow_id, runnerKind: "task",
-        actorUserId: "admin", runnerContextId: taskContext.id, sessionId: session.id, taskId: "survivor",
+        actorUserId: "user:admin", runnerContextId: taskContext.id, sessionId: session.id, taskId: "survivor",
         originId: "task-origin", state: "settled", inputSnapshot: {version: 1, input: "retained task input"},
         contextPackIds: [], createdAt: 1, settledAt: 2,
       }).run();

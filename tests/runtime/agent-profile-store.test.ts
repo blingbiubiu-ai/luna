@@ -94,7 +94,7 @@ describe("AgentProfileStore", () => {
       model: "gpt-5",
       env: { OPENAI_BASE_URL: "https://api.example.test/v1" },
       secrets: { OPENAI_API_KEY: { set: "top-secret" } },
-      actorId: "admin",
+      actorId: "fixture-owner",
     });
 
     expect(created.latestRevision.secrets).toEqual({
@@ -113,7 +113,7 @@ describe("AgentProfileStore", () => {
       model: "claude-sonnet-4-6",
       env: {},
       secrets: { ANTHROPIC_API_KEY: { set: "retained-secret" } },
-      actorId: "admin",
+      actorId: "fixture-owner",
     });
     const before = connection.db.select().from(agentProfileSecrets).get()!;
 
@@ -121,7 +121,7 @@ describe("AgentProfileStore", () => {
       model: "claude-opus-4-1",
       env: {},
       secrets: {},
-      actorId: "admin",
+      actorId: "fixture-owner",
     });
     const rows = connection.db.select().from(agentProfileSecrets).all();
 
@@ -141,7 +141,7 @@ describe("AgentProfileStore", () => {
       model: "gpt-5",
       env: {},
       secrets: {},
-      actorId: "admin",
+      actorId: "fixture-owner",
     });
     connection.db.insert(activeAgentConfig).values({
       agent_id: fixtureScope(connection.db).agentId,
@@ -149,11 +149,11 @@ describe("AgentProfileStore", () => {
       profile_id: created.id,
       revision_id: created.latestRevision.id,
       activation_sequence: 1,
-      activated_by: "admin",
+      activated_by_account_id: "fixture-owner",
       activated_at: Date.now(),
     }).run();
 
-    expect(() => store.deleteProfile(created.id, "admin")).toThrow(/active/i);
+    expect(() => store.deleteProfile(created.id, "fixture-owner")).toThrow(/active/i);
     expect(store.getProfile(created.id)?.deletedAt).toBeNull();
     expect(
       connection.db.select().from(activeAgentConfig)

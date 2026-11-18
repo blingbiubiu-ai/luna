@@ -36,9 +36,10 @@ export function createAgentMemoryRoutes(db: DrizzleDB) {
     if (isGuardResponse(auth)) throw new HTTPException(auth.status as 401 | 403, {res: auth});
     const agentId = c.req.param("agentId")!;
     const agents = new AgentStore(db);
-    agents.requireOwner(auth.user.id, agentId);
-    agents.requireAccess(auth.user.id, agentId);
-    return {viewer: {agentId, all: true}, writer: {agentId, kind: "owner", trusted: true, owner: true, userId: auth.user.id, shadowId: null}};
+    agents.requireOwner(auth.account.id, agentId);
+    const userId = agents.ownerUserId(agentId);
+    agents.requireAccess(userId, agentId);
+    return {viewer: {agentId, all: true}, writer: {agentId, kind: "owner", trusted: true, owner: true, userId, shadowId: null}};
   };
   /** Adds the names the audit view shows instead of raw ids. */
   const named = (rows: readonly MemoryRecord[]) => {

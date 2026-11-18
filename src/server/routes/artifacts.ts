@@ -20,11 +20,12 @@ import {
 } from "../artifact-content-url";
 
 import {
-  dashboardRequesterUserIdFromContext,
+  requesterAccountIdFromContext,
   lunaAccessTokenClaimsFromContext,
 } from "../auth";
 import { createArtifactAccessPolicy, runnerArtifactScope } from "../artifact-access-policy";
 import { RunnerArtifactGrantStore } from "../auth/runner-artifact-grant-store";
+import { runnerActorUserId } from "../auth/access-token-service";
 import { getKernel } from "./kernel";
 
 export interface ArtifactsRouteOptions {
@@ -607,7 +608,7 @@ function createArtifactInputForClaims(
     source: "content",
     input: {
       ...parsed.input,
-      relatedUserId: claims.actorUserId,
+      relatedUserId: runnerActorUserId(claims),
       producer: "runner",
       scopeType: scope.scopeType,
       scopeId: scope.scopeId,
@@ -643,7 +644,7 @@ function artifactAccessPolicyForContext(c: Context, db: DrizzleDB) {
   return createArtifactAccessPolicy({
     db,
     readHistory: true,
-    requesterUserId: dashboardRequesterUserIdFromContext(c),
+    requesterAccountId: requesterAccountIdFromContext(c),
     accessTokenClaims: claims,
     runArtifactAllowlist: claims === undefined
       ? []

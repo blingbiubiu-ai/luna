@@ -26,12 +26,17 @@ type PersistedChannelSurface = ChannelSurface & { id: string };
 export class ChannelDirectoryStore {
   constructor(private readonly _db: DrizzleDB) {}
 
+  /**
+   * `agentId` names the Agent the identity is seen in; a configured channel
+   * implies it, the shared Dashboard channel needs it.
+   */
   upsertIdentity(input: {
     channel: ChannelRef;
     identity: ChannelIdentity;
+    agentId?: string;
   }): PersistedChannelIdentity {
     // Directory upserts make identity profile changes visible across messages.
-    return this._db.transaction(tx => upsertChannelIdentity(tx as unknown as DrizzleDB, input.channel, input.identity));
+    return this._db.transaction(tx => upsertChannelIdentity(tx as unknown as DrizzleDB, input.channel, input.identity, undefined, input.agentId));
   }
 
   /** Called with an authenticated Luna user, before processing their messages. */
@@ -58,6 +63,7 @@ export class ChannelDirectoryStore {
   ensureMentionTarget(input: {
     channel: ChannelRef;
     mention: ChannelMention;
+    agentId?: string;
   }): PersistedChannelIdentity {
     if (input.mention.target.kind === "bot") {
       const now = String(Date.now());
@@ -73,6 +79,7 @@ export class ChannelDirectoryStore {
     return this.upsertIdentity({
       channel: input.channel,
       identity: input.mention.target,
+      ...(input.agentId === undefined ? {} : { agentId: input.agentId }),
     });
   }
 }
@@ -82,6 +89,7 @@ function upsertChannelIdentity(
   channel: ChannelRef,
   identity: ChannelIdentity,
   authenticatedUserId?: string,
+  agentId?: string,
 ): PersistedChannelIdentity {
   const now = String(Date.now());
   const row = upsertChannelIdentitySync(db, channel, identity, now);
@@ -91,6 +99,7 @@ function upsertChannelIdentity(
     channelIdentityId: row.id,
     identity,
     authenticatedUserId,
+    ...(agentId === undefined ? {} : { agentId }),
   });
   return persistedIdentity;
 }

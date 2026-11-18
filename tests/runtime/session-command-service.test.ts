@@ -28,8 +28,8 @@ beforeEach(() => {
     home = mkdtempSync(join(tmpdir(), "luna-commands-"));
     setLunaHome(home);
     connection = new DataConnection(schema);
-    connection.db.insert(schema.users).values({ id: "u", kind: "human", displayName: "User", status: "active", createdAt: "now", updatedAt: "now" }).run();
     const scope = fixtureSessionOwnership(connection.db, "feishu", "test");
+    connection.db.insert(schema.users).values({ id: "u", agentId: scope.agent_id, kind: "human", displayName: "User", status: "active", createdAt: "now", updatedAt: "now" }).run();
     const store = new SessionStore(connection.db);
     source = store.resolveByChannelSurface({ channelType: "feishu", channelId: "test", groupId: "source" }).id;
     target = store.resolveByChannelSurface({ channelType: "feishu", channelId: "test", groupId: "target" }).id;
@@ -140,7 +140,7 @@ test("accept is durable and atomic, replay does not resend and cross-session sen
 test("inactive actors fail before provider delivery", async () => {
     const { service, sent } = runtime();
     const cmd = service.accept(actor(), target, "message.send", "one", { content: "hello" });
-    connection.db.update(schema.users).set({ status: "inactive" }).where(eq(schema.users.id, "u")).run();
+    connection.db.update(schema.users).set({ status: "blocked" }).where(eq(schema.users.id, "u")).run();
     await service.waitForIdle();
     expect(service.get(cmd.id)?.status).toBe("failed");
     expect(sent).toEqual([]);
@@ -223,7 +223,7 @@ test("schedule editor requires the Agent owner, enforces revisions and permanent
     const { Hono } = await import("hono");
     const { createSessionCommandAdminRoutes } = await import("../../src/server/routes/session-commands");
     const app = new Hono();
-    app.use("*", async (c, next) => { c.set("dashboardAuthSession" as never, { authenticated: true, user: { id: "fixture-owner", name: "Owner", provider: "local" } } as never); c.set("lunaRequestAuthKind" as never, (c.req.header("x-runner") ? "luna-access-token" : "dashboard-cookie") as never); await next(); });
+    app.use("*", async (c, next) => { c.set("dashboardAuthSession" as never, { authenticated: true, account: { id: "fixture-owner", name: "Owner", provider: "local" } } as never); c.set("lunaRequestAuthKind" as never, (c.req.header("x-runner") ? "luna-access-token" : "dashboard-cookie") as never); await next(); });
     app.route("/", createSessionCommandAdminRoutes({ db: connection.db }));
     expect((await app.request("/schedules", { headers: { "x-runner": "1" } })).status).toBe(401);
     const agentId = new SessionStore(connection.db).getById(target)!.agent_id;
@@ -446,7 +446,7 @@ test("group creation rejects inactive actors at execution without authority reco
     let calls = 0;
     const service = new SessionCommandService({ db: connection.db, channelFor: () => ({ send: async () => { throw Error("unused"); }, createGroup: async () => { calls++; return { externalId: "oc_new", kind: "group" }; } }) });
     const cmd = service.accept(actor(), source, "group.create", "create", groupRequest());
-    connection.db.update(schema.users).set({status:"inactive"}).where(eq(schema.users.id,"u")).run();
+    connection.db.update(schema.users).set({status:"blocked"}).where(eq(schema.users.id,"u")).run();
     await service.waitForIdle(); expect(calls).toBe(0); expect(service.get(cmd.id)?.status).toBe("failed");
 });
 

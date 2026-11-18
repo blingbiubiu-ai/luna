@@ -16,12 +16,11 @@ type Schedule = typeof schema.sessionSchedules.$inferSelect;
 let home: string, connection: DataConnection<typeof schema>, app: Hono, sessionId: string, agentId: string, shadowId: string;
 beforeEach(() => {
   home = mkdtempSync(join(tmpdir(), "luna-editor-")); setLunaHome(home); connection = new DataConnection(schema);
-  connection.db.insert(schema.users).values({ id: "user", displayName: "Test", kind: "human", status: "active", createdAt: "now", updatedAt: "now" }).run();
   const scope = fixtureScope(connection.db, "user");
   ({ agentId, shadowId } = scope);
-  sessionId = new SessionStore(connection.db).createLocalSession("user", scope).id;
+  sessionId = new SessionStore(connection.db).createLocalSession("user:user", scope).id;
   app = new Hono();
-  app.use("*", async (c, next) => { c.set("dashboardAuthSession" as never, { authenticated: true, user: { id: c.req.header("x-user") ?? "user", name: "Test", provider: "local" } } as never); c.set("lunaRequestAuthKind" as never, (c.req.header("x-runner") ? "luna-access-token" : "dashboard-cookie") as never); await next(); });
+  app.use("*", async (c, next) => { c.set("dashboardAuthSession" as never, { authenticated: true, account: { id: c.req.header("x-user") ?? "user", name: "Test", provider: "local" } } as never); c.set("lunaRequestAuthKind" as never, (c.req.header("x-runner") ? "luna-access-token" : "dashboard-cookie") as never); await next(); });
   app.route("/", createSessionCommandAdminRoutes({ db: connection.db }));
 });
 afterEach(() => { connection.close(); rmSync(home, { recursive: true, force: true }); });
@@ -41,7 +40,7 @@ test("owner reads only matching schedule history and cannot send a forged execut
   const row = await create();
   const foreign = fixtureScope(connection.db, "other");
   const sibling = new AgentStore(connection.db).createShadow("user", agentId, { name: "Sibling" }, "schedule-sibling");
-  const siblingSession = new SessionStore(connection.db).createLocalSession("user", { agentId, shadowId: sibling.id });
+  const siblingSession = new SessionStore(connection.db).createLocalSession("user:user", { agentId, shadowId: sibling.id });
   expect((await app.request("/schedules")).status).toBe(400);
   expect((await app.request(`/schedules?agentId=${foreign.agentId}`)).status).toBe(403);
   expect((await app.request("/commands")).status).toBe(403);
@@ -89,9 +88,9 @@ test("finished one-shot and elapsed paused one-shot cannot be replayed by resume
 test("resume rechecks active actor and editor validates artifact availability", async () => {
   const row = await create();
   await request(`/schedules/${row.id}/state`, { enabled: false, revision: 1 });
-  connection.db.update(schema.users).set({ status: "inactive" }).where(eq(schema.users.id,"user")).run();
+  connection.db.update(schema.users).set({ status: "blocked" }).where(eq(schema.users.id,"user:user")).run();
   expect((await request(`/schedules/${row.id}/state`, { enabled: true, revision: 2 })).status).toBe(403);
-  connection.db.update(schema.users).set({status:"active"}).where(eq(schema.users.id,"user")).run();
+  connection.db.update(schema.users).set({status:"active"}).where(eq(schema.users.id,"user:user")).run();
   expect((await request("/schedule-editor", { ...body(), action: { kind: "message.send", content: "artifact:missing" } })).status).toBe(403);
   const edited = await request(`/schedule-editor/${row.id}`, { ...body(), revision: 2, action: { kind: "session.invoke", content: "analyze" } }, "PUT");
   expect(edited.status).toBe(200);

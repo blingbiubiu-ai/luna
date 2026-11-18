@@ -1,4 +1,4 @@
-import {and, eq, isNull, ne} from "drizzle-orm";
+import {and, eq, isNull, notInArray} from "drizzle-orm";
 import type {DrizzleDB} from "@/data";
 import {messages, tasks, users} from "@/data/schema";
 import {AuthorizationRuleStore} from "@/server/policy/authorization-rule-store";
@@ -30,7 +30,7 @@ export function memoryParticipants(db: DrizzleDB, invocation: Pick<MemoryInvocat
   for (const sessionId of sessionIds) {
     for (const row of db.selectDistinct({userId: messages.senderUserId}).from(messages)
       .innerJoin(users, eq(users.id, messages.senderUserId))
-      .where(and(eq(messages.ownerSessionId, sessionId), isNull(messages.deletedAt), ne(users.kind, "system"))).all()) participants.add(row.userId);
+      .where(and(eq(messages.ownerSessionId, sessionId), isNull(messages.deletedAt), notInArray(users.kind, ["shadow", "system"]))).all()) participants.add(row.userId);
   }
   return [...participants];
 }
@@ -44,7 +44,7 @@ export function memoryAccess(db: DrizzleDB, invocation: MemoryInvocation, kind: 
   const grants = new AuthorizationRuleStore(db, {kind: "agent", agentId: invocation.agentId}).getEffectiveGrantsForUser(invocation.actorUserId);
   const rule = (effect: "allow" | "deny", operation: string) => grants.some(grant => grant.effect === effect && ruleMatchesOperation(grant, operation));
   if (rule("deny", "memory.read")) throw new AgentError("memory_access_denied", 403);
-  const owner = new AgentStore(db).get(invocation.agentId).ownerUserId === invocation.actorUserId;
+  const owner = new AgentStore(db).isOwnerUser(invocation.agentId, invocation.actorUserId);
   return {
     // Consolidation is queued by Service for the owner and has to see everything it tidies.
     viewer: kind === "consolidation" && owner ? {agentId: invocation.agentId, all: true}

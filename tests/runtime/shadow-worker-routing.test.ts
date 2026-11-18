@@ -23,7 +23,7 @@ beforeEach(() => {
 afterEach(()=>{db.close();setLunaHome(previousHome);rmSync(home,{recursive:true,force:true});});
 function app(actor="alice",kind="dashboard-cookie") {
   return new Hono().use("*",async(c,next)=>{
-    (c as any).set("dashboardAuthSession",{authenticated:true,user:{id:actor,name:actor,provider:"test"}});
+    (c as any).set("dashboardAuthSession",{authenticated: true, account: {id:actor,name:actor,provider:"test"}});
     (c as any).set("lunaRequestAuthKind",kind);await next();
   }).route("/agents",createPlatformAgentRoutes(db.db));
 }

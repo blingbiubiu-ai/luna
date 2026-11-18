@@ -3,6 +3,10 @@ import { eq } from "drizzle-orm";
 import type { DrizzleDB } from "@/data";
 import { users } from "@/data/schema";
 
+/**
+ * Callers name Luna's own authors with these ids; each Agent stores them as its
+ * own users (`<id>:<agentId>`), since every user belongs to one Agent.
+ */
 export const LUNA_SYSTEM_USER_ID = "reserved:system:luna";
 export const LUNA_INTERNAL_USER_ID = "reserved:internal:luna";
 
@@ -22,12 +26,14 @@ export type LunaSystemUserKind = keyof typeof SYSTEM_USER_RECORDS;
 export class SystemUserStore {
   constructor(private readonly _db: DrizzleDB) {}
 
-  requireUserId(kind: LunaSystemUserKind): string {
+  /** The Agent's own user for Luna's `kind` author, created on first use. */
+  requireUserId(kind: LunaSystemUserKind, agentId: string): string {
     const record = SYSTEM_USER_RECORDS[kind];
+    const id = `${record.id}:${agentId}`;
     const existing = this._db
       .select()
       .from(users)
-      .where(eq(users.id, record.id))
+      .where(eq(users.id, id))
       .get();
     if (existing !== undefined) {
       return existing.id;
@@ -36,7 +42,8 @@ export class SystemUserStore {
     this._db
       .insert(users)
       .values({
-        id: record.id,
+        id,
+        agentId,
         kind: "system",
         displayName: record.displayName,
         avatarUrl: null,
@@ -47,11 +54,16 @@ export class SystemUserStore {
         updatedAt: now,
       })
       .run();
-    return record.id;
+    return id;
   }
 }
 
+/** Whether an id names one of Luna's own authors, by its alias or as an Agent's user. */
 export function isReservedSystemUserId(userId: string): boolean {
-  return userId === LUNA_SYSTEM_USER_ID ||
-    userId === LUNA_INTERNAL_USER_ID;
+  return [LUNA_SYSTEM_USER_ID, LUNA_INTERNAL_USER_ID].some(id => userId === id || userId.startsWith(`${id}:`));
+}
+
+/** Which of Luna's authors a reserved id names. */
+export function systemUserKind(userId: string): LunaSystemUserKind {
+  return userId === LUNA_SYSTEM_USER_ID || userId.startsWith(`${LUNA_SYSTEM_USER_ID}:`) ? "system" : "internal";
 }

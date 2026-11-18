@@ -27,7 +27,8 @@ test("verified bots use distinct Shadow identities and keep credentials encrypte
  const second=new AgentStore(db.db).createShadow(actor,agentId,{name:"Second"},"second");
  const two=await store.save({...scoped(),shadowId:second.id,id:"second",appId:"cli_second"},actor);
  expect(one.botUserId).toBe(new AgentStore(db.db).shadow(shadowId).replyUserId);
- expect(one.shadow).toEqual({id:shadowId,name:"Bot Shadow",status:"active"});
+ // The Shadow takes its verified bot's name until the owner renames it.
+ expect(one.shadow).toEqual({id:shadowId,name:"Feishu Name",status:"active"});
  expect(two.botUserId).toBe(second.replyUserId);
  expect(two.botUserId).not.toBe(one.botUserId);
  const mergedBots = db.db.select().from(schema.users).where(eq(schema.users.kind, "bot")).all();
@@ -95,7 +96,7 @@ test("owner, default Shadow and active binding constraints are transactional",as
 test("configuration endpoints require Agent owner and apply saved configuration",async()=>{
  let reloaded="";const routes=createChannelConfigRoutes({db:db.db,store,reload:async id=>{reloaded=id;}});
  expect((await routes.request("/")).status).toBe(401);
- const app=new Hono().use("*",async(c,next)=>{c.set("dashboardAuthSession" as never,{authenticated:true,user:{id:actor,name:"Owner",provider:"local"}} as never);c.set("lunaRequestAuthKind" as never,"dashboard-cookie" as never);await next();}).route("/channels",routes);
+ const app=new Hono().use("*",async(c,next)=>{c.set("dashboardAuthSession" as never,{authenticated: true, account: {id:actor,name:"Owner",provider:"local"}} as never);c.set("lunaRequestAuthKind" as never,"dashboard-cookie" as never);await next();}).route("/channels",routes);
  const result=await app.request("/channels",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(scoped())});expect(result.status).toBe(200);expect(await result.text()).not.toContain(input.appSecret);expect(reloaded).toBe(input.id);
  expect((await app.request("/channels")).status).toBe(400);
  const own = await app.request(`/channels?agentId=${agentId}`);
@@ -175,7 +176,8 @@ test("adding a Feishu bot creates its Shadow only after verification and retries
  expect(store.list()).toHaveLength(0);
 
  const added = await store.save(request, actor);
- expect(added.shadow).toMatchObject({name: input.name, status:"active"});
+ // A new Shadow is called what its bot is called in Feishu.
+ expect(added.shadow).toMatchObject({name: "Feishu Name", status:"active"});
  expect(agents.listShadows(actor, agentId)).toHaveLength(initialCount + 1);
  const edited = await store.save({...request, name:"Updated", appSecret:""}, actor);
  expect(edited.bindingId).toBe(added.bindingId);

@@ -60,7 +60,7 @@ export class SessionStore {
     if (session.binding_id !== null) this.requireChannelScope(session, session.channel_id);
     if (session.bot_user_id !== shadow.replyUserId) throw new AgentError("session_reply_identity_mismatch",409);
     const user = this._db.select().from(users).where(eq(users.id, shadow.replyUserId)).get();
-    if (!user || user.status !== "active" || user.kind !== "system") throw new Error("Shadow reply identity is unavailable");
+    if (!user || user.status !== "active" || user.kind !== "shadow") throw new Error("Shadow reply identity is unavailable");
     return user.id;
   }
 

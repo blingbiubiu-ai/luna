@@ -29,9 +29,9 @@ export function createAgentConfigRoutes(options: AgentConfigRouteOptions) {
       if (isGuardResponse(admin)) return admin;
       const agentId = c.req.query("agentId");
       if (!agentId) return c.json({status:"error",code:"agent_scope_required"},400);
-      new AgentStore(options.db).requireOwner(admin.user.id,agentId);
+      new AgentStore(options.db).requireOwner(admin.account.id,agentId);
       (c as any).set("agentConfigAgentId",agentId);
-      (c as any).set("agentConfigActorId", admin.user.id);
+      (c as any).set("agentConfigActorId", admin.account.id);
       await next();
     })
     .onError((error,c) => {

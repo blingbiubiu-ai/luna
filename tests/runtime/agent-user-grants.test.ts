@@ -3,10 +3,11 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Hono } from "hono";
+import { eq } from "drizzle-orm";
 import { DataConnection } from "@/data";
 import * as schema from "@/data/schema";
 import { setLunaHome } from "@/shared";
-import { fixtureScope } from "../helpers/platform-fixtures";
+import { fixtureOwnerUserId, fixtureScope, fixtureUser } from "../helpers/platform-fixtures";
 import { AuthorizationRuleStore } from "@/server/policy/authorization-rule-store";
 import { createUsersRoutes } from "@/server/routes/users";
 import { createGroupsRoutes } from "@/server/routes/groups";
@@ -25,7 +26,7 @@ afterEach(() => { connection.close(); rmSync(home, { recursive: true, force: tru
 /** An Agent owner who is not a platform administrator. */
 function app(actor: string) {
   return new Hono().use("*", async (c, next) => {
-    (c as any).set("dashboardAuthSession", { authenticated: true, user: { id: actor, name: actor, provider: "test" } });
+    (c as any).set("dashboardAuthSession", { authenticated: true, account: { id: actor, name: actor, provider: "test" } });
     (c as any).set("lunaRequestAuthKind", "dashboard-cookie"); (c as any).set("lunaAuthorizationDb", connection.db); await next();
   }).route("/users", createUsersRoutes({ db: connection.db })).route("/groups", createGroupsRoutes({ db: connection.db })).route("/operations", createOperationsRoutes({ db: connection.db }));
 }
@@ -38,23 +39,28 @@ test("an Agent owner grants and revokes a user's permissions on its own Agent, n
   expect(ops.operations.map(o => o.id)).not.toContain("system.admin");
   expect((await app("bob").request(`/operations${scope}`)).status).toBe(403);
 
-  // Only users in the Agent's directory can be granted or added to groups by a non-admin owner:
-  // bob is a foreign user until he actually belongs to alice's Agent directory.
-  expect((await app("alice").request(`/users/bob/authorization-rules/batch${scope}`, { method: "POST", headers: json,
+  // Only users of the Agent can be granted or added to groups by its owner:
+  // bob's own user lives in bob's Agent and stays foreign to alice's.
+  const foreign = fixtureOwnerUserId("bob");
+  expect((await app("alice").request(`/users/${foreign}/authorization-rules/batch${scope}`, { method: "POST", headers: json,
     body: JSON.stringify({ items: [{ target: "agent.root", effect: "allow" }] }) })).status).toBe(404);
   const now = new Date().toISOString();
   connection.db.insert(schema.groups).values({ id: "ops", agentId: alice.agentId, slug: "ops", displayName: "Ops", createdAt: now, updatedAt: now }).run();
-  expect((await app("alice").request("/users/bob/group-memberships", { method: "POST", headers: json,
+  expect((await app("alice").request(`/users/${foreign}/group-memberships`, { method: "POST", headers: json,
     body: JSON.stringify({ groupId: "ops", role: "member" }) })).status).toBe(404);
   expect((await app("alice").request("/groups/ops/members", { method: "POST", headers: json,
-    body: JSON.stringify({ userId: "bob", role: "member" }) })).status).toBe(404);
+    body: JSON.stringify({ userId: foreign, role: "member" }) })).status).toBe(404);
+  expect(() => connection.db.insert(schema.groupMemberships).values({ id: "ops-foreign", groupId: "ops", userId: foreign, createdAt: now, updatedAt: now }).run())
+    .toThrow("user_agent_mismatch");
+  // bob as he appears inside alice's Agent is a user of that Agent.
+  fixtureUser(connection.db, alice.agentId, "bob");
   connection.db.insert(schema.groupMemberships).values({ id: "ops-bob", groupId: "ops", userId: "bob", createdAt: now, updatedAt: now }).run();
   const granted = await app("alice").request(`/users/bob/authorization-rules/batch${scope}`, { method: "POST", headers: json,
     body: JSON.stringify({ items: [{ target: "agent.root", effect: "allow" }] }) });
   expect(granted.status).toBe(200);
   const { grants } = await granted.json() as { grants: { id: string }[] };
-  const profile = await (await app("alice").request(`/users/bob${scope}`)).json() as { directGrants: { target: string }[]; canManageUsers: boolean; canDeleteUsers: boolean };
-  expect(profile).toMatchObject({ canManageUsers: true, canDeleteUsers: false, directGrants: [expect.objectContaining({ target: "agent.root" })] });
+  const profile = await (await app("alice").request(`/users/bob${scope}`)).json() as { directGrants: { target: string }[]; canManageUsers: boolean; isOwner: boolean };
+  expect(profile).toMatchObject({ canManageUsers: true, isOwner: false, directGrants: [expect.objectContaining({ target: "agent.root" })] });
   expect(new ShadowRootAccessStore(connection.db).trusted(alice, "bob")).toBe(true);
   expect(new AuthorizationRuleStore(connection.db, { kind: "platform" }).listGrants({ subjectType: "user", subjectId: "bob" })).toEqual([]);
 
@@ -67,6 +73,10 @@ test("an Agent owner grants and revokes a user's permissions on its own Agent, n
 
   expect((await app("alice").request(`/users/bob/authorization-rules/${grants[0]!.id}${scope}`, { method: "DELETE" })).status).toBe(200);
   expect(new ShadowRootAccessStore(connection.db).trusted(alice, "bob")).toBe(false);
-  // Deleting a platform account still needs a platform administrator.
-  expect((await app("alice").request("/users/bob", { method: "DELETE" })).status).toBe(403);
+  // Removing bob takes him off alice's Agent only; his platform account and his own Agent are untouched.
+  expect((await app("bob").request(`/users/bob${scope}`, { method: "DELETE" })).status).toBe(403);
+  expect((await app("alice").request(`/users/bob${scope}`, { method: "DELETE" })).status).toBe(200);
+  expect(connection.db.select().from(schema.users).where(eq(schema.users.id, "bob")).get()?.status).toBe("removed");
+  expect(connection.db.select().from(schema.users).where(eq(schema.users.id, foreign)).get()?.status).toBe("active");
+  expect(connection.db.select().from(schema.accounts).where(eq(schema.accounts.id, "bob")).get()?.status).toBe("active");
 });

@@ -59,7 +59,7 @@ export class TaskCommandService {
     if (target.id !== sessionId) for (const messageId of sourceMessageIds)
       new SessionTimelineStore(db).appendReference({sessionId: target.id, messageId});
     const identity = requestedIdentityFromInbound(inbound) ?? {provider: "local", externalUserId: actorUserId, canonicalUserId: actorUserId};
-    const creatorUserId = canonicalUserIdForRequestedIdentity(db, identity) ?? actorUserId;
+    const creatorUserId = canonicalUserIdForRequestedIdentity(db, scope.agentId, identity) ?? actorUserId;
     const sourceMessageId = sourceMessageIds.at(-1);
     const entry = sourceMessageId ? db.select().from(sessionTimelineEntries).where(and(eq(sessionTimelineEntries.sessionId, sessionId), eq(sessionTimelineEntries.messageId, sourceMessageId))).get() : undefined;
     if (request.kind === "task.create") {

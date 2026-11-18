@@ -4,7 +4,7 @@ import { isDeepStrictEqual } from "node:util";
 import { and, eq, inArray } from "drizzle-orm";
 import type { DrizzleDB } from "@/data";
 import { runnerOperations, sessions, users } from "@/data/schema";
-import type { LunaAccessTokenClaims } from "@/server/auth/access-token-service";
+import { runnerActorUserId, type LunaAccessTokenClaims } from "@/server/auth/access-token-service";
 import { GatewayError } from "@/server/gateway-error";
 import { SessionDispatcher } from "@/sessions/session-dispatcher";
 import { ThreadCommandService } from "@/sessions/thread-command-service";
@@ -62,11 +62,11 @@ export class RunnerOperationService {
       const availableIds = input.type === "user_messages" ? input.messages.map(row => row.messageId) : [];
       const selectedIds = "sourceMessageIds" in payload && payload.sourceMessageIds ? payload.sourceMessageIds : availableIds;
       if (selectedIds.some(id => !availableIds.includes(id))) throw new GatewayError("invalid_source", "Source messages must belong to the current invocation", 403);
-      const context: OperationContext = {sessionId, originId, actorUserId: claims!.actorUserId, sourceMessageIds: [...new Set(selectedIds)],
+      const context: OperationContext = {sessionId, originId, actorUserId: runnerActorUserId(claims!), sourceMessageIds: [...new Set(selectedIds)],
         inbound: input.type === "user_messages" ? (input.messages.find(row => row.messageId === selectedIds.at(-1))?.rawMessage ?? input.latestMessage) : {
           id: session.root_message_key ?? `trigger:${input.triggerId}`,
           channel: {type: session.channel_type, id: session.channel_id}, surface: {externalId: session.group_id ?? session.channel_id, kind: "unknown"},
-          sender: {kind: "user", externalId: claims!.actorUserId, requesterIdentity: {provider: "local", externalUserId: claims!.actorUserId, canonicalUserId: claims!.actorUserId}},
+          sender: {kind: "user", externalId: runnerActorUserId(claims!), requesterIdentity: {provider: "local", externalUserId: runnerActorUserId(claims!), canonicalUserId: runnerActorUserId(claims!)}},
           text: input.instruction, mentions: [], addressing: {addressedToBot: true, reason: "p2p"},
           ...(session.thread_key ? {thread: {externalId: session.thread_key, ...(session.root_message_key ? {rootMessageExternalId: session.root_message_key} : {})}} : {})}};
       const now = Date.now();
@@ -79,7 +79,7 @@ export class RunnerOperationService {
   get(claims: LunaAccessTokenClaims | undefined, id: string) {
     const active = this.active(claims);
     const row = this.db.select().from(runnerOperations).where(eq(runnerOperations.id, id)).get();
-    if (!row || row.sessionId !== active.input.context.sessionId || row.context.actorUserId !== claims!.actorUserId)
+    if (!row || row.sessionId !== active.input.context.sessionId || row.context.actorUserId !== runnerActorUserId(claims!))
       throw new GatewayError("operation_not_found", "Operation not found", 404);
     return this.receipt(row);
   }

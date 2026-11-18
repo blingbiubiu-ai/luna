@@ -28,7 +28,7 @@ beforeEach(() => {
 afterEach(() => { restore(); connection.close(); rmSync(home, { recursive: true, force: true }); });
 
 const app = (actor: string) => new Hono().use("*", async (c, next) => {
-  (c as any).set("dashboardAuthSession", { authenticated: true, user: { id: actor, name: actor, provider: "test" } });
+  (c as any).set("dashboardAuthSession", { authenticated: true, account: { id: actor, name: actor, provider: "test" } });
   (c as any).set("lunaRequestAuthKind", "dashboard-cookie"); (c as any).set("lunaAuthorizationDb", connection.db); await next();
 }).route("/runtime", runtimeRoutes);
 const channels = async (actor: string, query = "") => {

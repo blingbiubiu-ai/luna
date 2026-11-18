@@ -1,5 +1,5 @@
 import {AgentError, AgentStore} from "@/agents/agent-store";
-import {dashboardRequesterUserIdFromContext} from "@/server/auth";
+import {requesterAccountIdFromContext} from "@/server/auth";
 import { loadDashboardUserRows } from "@/dashboard-api/user-display";
 import { grantInputFromBody } from "./authorization-rule-input";
 import { Hono, type Context } from "hono";
@@ -25,7 +25,7 @@ import {
   type AuthorizationRuleRecord,
 } from "../policy/authorization-rule-store";
 import { isGuardResponse, requireDashboardOnly } from "../auth/guards";
-import { requireAgentDirectoryUser } from "./users";
+import { requireAgentUser } from "./users";
 import { getKernel } from "./kernel";
 
 export interface GroupsRouteOptions {
@@ -86,7 +86,7 @@ export function createGroupsRoutes(options: GroupsRouteOptions = {}) {
       const description = stringValue(body.description);
       const avatarUrl = stringValue(body.avatarUrl);
       const agentId = requiredString(body.agentId, "agentId");
-      new AgentStore(db).requireOwner(dashboardRequesterUserIdFromContext(c)!, agentId);
+      new AgentStore(db).requireOwner(requesterAccountIdFromContext(c)!, agentId);
       const group = new GroupStore(db).createGroup({
         agentId,
         slug: requiredString(body.slug, "slug"),
@@ -136,10 +136,9 @@ export function createGroupsRoutes(options: GroupsRouteOptions = {}) {
       const db = getDb();
       const body = await readBody(c.req.raw);
       const group = requireOwnedGroup(c, db);
-      const requesterId = dashboardRequesterUserIdFromContext(c)!;
-      const agent = new AgentStore(db).requireOwner(requesterId, group.agentId);
+      const agent = new AgentStore(db).requireOwner(requesterAccountIdFromContext(c)!, group.agentId);
       const userId = requiredString(body.userId, "userId");
-      requireAgentDirectoryUser(db, agent.id, agent.ownerUserId, requesterId, userId);
+      requireAgentUser(db, agent.id, userId);
       const membership = new GroupStore(db).addMember({
         groupId: group.id,
         userId,
@@ -217,12 +216,12 @@ export const groupsRoutes = createGroupsRoutes();
 function requireGroupDirectoryAgent(c: Context, db: DrizzleDB) {
   const agentId = c.req.query("agentId")?.trim();
   if (!agentId) throw new AgentError("agent_scope_required", 400);
-  return new AgentStore(db).requireOwner(dashboardRequesterUserIdFromContext(c)!, agentId);
+  return new AgentStore(db).requireOwner(requesterAccountIdFromContext(c)!, agentId);
 }
 
 function requireOwnedGroup(c: Context, db: DrizzleDB) {
   const group = new GroupStore(db).requireGroup(c.req.param("id")!);
-  new AgentStore(db).requireOwner(dashboardRequesterUserIdFromContext(c)!, group.agentId);
+  new AgentStore(db).requireOwner(requesterAccountIdFromContext(c)!, group.agentId);
   return group;
 }
 

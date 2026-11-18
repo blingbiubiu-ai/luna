@@ -132,7 +132,7 @@ export class MainRunner {
         },
       ).runnerContext ?? input.runnerContext;
     }
-    const serviceEnv = buildMainRunnerServiceEnv({...input,runnerContext:compatibleContext},this._options,execution?.snapshot);
+    const serviceEnv = buildMainRunnerServiceEnv({...input,runnerContext:compatibleContext},this._options,scope.agentId,execution?.snapshot);
     const invocationStore = this._options.serviceAuthDb ? new InvocationStore(this._options.serviceAuthDb) : undefined;
     const invocation = input.invocationId ? invocationStore?.find(input.invocationId) : undefined;
     let runnerContext = compatibleContext;
@@ -278,6 +278,7 @@ function buildMainRunnerServiceEnv(
     MainRunnerOptions,
     "serviceAuthDb" | "accessTokenSigningSecret" | "serviceAuthNow"
   >,
+  agentId: string,
   agentConfig?: AgentExecutionSnapshot,
 ): Record<string, string> {
   const taskId =
@@ -290,6 +291,7 @@ function buildMainRunnerServiceEnv(
       : undefined;
   return buildLunaServiceRunnerEnv({
     runnerKind: "main",
+    agentId,
     ...(agentConfig ? {agentConfig} : {}),
     ...(input.invocationId ? { invocationId: input.invocationId } : {}),
     runnerContextId: input.runnerContext.id,

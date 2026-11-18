@@ -15,7 +15,7 @@ import {SessionTimelineStore} from "@/sessions/session-timeline-store";
 import {SessionTurnStore} from "@/sessions/session-turn-store";
 import {ContextPackStore} from "@/context/context-pack-store";
 import {maintainMemory, memoryOriginOfTrigger, prepareMemoryConsolidationRun, scheduleMemoryConsolidations, scheduleMemoryReflections} from "@/agents/agent-memory-maintenance";
-import {fixtureNamedSession} from "../helpers/platform-fixtures";
+import {fixtureNamedSession, fixtureUser} from "../helpers/platform-fixtures";
 
 const MIN = 60_000, IDLE = 30 * MIN, NOW = 1_800_000_000_000;
 let home: string, db: DataConnection<typeof schema>, commands: SessionCommandService, sequence = 0;
@@ -23,12 +23,13 @@ let scope: ReturnType<typeof fixtureNamedSession>;
 beforeEach(() => {
   home = mkdtempSync(join(tmpdir(), "luna-memory-maintenance-")); setLunaHome(home); db = new DataConnection(schema);
   scope = fixtureNamedSession(db.db, "session", "alice");
+  for (const id of ["lisi", "zhangsan", "bob", "carol", "wangwu", "wangfang"]) fixtureUser(db.db, scope.agentId, id);
   commands = new SessionCommandService({db: db.db, channelFor: () => undefined});
 });
 afterEach(() => { db.close(); rmSync(home, {recursive: true, force: true}); });
 
 function human(id: string) {
-  db.db.insert(schema.users).values({id, kind: "human", displayName: id, status: "active", createdAt: "now", updatedAt: "now"}).onConflictDoNothing().run();
+  fixtureUser(db.db, scope.agentId, id);
 }
 /** A message in the session, `agoMs` before NOW. */
 function say(senderUserId: string, agoMs: number, role: "user" | "assistant" = "user", sessionId = "session") {
@@ -52,9 +53,9 @@ const schedule = (now = NOW) => scheduleMemoryReflections(db.db, commands, IDLE,
 const command = (id: string) => db.db.select().from(schema.sessionCommands).where(eq(schema.sessionCommands.id, id)).get()!;
 
 test("an idle session with unreflected human messages gets exactly one silent reflection turn", () => {
-  ask("alice", 40 * MIN);
+  ask("user:alice", 40 * MIN);
   const [id] = schedule();
-  expect(command(id!)).toMatchObject({kind: "session.invoke", sessionId: "session", sourceSessionId: "session", actorUserId: "alice", status: "pending"});
+  expect(command(id!)).toMatchObject({kind: "session.invoke", sessionId: "session", sourceSessionId: "session", actorUserId: "user:alice", status: "pending"});
   expect(String(command(id!).payload.content)).toContain("LUNA_NOTHING_TO_SEND");
   expect(memoryOriginOfTrigger(db.db, id!)).toBe("reflection");
   expect(memoryOriginOfTrigger(db.db, "unrelated")).toBe("inline");
@@ -64,7 +65,7 @@ test("an idle session with unreflected human messages gets exactly one silent re
 });
 
 test("a session that is still active, or only has Agent replies, is left alone until it goes quiet", () => {
-  ask("alice", 10 * MIN);
+  ask("user:alice", 10 * MIN);
   expect(schedule()).toEqual([]);
   expect(schedule(NOW + 25 * MIN)).toHaveLength(1);
   const reply = new MessageStore(db.db).appendOnce({sessionId: "session", channelMessageKey: "reply", role: "assistant",
@@ -76,24 +77,24 @@ test("a session that is still active, or only has Agent replies, is left alone u
 });
 
 test("new human messages after a reflection are reflected on again", () => {
-  ask("alice", 40 * MIN);
+  ask("user:alice", 40 * MIN);
   expect(schedule()).toHaveLength(1);
   db.db.update(schema.sessionCommands).set({status: "completed"}).run();
-  ask("alice", -5 * MIN);
+  ask("user:alice", -5 * MIN);
   expect(schedule(NOW + 10 * MIN)).toEqual([]);
   expect(schedule(NOW + 40 * MIN)).toHaveLength(1);
 });
 
 test("reflection runs as the owner only when nobody else spoke, otherwise as the latest other speaker", () => {
   human("bob"); human("carol");
-  ask("bob", 50 * MIN); ask("carol", 45 * MIN); ask("alice", 40 * MIN);
+  ask("bob", 50 * MIN); ask("carol", 45 * MIN); ask("user:alice", 40 * MIN);
   expect(command(schedule()[0]!).actorUserId).toBe("carol");
 });
 
 test("history from before the lookback window, inactive sessions and disabled reflection are skipped", () => {
-  ask("alice", 25 * 60 * MIN);
+  ask("user:alice", 25 * 60 * MIN);
   expect(schedule()).toEqual([]);
-  ask("alice", 40 * MIN);
+  ask("user:alice", 40 * MIN);
   expect(scheduleMemoryReflections(db.db, commands, 0, NOW)).toEqual([]);
   db.db.update(schema.sessions).set({status: "archived"}).where(eq(schema.sessions.id, "session")).run();
   expect(schedule()).toEqual([]);
@@ -105,13 +106,13 @@ test("only messages a completed Main Runner turn took in, as input or as context
   say("bob", 50 * MIN); say("carol", 45 * MIN);
   expect(schedule()).toEqual([]);
   // A turn still running, or one that failed, does not count yet.
-  const pending = say("alice", 40 * MIN);
+  const pending = say("user:alice", 40 * MIN);
   const running = turn([pending], {status: "running"});
   expect(schedule()).toEqual([]);
   db.db.update(schema.sessionTurns).set({status: "failed"}).where(eq(schema.sessionTurns.id, running)).run();
   expect(schedule()).toEqual([]);
   // Chatter later taken in as context counts, and its speaker is who the reflection runs as.
-  const chatter = say("carol", 38 * MIN), addressed = say("alice", 35 * MIN);
+  const chatter = say("carol", 38 * MIN), addressed = say("user:alice", 35 * MIN);
   turn([addressed, chatter], {role: "context"});
   const [id] = schedule();
   expect(command(id!).actorUserId).toBe("carol");
@@ -122,7 +123,7 @@ test("a Service-queued turn counts its context, except a memory maintenance turn
   human("bob");
   const chatter = say("bob", 40 * MIN);
   const contextOf = (originId: string) => {
-    const queued = commands.accept({userId: "alice", sourceSessionId: "session", originId}, "session", "session.invoke", originId, {content: "do it", purpose: "notification"});
+    const queued = commands.accept({userId: "user:alice", sourceSessionId: "session", originId}, "session", "session.invoke", originId, {content: "do it", purpose: "notification"});
     const packs = new ContextPackStore(db.db);
     const pack = packs.createPack({ownerType: "session", ownerId: "session", kind: "turn_delta", selectionStrategy: "trigger_recent_context", createdForInvocationId: queued.id});
     packs.addItems(pack.id, [{itemKind: "message", itemId: chatter, sourceSessionId: "session", sourceMessageId: chatter, role: "delta_context", reason: "trigger_recent_context"}]);
@@ -136,7 +137,7 @@ test("a Service-queued turn counts its context, except a memory maintenance turn
 });
 
 test("a session with queued or running work waits for the next pass", () => {
-  const id = ask("alice", 40 * MIN);
+  const id = ask("user:alice", 40 * MIN);
   const entry = db.db.select().from(schema.sessionTimelineEntries).where(eq(schema.sessionTimelineEntries.messageId, id)).get()!;
   db.db.insert(schema.sessionInbox).values({id: "inbox", session_id: "session", entry_id: `${entry.id}-next`, message_id: id, received_at: NOW, status: "pending", created_at: NOW, updated_at: NOW}).run();
   expect(schedule()).toEqual([]);
@@ -149,7 +150,7 @@ test("a session with queued or running work waits for the next pass", () => {
 
 const DAY = 24 * 60 * MIN;
 const consolidate = (now = NOW) => scheduleMemoryConsolidations(db.db, commands, DAY, now);
-const writer = (kind: MemoryWriter["kind"] = "inline"): MemoryWriter => ({agentId: scope.agentId, kind, trusted: true, userId: "alice", shadowId: scope.shadowId});
+const writer = (kind: MemoryWriter["kind"] = "inline"): MemoryWriter => ({agentId: scope.agentId, kind, trusted: true, userId: "user:alice", shadowId: scope.shadowId});
 const note = {type: "project" as const, title: "发布冻结", description: "11-20 前冻结发布", body: "不合并功能分支"};
 /** Marks every queued turn as ended with `status`. */
 const finish = (status = "completed") => db.db.update(schema.sessionCommands).set({status}).run();
@@ -160,9 +161,9 @@ test("consolidation runs once per interval for an Agent whose memory changed, in
   const entry = store.add(writer(), note);
   const [id] = consolidate();
   const first = command(id!);
-  expect(first).toMatchObject({kind: "session.invoke", actorUserId: "alice", status: "pending"});
+  expect(first).toMatchObject({kind: "session.invoke", actorUserId: "user:alice", status: "pending"});
   expect(first.sessionId).not.toBe("session");
-  expect(db.db.select().from(schema.sessions).where(eq(schema.sessions.id, first.sessionId)).get()).toMatchObject({title: "记忆整理", channel_type: "dashboard", shadow_id: scope.shadowId, created_by_user_id: "alice"});
+  expect(db.db.select().from(schema.sessions).where(eq(schema.sessions.id, first.sessionId)).get()).toMatchObject({title: "记忆整理", channel_type: "dashboard", shadow_id: scope.shadowId, created_by_user_id: "user:alice"});
   expect(String(first.payload.content)).toContain(`1. [${entry.id}] (project, trusted, origin inline, revision 1`);
   expect(String(first.payload.content)).toContain(`Today is ${new Date(NOW).toISOString().slice(0, 10)}`);
   expect(memoryOriginOfTrigger(db.db, id!)).toBe("consolidation");
@@ -181,10 +182,10 @@ test("consolidation runs once per interval for an Agent whose memory changed, in
 
 test("only a consolidation turn of the Agent owner sees every entry", () => {
   human("bob");
-  const invocation = {...scope, actorUserId: "alice", sessionId: "session", taskId: null, runnerContextId: "context"};
+  const invocation = {...scope, actorUserId: "user:alice", sessionId: "session", taskId: null, runnerContextId: "context"};
   expect(memoryAccess(db.db, invocation, "consolidation").viewer).toEqual({agentId: scope.agentId, all: true});
   expect(memoryAccess(db.db, invocation, "consolidation").writer()).toMatchObject({kind: "consolidation", trusted: true});
-  expect(memoryAccess(db.db, invocation, "reflection").viewer).toMatchObject({shadowId: scope.shadowId, participants: ["alice"]});
+  expect(memoryAccess(db.db, invocation, "reflection").viewer).toMatchObject({shadowId: scope.shadowId, participants: ["user:alice"]});
   expect(memoryAccess(db.db, {...invocation, actorUserId: "bob"}, "consolidation").viewer).toMatchObject({shadowId: scope.shadowId});
 });
 
@@ -196,7 +197,7 @@ test("a consolidation turn is handed only what changed since the last one, each 
   expect(first).toContain(`[${old.id}]`);
   expect(first).toContain(`[${unrelated.id}]`);
   expect(first).not.toContain("similar:");
-  const duplicate = store.add({...writer(), trusted: false, userId: "alice"}, {type: "project", title: "周报的格式", description: "周报不要用表格 改用列表", body: "b", expiresAt: NOW + 30 * DAY});
+  const duplicate = store.add({...writer(), trusted: false, userId: "user:alice"}, {type: "project", title: "周报的格式", description: "周报不要用表格 改用列表", body: "b", expiresAt: NOW + 30 * DAY});
   store.update(writer(), {agentId: scope.agentId, all: true}, duplicate.id, {expectedRevision: 1, type: "feedback"});
   finish();
   const second = String(command(consolidate(NOW + 2 * DAY)[0]!).payload.content);
@@ -292,11 +293,11 @@ test("consolidation shows a duplicate filed under another type and restated insi
 
 
 test("reflection asks for one episode, and maintenance fades old episodes", () => {
-  ask("alice", 40 * MIN);
+  ask("user:alice", 40 * MIN);
   const text = String(command(schedule()[0]!).payload.content);
   expect(text).toContain("luna memory add --type episode");
   const store = new AgentMemoryStore(db.db);
-  const old = store.add(writer(), {type: "episode", title: "旧事", description: "d", body: "b", occurredAt: NOW - 100 * DAY}, {participants: ["alice"]});
+  const old = store.add(writer(), {type: "episode", title: "旧事", description: "d", body: "b", occurredAt: NOW - 100 * DAY}, {participants: ["user:alice"]});
   db.db.update(schema.agentMemories).set({lastUsedAt: NOW - 100 * DAY}).run();
   maintainMemory(db.db, commands, {reflectionIdleMs: 0, consolidationIntervalMs: 0, forgetUnusedMs: 0, episodeRetentionMs: 90 * DAY}, NOW);
   expect(store.page(scope.agentId, {limit: 200}).entries.find(row => row.id === old.id)!.status).toBe("archived");
@@ -305,19 +306,19 @@ test("reflection asks for one episode, and maintenance fades old episodes", () =
 test("a Work session is reflected on too, and its reflection runs with the Work Runner, not Main", async () => {
   const {createSessionTriggerExecutor} = await import("@/sessions/trigger-executor");
   db.db.update(schema.sessions).set({kind: "work"}).where(eq(schema.sessions.id, "session")).run();
-  ask("alice", 40 * MIN);
+  ask("user:alice", 40 * MIN);
   const [id] = schedule();
   expect(memoryOriginOfTrigger(db.db, id!)).toBe("reflection");
   const calls: {sessionId: string; actorUserId: string; instruction: string}[] = [];
   const execute = createSessionTriggerExecutor(db.db, () => { throw new Error("Main must not run a Work session's reflection"); }, () => "codex",
     async (session, turn) => { calls.push({sessionId: session.id, actorUserId: turn.actorUserId, instruction: turn.instruction}); });
   await execute(command(id!), new AbortController().signal);
-  expect(calls).toMatchObject([{sessionId: "session", actorUserId: "alice"}]);
+  expect(calls).toMatchObject([{sessionId: "session", actorUserId: "user:alice"}]);
   expect(calls[0]!.instruction).toContain("luna memory add --type episode");
   expect(db.db.select().from(schema.sessionTurns).where(eq(schema.sessionTurns.id, id!)).get()).toMatchObject({status: "completed", reason: "session_trigger"});
   // A failing maintenance turn is recorded as failed and reported to the command worker.
   db.db.update(schema.sessionCommands).set({status: "completed"}).where(eq(schema.sessionCommands.id, id!)).run();
-  ask("alice", -5 * MIN);
+  ask("user:alice", -5 * MIN);
   const [next] = schedule(NOW + 60 * MIN);
   const failing = createSessionTriggerExecutor(db.db, () => { throw new Error("unused"); }, () => "codex", async () => { throw new Error("model unavailable"); });
   await expect(failing(command(next!), new AbortController().signal)).rejects.toThrow("model unavailable");
@@ -326,7 +327,7 @@ test("a Work session is reflected on too, and its reflection runs with the Work 
 
 
 
-const fixtureTaskResult = (id: string, agoMs: number, creator = "alice") => {
+const fixtureTaskResult = (id: string, agoMs: number, creator = "user:alice") => {
   db.db.insert(schema.tasks).values({id: `task-${id}`, agent_id: scope.agentId, shadow_id: scope.shadowId, type: "task", title: "统计质数", summary: "1 到 100",
     status: "completed", creator_user_id: creator, primary_session_id: "session", created_at: 1, updated_at: 1, last_activity_at: 1}).onConflictDoNothing().run();
   db.db.insert(schema.sessionTriggers).values({id: `trigger-${id}`, sessionId: "session", kind: "task_result", dedupeKey: `dedupe-${id}`,
@@ -350,11 +351,11 @@ test("a Task result handled in the session starts a reflection, as whoever creat
 
 test("reflection is told the conversation's latest episode so it can extend it", () => {
   const store = new AgentMemoryStore(db.db);
-  ask("alice", 40 * MIN);
+  ask("user:alice", 40 * MIN);
   const first = schedule()[0]!;
   expect(String(command(first).payload.content)).not.toContain("latest episode");
   db.db.update(schema.sessionCommands).set({status: "completed"}).where(eq(schema.sessionCommands.id, first)).run();
-  const started = store.add({...writer(), kind: "reflection", sessionId: "session"}, {type: "episode", title: "发起质数统计", description: "用户让我统计 1 到 100 的质数，任务已发起", body: "b", occurredAt: NOW - 30 * MIN}, {participants: ["alice"]});
+  const started = store.add({...writer(), kind: "reflection", sessionId: "session"}, {type: "episode", title: "发起质数统计", description: "用户让我统计 1 到 100 的质数，任务已发起", body: "b", occurredAt: NOW - 30 * MIN}, {participants: ["user:alice"]});
   fixtureTaskResult("a", -5 * MIN);
   const text = String(command(schedule(NOW + 40 * MIN)[0]!).payload.content);
   expect(text).toContain(`This conversation's latest episode is [${started.id}] (revision 1) 发起质数统计: 用户让我统计 1 到 100 的质数，任务已发起`);
@@ -364,10 +365,10 @@ test("reflection is told the conversation's latest episode so it can extend it",
 
 test("a reflection extending an episode dates it to now and adds who took part", () => {
   const store = new AgentMemoryStore(db.db), all = {agentId: scope.agentId, all: true as const};
-  const episode = store.add({...writer(), kind: "reflection"}, {type: "episode", title: "发起统计", description: "d", body: "b", occurredAt: NOW - DAY}, {participants: ["alice"]});
-  const extended = store.update({...writer(), kind: "reflection"}, all, episode.id, {expectedRevision: 1, body: "上午发起，下午完成，共 25 个"}, {participants: ["alice", "bob"]});
+  const episode = store.add({...writer(), kind: "reflection"}, {type: "episode", title: "发起统计", description: "d", body: "b", occurredAt: NOW - DAY}, {participants: ["user:alice"]});
+  const extended = store.update({...writer(), kind: "reflection"}, all, episode.id, {expectedRevision: 1, body: "上午发起，下午完成，共 25 个"}, {participants: ["user:alice", "bob"]});
   expect(Math.abs(extended.occurredAt! - Date.now())).toBeLessThan(5000);
-  expect(extended.participants).toEqual(["alice", "bob"]);
+  expect(extended.participants).toEqual(["user:alice", "bob"]);
   // An owner's edit keeps the date; an explicit date wins.
   expect(store.update({...writer(), kind: "owner"}, all, episode.id, {expectedRevision: 2, body: "改正文"}).occurredAt).toBe(extended.occurredAt);
   expect(store.update({...writer(), kind: "reflection"}, all, episode.id, {expectedRevision: 3, occurredAt: NOW - 2 * DAY}).occurredAt).toBe(NOW - 2 * DAY);
@@ -378,8 +379,8 @@ test("a reflection extending an episode dates it to now and adds who took part",
 
 test("participants leave out the Agent's own reply identity", async () => {
   const {memoryParticipants} = await import("@/agents/agent-memory-access");
-  ask("alice", 60 * MIN);
+  ask("user:alice", 60 * MIN);
   const bot = db.db.select().from(schema.sessions).where(eq(schema.sessions.id, "session")).get()!.bot_user_id!;
   say(bot, 59 * MIN, "assistant");
-  expect(memoryParticipants(db.db, {actorUserId: "alice", sessionId: "session", taskId: null})).toEqual(["alice"]);
+  expect(memoryParticipants(db.db, {actorUserId: "user:alice", sessionId: "session", taskId: null})).toEqual(["user:alice"]);
 });

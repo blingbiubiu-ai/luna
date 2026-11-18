@@ -17,7 +17,7 @@ import {
 import {
   isReservedSystemUserId,
   LUNA_INTERNAL_USER_ID,
-  LUNA_SYSTEM_USER_ID,
+  systemUserKind,
   SystemUserStore,
 } from "@/identity/system-user-store";
 import { inferUserKindForChannelIdentity } from "@/identity/identity-directory";
@@ -396,8 +396,8 @@ export class MessageStore {
   private _appendMessageInTransaction(input: AppendMessageInput): AppendMessageResult {
     const session=this._db.select().from(sessions).where(eq(sessions.id,input.sessionId)).get();
     if(!session||session.status!=="active")throw new Error("message_session_scope_required");
-    this._upsertDirectory(input);
-    this._upsertMentionTargets(input);
+    this._upsertDirectory(input, session.agent_id);
+    this._upsertMentionTargets(input, session.agent_id);
 
     const messageId = uuid();
     const channel = this._resolveMessageChannel(input);
@@ -407,7 +407,7 @@ export class MessageStore {
     const messageKind = input.messageKind ?? defaultMessageKind(input.role);
     const normalizedContent = normalizeMessageContent(input.content);
     const rawPayload = rawPayloadFromInput(input);
-    const sender = this._resolvedSender(input, channel, messageKind);
+    const sender = this._resolvedSender(input, channel, messageKind, session.agent_id);
     const values = {
       id: messageId,
       agentId:session.agent_id,shadowId:session.shadow_id,bindingId:session.binding_id,
@@ -611,7 +611,7 @@ export class MessageStore {
     }
   }
 
-  private _upsertMentionTargets(input: AppendMessageInput): void {
+  private _upsertMentionTargets(input: AppendMessageInput, agentId: string): void {
     if (
       input.mentions === undefined ||
       input.mentions.length === 0 ||
@@ -626,11 +626,12 @@ export class MessageStore {
       this._directory.ensureMentionTarget({
         channel: input.channel,
         mention,
+        agentId,
       });
     }
   }
 
-  private _upsertDirectory(input: AppendMessageInput): void {
+  private _upsertDirectory(input: AppendMessageInput, agentId: string): void {
     const channel = input.channel ?? input.inbound?.channel;
     if (channel === undefined) {
       return;
@@ -643,6 +644,7 @@ export class MessageStore {
       this._directory.upsertIdentity({
         channel,
         identity: input.sender,
+        agentId,
       });
     } else if (
       input.sender === undefined &&
@@ -652,12 +654,14 @@ export class MessageStore {
       this._directory.upsertIdentity({
         channel,
         identity: input.inbound.sender,
+        agentId,
       });
     }
     for (const identity of input.relatedIdentities ?? []) {
       this._directory.upsertIdentity({
         channel,
         identity,
+        agentId,
       });
     }
     const surface = input.surface ?? input.inbound?.surface;
@@ -728,6 +732,7 @@ export class MessageStore {
     input: AppendMessageInput,
     channel: ChannelFingerprint,
     messageKind: SessionMessageKind,
+    agentId: string,
   ): {
     readonly senderUserId: string;
     readonly senderIdentityId: string | null;
@@ -736,11 +741,11 @@ export class MessageStore {
     if (explicitSenderUserId !== undefined) {
       if (isReservedSystemUserId(explicitSenderUserId)) {
         return {
-          senderUserId: this._materializeSystemSender(explicitSenderUserId),
+          senderUserId: this._materializeSystemSender(explicitSenderUserId, agentId),
           senderIdentityId: null,
         };
       }
-      this._ensureCanonicalUserRecord(explicitSenderUserId, input, messageKind);
+      this._ensureCanonicalUserRecord(explicitSenderUserId, input, messageKind, agentId);
       return {
         senderUserId: explicitSenderUserId,
         senderIdentityId: this._senderIdentityId(input, channel),
@@ -750,7 +755,7 @@ export class MessageStore {
     const reservedSenderUserId = reservedSystemSenderUserId(messageKind);
     if (reservedSenderUserId !== undefined) {
       return {
-        senderUserId: this._materializeSystemSender(reservedSenderUserId),
+        senderUserId: this._materializeSystemSender(reservedSenderUserId, agentId),
         senderIdentityId: null,
       };
     }
@@ -768,24 +773,23 @@ export class MessageStore {
     );
   }
 
-  private _materializeSystemSender(userId: string): string {
-    if (userId === LUNA_SYSTEM_USER_ID) {
-      return this._systemUsers.requireUserId("system");
-    }
-    return this._systemUsers.requireUserId("internal");
+  private _materializeSystemSender(userId: string, agentId: string): string {
+    return this._systemUsers.requireUserId(systemUserKind(userId), agentId);
   }
 
   private _ensureCanonicalUserRecord(
     userId: string,
     input: AppendMessageInput,
     messageKind: SessionMessageKind,
+    agentId: string,
   ): void {
     const existing = this._db
-      .select({ id: users.id })
+      .select({ id: users.id, agentId: users.agentId })
       .from(users)
       .where(eq(users.id, userId))
       .get();
     if (existing !== undefined) {
+      if (existing.agentId !== agentId) throw new Error("message_sender_agent_mismatch");
       return;
     }
     const now = String(Date.now());
@@ -794,6 +798,7 @@ export class MessageStore {
       .insert(users)
       .values({
         id: userId,
+        agentId,
         kind: canonicalUserKind(sender, input.role, messageKind),
         displayName:
           normalizedDisplayName(sender) ??

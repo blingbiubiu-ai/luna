@@ -1,4 +1,5 @@
 import { artifactizeLocalFileReferencesInValue } from "@/artifacts/local-file-artifactizer";
+import { TaskScopeResolver } from "@/agents/task-scope";
 import { ChannelDirectoryStore } from "@/channels/directory-store";
 import type { NormalizedInboundMessage } from "@/channels/types";
 import type { DrizzleDB } from "@/data";
@@ -25,6 +26,7 @@ export function appendInputFromNormalizedInbound(input: {
   };
   const senderUserId = resolveInboundSenderUserId({
     db: input.db,
+    agentId: new TaskScopeResolver(input.db).session(input.sessionId).agentId,
     message: renderedMessage,
   });
   return {
@@ -61,6 +63,7 @@ export function artifactizeInboundMessageResources(input: {
 }): NormalizedInboundMessage {
   const relatedUserId = canonicalUserIdForRequestedIdentity(
     input.db,
+    new TaskScopeResolver(input.db).session(input.sessionId).agentId,
     requestedIdentityFromInbound(input.message),
   ) ?? input.message.sender.externalId;
   return artifactizeLocalFileReferencesInValue({
@@ -116,17 +119,21 @@ function normalizedMessageStoragePayload(
       };
 }
 
+/** The sender as a user of `agentId`, the Agent whose session or bot received the message. */
 export function resolveInboundSenderUserId(input: {
   readonly db: DrizzleDB;
+  readonly agentId: string;
   readonly message: NormalizedInboundMessage;
 }): string {
   const persistedIdentity = new ChannelDirectoryStore(input.db).upsertIdentity({
     channel: input.message.channel,
     identity: input.message.sender,
+    agentId: input.agentId,
   });
   const requestedIdentity = requestedIdentityFromInbound(input.message);
   const requestedUserId = canonicalUserIdForRequestedIdentity(
     input.db,
+    input.agentId,
     requestedIdentity,
   );
   if (requestedUserId !== undefined) {

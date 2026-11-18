@@ -72,8 +72,7 @@ test.skipIf(process.env.LUNA_PROVIDER_INTEGRATION !== "1")("Real Service transpo
   writeFileSync(join(config.paths.home, ".runner-bin/luna"), '#!/bin/sh\nexec bun /app/luna-cli/cli.js "$@"\n', { mode: 0o755 });
   const serviceFile = join(root, "service/service.sqlite");
   let serviceDb = new Database(serviceFile); let db = drizzle(serviceDb); migrate(db, { migrationsFolder: "src/data/drizzle" });
-  db.insert(users).values({ id: "user", kind: "human", displayName: "Transport test", createdAt: "0", updatedAt: "0" }).run();
-  db.insert(sessions).values({ id: "session", channel_type: "test", channel_id: "test", created_at: 0, updated_at: 0 , ...fixtureSessionOwnership(db,"test","test")}).run();
+  db.insert(sessions).values({ id: "session", channel_type: "test", channel_id: "test", created_at: 0, updated_at: 0 , ...fixtureSessionOwnership(db,"test","test","user")}).run();
   const runtimeDb = openExecutionDatabase(join(root, "runtime/state.sqlite")); const workerDb = openExecutionDatabase(join(root, "worker/state.sqlite"));
   const suffix = contentHash(root).slice(0, 12), workerId = `transport_${suffix}`;
   const image = execFileSync("docker", ["image", "inspect", process.env.LUNA_RUNNER_TEST_IMAGE ?? "luna-runner:latest", "--format", "{{.Id}}"], { encoding: "utf8" }).trim();
@@ -109,8 +108,8 @@ test.skipIf(process.env.LUNA_PROVIDER_INTEGRATION !== "1")("Real Service transpo
       const localRoot = join(root, contextId); mkdirSync(localRoot, { recursive: true }); writeFileSync(join(localRoot, "AGENTS.md"), "Transport integration. Follow the user request.\n");
       db.insert(runnerContexts).values(fixtureRunnerContext(db, { id: contextId, owner_type: "session", owner_id: "session", runner_type: profile.agentType, runner_root_path: localRoot, created_at: 0, updated_at: 0 })).onConflictDoNothing().run();
       db.insert(runnerContextOrigins).values({ contextId, runtimeId: "runtime" }).onConflictDoNothing().run();
-      transport.store.register({ id: invocationId, runnerKind: "work", actorUserId: "user", runnerContextId: contextId, sessionId: "session", taskId: null, taskRunId: null, originId: invocationId, inputSnapshot: { version: 1, input: {} }, contextPackIds: [] });
-      const issued = new AccessTokenService({ db, signingSecret: "transport-test-only" }).issueToken({ userId: "user", name: "transport", source: "runner", role: "runner", runnerKind: "work", sourceRunnerJobId: contextId, sourceSessionId: "session", metadata: { invocationId }, ttlMs: 86400000, now: Date.now() });
+      transport.store.register({ id: invocationId, runnerKind: "work", actorUserId: "user:user", runnerContextId: contextId, sessionId: "session", taskId: null, taskRunId: null, originId: invocationId, inputSnapshot: { version: 1, input: {} }, contextPackIds: [] });
+      const issued = new AccessTokenService({ db, signingSecret: "transport-test-only" }).issueToken({ userId: "user:user", name: "transport", source: "runner", role: "runner", runnerKind: "work", sourceRunnerJobId: contextId, sourceSessionId: "session", metadata: { invocationId }, ttlMs: 86400000, now: Date.now() });
       transport.store.bindToken(invocationId, issued.record.id);
       const marker = `TRANSPORT_${crypto.randomUUID().replaceAll("-", "")}`;
       let text = "", providerSession: string | undefined;
@@ -161,7 +160,7 @@ test.skipIf(process.env.LUNA_PROVIDER_INTEGRATION !== "1")("Real Service transpo
       const main = new MainRunner({ serviceAuthDb: db, accessTokenSigningSecret: "transport-test-only", runnerContextStore: contexts,
         resolveAgentExecution: () => ({ snapshot: profile, runner: createAgentRunnerForConfig(profile, transport) }) });
       const completion = await main.run({ invocationId: mainId, runnerContext: mainContext, signal: AbortSignal.timeout(120000), input: {
-        type: "session_trigger", triggerId: mainId, instruction: "This trigger requires no user-visible reply, task, or other action. Do not call any tools. End with only LUNA_NOTHING_TO_SEND.", requesterUserId: "user", sourceSessionId: "main-session", correlationId: mainId, hops: 0, artifactRefs: [], context: { sessionId: "main-session", candidateOpenTasks: [] },
+        type: "session_trigger", triggerId: mainId, instruction: "This trigger requires no user-visible reply, task, or other action. Do not call any tools. End with only LUNA_NOTHING_TO_SEND.", requesterUserId: "user:user", sourceSessionId: "main-session", correlationId: mainId, hops: 0, artifactRefs: [], context: { sessionId: "main-session", candidateOpenTasks: [] },
       } });
       expect(completion).toEqual({ status: "completed", followupReleased: false });
       const mainInvocation = transport.store.require(mainId);
@@ -201,11 +200,11 @@ test.skipIf(process.env.LUNA_PROVIDER_INTEGRATION !== "1")("Real Service transpo
       commands.start();
       try {
         const sessionStore = new SessionStore(db);
-        const created = sessionStore.createLocalSession("user",fixtureScope(db,"user"));
+        const created = sessionStore.createLocalSession("user:user",fixtureScope(db,"user"));
         db.update(sessions).set({ kind: "work" }).where(eq(sessions.id, created.id)).run();
         const workSession = sessionStore.getById(created.id)!;
         const answer = `WORK_${crypto.randomUUID().replaceAll("-", "")}`;
-        const message = new MessageStore(db).append({ sessionId: workSession.id, senderUserId: "user", role: "user",
+        const message = new MessageStore(db).append({ sessionId: workSession.id, senderUserId: "user:user", role: "user",
           content: [{ type: "text", text: `Send exactly ${answer} to this session using luna messages send --text ${answer} --request-id work-${mode} --purpose answer. Use the shell command bun /app/luna-cli/cli.js messages send if luna is not on PATH. Do not read files or do any other work.` }] });
         const entry = new SessionTimelineStore(db).appendMessage({ sessionId: workSession.id, messageId: message.id });
         const inbox = new SessionInboxStore(db).enqueueOnce({ sessionId: workSession.id, entryId: entry.id, message });
@@ -237,8 +236,8 @@ test.skipIf(process.env.LUNA_PROVIDER_INTEGRATION !== "1")("Real Service transpo
         expect(runtimeDb.query("SELECT 1 FROM runtime_released_jobs WHERE job_id=?").get(workJob.id)).toBeTruthy();
         const taskId = `task-${mode}`;
         const reportText = `REPORT_${crypto.randomUUID().replaceAll("-", "")}`;
-        db.insert(tasks).values({ id: taskId, type: "execution", title: "Runtime report integration", status: "running", creator_user_id: "user", primary_session_id: workSession.id,
-          context_json: { requestedByIdentity: { provider: "local", externalUserId: "user" } }, created_at: 0, updated_at: 0, last_activity_at: 0 , ...fixtureTaskOwnership(db,workSession.id)}).run();
+        db.insert(tasks).values({ id: taskId, type: "execution", title: "Runtime report integration", status: "running", creator_user_id: "user:user", primary_session_id: workSession.id,
+          context_json: { requestedByIdentity: { provider: "local", externalUserId: "user:user" } }, created_at: 0, updated_at: 0, last_activity_at: 0 , ...fixtureTaskOwnership(db,workSession.id)}).run();
         new TaskSubscriptionStore(db).resolve({ taskId, sessionId: workSession.id, channelType: "dashboard", channelId: "luna-dashboard", visibility: "full" });
         // Bind the production Task entrypoint to this fixture's real execution services.
         taskKernel ??= (await import("../../src/kernel")).kernel;

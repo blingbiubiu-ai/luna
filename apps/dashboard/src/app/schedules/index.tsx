@@ -40,9 +40,11 @@ function schedulePath(path: string, scope: ScheduleScope) {
 function SchedulesPage() {
   const { t } = useTranslation();
   const auth = useDashboardAuthSession();
-  const actor = auth.data?.user?.id ?? "";
-  const { ownerUserId } = useRouteAgent();
-  const canManage = actor === ownerUserId;
+  const account = auth.data?.account?.id ?? "";
+  const { ownerAccountId, ownerUserId } = useRouteAgent();
+  const canManage = account === ownerAccountId;
+  // Schedules created in the Dashboard run as the owner's user in this Agent.
+  const actor = ownerUserId;
   const selection = useShadowScope(false, canManage);
   const scope = selection.scope;
   return <div className="flex min-h-0 flex-1 flex-col">

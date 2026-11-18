@@ -1,4 +1,4 @@
-import {fixtureExecutionReference} from "../helpers/platform-fixtures";
+import {fixtureExecutionReference, fixtureUser } from "../helpers/platform-fixtures";
 import {fixtureRunnerContext} from "../helpers/platform-fixtures";
 import {fixtureTaskOwnership} from "../helpers/platform-fixtures";
 import {fixtureSessionOwnership} from "../helpers/platform-fixtures";
@@ -30,8 +30,9 @@ function fixture() {
   const home = mkdtempSync(join(tmpdir(), "luna-invocation-authority-"));
   const sqlite = new Database(":memory:"); const db = drizzle(sqlite);
   migrate(db, { migrationsFolder: "src/data/drizzle" });
-  db.insert(users).values({ id: "user1", kind: "human", displayName: "Tester", createdAt: "0", updatedAt: "0" }).run();
-  db.insert(sessions).values({ id: "session1", created_by_user_id: "user1", channel_type: "test", channel_id: "test", created_at: 0, updated_at: 0 , ...fixtureSessionOwnership(db,"test","test")}).run();
+  const ownership = fixtureSessionOwnership(db,"test","test");
+  fixtureUser(db, ownership.agent_id, "user1");
+  db.insert(sessions).values({ id: "session1", created_by_user_id: "user1", channel_type: "test", channel_id: "test", created_at: 0, updated_at: 0 , ...ownership}).run();
   const session = db.select().from(sessions).where(eq(sessions.id, "session1")).get()!;
   db.insert(runnerContexts).values(fixtureRunnerContext(db, {id: "ctx1", owner_type: "session", owner_id: "session1", runner_type: "claude", runner_root_path: "/unused", created_at: 0, updated_at: 0})).run();
   const store = new InvocationStore(db);
@@ -271,7 +272,7 @@ test("startup recovery cancels an invocation whose actor was disabled", async ()
   const {JobReconciler} = await import("../../src/runners/job-reconciler");
   const f = fixture();
   try {
-    f.db.update(users).set({status:"disabled"}).where(eq(users.id,"user1")).run();
+    f.db.update(users).set({status:"blocked"}).where(eq(users.id,"user1")).run();
     const cancelled: string[] = [];
     const runtime = runtimeStub({
       async cancelIntent(request) { cancelled.push(request.jobId); return {placementState: "terminal"} as never; },
@@ -288,7 +289,7 @@ test("startup recovery cancels an invocation whose actor was disabled", async ()
 for (const boundary of ["submit", "events"] as const) test(`disabled actor at ${boundary} cannot upload credentials or publish late output`, async () => {
   const {RuntimeAgentTransport} = await import("../../src/runners/runtime-agent-transport");
   const f = fixture();
-  const revoke = () => f.db.update(users).set({status:"disabled"}).where(eq(users.id,"user1")).run();
+  const revoke = () => f.db.update(users).set({status:"blocked"}).where(eq(users.id,"user1")).run();
   const uploads: string[] = [], outputs: unknown[] = [];
   const runtime = runtimeStub({
     async submit() { if (boundary === "submit") revoke(); return {placementState: boundary === "submit" ? "queued" : "terminal"} as never; },
@@ -319,7 +320,7 @@ test("scope revoked during health check prevents preparation and Job creation", 
   f.store.register({agentConfig:fixtureExecutionReference(f.db,"ctx1"), id: "preparing", originId: "prepare-turn", runnerKind: "work", actorUserId: "user1", runnerContextId: "ctx1", sessionId: "session1", taskId: null, taskRunId: null, inputSnapshot: original.inputSnapshot, contextPackIds: []});
   const calls: string[] = [];
   const runtime = runtimeStub({
-    async verify() { f.db.update(users).set({status:"disabled"}).where(eq(users.id,"user1")).run(); },
+    async verify() { f.db.update(users).set({status:"blocked"}).where(eq(users.id,"user1")).run(); },
     async files<T>() { calls.push("files"); return {} as T; },
     async submit() { calls.push("submit"); return {} as never; },
   });

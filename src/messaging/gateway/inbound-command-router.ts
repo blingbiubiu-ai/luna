@@ -1,5 +1,9 @@
 import type { ChannelAdapter, NormalizedInboundMessage } from "@/channels";
 import { ChannelDirectoryStore } from "@/channels/directory-store";
+import { BotBindingStore } from "@/agents/bot-binding-store";
+import { AccountLinkService } from "@/identity/account-link";
+import { users } from "@/data/schema";
+import { eq } from "drizzle-orm";
 import type { DrizzleDB } from "@/data";
 import {
   canonicalUserIdForRequestedIdentity,
@@ -47,6 +51,10 @@ export class InboundCommandRouter {
     }
     if (command === "#auth") {
       await this._handleAuth(message);
+      return true;
+    }
+    if (command === "#link") {
+      await this._handleLink(message);
       return true;
     }
     if (command === "#work") {
@@ -97,8 +105,20 @@ export class InboundCommandRouter {
     });
     const userId = canonicalUserIdForRequestedIdentity(
       this._options.db,
+      new BotBindingStore(this._options.db).requireActive(message.channel.id).agentId,
       requestedIdentityFromInbound(message),
     );
+    const linked = userId === undefined ? undefined
+      : this._options.db.select({ accountId: users.accountId }).from(users).where(eq(users.id, userId)).get()?.accountId;
+    if (userId !== undefined && !linked) {
+      await this._options.channel.send(message, {
+        replyMode: "direct_message",
+        content: "This chat identity is not linked to a Luna account yet. Send #link first and confirm it in the Dashboard.",
+        targetMessageId: message.id,
+        idempotencyKey: `system-command:${message.channel.id}:${message.id}:auth:not-linked`,
+      });
+      return;
+    }
     if (userId === undefined) {
       await this._options.channel.send(message, {
         replyMode: "direct_message",
@@ -137,6 +157,49 @@ export class InboundCommandRouter {
       ].join("\n"),
       targetMessageId: message.id,
       idempotencyKey: `system-command:${message.channel.id}:${message.id}:auth:issued`,
+    });
+  }
+
+  /**
+   * `#link`: proves the sender holds this chat identity. The token it returns is
+   * redeemed by the Agent owner in the Dashboard, who sees whose identity it is first.
+   */
+  private async _handleLink(message: NormalizedInboundMessage): Promise<void> {
+    const reply = (content: string, suffix: string) => this._options.channel.send(message, {
+      replyMode: message.surface.kind === "p2p" ? "direct_message" : "channel_message",
+      content,
+      targetMessageId: message.id,
+      idempotencyKey: `system-command:${message.channel.id}:${message.id}:link:${suffix}`,
+    });
+    if (message.surface.kind !== "p2p") {
+      await reply("Please send #link in a private chat with this bot.", "group-rejected");
+      return;
+    }
+    if (message.sender.kind !== "user") {
+      await reply("Only a person can link a chat identity.", "not-human");
+      return;
+    }
+    const agentId = new BotBindingStore(this._options.db).requireActive(message.channel.id).agentId;
+    const channelIdentity = this._directory.upsertIdentity({ channel: message.channel, identity: message.sender, agentId });
+    const userId = canonicalUserIdForRequestedIdentity(this._options.db, agentId, requestedIdentityFromInbound(message));
+    if (userId === undefined) {
+      await reply("Could not resolve your Luna user from this chat identity.", "user-not-found");
+      return;
+    }
+    const token = new AccountLinkService(this._options.db).issue({
+      userId, channelType: message.channel.type, channelId: message.channel.id, channelIdentityId: channelIdentity.id,
+    });
+    await this._options.channel.send(message, {
+      replyMode: "direct_message",
+      content: [
+        "One-time link token:",
+        "",
+        token,
+        "",
+        "Signed in to the Luna Dashboard as this Agent's owner, open Users → Link chat identity and paste it. It expires in 10 minutes and can be used only once.",
+      ].join("\n"),
+      targetMessageId: message.id,
+      idempotencyKey: `system-command:${message.channel.id}:${message.id}:link:issued`,
     });
   }
 }

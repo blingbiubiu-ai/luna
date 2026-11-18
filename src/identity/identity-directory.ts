@@ -4,11 +4,12 @@ import { and, eq, ne } from "drizzle-orm";
 import type { ChannelIdentity, ChannelRef } from "@/channels";
 import { trustedChannelIdentityProfile } from "@/channels/identity-profile-trust";
 import type { DrizzleDB } from "@/data";
-import { channelUserBindings, identityObservations, userIdentityLinks, users } from "@/data/schema";
-import { usableDisplayName } from "./display-name";
+import { channelConfigs, channelUserBindings, identityObservations, userIdentityLinks, users, type UserKind } from "@/data/schema";
+import { cleanDisplayName, usableDisplayName } from "./display-name";
+import { followShadowBotName } from "./shadow-name";
 import { createLogger, uuid } from "@/shared";
 
-export type UserKind = "human" | "bot" | "service" | "system";
+export type { UserKind } from "@/data/schema";
 export type IdentityConfidence = "verified" | "inferred" | "manual";
 
 export interface IdentityClaim {
@@ -45,7 +46,7 @@ export class IdentityDirectory {
         .where(eq(channelUserBindings.channelIdentityId, channelIdentityId)).get();
       const previous = binding && tx.select().from(users).where(eq(users.id, binding.userId)).get();
       const target = tx.select().from(users).where(eq(users.id, userId)).get();
-      if (target?.kind !== "system" || !previous || !["bot", "system"].includes(previous.kind)) {
+      if (target?.kind !== "shadow" || !previous || previous.agentId !== target.agentId || !["bot", "shadow"].includes(previous.kind)) {
         throw new Error("bot_identity_conflict");
       }
       if (previous.id === userId) return;
@@ -80,12 +81,14 @@ export class IdentityDirectory {
     readonly channelIdentityId: string;
     readonly identity: ChannelIdentity;
     readonly authenticatedUserId?: string | undefined;
+    readonly agentId?: string;
   }): MaterializedUser | null {
     const userKind = inferUserKindForChannelIdentity(input.identity);
     if (userKind === null) {
       return null;
     }
     const trustedProfile = trustedChannelIdentityProfile(input.identity);
+    const agentId = input.agentId ?? this.agentIdForChannel(input.channel, input.authenticatedUserId);
 
     const claims = identityClaimsForChannelIdentity(
       input.channel,
@@ -94,6 +97,7 @@ export class IdentityDirectory {
     let user: MaterializedUser;
     try {
       user = this.materializeIdentityClaims({
+        agentId,
         kind: userKind,
         displayName: trustedProfile.displayName ?? input.identity.externalId,
         ...(trustedProfile.avatarUrl === undefined
@@ -121,18 +125,43 @@ export class IdentityDirectory {
     return { ...user, displayName: refreshed.displayName };
   }
 
+  /**
+   * The Agent a channel belongs to: a configured channel belongs to one Agent;
+   * the Dashboard channel is shared, so its identity names the user it is.
+   */
+  agentIdForChannel(channel: ChannelRef, authenticatedUserId?: string): string {
+    if (authenticatedUserId !== undefined) {
+      const user = this._db.select({ agentId: users.agentId }).from(users).where(eq(users.id, authenticatedUserId)).get();
+      if (!user) throw new IdentityConflictError("authenticated user is unknown");
+      return user.agentId;
+    }
+    const config = this._db.select({ agentId: channelConfigs.agentId }).from(channelConfigs).where(eq(channelConfigs.id, channel.id)).get();
+    if (!config) throw new Error(`channel_agent_unknown: ${channel.type}:${channel.id}`);
+    return config.agentId;
+  }
+
+  /**
+   * The name an `@` shows. A bot's label is its current name and its Shadow
+   * follows it. For a person it fills in a missing name only, since their own
+   * profile, which comes with their messages, is authoritative. A name set in
+   * Luna (Dashboard, manual) is kept.
+   */
   applyMentionDisplayName(channelIdentityId: string, label: string | undefined): void {
     const user = this.resolveUserByChannelIdentityId(channelIdentityId);
+    if (user?.kind === "shadow") return followShadowBotName(this._db, user.id, label?.trim().replace(/^@\s*/, ""));
     if (!user || (user.profileSource !== "channel" && user.profileSource !== "mention")) return;
     const links = this._db.select().from(userIdentityLinks).where(eq(userIdentityLinks.userId, user.id)).all();
     const ids = new Set([user.id, ...links.map(link => link.identityValue)]);
-    const name = usableDisplayName(label, ids);
+    const name = usableDisplayName(cleanDisplayName(label), ids);
+    // A person's own profile name outranks an @ label, which may be a group nickname; the label only fills a missing name.
     if (!name || (user.profileSource === "channel" && usableDisplayName(user.displayName, ids))) return;
     if (name === user.displayName && user.profileSource === "mention") return;
     this._db.update(users).set({ displayName: name, profileSource: "mention", updatedAt: String(Date.now()) }).where(eq(users.id, user.id)).run();
   }
 
+  /** Resolves or creates the user of `agentId` that this evidence names; evidence never crosses Agents. */
   materializeIdentityClaims(input: {
+    readonly agentId: string;
     readonly kind: UserKind;
     readonly displayName: string;
     readonly avatarUrl?: string;
@@ -146,17 +175,23 @@ export class IdentityDirectory {
       let existingUser = directory.resolveUserForMaterialization(input);
       if (input.authenticatedUserId !== undefined) {
         const authenticated = tx.select().from(users).where(eq(users.id, input.authenticatedUserId)).get();
-        if (authenticated?.status !== "active" || (existingUser && existingUser.id !== authenticated.id)) {
+        if (authenticated?.status !== "active" || authenticated.agentId !== input.agentId || (existingUser && existingUser.id !== authenticated.id)) {
           throw new IdentityConflictError("authenticated user differs from channel identity");
         }
         existingUser = authenticated;
       }
-      if (existingUser && existingUser.kind !== input.kind && !(existingUser.kind === "system" && input.kind === "bot")) {
+      if (existingUser && existingUser.kind !== input.kind && !(existingUser.kind === "shadow" && input.kind === "bot")) {
         throw new IdentityConflictError("identity kind differs from canonical user");
+      }
+      // Someone removed from the Agent's list is back once they write again; a blocked user stays blocked.
+      if (existingUser?.status === "removed") {
+        tx.update(users).set({ status: "active", updatedAt: String(Date.now()) }).where(eq(users.id, existingUser.id)).run();
+        existingUser = { ...existingUser, status: "active" };
       }
       const user = directory.refreshChannelProfile(
         existingUser ??
           directory.createUser({
+            agentId: input.agentId,
             kind: input.kind,
             displayName: input.displayName,
             ...(input.avatarUrl === undefined ? {} : { avatarUrl: input.avatarUrl }),
@@ -168,6 +203,7 @@ export class IdentityDirectory {
         },
       );
       directory.ensureLinks({
+        agentId: input.agentId,
         userId: user.id,
         ...(input.channelIdentityId === undefined
           ? {}
@@ -177,34 +213,37 @@ export class IdentityDirectory {
 
       return {
         id: user.id,
-        kind: user.kind as UserKind,
+        kind: user.kind,
         displayName: user.displayName,
       };
     });
   }
 
-  resolveUserIdForIdentity(claim: {
+  /** The user of `agentId` that verified evidence names, whatever their status; undefined when unknown. */
+  resolveUserIdForIdentity(agentId: string, claim: {
     readonly namespace: string;
     readonly kind: string;
     readonly value: string;
     readonly scope: string;
   }): string | undefined {
-    const link = this.findLinkByClaim({
+    const link = this.findLinkByClaim(agentId, {
       ...claim,
       confidence: "verified",
     });
-    if (link === undefined) {
-      return undefined;
+    return link === undefined ? undefined : this.current(link.userId)?.id;
+  }
+
+  /** A user as it stands now: a merged user is followed to the user it became. */
+  private current(userId: string): UserRow | undefined {
+    let user = this._db.select().from(users).where(eq(users.id, userId)).get();
+    for (let hops = 0; user?.status === "merged" && user.mergedIntoUserId && hops < 8; hops++) {
+      user = this._db.select().from(users).where(eq(users.id, user.mergedIntoUserId)).get();
     }
-    const user = this._db
-      .select()
-      .from(users)
-      .where(eq(users.id, link.userId))
-      .get();
-    return user === undefined || user.status !== "active" ? undefined : user.id;
+    return user?.status === "merged" ? undefined : user;
   }
 
   private resolveUserForMaterialization(input: {
+    readonly agentId: string;
     readonly channelIdentityId?: string;
     readonly claims: readonly IdentityClaim[];
   }): UserRow | null {
@@ -212,7 +251,10 @@ export class IdentityDirectory {
       input.channelIdentityId === undefined
         ? null
         : this.resolveUserByChannelIdentityId(input.channelIdentityId);
-    const claimUser = this.resolveUserByClaims(input.claims);
+    if (channelUser !== null && channelUser.agentId !== input.agentId) {
+      throw new IdentityConflictError("channel identity belongs to another Agent");
+    }
+    const claimUser = this.resolveUserByClaims(input.agentId, input.claims);
     if (
       channelUser !== null &&
       claimUser !== null &&
@@ -233,12 +275,8 @@ export class IdentityDirectory {
       .where(eq(channelUserBindings.channelIdentityId, channelIdentityId))
       .all();
     for (const link of links) {
-      const user = this._db
-        .select()
-        .from(users)
-        .where(eq(users.id, link.userId))
-        .get();
-      if (user !== undefined && user.status === "active") {
+      const user = this.current(link.userId);
+      if (user !== undefined) {
         usersById.set(user.id, user);
       }
     }
@@ -250,30 +288,15 @@ export class IdentityDirectory {
     return usersById.values().next().value ?? null;
   }
 
-  private resolveUserByClaims(claims: readonly IdentityClaim[]): UserRow | null {
+  private resolveUserByClaims(agentId: string, claims: readonly IdentityClaim[]): UserRow | null {
     const usersById = new Map<string, UserRow>();
     for (const claim of claims) {
-      const link = this._db
-        .select()
-        .from(userIdentityLinks)
-        .where(
-          and(
-            eq(userIdentityLinks.identityNamespace, claim.namespace),
-            eq(userIdentityLinks.identityKind, claim.kind),
-            eq(userIdentityLinks.identityValue, claim.value),
-            eq(userIdentityLinks.identityScope, claim.scope),
-          ),
-        )
-        .get();
+      const link = this.findLinkByClaim(agentId, claim);
       if (link === undefined) {
         continue;
       }
-      const user = this._db
-        .select()
-        .from(users)
-        .where(eq(users.id, link.userId))
-        .get();
-      if (user !== undefined && user.status === "active") {
+      const user = this.current(link.userId);
+      if (user !== undefined) {
         usersById.set(user.id, user);
       }
     }
@@ -284,6 +307,7 @@ export class IdentityDirectory {
   }
 
   private createUser(input: {
+    readonly agentId: string;
     readonly kind: UserKind;
     readonly displayName: string;
     readonly avatarUrl?: string;
@@ -294,6 +318,7 @@ export class IdentityDirectory {
       .insert(users)
       .values({
         id,
+        agentId: input.agentId,
         kind: input.kind,
         displayName: input.displayName,
         avatarUrl: input.avatarUrl ?? null,
@@ -312,6 +337,7 @@ export class IdentityDirectory {
   }
 
   private ensureLinks(input: {
+    readonly agentId: string;
     readonly userId: string;
     readonly channelIdentityId?: string;
     readonly claims: readonly IdentityClaim[];
@@ -336,7 +362,7 @@ export class IdentityDirectory {
       .get();
 
     input.claims.forEach((claim, index) => {
-      const existingLink = this.findLinkByClaim(claim);
+      const existingLink = this.findLinkByClaim(input.agentId, claim);
       if (existingLink !== undefined && existingLink.userId !== input.userId) {
         throw new Error("Identity claim already belongs to a different user");
       }
@@ -357,7 +383,8 @@ export class IdentityDirectory {
       this._db
         .insert(userIdentityLinks)
         .values({
-          id: makeStableRowId("user_identity_link", identityClaimKey(claim)),
+          id: makeStableRowId("user_identity_link", JSON.stringify([input.agentId, identityClaimKey(claim)])),
+          agentId: input.agentId,
           userId: input.userId,
           identityNamespace: claim.namespace,
           identityKind: claim.kind,
@@ -372,7 +399,7 @@ export class IdentityDirectory {
     });
     this.ensureSinglePrimaryLink(input.userId);
     for (const claim of input.claims) {
-      this.observeClaim(this.findLinkByClaim(claim)!.id, input.channelIdentityId ?? null, claim.confidence);
+      this.observeClaim(this.findLinkByClaim(input.agentId, claim)!.id, input.channelIdentityId ?? null, claim.confidence);
     }
   }
 
@@ -386,7 +413,7 @@ export class IdentityDirectory {
         set: {confidence: effective, observedAt: Date.now()}}).run();
   }
 
-  private findLinkByClaim(claim: IdentityClaim):
+  private findLinkByClaim(agentId: string, claim: IdentityClaim):
     | typeof userIdentityLinks.$inferSelect
     | undefined {
     return this._db
@@ -394,6 +421,7 @@ export class IdentityDirectory {
       .from(userIdentityLinks)
       .where(
         and(
+          eq(userIdentityLinks.agentId, agentId),
           eq(userIdentityLinks.identityNamespace, claim.namespace),
           eq(userIdentityLinks.identityKind, claim.kind),
           eq(userIdentityLinks.identityValue, claim.value),
@@ -411,6 +439,11 @@ export class IdentityDirectory {
       readonly avatarUrl?: string;
     },
   ): UserRow {
+    if (user.kind === "shadow") {
+      // A Shadow's own bot, seen as a sender or through its profile, carries the bot's current name.
+      followShadowBotName(this._db, user.id, input.displayName);
+      return this._db.select().from(users).where(eq(users.id, user.id)).get() ?? user;
+    }
     if (user.kind === "system" || (user.profileSource !== "channel" && user.profileSource !== "mention")) {
       return user;
     }
@@ -418,12 +451,13 @@ export class IdentityDirectory {
     if (input.kind !== undefined && input.kind !== user.kind) {
       updates.kind = input.kind;
     }
+    const displayName = cleanDisplayName(input.displayName);
     if (
-      input.displayName !== undefined &&
-      usableDisplayName(input.displayName, new Set(this._db.select().from(userIdentityLinks).where(eq(userIdentityLinks.userId, user.id)).all().map(link => link.identityValue))) &&
-      (input.displayName !== user.displayName || user.profileSource === "mention")
+      displayName !== undefined &&
+      usableDisplayName(displayName, new Set(this._db.select().from(userIdentityLinks).where(eq(userIdentityLinks.userId, user.id)).all().map(link => link.identityValue))) &&
+      (displayName !== user.displayName || user.profileSource === "mention")
     ) {
-      updates.displayName = input.displayName;
+      updates.displayName = displayName;
       updates.profileSource = "channel";
     }
     if (input.avatarUrl !== undefined && input.avatarUrl !== user.avatarUrl) {

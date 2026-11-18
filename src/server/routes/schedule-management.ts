@@ -31,12 +31,12 @@ export function scheduleManagementRoutes(db: () => DrizzleDB, service: () => Ses
     const agentId = c.req.query("agentId");
     if (!agentId) throw new GatewayError("agent_scope_required", "Select an Agent", 400);
     const agents = new AgentStore(db());
-    agents.requireOwner(auth.user.id, agentId);
+    agents.requireOwner(auth.account.id, agentId);
     const shadowId = c.req.query("shadowId");
     if (shadowId && agents.shadow(shadowId).agentId !== agentId) {
       throw new GatewayError("shadow_not_found", "Shadow not found", 404);
     }
-    return { actorUserId: auth.user.id, agentId, ...(shadowId ? { shadowId } : {}) };
+    return { actorUserId: agents.ownerUserId(agentId), agentId, ...(shadowId ? { shadowId } : {}) };
   }
   function inScope(scope: ScheduleScope) {
     return and(eq(sessions.agent_id, scope.agentId), scope.shadowId ? eq(sessions.shadow_id, scope.shadowId) : undefined);

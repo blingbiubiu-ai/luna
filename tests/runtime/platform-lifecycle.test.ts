@@ -10,29 +10,29 @@ import {AgentStore} from "@/agents/agent-store";
 import {AgentLifecycleStore} from "@/agents/agent-lifecycle-store";
 import {SessionStore} from "@/sessions/session-store";
 import {AccessTokenService} from "@/server/auth/access-token-service";
-import {fixtureScope, fixtureRunnerContext} from "../helpers/platform-fixtures";
+import {fixtureScope, fixtureRunnerContext, fixtureOwnerUserId} from "../helpers/platform-fixtures";
 
 let home: string, connection: DataConnection<typeof schema>, scope: ReturnType<typeof fixtureScope>;
 let first: string, other: string, shadowId: string;
-const owner = "owner";
+const owner = "owner", ownerUser = fixtureOwnerUserId(owner);
 beforeEach(() => {
   home = mkdtempSync(join(tmpdir(), "luna-lifecycle-")); setLunaHome(home);
   connection = new DataConnection(schema); scope = fixtureScope(connection.db, owner);
   const agents = new AgentStore(connection.db);
   shadowId = agents.createShadow(owner, scope.agentId, {name: "Other"}, "other").id;
-  first = new SessionStore(connection.db).createLocalSession(owner, scope).id;
-  other = new SessionStore(connection.db).createLocalSession(owner, {...scope, shadowId}).id;
+  first = new SessionStore(connection.db).createLocalSession(ownerUser, scope).id;
+  other = new SessionStore(connection.db).createLocalSession(ownerUser, {...scope, shadowId}).id;
 });
 afterEach(() => {connection.close(); rmSync(home, {recursive: true, force: true});});
 function seedQueue(sessionId: string) {
   const db = connection.db;
 
-  db.insert(schema.sessionSchedules).values({id: sessionId, actorUserId: owner, sourceSessionId: sessionId, targetSessionId: sessionId,
+  db.insert(schema.sessionSchedules).values({id: sessionId, actorUserId: ownerUser, sourceSessionId: sessionId, targetSessionId: sessionId,
     action: {}, timezone: "UTC", nextAt: 1, enabled: true, revision: 1, overlap: "skip", misfire: "skip", expiresAfterMs: 1000, createdAt: 1}).run();
-  db.insert(schema.sessionCommands).values({id: sessionId, kind: "message.send", sessionId, sourceSessionId: sessionId, actorUserId: owner,
+  db.insert(schema.sessionCommands).values({id: sessionId, kind: "message.send", sessionId, sourceSessionId: sessionId, actorUserId: ownerUser,
     originId: "test", dedupeKey: sessionId, payload: {}, status: "pending", correlationId: sessionId, availableAt: 1, createdAt: 1, updatedAt: 1}).run();
   db.insert(schema.runnerContexts).values(fixtureRunnerContext(db, {id: sessionId, owner_type: "session", owner_id: sessionId, runner_type: "test", runner_root_path: "/unused", created_at: 1, updated_at: 1})).run();
-  return new AccessTokenService({db, signingSecret: "test"}).issueToken({userId: owner, name: "test", source: "runner", role: "runner", runnerKind: "work", sourceSessionId: sessionId, sourceRunnerJobId: sessionId, now: Date.now(), ttlMs: 60000});
+  return new AccessTokenService({db, signingSecret: "test"}).issueToken({userId: ownerUser, name: "test", source: "runner", role: "runner", runnerKind: "work", sourceSessionId: sessionId, sourceRunnerJobId: sessionId, now: Date.now(), ttlMs: 60000});
 }
 test("Shadow disable atomically revokes authority and cancels queued work without touching siblings", () => {
   const firstToken = seedQueue(first), otherToken = seedQueue(other);
@@ -48,7 +48,7 @@ test("Shadow disable atomically revokes authority and cancels queued work withou
   expect(connection.db.select().from(schema.sessionCommands).where(eq(schema.sessionCommands.id, first)).get()?.status).toBe("cancelled");
   expect(connection.db.select().from(schema.sessionCommands).where(eq(schema.sessionCommands.id, other)).get()?.status).toBe("pending");
   expect(connection.db.select().from(schema.sessionSchedules).where(eq(schema.sessionSchedules.id, first)).get()).toMatchObject({enabled: false, paused: true, revision: 2});
-  expect(() => new AgentStore(connection.db).requireScope(owner, scope)).toThrow("shadow_disabled");
+  expect(() => new AgentStore(connection.db).requireScope(ownerUser, scope)).toThrow("shadow_disabled");
   expect(new AgentLifecycleStore(connection.db).pending().map(row => row.id)).toEqual([job.id]);
 });
 test("Agent disable closes every Shadow while owner can still inspect configuration", () => {
@@ -56,7 +56,7 @@ test("Agent disable closes every Shadow while owner can still inspect configurat
   new AgentLifecycleStore(connection.db).request(owner, {agentId: scope.agentId}, "disabled", "disable-agent");
   const agents = new AgentStore(connection.db);
   expect(agents.listShadows(owner, scope.agentId)).toHaveLength(2);
-  expect(() => agents.requireScope(owner, {...scope, shadowId})).toThrow("agent_disabled");
+  expect(() => agents.requireScope(ownerUser, {...scope, shadowId})).toThrow("agent_disabled");
   expect(connection.db.select().from(schema.sessionSchedules).all().every(row => !row.enabled)).toBe(true);
   expect(() => new AgentLifecycleStore(connection.db).request(owner, {...scope, shadowId}, "active", "resume-child")).toThrow("agent_disabled");
 });

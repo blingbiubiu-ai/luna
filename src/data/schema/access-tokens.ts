@@ -13,7 +13,10 @@ export const accessTokens = sqliteTable(
     agentId:text("agent_id"),
     shadowId:text("shadow_id"),
     tokenHash: text("token_hash").notNull(),
-    userId: text("user_id").notNull(),
+    /** The Agent user a runner token acts as; null for a personal token. */
+    userId: text("user_id"),
+    /** The account a personal CLI/MCP token belongs to; null for a runner token. */
+    accountId: text("account_id"),
     source: text("source").notNull(),
     name: text("name").notNull(),
     role: text("role").notNull(),
@@ -56,7 +59,7 @@ export const cliAuthSessions = sqliteTable(
     deviceCodeHash: text("device_code_hash").notNull(),
     userCodeHash: text("user_code_hash").notNull(),
     status: text("status").notNull(),
-    approvedByUserId: text("approved_by_user_id"),
+    approvedByAccountId: text("approved_by_account_id"),
     createdAt: integer("created_at").notNull(),
     expiresAt: integer("expires_at").notNull(),
     approvedAt: integer("approved_at"),

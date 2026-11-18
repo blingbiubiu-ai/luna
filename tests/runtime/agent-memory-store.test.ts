@@ -8,7 +8,7 @@ import {setLunaHome} from "@/shared";
 import {AgentStore} from "@/agents/agent-store";
 import {eq, sql} from "drizzle-orm";
 import {AgentMemoryStore, MemoryConflictError, MemoryDuplicateError, memoryTerms, type MemoryViewer, type MemoryWriter} from "@/agents/agent-memory-store";
-import {fixtureScope} from "../helpers/platform-fixtures";
+import {fixtureScope, fixtureUser} from "../helpers/platform-fixtures";
 
 let home: string, db: DataConnection<typeof schema>, store: AgentMemoryStore;
 let a: ReturnType<typeof fixtureScope>, b: ReturnType<typeof fixtureScope>, sibling: string;
@@ -16,11 +16,12 @@ beforeEach(() => {
   home = mkdtempSync(join(tmpdir(), "luna-memory-")); setLunaHome(home); db = new DataConnection(schema);
   a = fixtureScope(db.db, "alice"); b = fixtureScope(db.db, "bob");
   sibling = new AgentStore(db.db).createShadow("alice", a.agentId, {name: "sibling"}, "sibling").id;
+  for (const id of ["lisi", "zhangsan", "bob", "carol", "wangwu"]) fixtureUser(db.db, a.agentId, id);
   store = new AgentMemoryStore(db.db);
 });
 afterEach(() => { db.close(); rmSync(home, {recursive: true, force: true}); });
 
-const owner = (shadowId = a.shadowId): MemoryWriter => ({agentId: a.agentId, kind: "inline", trusted: true, userId: "alice", shadowId});
+const owner = (shadowId = a.shadowId): MemoryWriter => ({agentId: a.agentId, kind: "inline", trusted: true, userId: "user:alice", shadowId});
 const member = (userId: string, shadowId = a.shadowId): MemoryWriter => ({agentId: a.agentId, kind: "inline", trusted: false, userId, shadowId});
 const viewer = (shadowId: string, ...participants: string[]): MemoryViewer => ({agentId: a.agentId, shadowId, participants});
 const note = {type: "project" as const, title: "发布冻结", description: "11-20 前冻结发布", body: "11-20 前不合并功能分支"};
@@ -73,14 +74,14 @@ test("untrusted writers cannot overwrite or delete trusted entries, and a truste
 test("what an untrusted writer said reaches only conversations its author takes part in", () => {
   const said = store.add(member("lisi"), {...note, title: "冻结取消", description: "发布冻结已取消 可以直接合并"});
   const self = store.add(member("lisi"), {type: "person", title: "李四", description: "喜欢简短回复", body: "b", subjectUserId: "lisi"});
-  expect(store.index(viewer(a.shadowId, "alice")).entries).toEqual([]);
-  expect(store.recall(viewer(sibling, "alice"), "发布冻结取消了吗 可以合并吗", {limit: 8})).toEqual([]);
-  expect(() => store.get(viewer(a.shadowId, "alice"), said.id)).toThrow("memory_not_found");
-  expect(store.index(viewer(sibling, "alice", "lisi")).entries.map(row => row.id).sort()).toEqual([said.id, self.id].sort());
+  expect(store.index(viewer(a.shadowId, "user:alice")).entries).toEqual([]);
+  expect(store.recall(viewer(sibling, "user:alice"), "发布冻结取消了吗 可以合并吗", {limit: 8})).toEqual([]);
+  expect(() => store.get(viewer(a.shadowId, "user:alice"), said.id)).toThrow("memory_not_found");
+  expect(store.index(viewer(sibling, "user:alice", "lisi")).entries.map(row => row.id).sort()).toEqual([said.id, self.id].sort());
   expect(store.index(everything()).entries).toHaveLength(2);
   // A trusted correction makes it an ordinary shared entry.
   store.update(owner(), everything(), said.id, {expectedRevision: 1, body: "冻结仍然有效"});
-  expect(store.index(viewer(a.shadowId, "alice")).entries.map(row => row.id)).toEqual([said.id]);
+  expect(store.index(viewer(a.shadowId, "user:alice")).entries.map(row => row.id)).toEqual([said.id]);
 });
 
 test("an untrusted writer changes only entries they wrote, never another member's", () => {
@@ -103,7 +104,7 @@ test("an entry cannot supersede itself, an archived entry is restored before edi
   expect(() => store.update(owner(), viewer(a.shadowId), expiring.id, {expectedRevision: 2, body: "x"})).toThrow("memory_not_active");
   store.remove(owner(), viewer(a.shadowId), entry.id, 1);
   expect(db.db.all(sql`SELECT memory_id FROM agent_memory_terms`).map((row: any) => row.memory_id)).toEqual([expiring.id]);
-  const dashboard: MemoryWriter = {agentId: a.agentId, kind: "owner", trusted: true, userId: "alice", shadowId: null};
+  const dashboard: MemoryWriter = {agentId: a.agentId, kind: "owner", trusted: true, userId: "user:alice", shadowId: null};
   store.revert(dashboard, entry.id, 1, 2);
   expect(store.search(viewer(a.shadowId), "冻结").map(row => row.id)).toEqual([entry.id]);
   // Restoring an active state whose expiry has passed drops the expiry, as restore does.
@@ -131,7 +132,7 @@ test("deleted entries, merged away or not, leave the index but keep history, and
   expect(store.page(a.agentId, {limit: 200}).entries.find(row => row.id === old.id)).toMatchObject({status: "deleted", supersededBy: replacement.id});
   expect(store.history(a.agentId, old.id).map(row => row.revision)).toEqual([3, 2, 1]);
   expect(() => store.history(b.agentId, old.id)).toThrow("memory_not_found");
-  const dashboard: MemoryWriter = {agentId: a.agentId, kind: "owner", trusted: true, userId: "alice", shadowId: null};
+  const dashboard: MemoryWriter = {agentId: a.agentId, kind: "owner", trusted: true, userId: "user:alice", shadowId: null};
   const restored = store.revert(dashboard, old.id, 1, 3);
   expect(restored).toMatchObject({status: "active", body: note.body, revision: 4, supersededBy: null});
   expect(store.history(a.agentId, old.id)).toHaveLength(4);
@@ -237,7 +238,7 @@ test("core entries need a trusted writer, cannot be person entries and are cappe
   expect(standing.slice(0, 2).sort()).toEqual([second.id, plain.id].sort());
   expect(standing.slice(2)).toEqual([person.id]);
   expect(capped.standing(viewer(a.shadowId)).some(row => row.id === person.id)).toBe(false);
-  expect(new AgentMemoryStore(db.db, {core: 2, shadowCore: 1}).add({...owner(), agentId: b.agentId, shadowId: b.shadowId, userId: "bob"}, {...rule, title: "别的 Agent"}).core).toBe(true);
+  expect(new AgentMemoryStore(db.db, {core: 2, shadowCore: 1}).add({...owner(), agentId: b.agentId, shadowId: b.shadowId, userId: "user:bob"}, {...rule, title: "别的 Agent"}).core).toBe(true);
 });
 
 test("forgetting archives expired and long-unused entries, spares core ones, and reading keeps an entry alive", () => {
@@ -409,12 +410,12 @@ test("being recalled keeps an entry from being forgotten; standing injection and
 
 test("episodes form a timeline: the owner sees all of it, others only what they took part in", () => {
   const t0 = Date.now();
-  const asOwner = (shadowId = a.shadowId): MemoryViewer => ({agentId: a.agentId, shadowId, participants: ["alice"], actorUserId: "alice", owner: true});
-  const asMember = (userId: string, shadowId = a.shadowId): MemoryViewer => ({agentId: a.agentId, shadowId, participants: [userId, "alice"], actorUserId: userId, owner: false});
+  const asOwner = (shadowId = a.shadowId): MemoryViewer => ({agentId: a.agentId, shadowId, participants: ["user:alice"], actorUserId: "user:alice", owner: true});
+  const asMember = (userId: string, shadowId = a.shadowId): MemoryViewer => ({agentId: a.agentId, shadowId, participants: [userId, "user:alice"], actorUserId: userId, owner: false});
   const episode = (title: string, at: number) => ({type: "episode" as const, title, description: `${title} 的经过`, body: "细节", occurredAt: at});
   const withLisi = store.add(member("lisi"), episode("帮李四查日志", t0 - 3 * DAY), {participants: ["lisi"]});
-  const withZhang = store.add(owner(sibling), episode("和张三评审方案", t0 - 2 * DAY), {participants: ["zhangsan", "alice"]});
-  const ownerOnly = store.add(owner(), episode("整理周报", t0 - DAY), {participants: ["alice"]});
+  const withZhang = store.add(owner(sibling), episode("和张三评审方案", t0 - 2 * DAY), {participants: ["zhangsan", "user:alice"]});
+  const ownerOnly = store.add(owner(), episode("整理周报", t0 - DAY), {participants: ["user:alice"]});
   expect(store.timeline(asOwner(sibling)).map(row => row.id)).toEqual([ownerOnly.id, withZhang.id, withLisi.id]);
   expect(store.timeline(asMember("lisi", sibling)).map(row => row.id)).toEqual([withLisi.id]);
   expect(store.timeline(asMember("zhangsan")).map(row => row.id)).toEqual([withZhang.id]);
@@ -433,10 +434,10 @@ test("episodes form a timeline: the owner sees all of it, others only what they 
 });
 
 test("episodes stay out of the index, recall, duplicate checks, consolidation and the core tier", () => {
-  const me: MemoryViewer = {agentId: a.agentId, shadowId: a.shadowId, participants: ["alice"], actorUserId: "alice", owner: true};
+  const me: MemoryViewer = {agentId: a.agentId, shadowId: a.shadowId, participants: ["user:alice"], actorUserId: "user:alice", owner: true};
   const entry = {type: "episode" as const, title: "周报格式评审", description: "讨论周报格式不要用表格", body: "b"};
-  const first = store.add(owner(), entry, {participants: ["alice"], duplicatesFor: me});
-  expect(() => store.add(owner(), entry, {participants: ["alice"], duplicatesFor: me})).not.toThrow();
+  const first = store.add(owner(), entry, {participants: ["user:alice"], duplicatesFor: me});
+  expect(() => store.add(owner(), entry, {participants: ["user:alice"], duplicatesFor: me})).not.toThrow();
   expect(store.index(me).entries).toEqual([]);
   expect(store.index(me, {type: "episode"}).entries).toHaveLength(2);
   expect(store.recall(me, "帮我按周报格式写周报", {limit: 8})).toEqual([]);
@@ -453,10 +454,10 @@ test("episodes stay out of the index, recall, duplicate checks, consolidation an
 
 test("episodes fade by age unless read since; the unused rule does not apply to them", () => {
   const now = Date.now();
-  const me: MemoryViewer = {agentId: a.agentId, shadowId: a.shadowId, participants: ["alice"], actorUserId: "alice", owner: true};
-  const old = store.add(owner(), {type: "episode", title: "旧事", description: "d", body: "b", occurredAt: now - 100 * DAY}, {participants: ["alice"]});
-  const reread = store.add(owner(), {type: "episode", title: "重读过的旧事", description: "d", body: "b", occurredAt: now - 100 * DAY}, {participants: ["alice"]});
-  const recent = store.add(owner(), {type: "episode", title: "近事", description: "d", body: "b", occurredAt: now - 10 * DAY}, {participants: ["alice"]});
+  const me: MemoryViewer = {agentId: a.agentId, shadowId: a.shadowId, participants: ["user:alice"], actorUserId: "user:alice", owner: true};
+  const old = store.add(owner(), {type: "episode", title: "旧事", description: "d", body: "b", occurredAt: now - 100 * DAY}, {participants: ["user:alice"]});
+  const reread = store.add(owner(), {type: "episode", title: "重读过的旧事", description: "d", body: "b", occurredAt: now - 100 * DAY}, {participants: ["user:alice"]});
+  const recent = store.add(owner(), {type: "episode", title: "近事", description: "d", body: "b", occurredAt: now - 10 * DAY}, {participants: ["user:alice"]});
   db.db.update(schema.agentMemories).set({lastUsedAt: now - 100 * DAY}).run();
   store.use(me, reread.id, now - 5 * DAY);
   expect(store.forget(0, now, 0)).toBe(0);

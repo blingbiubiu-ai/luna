@@ -40,7 +40,7 @@ for (const checkpoint of [false, true]) {
     });
     const transport = new RuntimeAgentTransport(db, client);
     try {
-      transport.store.register({ agentConfig:fixtureExecutionReference(db), id: "inv", runnerKind: "main", actorUserId: "user", runnerContextId: "context", sessionId: "session", taskId: null, taskRunId: null, originId: "turn", inputSnapshot: mainSnapshot(db), contextPackIds: [] });
+      transport.store.register({ agentConfig:fixtureExecutionReference(db), id: "inv", runnerKind: "main", actorUserId: "user:user", runnerContextId: "context", sessionId: "session", taskId: null, taskRunId: null, originId: "turn", inputSnapshot: mainSnapshot(db), contextPackIds: [] });
       transport.store.createJob("runtime", { version: 2, ...fixtureInvocationJobScope(db, transport.store, "inv", root), jobId: "job", invocationId: "inv", environmentId: "luna", runnerContextId: "context", scopeKey: "session:context", runnerKind: "main", sessionId: "session", input: { runnerType: "codex", prompt: "original", sessionId: "stale" }, credentialsRevision: 1, timeoutMs: 1000 });
       let invalidations = 0;
       const run = async () => {
@@ -72,7 +72,7 @@ test("Work session reset commits with the event cursor and replay cannot erase a
   const store = new InvocationStore(db);
   try {
     db.insert(runnerContexts).values(fixtureRunnerContext(db, { id: "work-context", owner_type: "session", owner_id: "session", runner_type: "codex", runner_root_path: root, runner_session_id: "stale", created_at: 0, updated_at: 0 })).run();
-    store.register({ agentConfig:fixtureExecutionReference(db,"work-context"), id: "work-inv", runnerKind: "work", actorUserId: "user", runnerContextId: "work-context", sessionId: "session", taskId: null, taskRunId: null, originId: "turn", inputSnapshot: decodeInvocation({version: 1, kind: "work", input: {sessionId: "session", runnerContextId: "work-context", turnId: "turn"}}), contextPackIds: [] });
+    store.register({ agentConfig:fixtureExecutionReference(db,"work-context"), id: "work-inv", runnerKind: "work", actorUserId: "user:user", runnerContextId: "work-context", sessionId: "session", taskId: null, taskRunId: null, originId: "turn", inputSnapshot: decodeInvocation({version: 1, kind: "work", input: {sessionId: "session", runnerContextId: "work-context", turnId: "turn"}}), contextPackIds: [] });
     store.createJob("runtime", { version: 2, ...fixtureInvocationJobScope(db, store, "work-inv", root), jobId: "work-job", invocationId: "work-inv", environmentId: "luna", runnerContextId: "work-context", scopeKey: "session:work-context", runnerKind: "work", sessionId: "session", input: { runnerType: "codex", prompt: "original", sessionId: "stale" }, credentialsRevision: 1, timeoutMs: 10000 });
     store.consume({ jobId: "work-job", seq: 1, kind: "execution", data: { event: { seq: 1, at: 1, kind: "provider", data: { status: "init", sessionId: "stale" } } } }, () => {});
     const event = { jobId: "work-job", seq: 2, kind: "execution" as const, data: { event: { seq: 2, at: 2, kind: "state", data: { jobId: "work-job", assignmentId: "assignment", instanceId: "instance", bootId: "boot", streamId: "stream", requestHash: "hash", state: "retry_wait", lastSeq: 2, createdAt: 1,
@@ -123,7 +123,7 @@ for (const delivery of ["live", "reattach", "snapshot", "partial", "partial-succ
     });
     const transport = new RuntimeAgentTransport(db, client);
     try {
-      transport.store.register({ agentConfig:fixtureExecutionReference(db), id: "inv", runnerKind: "main", actorUserId: "user", runnerContextId: "context",
+      transport.store.register({ agentConfig:fixtureExecutionReference(db), id: "inv", runnerKind: "main", actorUserId: "user:user", runnerContextId: "context",
         sessionId: "session", taskId: null, taskRunId: null, originId: "turn", inputSnapshot: mainSnapshot(db), contextPackIds: [] });
       transport.store.createJob("runtime", { version: 2, ...fixtureInvocationJobScope(db, transport.store, "inv", root), jobId: "job", invocationId: "inv", environmentId: "luna",
         runnerContextId: "context", scopeKey: "session:context", runnerKind: "main", sessionId: "session",
@@ -167,7 +167,7 @@ function mainSnapshot(db: DrizzleDB) {
   return decodeInvocation({version: 1, kind: "main", input: {
     runnerContext: {...context, workspacePath: context.runner_root_path, ipcPath: context.runner_root_path},
     turnId: "turn", input: {type: "session_trigger", triggerId: "trigger", instruction: "test",
-      requesterUserId: "user", context: {sessionId: "session", candidateOpenTasks: []}, artifactRefs: [],
+      requesterUserId: "user:user", context: {sessionId: "session", candidateOpenTasks: []}, artifactRefs: [],
       sourceSessionId: "session", correlationId: "correlation", hops: 0}
   }});
 }

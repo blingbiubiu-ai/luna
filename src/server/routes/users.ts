@@ -1,9 +1,8 @@
 import {AgentError, AgentStore} from "@/agents/agent-store";
-import { deleteDashboardUser } from "@/dashboard-api/deletion";
-import { dashboardRequesterUserIdFromContext } from "../auth";
+import { requesterAccountIdFromContext } from "../auth";
 import { loadDashboardUserRows, type DisplayUserRow } from "@/dashboard-api/user-display";
 import { grantInputFromBody } from "./authorization-rule-input";
-import { and, asc, desc, eq, inArray, isNull, ne, notExists, or } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, notExists, or } from "drizzle-orm";
 import { type Context, Hono } from "hono";
 import { HTTPException } from "hono/http-exception";
 
@@ -17,10 +16,7 @@ import {
   agentShadows,
   channelConfigs,
   channelIdentities,
-  channelUserBindings,
   channelSurfaces,
-  groupMemberships,
-  groups,
   messages,
   sessionTimelineEntries,
   sessions,
@@ -36,9 +32,14 @@ import {
 } from "../policy/authorization-rule-store";
 import type { AuthorizationSubjectType } from "../policy/authorization-subject";
 import { resolveSessionDisplayTitle } from "@/dashboard-api/session-display-title";
-import { isGuardResponse, requireAdmin, requireDashboardOnly } from "../auth/guards";
-import { isPlatformAdministrator } from "../policy/platform-administrator";
+import { isGuardResponse, requireDashboardOnly } from "../auth/guards";
 import { getKernel } from "./kernel";
+import { AgentUserStore, type ManagedUserStatus } from "@/identity/agent-user-store";
+
+function parseManagedStatus(value: unknown): ManagedUserStatus {
+  if (value === "active" || value === "blocked") return value;
+  throw new HTTPException(400, { message: "status must be active or blocked" });
+}
 
 type ChannelSurfaceRow = typeof channelSurfaces.$inferSelect;
 type ChannelIdentityRow = typeof channelIdentities.$inferSelect;
@@ -116,6 +117,7 @@ type UserActivitySummary = {
 
 type DashboardUserContext = {
   readonly agentId: string;
+  readonly ownerAccountId: string;
   readonly groupStore: GroupStore;
   readonly grantStore: AuthorizationRuleStore;
   readonly userRows: readonly DisplayUserRow[];
@@ -141,26 +143,26 @@ export function createUsersRoutes(options: UsersRouteOptions = {}) {
       throw error;
     })
     .use("*", async (c, next) => {
-      // Users belong to an Agent's directory: the Agent owner manages memberships and grants.
+      // Users belong to one Agent: its owner lists, renames, blocks and removes them and manages their groups and grants.
       const auth = requireDashboardOnly(c);
       if (isGuardResponse(auth)) return auth;
       await next();
     })
     .get("/", (c) => {
       const db = getDb();
-      const {id: agentId, ownerUserId} = requireUserDirectoryAgent(c, db);
+      const {id: agentId} = requireUserDirectoryAgent(c, db);
       const hiddenShadows = db.select({ id: agentShadows.id }).from(agentShadows).where(and(
         eq(agentShadows.replyUserId, users.id),
         eq(agentShadows.status, "deleted"),
       ));
+      // Removed users come back to the list when they write again; merged users live on in another row.
       const userRows = db
         .select()
         .from(users)
-        .where(and(eq(users.status, "active"), isNull(users.mergedIntoUserId), notExists(hiddenShadows),
-          agentUserVisibility(db, agentId, ownerUserId)))
+        .where(and(eq(users.agentId, agentId), inArray(users.status, ["active", "blocked"]), notExists(hiddenShadows)))
         .orderBy(desc(users.updatedAt), asc(users.displayName), asc(users.id))
         .all();
-      const context = loadDashboardUserContext(db, agentId, ownerUserId);
+      const context = loadDashboardUserContext(db, agentId);
 
       return c.json({
         users: userRows.map((row) =>
@@ -168,12 +170,21 @@ export function createUsersRoutes(options: UsersRouteOptions = {}) {
         ),
       });
     })
+    .patch("/:id", async (c) => {
+      const db = getDb();
+      const agent = requireUserDirectoryAgent(c, db);
+      const body = await readBody(c.req.raw);
+      const user = new AgentUserStore(db).update(agent.id, c.req.param("id"), {
+        ...(body.displayName === undefined ? {} : { displayName: requiredString(body.displayName, "displayName") }),
+        ...(body.status === undefined ? {} : { status: parseManagedStatus(body.status) }),
+      });
+      return c.json({ status: "ok", user });
+    })
     .delete("/:id", (c) => {
-      // Deleting a user removes a platform-wide account, so it stays admin-only.
-      const admin = requireAdmin(c);
-      if (isGuardResponse(admin)) return admin;
-      deleteDashboardUser(getDb(), c.req.param("id"), dashboardRequesterUserIdFromContext(c));
-      return c.json({ status: "ok" });
+      // Removing takes a user off this Agent's list; it never touches other Agents or the platform account.
+      const db = getDb();
+      const agent = requireUserDirectoryAgent(c, db);
+      return c.json({ status: "ok", user: new AgentUserStore(db).remove(agent.id, c.req.param("id")) });
     })
     .post("/:id/group-memberships", async (c) => {
       const db = getDb();
@@ -182,11 +193,8 @@ export function createUsersRoutes(options: UsersRouteOptions = {}) {
       const body = await readBody(c.req.raw);
       const groupStore = new GroupStore(db);
       const group = groupStore.requireGroup(requiredString(body.groupId, "groupId"));
-      const requesterId = dashboardRequesterUserIdFromContext(c)!;
-      const agent = new AgentStore(db).requireOwner(requesterId, group.agentId);
-      if (!isPlatformAdministrator(db, requesterId)) {
-        requireAgentUser(db, agent.id, agent.ownerUserId, targetUserId);
-      }
+      const agent = new AgentStore(db).requireOwner(requesterAccountIdFromContext(c)!, group.agentId);
+      requireAgentUser(db, agent.id, targetUserId);
       const membership = groupStore.addMember({
         groupId: group.id,
         userId: targetUserId,
@@ -199,7 +207,7 @@ export function createUsersRoutes(options: UsersRouteOptions = {}) {
       requireUserRow(db, c.req.param("id"));
       const groupStore = new GroupStore(db);
       const group = groupStore.requireGroup(c.req.param("groupId"));
-      new AgentStore(db).requireOwner(dashboardRequesterUserIdFromContext(c)!, group.agentId);
+      new AgentStore(db).requireOwner(requesterAccountIdFromContext(c)!, group.agentId);
       const removed = groupStore.removeMember({
         groupId: group.id,
         userId: c.req.param("id"),
@@ -219,8 +227,8 @@ export function createUsersRoutes(options: UsersRouteOptions = {}) {
     // Grants on the Users page are scoped to the Agent in ?agentId, like group grants.
     .post("/:id/authorization-rules/batch", async (c) => {
       const db = getDb();
-      const {id: agentId, ownerUserId} = requireUserDirectoryAgent(c, db);
-      const row = requireAgentUser(db, agentId, ownerUserId, c.req.param("id"));
+      const {id: agentId} = requireUserDirectoryAgent(c, db);
+      const row = requireAgentUser(db, agentId, c.req.param("id"));
       const body = await readBody(c.req.raw);
       if (!Array.isArray(body.items) || body.items.length === 0) {
         throw new HTTPException(400, {message: "Authorization rules are required"});
@@ -243,12 +251,11 @@ export function createUsersRoutes(options: UsersRouteOptions = {}) {
     })
     .delete("/:id/authorization-rules/:grantId", (c) => {
       const db = getDb();
-      const {id: agentId, ownerUserId} = requireUserDirectoryAgent(c, db);
+      const {id: agentId} = requireUserDirectoryAgent(c, db);
       const requestedId = c.req.param("id");
       const row = requireUserRow(db, requestedId, true);
-      const canonicalRow = resolveCanonicalUserRow(requestedId, loadDashboardUserRows(db)) ?? row;
-      if (!db.select({ id: users.id }).from(users)
-        .where(and(eq(users.id, canonicalRow.id), agentUserVisibility(db, agentId, ownerUserId))).get()) {
+      const canonicalRow = resolveCanonicalUserRow(requestedId, loadDashboardUserRows(db, agentId)) ?? row;
+      if (canonicalRow.agentId !== agentId) {
         throw new HTTPException(404, {message: "User authorization rule not found"});
       }
       const store = new AuthorizationRuleStore(db, {kind: "agent", agentId});
@@ -260,13 +267,12 @@ export function createUsersRoutes(options: UsersRouteOptions = {}) {
     })
     .get("/:id", (c) => {
       const db = getDb();
-      const {id: agentId, ownerUserId} = requireUserDirectoryAgent(c, db);
-      const context = loadDashboardUserContext(db, agentId, ownerUserId);
+      const {id: agentId} = requireUserDirectoryAgent(c, db);
+      const context = loadDashboardUserContext(db, agentId);
       const requestedId = c.req.param("id");
       const row = requireUserRow(db, requestedId, true);
       const canonicalRow = resolveCanonicalUserRow(requestedId, context.userRows);
-      if (canonicalRow === undefined || !db.select({ id: users.id }).from(users)
-        .where(and(eq(users.id, canonicalRow.id), agentUserVisibility(db, agentId, ownerUserId))).get()) {
+      if (canonicalRow === undefined || canonicalRow.agentId !== agentId) {
         throw new HTTPException(404, {
           message: `Canonical user not found: ${requestedId}`,
         });
@@ -274,7 +280,7 @@ export function createUsersRoutes(options: UsersRouteOptions = {}) {
       return c.json({
         // The requester reached here as the Agent owner.
         canManageUsers: true,
-        canDeleteUsers: isPlatformAdministrator(db, dashboardRequesterUserIdFromContext(c)!),
+        isOwner: canonicalRow.accountId !== null && canonicalRow.accountId === context.ownerAccountId,
         ...toDashboardUser(
           canonicalRow,
           context.activityByUserId.get(canonicalRow.id),
@@ -318,15 +324,10 @@ function validateOperationGrantTarget(input: {
   return { status: "ok", policy };
 }
 
-/** A user in this Agent's directory: only those can receive the Agent's grants or group memberships from non-admin owners. */
-export function requireAgentDirectoryUser(db: DrizzleDB, agentId: string, ownerUserId: string, requesterId: string, id: string): UserRow {
-  if (isPlatformAdministrator(db, requesterId)) return requireUserRow(db, id);
-  return requireAgentUser(db, agentId, ownerUserId, id);
-}
-
-function requireAgentUser(db: DrizzleDB, agentId: string, ownerUserId: string, id: string): UserRow {
+/** A user of this Agent: only those can receive the Agent's grants or group memberships. */
+export function requireAgentUser(db: DrizzleDB, agentId: string, id: string): UserRow {
   const row = requireUserRow(db, id);
-  if (!db.select({ id: users.id }).from(users).where(and(eq(users.id, row.id), agentUserVisibility(db, agentId, ownerUserId))).get()) {
+  if (row.agentId !== agentId) {
     throw new HTTPException(404, { message: `User not found: ${id}` });
   }
   return row;
@@ -335,30 +336,17 @@ function requireAgentUser(db: DrizzleDB, agentId: string, ownerUserId: string, i
 function requireUserDirectoryAgent(c: Context, db: DrizzleDB) {
   const agentId = c.req.query("agentId")?.trim();
   if (!agentId) throw new AgentError("agent_scope_required", 400);
-  return new AgentStore(db).requireOwner(dashboardRequesterUserIdFromContext(c)!, agentId);
+  return new AgentStore(db).requireOwner(requesterAccountIdFromContext(c)!, agentId);
 }
 
-function agentUserVisibility(db: DrizzleDB, agentId: string, ownerId: string) {
-  const otherAgentShadows = db.select({id: agentShadows.id}).from(agentShadows)
-    .where(and(eq(agentShadows.replyUserId, users.id), ne(agentShadows.agentId, agentId)));
-  return and(notExists(otherAgentShadows), or(
-    eq(users.id, ownerId),
-    inArray(users.id, db.select({ id: agentShadows.replyUserId }).from(agentShadows).where(eq(agentShadows.agentId, agentId))),
-    inArray(users.id, db.select({ id: messages.senderUserId }).from(messages).where(eq(messages.agentId, agentId))),
-    inArray(users.id, db.select({ id: channelUserBindings.userId }).from(channelUserBindings)
-      .innerJoin(channelIdentities, eq(channelIdentities.id, channelUserBindings.channelIdentityId))
-      .innerJoin(channelConfigs, eq(channelConfigs.id, channelIdentities.channelId)).where(eq(channelConfigs.agentId, agentId))),
-    inArray(users.id, db.select({ id: groupMemberships.userId }).from(groupMemberships)
-      .innerJoin(groups, eq(groupMemberships.groupId, groups.id)).where(eq(groups.agentId, agentId))),
-  ));
-}
-
-function loadDashboardUserContext(db: DrizzleDB, agentId: string, ownerUserId: string): DashboardUserContext {
-  const userRows = loadDashboardUserRows(db);
+function loadDashboardUserContext(db: DrizzleDB, agentId: string): DashboardUserContext {
+  const userRows = loadDashboardUserRows(db, agentId);
   const channelIds = db.select({id: channelConfigs.id}).from(channelConfigs).where(eq(channelConfigs.agentId, agentId));
+  // The shared Dashboard channel names each Agent's own users.
   const identityScope = or(
     inArray(channelIdentities.channelId, channelIds),
-    and(eq(channelIdentities.channelType, "dashboard"), eq(channelIdentities.externalId, ownerUserId)),
+    and(eq(channelIdentities.channelType, "dashboard"), inArray(channelIdentities.externalId,
+      db.select({ id: users.id }).from(users).where(eq(users.agentId, agentId)))),
   );
   const channelIdentityRows = db.select().from(channelIdentities).where(identityScope).all();
   const linkRows = db.select({link: userIdentityLinks, channelIdentityId: identityObservations.channelIdentityId})
@@ -377,6 +365,7 @@ function loadDashboardUserContext(db: DrizzleDB, agentId: string, ownerUserId: s
 
   return {
     agentId,
+    ownerAccountId: new AgentStore(db).get(agentId).ownerAccountId,
     groupStore: new GroupStore(db),
     grantStore: new AuthorizationRuleStore(db, {kind: "agent", agentId}),
     userRows,
@@ -454,7 +443,7 @@ function requireUserRow(db: DrizzleDB, id: string, includeDeleted = false): User
     .from(users)
     .where(eq(users.id, id))
     .get();
-  if (row === undefined || (!includeDeleted && row.status === "deleted")) {
+  if (row === undefined || (!includeDeleted && row.status === "merged")) {
     throw new HTTPException(404, {
       message: `User not found: ${id}`,
     });

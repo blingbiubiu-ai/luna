@@ -3,6 +3,7 @@ import type {DrizzleDB} from "@/data";
 import {agentMemories, lunaAgents, memoryConsolidations, memoryReflectionCheckpoints, runnerContexts, sessionCommands, sessions} from "@/data/schema";
 import {AgentMemoryStore, type MemoryRecord} from "./agent-memory-store";
 import {SessionStore} from "@/sessions/session-store";
+import {AgentStore} from "./agent-store";
 import type {SessionCommand, SessionCommandService} from "@/messaging/session-command-service";
 import type {MemoryOriginKind} from "@/data/schema";
 
@@ -74,10 +75,11 @@ const inert = (text: string) => text.replace(/artifact:/g, "artifact\u2236");
 export function scheduleMemoryReflections(db: DrizzleDB, commands: Pick<SessionCommandService, "accept">, idleMs: number, now = Date.now()): string[] {
   if (idleMs <= 0) return [];
   const rows = db.all<{sessionId: string; ownerUserId: string; messageId: string; senderUserId: string; createdAt: number}>(sql`
-    SELECT m.id AS messageId, s.id AS sessionId, m.sender_user_id AS senderUserId, m.created_at AS createdAt, a.owner_user_id AS ownerUserId
+    SELECT m.id AS messageId, s.id AS sessionId, m.sender_user_id AS senderUserId, m.created_at AS createdAt, ou.id AS ownerUserId
     FROM messages m
     JOIN sessions s ON s.id = m.owner_session_id
     JOIN luna_agents a ON a.id = s.agent_id
+    JOIN users ou ON ou.agent_id = a.id AND ou.account_id = a.owner_account_id
     JOIN users u ON u.id = m.sender_user_id
     LEFT JOIN memory_reflection_checkpoints c ON c.session_id = s.id
     WHERE s.status = 'active' AND s.kind IN ('main', 'work') AND a.status = 'active'
@@ -100,10 +102,11 @@ export function scheduleMemoryReflections(db: DrizzleDB, commands: Pick<SessionC
     ORDER BY m.created_at`);
   // A Task result handled in the session is part of its story too; the Task's creator stands for who asked.
   const results = db.all<{sessionId: string; ownerUserId: string; messageId: string; senderUserId: string; createdAt: number}>(sql`
-    SELECT tr.id AS messageId, s.id AS sessionId, coalesce(cu.id, a.owner_user_id) AS senderUserId, tr.updated_at AS createdAt, a.owner_user_id AS ownerUserId
+    SELECT tr.id AS messageId, s.id AS sessionId, coalesce(cu.id, ou.id) AS senderUserId, tr.updated_at AS createdAt, ou.id AS ownerUserId
     FROM session_triggers tr
     JOIN sessions s ON s.id = tr.session_id
     JOIN luna_agents a ON a.id = s.agent_id
+    JOIN users ou ON ou.agent_id = a.id AND ou.account_id = a.owner_account_id
     LEFT JOIN tasks tk ON tk.id = json_extract(tr.payload_json, '$.result.taskId')
     LEFT JOIN users cu ON cu.id = tk.creator_user_id AND cu.kind = 'human' AND cu.status = 'active'
     LEFT JOIN memory_reflection_checkpoints c ON c.session_id = s.id
@@ -197,16 +200,17 @@ export function scheduleMemoryConsolidations(db: DrizzleDB, commands: Pick<Sessi
     const viewer = {agentId: agent.id, all: true as const};
     const groups = batch.map(entry => ({entry, related: store.similar(viewer, entry, {limit: RELATED_LIMIT, anyType: true}).filter(candidate => candidate.overlap >= RELATED_OVERLAP).map(candidate => candidate.row)}));
     try {
+      const ownerUserId = new AgentStore(db).ownerUserId(agent.id);
       const sessionStore = new SessionStore(db);
       let session = state ? sessionStore.getById(state.sessionId) : undefined;
       if (session?.status !== "active") {
-        session = sessionStore.createLocalSession(agent.ownerUserId, {agentId: agent.id, shadowId: agent.defaultShadowId});
+        session = sessionStore.createLocalSession(ownerUserId, {agentId: agent.id, shadowId: agent.defaultShadowId});
         db.update(sessions).set({title: "记忆整理"}).where(eq(sessions.id, session.id)).run();
         // Record the session before queueing, so a turn that cannot be queued does not leave a new session behind on every pass.
         db.insert(memoryConsolidations).values({agentId: agent.id, sessionId: session.id, changeSeq: state?.changeSeq ?? 0, coveredFrom: state?.coveredFrom ?? 0, commandId: state?.commandId ?? null, ranAt: state?.ranAt ?? 0})
           .onConflictDoUpdate({target: memoryConsolidations.agentId, set: {sessionId: session.id}}).run();
       }
-      const command = commands.accept({userId: agent.ownerUserId, sourceSessionId: session.id, originId: `${CONSOLIDATION_ORIGIN}${agent.id}:${now}`},
+      const command = commands.accept({userId: ownerUserId, sourceSessionId: session.id, originId: `${CONSOLIDATION_ORIGIN}${agent.id}:${now}`},
         session.id, "session.invoke", "consolidate", {content: consolidationInstruction(day(now), groups), purpose: "notification"}, {expiresAt: now + RUN_EXPIRES_MS});
       queued.push(command.id);
       // With a backlog left, the next batch does not wait a whole interval.

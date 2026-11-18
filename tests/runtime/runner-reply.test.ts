@@ -11,7 +11,7 @@ import { SessionStore } from "../../src/sessions/session-store";
 import { SessionCommandService, registerSessionCommands } from "../../src/messaging/session-command-service";
 import { finalizeRunnerReply } from "../../src/messaging/runner-answer";
 import { ArtifactRegistry } from "../../src/artifacts/artifact-registry";
-import { fixtureSessionOwnership } from "../helpers/platform-fixtures";
+import { fixtureOwnerUserId, fixtureSessionOwnership } from "../helpers/platform-fixtures";
 import type { OutboundChannelOperation } from "../../src/work/types";
 
 let previousHome: string, home: string, db: DataConnection<typeof schema>, sessionId: string;
@@ -44,7 +44,7 @@ test("final answer persists once before delivery and recovery does not call the 
     delivered.push(op.content); return { ...op, id: "sent", channelId: "test" };
   } };
   const first = new SessionCommandService({ db: db.db, channelFor: () => channel }); registerSessionCommands(db.db, first);
-  const input = { sessionId, originId: "turn", actorUserId: "user", allowSilent: false, text: "最终答复" };
+  const input = { sessionId, originId: "turn", actorUserId: fixtureOwnerUserId("user"), allowSilent: false, text: "最终答复" };
   expect(finalizeRunnerReply(db.db, input).kind).toBe("queued");
   expect(delivered).toEqual([]);
   const resumed = new SessionCommandService({ db: db.db, channelFor: () => channel }); registerSessionCommands(db.db, resumed);
@@ -57,12 +57,12 @@ test("final answer persists once before delivery and recovery does not call the 
 
 test.each(["pending", "running", "sent", "unknown"])("CLI answer in %s owns delivery; progress does not", status => {
   const service = new SessionCommandService({ db: db.db, channelFor: () => undefined }); registerSessionCommands(db.db, service);
-  const actor = { userId: "user", sourceSessionId: sessionId, originId: "turn" };
+  const actor = { userId: fixtureOwnerUserId("user"), sourceSessionId: sessionId, originId: "turn" };
   service.accept(actor, sessionId, "message.send", "progress", { content: "working", purpose: "progress" });
   const answer = service.accept(actor, sessionId, "message.send", "answer", { content: "done", purpose: "answer" });
   db.db.update(schema.sessionCommands).set({ status }).where(eq(schema.sessionCommands.id, answer.id)).run();
-  expect(finalizeRunnerReply(db.db, { sessionId, originId: "turn", actorUserId: "user", allowSilent: false, text: "duplicate" }).kind).toBe("existing");
-  expect(finalizeRunnerReply(db.db, { sessionId, originId: "next", actorUserId: "user", allowSilent: false, text: "next answer" }).kind).toBe("queued");
+  expect(finalizeRunnerReply(db.db, { sessionId, originId: "turn", actorUserId: fixtureOwnerUserId("user"), allowSilent: false, text: "duplicate" }).kind).toBe("existing");
+  expect(finalizeRunnerReply(db.db, { sessionId, originId: "next", actorUserId: fixtureOwnerUserId("user"), allowSilent: false, text: "next answer" }).kind).toBe("queued");
 });
 
 test("structured card is persisted, forwarded, and authorized with active image artifacts", async () => {
@@ -71,11 +71,11 @@ test("structured card is persisted, forwarded, and authorized with active image 
   const service = new SessionCommandService({ db: db.db, channelFor: () => ({ send: async (_inbound, op) => { sent = op.reply; return { ...op, id: "sent", channelId: "test" }; } }) });
   registerSessionCommands(db.db, service);
   const text = JSON.stringify({ type: "luna.reply", version: 1, presentation: "card", title: "成果", content: [{ type: "text", text: "预览" }, { type: "image", artifactRef: `artifact:${artifact.id}` }] });
-  finalizeRunnerReply(db.db, { sessionId, originId: "turn", actorUserId: "user", allowSilent: false, text });
+  finalizeRunnerReply(db.db, { sessionId, originId: "turn", actorUserId: fixtureOwnerUserId("user"), allowSilent: false, text });
   expect(db.db.select().from(schema.messages).all()[0]?.presentationKind).toBe("rich_markdown");
   await service.waitForIdle(); expect(sent?.content[1]?.type).toBe("image");
   const missing = text.replace(artifact.id, "missing");
-  expect(() => finalizeRunnerReply(db.db, { sessionId, originId: "other", actorUserId: "user", allowSilent: false, text: missing })).toThrow("active image");
+  expect(() => finalizeRunnerReply(db.db, { sessionId, originId: "other", actorUserId: fixtureOwnerUserId("user"), allowSilent: false, text: missing })).toThrow("active image");
 });
 
 test.each(["image", "message", "card"])("Feishu %s renders image blocks in order for direct and threaded delivery", async presentation => {

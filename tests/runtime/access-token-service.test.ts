@@ -8,13 +8,12 @@ import { eq } from "drizzle-orm";
 import { DataConnection } from "../../src/data";
 import * as schema from "../../src/data/schema";
 import { accessTokens, channelAuthTokens } from "../../src/data/schema";
-import { IdentityDirectory } from "../../src/identity/identity-directory";
 import {
   AccessTokenService,
   hashAccessToken,
   type IssueLunaAccessTokenInput,
 } from "../../src/server/auth/access-token-service";
-import { fixtureNamedSession } from "../helpers/platform-fixtures";
+import { fixtureAccount, fixtureNamedSession, fixtureScope } from "../helpers/platform-fixtures";
 import { RunnerContextStore } from "../../src/runners/runner-context-store";
 import { config, setLunaHome } from "../../src/shared";
 
@@ -23,8 +22,8 @@ describe("AccessTokenService", () => {
   let previousHome: string;
   let connection: DataConnection<typeof schema>;
   let service: AccessTokenService;
-  let user: { id: string; displayName: string };
-  let otherUser: { id: string; displayName: string };
+  let account: string;
+  let otherAccount: string;
 
   beforeEach(() => {
     previousHome = config.paths.home;
@@ -33,33 +32,9 @@ describe("AccessTokenService", () => {
     setLunaHome(home);
 
     connection = new DataConnection(schema);
-    const identityDirectory = new IdentityDirectory(connection.db);
-    user = identityDirectory.materializeIdentityClaims({
-      kind: "human",
-      displayName: "Token User",
-      claims: [
-        {
-          namespace: "local",
-          kind: "local_id",
-          value: "token-user",
-          scope: "",
-          confidence: "manual",
-        },
-      ],
-    });
-    otherUser = identityDirectory.materializeIdentityClaims({
-      kind: "human",
-      displayName: "Other Token User",
-      claims: [
-        {
-          namespace: "local",
-          kind: "local_id",
-          value: "other-token-user",
-          scope: "",
-          confidence: "manual",
-        },
-      ],
-    });
+    // Personal CLI/MCP tokens belong to accounts; runner tokens act as a user of an Agent.
+    account = fixtureAccount(connection.db, "token-account").id;
+    otherAccount = fixtureAccount(connection.db, "other-account").id;
     service = new AccessTokenService({
       db: connection.db,
       signingSecret: "test-access-token-secret",
@@ -74,7 +49,7 @@ describe("AccessTokenService", () => {
 
   test("creates signed cli token, stores only hash, and verifies it", () => {
     const issued = service.issueToken({
-      userId: user.id,
+      accountId: account,
       name: "MacBook CLI",
       source: "cli",
       role: "user",
@@ -87,16 +62,18 @@ describe("AccessTokenService", () => {
     );
     expect(JSON.stringify(connection.db.select().from(accessTokens).all()))
       .not.toContain(issued.token);
-    expect(service.verifyBearer(issued.token, { now: 2000 }).user.id).toBe(
-      user.id,
-    );
+    expect(service.verifyBearer(issued.token, { now: 2000 }).subject).toMatchObject({
+      kind: "account", id: account,
+    });
   });
 
   function runnerTokenInput(overrides: Partial<IssueLunaAccessTokenInput> = {}) {
-    fixtureNamedSession(connection.db, "runner-session", user.id);
+    const scope = fixtureNamedSession(connection.db, "runner-session", account);
     const context = new RunnerContextStore(connection.db).resolveForSession("runner-session", "codex");
-    return baseTokenInput(user.id, {source: "runner", role: "runner", runnerKind: "work",
-      sourceSessionId: "runner-session", sourceRunnerJobId: context.id, ...overrides});
+    // A runner token acts as a user of its Agent and names no account.
+    const { accountId: _personal, ...base } = baseTokenInput(account);
+    return {...base, userId: scope.ownerUserId, source: "runner", role: "runner", runnerKind: "work",
+      sourceSessionId: "runner-session", sourceRunnerJobId: context.id, ...overrides} satisfies IssueLunaAccessTokenInput;
   }
 
   test("rejects tokens when signed claims and stored record diverge", () => {
@@ -105,7 +82,6 @@ describe("AccessTokenService", () => {
       name: string;
       update: Partial<typeof accessTokens.$inferInsert>;
     }> = [
-      { name: "agent", update: { agentId: null } },
       { name: "shadow", update: { shadowId: null } },
       { name: "source", update: { source: "cli" } },
       { name: "role", update: { role: "user" } },
@@ -114,6 +90,12 @@ describe("AccessTokenService", () => {
       { name: "task run context", update: { sourceTaskRunId: "run_other" } },
       { name: "runner job context", update: { sourceRunnerJobId: "job_other" } },
     ];
+
+    // A runner token's user must stay in the token's Agent; the database refuses moving it out.
+    const moved = service.issueToken(input);
+    expect(() => connection.db.update(accessTokens).set({ agentId: null })
+      .where(eq(accessTokens.id, moved.record.id)).run()).toThrow("user_agent_mismatch");
+    expect(service.verifyBearer(moved.token, { now: 2000 }).subject.id).toBe(input.userId);
 
     for (const item of cases) {
       const issued = service.issueToken(input);
@@ -132,12 +114,12 @@ describe("AccessTokenService", () => {
 
   test("rejects expired revoked and tampered tokens", () => {
     const issued = service.issueToken(
-      baseTokenInput(user.id, { now: 1000, ttlMs: 5000 }),
+      baseTokenInput(account, { now: 1000, ttlMs: 5000 }),
     );
     expect(() => service.verifyBearer(issued.token, { now: 7000 })).toThrow(
       "expired_access_token",
     );
-    service.revokeToken(issued.record.id, user.id, 2000);
+    service.revokeToken(issued.record.id, account, 2000);
     expect(() => service.verifyBearer(issued.token, { now: 3000 })).toThrow(
       "revoked_access_token",
     );
@@ -150,7 +132,7 @@ describe("AccessTokenService", () => {
     const started = service.startCliAuthSession({
       now: 1000,
     });
-    service.approveCliAuthSession(started.userCode, user.id, 2000);
+    service.approveCliAuthSession(started.userCode, account, 2000);
     const polled = service.pollCliAuthSession(started.deviceCode, { now: 3000 });
     expect(polled.status).toBe("approved");
     expect(service.pollCliAuthSession(started.deviceCode, { now: 4000 }).status)
@@ -161,8 +143,10 @@ describe("AccessTokenService", () => {
     const started = service.startCliAuthSession({
       now: 1000,
     });
+    // The proof names the chat sender's user; it is linked to the account as that Agent's owner.
+    const owner = fixtureScope(connection.db, account).ownerUserId;
     const proof = service.issueChannelAuthToken({
-      userId: user.id,
+      userId: owner,
       channelType: "feishu",
       channelId: "feishu-main",
       channelIdentityId: "identity-token-user",
@@ -188,7 +172,7 @@ describe("AccessTokenService", () => {
     if (polled.status !== "approved") {
       throw new Error(`expected approved poll result, got ${polled.status}`);
     }
-    expect(polled.user.id).toBe(user.id);
+    expect(polled.account.id).toBe(account);
     expect(
       connection.db.select().from(channelAuthTokens).all()[0]?.consumedAt,
     ).toBe(2000);
@@ -205,7 +189,7 @@ describe("AccessTokenService", () => {
     const started = service.startCliAuthSession({
       now: 1000,
     });
-    service.approveCliAuthSession(started.userCode, user.id, 2000);
+    service.approveCliAuthSession(started.userCode, account, 2000);
     const first = service.pollCliAuthSession(started.deviceCode, { now: 3000 });
     const second = service.pollCliAuthSession(started.deviceCode, { now: 4000 });
 
@@ -219,13 +203,13 @@ describe("AccessTokenService", () => {
     expect(cliTokens).toHaveLength(1);
   });
 
-  test("does not let one user revoke another user's token", () => {
-    const issued = service.issueToken(baseTokenInput(user.id));
+  test("does not let one account revoke another account's token", () => {
+    const issued = service.issueToken(baseTokenInput(account));
 
-    service.revokeToken(issued.record.id, otherUser.id, 2000);
+    service.revokeToken(issued.record.id, otherAccount, 2000);
 
-    expect(service.verifyBearer(issued.token, { now: 3000 }).user.id).toBe(
-      user.id,
+    expect(service.verifyBearer(issued.token, { now: 3000 }).subject.id).toBe(
+      account,
     );
   });
 
@@ -234,7 +218,7 @@ describe("AccessTokenService", () => {
       runnerTokenInput({ttlMs: 24 * 60 * 60 * 1000}),
     );
     const cli = service.issueToken(
-      baseTokenInput(user.id, {
+      baseTokenInput(account, {
         source: "cli",
         role: "user",
         now: 1000,
@@ -256,11 +240,11 @@ describe("AccessTokenService", () => {
 });
 
 function baseTokenInput(
-  userId: string,
+  accountId: string,
   overrides: Partial<IssueLunaAccessTokenInput> = {},
 ): IssueLunaAccessTokenInput {
   return {
-    userId,
+    accountId,
     name: "Test token",
     source: "cli",
     role: "user",

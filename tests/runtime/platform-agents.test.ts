@@ -4,16 +4,14 @@ import { drizzle } from "drizzle-orm/bun-sqlite";
 import { migrate } from "drizzle-orm/bun-sqlite/migrator";
 import { AgentStore } from "../../src/agents/agent-store";
 import * as schema from "../../src/data/schema";
+import { fixtureAccount, fixtureUser } from "../helpers/platform-fixtures";
 
 function fixture() {
   const sqlite = new Database(":memory:");
   sqlite.exec("PRAGMA foreign_keys=ON");
   const db = drizzle(sqlite, {schema});
   migrate(db, {migrationsFolder: "src/data/drizzle"});
-  const timestamp = new Date().toISOString();
-  for (const id of ["owner-a", "owner-b", "guest"]) {
-    db.insert(schema.users).values({id, kind: "human", displayName: id, status: "active", createdAt: timestamp, updatedAt: timestamp}).run();
-  }
+  for (const id of ["owner-a", "owner-b", "guest"]) fixtureAccount(db, id);
   return {sqlite, db, store: new AgentStore(db)};
 }
 
@@ -29,20 +27,22 @@ test("Agent creation is atomic and idempotent with a distinct default Shadow ide
     expect(main.agentId).toBe(first.id);
     expect(other.replyUserId).not.toBe(main.replyUserId);
     expect(main.replyUserId).not.toBe("luna:bot");
-    expect(sqlite.query("SELECT kind FROM users WHERE id=?").get(other.replyUserId)).toEqual({kind: "system"});
+    expect(sqlite.query("SELECT kind FROM users WHERE id=?").get(other.replyUserId)).toEqual({kind: "shadow"});
     expect(sqlite.query("PRAGMA foreign_key_check").all()).toEqual([]);
   } finally {sqlite.close();}
 });
 
 test("Feishu actors can use a Shadow while ownership protects management", () => {
-  const {sqlite, store} = fixture();
+  const {sqlite, db, store} = fixture();
   try {
     const a = store.create("owner-a", {name: "A"}, "a");
     const b = store.create("owner-b", {name: "B"}, "b");
+    const feishuUser = fixtureUser(db, a.id, "feishu-guest");
     expect(() => store.requireOwner("guest", a.id)).toThrow("agent_access_denied");
-    expect(store.requireScope("guest", {agentId: a.id, shadowId: a.defaultShadowId}).id).toBe(a.defaultShadowId);
+    expect(store.requireScope(feishuUser, {agentId: a.id, shadowId: a.defaultShadowId}).id).toBe(a.defaultShadowId);
     expect(() => store.createShadow("guest", a.id, {name: "X"}, "x")).toThrow("agent_access_denied");
-    expect(() => store.requireScope("guest", {agentId: a.id, shadowId: b.defaultShadowId})).toThrow("scope_mismatch");
+    expect(() => store.requireScope(feishuUser, {agentId: a.id, shadowId: b.defaultShadowId})).toThrow("scope_mismatch");
+    expect(() => store.requireScope(feishuUser, {agentId: b.id, shadowId: b.defaultShadowId})).toThrow("agent_access_denied");
   } finally {sqlite.close();}
 });
 
@@ -55,7 +55,7 @@ test("database rejects missing or foreign default Shadow pointers and rolls back
       sqlite.query("UPDATE luna_agents SET default_shadow_id=? WHERE id=?").run(b.defaultShadowId, a.id);
     })()).toThrow();
     expect(store.get(a.id).defaultShadowId).toBe(a.defaultShadowId);
-    expect(() => store.create("guest-missing", {name: "bad"}, "bad")).toThrow("active_user_required");
+    expect(() => store.create("guest-missing", {name: "bad"}, "bad")).toThrow("active_account_required");
     expect(sqlite.query("SELECT count(*) AS count FROM luna_agents").get()).toEqual({count: 2});
   } finally {sqlite.close();}
 });
@@ -84,7 +84,7 @@ test("self-service API rejects missing keys, forged ownership and unauthenticate
   }}>().use("*", async (c, next) => {
     const id = c.req.header("Test-Actor");
     if (id) {
-      c.set("dashboardAuthSession", {authenticated: true, user: {id, name: id, provider: "test"}});
+      c.set("dashboardAuthSession", {authenticated: true, account: {id, name: id, provider: "test"}});
       c.set("lunaRequestAuthKind", "dashboard-cookie");
     }
     await next();
@@ -111,7 +111,8 @@ test("self-service API rejects missing keys, forged ownership and unauthenticate
     expect(renamed.status).toBe(200);
     expect(await renamed.json()).toMatchObject({shadow: {id: agent.defaultShadowId, replyUserId, name: "Renamed"}});
     expect(sqlite.query("SELECT display_name FROM users WHERE id=?").get(replyUserId)).toEqual({display_name: "Renamed"});
-    const grantRequest = (target: string, subjectId = "owner-a") => app.request(`/agents/${agent.id}/authorization-rules`, {
+    const ownerUserId = new AgentStore(db).ownerUserId(agent.id);
+    const grantRequest = (target: string, subjectId = ownerUserId) => app.request(`/agents/${agent.id}/authorization-rules`, {
       method: "POST", headers: {"Test-Actor": "owner-a", "Content-Type": "application/json"},
       body: JSON.stringify({subjectType: "user", subjectId, target, matchType: "exact", effect: "allow"}),
     });
@@ -121,7 +122,8 @@ test("self-service API rejects missing keys, forged ownership and unauthenticate
     const ownerHeaders = {"Test-Actor": "owner-a", "Content-Type": "application/json"};
     expect((await app.request(accessPath, {headers: ownerHeaders})).status).toBe(404);
     expect((await app.request(accessPath, {method:"PUT", headers: ownerHeaders})).status).toBe(404);
-    expect((await grantRequest("workspace.knowledge.read", "guest")).status).toBe(201);
+    expect((await grantRequest("workspace.knowledge.read", "guest")).status).toBe(404);
+    expect((await grantRequest("workspace.knowledge.read", fixtureUser(db, agent.id, "guest-user"))).status).toBe(201);
     const guestHeaders = {"Test-Actor": "guest"};
     expect(await (await app.request("/agents", {headers:guestHeaders})).json()).toMatchObject({agents: []});
     for (const path of ["", "/shadows", "/memories", "/authorization-rules"]) {

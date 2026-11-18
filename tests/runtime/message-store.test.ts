@@ -1,4 +1,4 @@
-import {fixtureSessionOwnership} from "../helpers/platform-fixtures";
+import {fixtureSessionOwnership,fixtureUser} from "../helpers/platform-fixtures";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -933,8 +933,11 @@ function sessionRow(db: import("../../src/data").DrizzleDB,input: {
   readonly threadKey?: string | null;
   readonly parentSessionId?: string | null;
 }): typeof sessions.$inferInsert {
+  const ownership = fixtureSessionOwnership(db,"feishu",input.channelId);
+  // The session's creator is a user of the session's Agent.
+  fixtureUser(db, ownership.agent_id, "user-1");
   return {
-    ...fixtureSessionOwnership(db,"feishu",input.channelId),
+    ...ownership,
     id: input.id,
     surface_key: input.surfaceKey,
     channel_type: "feishu",

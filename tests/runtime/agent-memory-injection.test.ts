@@ -10,7 +10,7 @@ import {AgentMemoryStore, type MemoryWriter} from "@/agents/agent-memory-store";
 import {memoryInjection} from "@/agents/agent-memory-injection";
 import {RunnerContextStore} from "@/runners/runner-context-store";
 import {AuthorizationRuleStore} from "@/server/policy/authorization-rule-store";
-import {fixtureNamedSession} from "../helpers/platform-fixtures";
+import {fixtureNamedSession, fixtureUser} from "../helpers/platform-fixtures";
 import {MessageStore} from "@/sessions/message-store";
 
 let home: string, db: DataConnection<typeof schema>, store: AgentMemoryStore, contexts: RunnerContextStore;
@@ -18,16 +18,17 @@ let scope: ReturnType<typeof fixtureNamedSession>, contextId: string, sibling: s
 beforeEach(() => {
   home = mkdtempSync(join(tmpdir(), "luna-memory-injection-")); setLunaHome(home); db = new DataConnection(schema);
   scope = fixtureNamedSession(db.db, "session", "alice");
+  for (const id of ["lisi", "zhangsan", "bob", "carol", "wangwu"]) fixtureUser(db.db, scope.agentId, id);
   sibling = new AgentStore(db.db).createShadow("alice", scope.agentId, {name: "sibling"}, "sibling").id;
   store = new AgentMemoryStore(db.db); contexts = new RunnerContextStore(db.db);
   contextId = contexts.resolveForSession("session", "codex").id;
 });
 afterEach(() => { db.close(); rmSync(home, {recursive: true, force: true}); });
 
-const here = (): MemoryWriter => ({agentId: scope.agentId, kind: "inline", trusted: true, userId: "alice", shadowId: scope.shadowId, sessionId: "session", contextId});
-const elsewhere = (): MemoryWriter => ({agentId: scope.agentId, kind: "inline", trusted: true, userId: "alice", shadowId: sibling, sessionId: "other-session", contextId: "other-context"});
+const here = (): MemoryWriter => ({agentId: scope.agentId, kind: "inline", trusted: true, userId: "user:alice", shadowId: scope.shadowId, sessionId: "session", contextId});
+const elsewhere = (): MemoryWriter => ({agentId: scope.agentId, kind: "inline", trusted: true, userId: "user:alice", shadowId: sibling, sessionId: "other-session", contextId: "other-context"});
 const all = {get agentId() { return scope.agentId; }, all: true as const};
-const inject = (message?: string) => memoryInjection(db.db, {...scope, actorUserId: "alice", sessionId: "session", taskId: null, runnerContextId: contextId}, message);
+const inject = (message?: string) => memoryInjection(db.db, {...scope, actorUserId: "user:alice", sessionId: "session", taskId: null, runnerContextId: contextId}, message);
 const rule = {type: "feedback" as const, title: "回复语言", description: "对外回复一律用中文", body: "中文", core: true};
 const weekly = {type: "feedback" as const, title: "周报格式", description: "周报不要用表格", body: "用列表"};
 const freeze = {type: "project" as const, title: "发布冻结", description: "11-20 前冻结发布", body: "不合并功能分支"};
@@ -38,7 +39,7 @@ test("a conversation starts with core entries and entries about the people prese
   expect(inject("你好").text).toBeUndefined();
   const core = store.add(elsewhere(), rule);
   store.add(elsewhere(), weekly); store.add(elsewhere(), freeze);
-  const me = store.add(elsewhere(), {type: "person", title: "Alice", description: "只要结论", body: "b", subjectUserId: "alice"});
+  const me = store.add(elsewhere(), {type: "person", title: "Alice", description: "只要结论", body: "b", subjectUserId: "user:alice"});
   store.add(elsewhere(), {type: "person", title: "张三", description: "d", body: "b", subjectUserId: "zhangsan"});
   const first = turn("你好")!;
   expect(first).toContain("## Agent memory: always in effect");
@@ -76,7 +77,7 @@ test("later turns report changes made elsewhere only for entries this conversati
   store.update(elsewhere(), all, shown.id, {expectedRevision: 1, description: "周报改用表格"});
   store.remove(elsewhere(), all, core.id, 1);
   const added = store.add(elsewhere(), {...rule, title: "新规则", description: "线上操作先确认"});
-  const person = store.add(elsewhere(), {type: "person", title: "Alice", description: "只要结论", body: "b", subjectUserId: "alice"});
+  const person = store.add(elsewhere(), {type: "person", title: "Alice", description: "只要结论", body: "b", subjectUserId: "user:alice"});
   const delta = turn("继续")!;
   expect(delta).toContain("## Agent memory updates");
   expect(delta).toContain("周报改用表格");
@@ -112,7 +113,7 @@ test("injection respects visibility and an explicit deny of memory.read", () => 
   expect(inject("写周报格式的周报").text).toBeUndefined();
   store.add(elsewhere(), rule);
   expect(inject("你好").text).toContain("回复语言");
-  new AuthorizationRuleStore(db.db, {kind: "agent", agentId: scope.agentId}).addGrant({subjectType: "user", subjectId: "alice", target: "memory.read", effect: "deny"});
+  new AuthorizationRuleStore(db.db, {kind: "agent", agentId: scope.agentId}).addGrant({subjectType: "user", subjectId: "user:alice", target: "memory.read", effect: "deny"});
   expect(inject("你好").text).toBeUndefined();
 });
 
@@ -142,7 +143,6 @@ test("a conversation is told about people who join it later, and that an entry i
   const bob = store.add(elsewhere(), {type: "person", title: "Bob", description: "喜欢先看结论", body: "b", subjectUserId: "bob"});
   expect(turn("继续")).toBeUndefined();
   // bob speaks in the session: what was known about him before is told now.
-  db.db.insert(schema.users).values({id: "bob", kind: "human", displayName: "Bob", status: "active", createdAt: "now", updatedAt: "now"}).run();
   new MessageStore(db.db).appendOnce({sessionId: "session", channelMessageKey: "bob-1", role: "user", senderUserId: "bob",
     content: [{type: "text", text: "我也在"}], channel: {type: "dashboard", id: "dashboard"}});
   expect(turn("继续")).toContain(`[${bob.id}] (person) Bob`);

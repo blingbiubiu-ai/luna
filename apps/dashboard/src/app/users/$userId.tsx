@@ -1,5 +1,4 @@
 import { useAgentBasePath } from "@/lib/agent-route";
-import { DeleteRecordButton } from "@/components/delete-record-button";
 import { UiText } from "@/lib/i18n";
 import { useTranslation } from "@/lib/i18n";
 import { createFileRoute } from "@tanstack/react-router";
@@ -10,7 +9,6 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
-  useDashboardAuthSession,
   useGroups,
   useOperations,
   useUser,
@@ -18,6 +16,8 @@ import {
   useUserOperationGrantDeleteMutation,
   useUserGroupMembershipDeleteMutation,
   useUserGroupMembershipMutation,
+  useUserRemoveMutation,
+  useUserUpdateMutation,
 } from "@/lib/api";
 import type { DashboardUser } from "@/lib/api";
 import { UserProfile } from "./user-profile";
@@ -31,9 +31,13 @@ function UserDetailPage() {
   const { agentId, userId } = Route.useParams();
   const base = useAgentBasePath();
   const { data: user, error, isError, isLoading } = useUser(userId, agentId);
-  const { data: authSession, isError: authError } = useDashboardAuthSession();
-  const currentUserId = !authError && authSession?.authenticated ? authSession.user?.id : undefined;
   const resolvedUserId = user?.id ?? userId;
+  const update = useUserUpdateMutation(resolvedUserId, agentId);
+  const remove = useUserRemoveMutation(resolvedUserId, agentId);
+  // Shadows, Luna's own authors and the owner are not managed from this page.
+  const manageable = user?.canManageUsers === true && user.isOwner !== true && (user.kind === "human" || user.kind === "bot");
+  const pending = update.isPending || remove.isPending;
+  const actionError = update.error ?? remove.error;
   const canManageUsers = user?.canManageUsers === true;
   const groups = useGroups(agentId, canManageUsers);
   const membership = useUserGroupMembershipMutation(resolvedUserId);
@@ -75,9 +79,27 @@ function UserDetailPage() {
             <UiText>{user.kind}</UiText>
           </Badge>
         ) : null}
-        {user?.status === "deleted" ? <Badge variant="secondary">已删除</Badge> : null}
-        {user?.canDeleteUsers === true && user.status !== "deleted" && user.kind !== "system" && currentUserId !== undefined && user.id !== currentUserId ? <DeleteRecordButton kind="users" id={user.id} name={user.displayName} onDeleted={() => { window.location.assign(`${base}/users`); }} /> : null}
+        {user?.isOwner === true ? <Badge variant="secondary">所有者</Badge> : null}
+        {user?.status === "blocked" ? <Badge variant="destructive">已拉黑</Badge> : null}
+        {user && manageable ? (
+          <div className="flex items-center gap-1">
+            <Button variant="ghost" size="sm" disabled={pending} onClick={() => {
+              const name = window.prompt("在此 Agent 中显示的名字", user.displayName)?.trim();
+              if (name && name !== user.displayName) update.mutate({ displayName: name });
+            }}>改名</Button>
+            <Button variant="ghost" size="sm" disabled={pending} onClick={() => {
+              const blocking = user.status !== "blocked";
+              if (!blocking || window.confirm(`拉黑「${user.displayName}」？此 Agent 将不再接收和回复 TA 的消息。`)) update.mutate({ status: blocking ? "blocked" : "active" });
+            }}>{user.status === "blocked" ? "取消拉黑" : "拉黑"}</Button>
+            <Button variant="ghost" size="sm" className="text-destructive hover:text-destructive" disabled={pending} onClick={() => {
+              if (window.confirm(`把「${user.displayName}」从此 Agent 的用户列表移除？历史记录保留；TA 再发消息会重新出现。`)) {
+                remove.mutate(undefined, { onSuccess: () => { window.location.assign(`${base}/users`); } });
+              }
+            }}>移除</Button>
+          </div>
+        ) : null}
       </header>
+      {actionError ? <p role="alert" className="border-b px-4 py-2 text-sm text-destructive">{actionError instanceof Error ? actionError.message : String(actionError)}</p> : null}
 
       <main className="space-y-4 p-4">
         {isError ? (

@@ -55,16 +55,16 @@ export class ChannelConfigStore {
    };
   });
  }
- retire(actorUserId: string, agentId: string, channelId: string, bindingId: string) {
+ retire(accountId: string, agentId: string, channelId: string, bindingId: string) {
   return this.db.transaction(tx => {
    const db = tx as unknown as DrizzleDB;
-   new AgentStore(db).requireOwner(actorUserId, agentId);
+   new AgentStore(db).requireOwner(accountId, agentId);
    const binding = tx.select().from(shadowBotBindings).where(eq(shadowBotBindings.id, bindingId)).get();
    if (binding?.channelConfigId !== channelId || binding.agentId !== agentId) {
     throw new AgentError("bot_binding_not_found", 404);
    }
    if (binding.status === "retired") return;
-   new BotBindingStore(db).retire(actorUserId, bindingId);
+   new BotBindingStore(db).retire(accountId, bindingId);
    tx.update(channelConfigs).set({enabled: false, updatedAt: Date.now()}).where(eq(channelConfigs.id, channelId)).run();
   });
  }
@@ -74,11 +74,11 @@ export class ChannelConfigStore {
  .innerJoin(lunaAgents,and(eq(lunaAgents.id,channelConfigs.agentId),eq(lunaAgents.status,"active")))
  .where(eq(channelConfigs.enabled,true)).all().map(({channel:row})=>({id:row.id,type:row.type,name:row.name,description:"Database-managed channel",params:{app_id:row.appId,app_secret:this.decrypt(row),chat_id:row.chatId,...(row.botIdentity?{bot_open_id:row.botIdentity.externalId}:{})}}));}
  private decrypt(row:typeof channelConfigs.$inferSelect){return this.cipher.decrypt({...row.secret,profileId:row.id,revisionId:"channel-v1",key:"app_secret"});}
- async save(raw:unknown,actorUserId:string){
+ async save(raw:unknown,accountId:string){
   const input=feishuConfigInput.parse(raw);
   const agents=new AgentStore(this.db);
-  agents.requireOwner(actorUserId,input.agentId);
-  if (input.shadowId) agents.requireScope(actorUserId, {agentId: input.agentId, shadowId: input.shadowId});
+  agents.requireOwner(accountId,input.agentId);
+  if (input.shadowId) agents.requireScope(agents.ownerUserId(input.agentId), {agentId: input.agentId, shadowId: input.shadowId});
   const old=this.db.select().from(channelConfigs).where(eq(channelConfigs.id,input.id)).get();
   if(old&&old.agentId!==input.agentId)throw new Error("channel_scope_mismatch");
   if(old&&old.appId!==input.appId)throw new Error("已有通道不能更换 App ID，请新建通道。");
@@ -93,21 +93,21 @@ export class ChannelConfigStore {
     // Provider verification yields; recheck ownership against the committed row.
     const current=tx.select().from(channelConfigs).where(eq(channelConfigs.id,input.id)).get();
     if(current&&(current.agentId!==input.agentId||current.appId!==input.appId))throw new AgentError("channel_scope_mismatch",409);
-    const shadowId = input.shadowId ?? this.resolveBotShadow(db, actorUserId, input);
+    const shadowId = input.shadowId ?? this.resolveBotShadow(db, accountId, input);
     const bindings = new BotBindingStore(db);
     const active = bindings.activeForChannel(input.id);
     if (active && active.shadowId !== shadowId && new AgentStore(db).shadow(active.shadowId).status === "deleted") {
-      bindings.retire(actorUserId, active.id);
+      bindings.retire(accountId, active.id);
     }
     const row={id:input.id,agentId:input.agentId,type:"feishu",name:input.name,appId:input.appId,secret:encrypted,chatId:input.chatId,enabled:input.enabled,botIdentity:identity,updatedAt:Date.now()};
     tx.insert(channelConfigs).values(row).onConflictDoUpdate({target:channelConfigs.id,set:row}).run();
-    bindings.bind(actorUserId,shadowId,input.id);
+    bindings.bind(accountId,shadowId,input.id);
     if(identity) recordShadowBotIdentity(db,input.id,identity);
   });
   return this.list().find(row=>row.id===input.id)!;
  }
 
- private resolveBotShadow(db: DrizzleDB, actorUserId: string, input: z.infer<typeof feishuConfigInput>): string {
+ private resolveBotShadow(db: DrizzleDB, accountId: string, input: z.infer<typeof feishuConfigInput>): string {
   const bindings = new BotBindingStore(db);
   const active = bindings.activeForChannel(input.id);
   if (active) return active.shadowId;
@@ -121,7 +121,7 @@ export class ChannelConfigStore {
     )).get();
     if (!occupied) return previous.shadowId;
   }
-  return agents.createShadow(actorUserId, input.agentId, {name: input.name},
+  return agents.createShadow(accountId, input.agentId, {name: input.name},
     `channel:${input.id}:${previous?.id ?? "initial"}`).id;
  }
 }

@@ -38,7 +38,9 @@ afterEach(() => {
 describe("unified policy", () => {
   test("Operation policy evaluates typed grants", async () => {
     const connection = await openFreshDatabase();
+    const agent = fixtureAgent(connection.db, "policy-owner");
     const user = new IdentityDirectory(connection.db).materializeIdentityClaims({
+      agentId: agent.id,
       kind: "human",
       displayName: "Knowledge Writer",
       claims: [
@@ -51,7 +53,7 @@ describe("unified policy", () => {
         },
       ],
     });
-    const grantStore = new AuthorizationRuleStore(connection.db, {kind: "agent", agentId: fixtureAgent(connection.db, user.id).id});
+    const grantStore = new AuthorizationRuleStore(connection.db, {kind: "agent", agentId: agent.id});
     grantStore.addGrant({ matchType: "exact",
       subjectType: "user",
       subjectId: user.id,
@@ -137,11 +139,12 @@ describe("wildcard operation grants", () => {
     try {
       const { resolveOperationPolicy } = await import("../../src/operations/operation-registry");
       const { validateOperationGrantTarget } = await import("../../src/server/routes/groups");
+      const agent = fixtureAgent(connection.db, "wildcard-owner");
       const user = new IdentityDirectory(connection.db).materializeIdentityClaims({
-        kind: "human", displayName: "Wildcard test",
+        agentId: agent.id, kind: "human", displayName: "Wildcard test",
         claims: [{ namespace: "local", kind: "local_id", value: "wildcard-test", scope: "", confidence: "manual" }],
       });
-      const store = new AuthorizationRuleStore(connection.db, {kind: "agent", agentId: fixtureAgent(connection.db, user.id).id});
+      const store = new AuthorizationRuleStore(connection.db, {kind: "agent", agentId: agent.id});
       const base = { subjectType: "user" as const, subjectId: user.id };
       store.addGrant({ matchType: "prefix", ...base, target: "workspace", effect: "allow" });
       const deny = store.addGrant({ matchType: "prefix", ...base, target: "workspace.knowledge.write", effect: "deny" });

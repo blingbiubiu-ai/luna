@@ -69,7 +69,7 @@ export class ActiveAgentConfigService {
         profile_id: profile.id,
         revision_id: revision.id,
         activation_sequence: (current?.activation_sequence ?? 0) + 1,
-        activated_by: actorId,
+        activated_by_account_id: actorId,
         activated_at: Date.now(),
       };
       this.db.insert(activeAgentConfig).values(values).onConflictDoUpdate({

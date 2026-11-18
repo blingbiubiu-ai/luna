@@ -10,7 +10,6 @@ import { Hono, type MiddlewareHandler } from "hono";
 
 import { DataConnection } from "../../src/data";
 import * as schema from "../../src/data/schema";
-import { IdentityDirectory } from "../../src/identity/identity-directory";
 import {
   createDashboardAuthMiddleware,
   DashboardAuthService,
@@ -38,7 +37,9 @@ describe("workspace routes", () => {
   let agentId:string;
   let knowledgeRoot:string;
   let connection: DataConnection<typeof schema>;
-  let user: { id: string; displayName: string };
+  // The signed-in account; inside its Agent it acts as the owner user.
+  let account: { id: string; displayName: string };
+  let ownerUserId: string;
   let accessTokenService: AccessTokenService;
   let app: Hono;
 
@@ -50,20 +51,8 @@ describe("workspace routes", () => {
 
     setLunaHome(home);
     connection = new DataConnection(schema);
-    user = new IdentityDirectory(connection.db).materializeIdentityClaims({
-      kind: "human",
-      displayName: "Writer",
-      claims: [
-        {
-          namespace: "local",
-          kind: "local_id",
-          value: "writer",
-          scope: "",
-          confidence: "manual",
-        },
-      ],
-    });
-    const scope=fixtureScope(connection.db,user.id);agentId=scope.agentId;
+    account = { id: "writer", displayName: "Writer" };
+    const scope=fixtureScope(connection.db,account.id);agentId=scope.agentId;ownerUserId=scope.ownerUserId;
     knowledgeRoot=createKnowledgeWorkspaceRepository(repoRoot,agentId).root;
     mkdirSync(join(knowledgeRoot, "wiki/domains"), { recursive: true });
     mkdirSync(join(knowledgeRoot, "archive"), { recursive: true });
@@ -81,7 +70,7 @@ describe("workspace routes", () => {
       signingSecret: "test-workspace-access-token-secret",
     });
     app = new Hono()
-      .use("*", authenticateTestUser(user, issueClaims()))
+      .use("*", authenticateTestUser(account, issueClaims()))
       .route("/api/workspaces", createWorkspaceRoutes({ db: connection.db, serviceHome:repoRoot }));
   });
 
@@ -126,7 +115,7 @@ describe("workspace routes", () => {
   test("dashboard cookie session can access workspace with DB grant and no access-token claims", async () => {
     grant("workspace.knowledge.read");
     const auth = new DashboardAuthService({
-      provider: dashboardProvider(user),
+      provider: dashboardProvider(account),
       sessionSecret: "workspace-cookie-session-secret",
     });
     const login = await auth.login("dashboard-token");
@@ -245,7 +234,7 @@ describe("workspace routes", () => {
   function grant(operationId: string, effect: "allow" | "deny" = "allow"): void {
     new AuthorizationRuleStore(connection.db,{kind:"agent",agentId}).addGrant({ matchType: "exact",
       subjectType: "user",
-      subjectId: user.id,
+      subjectId: ownerUserId,
       target: operationId,
       effect,
     });
@@ -259,7 +248,7 @@ describe("workspace routes", () => {
 
   function issueClaims(): LunaAccessTokenClaims {
     return accessTokenService.issueToken({
-      userId: user.id,
+      accountId: account.id,
       name: "Workspace route test token",
       source: "cli",
       role: "user",
@@ -270,7 +259,7 @@ describe("workspace routes", () => {
 
   function appWithClaims(claims: LunaAccessTokenClaims): Hono {
     return new Hono()
-      .use("*", authenticateTestUser(user, claims))
+      .use("*", authenticateTestUser(account, claims))
       .route(
         "/api/workspaces",
         createWorkspaceRoutes({ db: connection.db, serviceHome:repoRoot }),
@@ -279,15 +268,15 @@ describe("workspace routes", () => {
 });
 
 function authenticateTestUser(
-  user: { readonly id: string; readonly displayName: string },
+  account: { readonly id: string; readonly displayName: string },
   claims: LunaAccessTokenClaims,
 ): MiddlewareHandler {
   return async (c, next) => {
     c.set("dashboardAuthSession", {
       authenticated: true,
-      user: {
-        id: user.id,
-        name: user.displayName,
+      account: {
+        id: account.id,
+        name: account.displayName,
         provider: "test-access-token",
       },
     });
@@ -298,15 +287,15 @@ function authenticateTestUser(
 }
 
 function dashboardProvider(
-  user: { readonly id: string; readonly displayName: string },
+  account: { readonly id: string; readonly displayName: string },
 ): DashboardAuthProvider {
   return {
     id: "test-dashboard",
     async authenticateToken(token: string) {
       return token === "dashboard-token"
         ? {
-            id: user.id,
-            name: user.displayName,
+            id: account.id,
+            name: account.displayName,
             provider: "test-dashboard",
           }
         : null;

@@ -12,41 +12,64 @@ import { users } from "../../src/data/schema";
 import { feishuIdentityMetadata } from "../../src/identity/feishu-identity-scopes";
 import { ChannelDirectoryStore } from "../../src/channels/directory-store";
 import { AgentStore } from "../../src/agents/agent-store";
+import { AccountStore } from "../../src/identity/account-store";
 import { AuthorizationRuleStore } from "../../src/server/policy/authorization-rule-store";
 
-/** Explicit test tenant; never used by production as a default scope. */
-export function fixtureAgent(db: DrizzleDB, ownerUserId = "fixture-owner") {
-  const now = String(Date.now());
-  db.insert(users).values({id: ownerUserId, kind: "human", displayName: ownerUserId,
-    status: "active", createdAt: now, updatedAt: now}).onConflictDoNothing().run();
-  return new AgentStore(db).create(ownerUserId, {name: "Test Agent"}, "fixture-agent");
+/** Signs an account in, as the Dashboard does on first login. */
+export function fixtureAccount(db: DrizzleDB, accountId: string) {
+  return new AccountStore(db).ensure({id: accountId, name: accountId});
 }
 
-export function fixturePlatformAdmin(db: DrizzleDB, userId: string) {
+/**
+ * The owner's user in a fixture Agent is named `user:<account>`, distinct from
+ * the account id, so a test cannot pass one where the other is meant.
+ */
+export function fixtureOwnerUserId(accountId: string) {
+  return `user:${accountId}`;
+}
+
+/** Explicit test tenant; never used by production as a default scope. */
+export function fixtureAgent(db: DrizzleDB, ownerAccountId = "fixture-owner") {
+  fixtureAccount(db, ownerAccountId);
+  const agent = new AgentStore(db).create(ownerAccountId, {name: "Test Agent"}, "fixture-agent");
+  const ownerUserId = new AgentStore(db).ownerUserId(agent.id), named = fixtureOwnerUserId(ownerAccountId);
+  if (ownerUserId !== named && !db.select({id: users.id}).from(users).where(eq(users.id, named)).get()) {
+    db.update(users).set({id: named}).where(eq(users.id, ownerUserId)).run();
+  }
+  return agent;
+}
+
+/** A human user of an Agent who is not its owner, as a channel sender would be. */
+export function fixtureUser(db: DrizzleDB, agentId: string, userId: string, kind: "human" | "bot" = "human", displayName = userId) {
   const now = String(Date.now());
-  db.insert(users).values({id: userId, kind: "human", displayName: userId,
-    status: "active", createdAt: now, updatedAt: now}).onConflictDoNothing().run();
+  db.insert(users).values({id: userId, agentId, kind, displayName, status: "active", createdAt: now, updatedAt: now})
+    .onConflictDoNothing().run();
+  return userId;
+}
+
+export function fixturePlatformAdmin(db: DrizzleDB, accountId: string) {
+  fixtureAccount(db, accountId);
   new AuthorizationRuleStore(db, {kind: "platform"}).addGrant({
-    subjectType: "user", subjectId: userId, target: "system.admin", effect: "allow",
+    subjectType: "user", subjectId: accountId, target: "system.admin", effect: "allow",
   });
 }
 
 /** Explicit Dashboard scope for a test's human owner. */
-export function fixtureScope(db: DrizzleDB, ownerUserId = "fixture-owner") {
-  const agent = fixtureAgent(db, ownerUserId);
-  return {agentId: agent.id, shadowId: agent.defaultShadowId};
+export function fixtureScope(db: DrizzleDB, ownerAccountId = "fixture-owner") {
+  const agent = fixtureAgent(db, ownerAccountId);
+  return {agentId: agent.id, shadowId: agent.defaultShadowId, ownerUserId: new AgentStore(db).ownerUserId(agent.id)};
 }
 
 /** Creates explicit ownership for raw session rows used by persistence tests. */
-export function fixtureSessionOwnership(db: DrizzleDB, channelType: string, channelId: string, ownerUserId = "fixture-owner") {
-  const scope = fixtureScope(db, ownerUserId);
+export function fixtureSessionOwnership(db: DrizzleDB, channelType: string, channelId: string, ownerAccountId = "fixture-owner") {
+  const scope = fixtureScope(db, ownerAccountId);
   const agents = new AgentStore(db);
   if (channelType === "dashboard") return {agent_id: scope.agentId,shadow_id:scope.shadowId,binding_id:null,bot_user_id:agents.shadow(scope.shadowId).replyUserId};
-  const shadow = agents.createShadow(ownerUserId,scope.agentId,{name:channelId},`channel:${channelType}:${channelId}`);
+  const shadow = agents.createShadow(ownerAccountId,scope.agentId,{name:channelId},`channel:${channelType}:${channelId}`);
   const cipher=AgentSecretCipher.fromEnvironment({LUNA_AGENT_CONFIG_MASTER_KEY:Buffer.alloc(32,5).toString("base64")});
   db.insert(channelConfigs).values({id:channelId,agentId:scope.agentId,type:channelType,name:channelId,appId:`test:${channelType}:${channelId}`,
     secret:cipher.encrypt({profileId:channelId,revisionId:"channel-v1",key:"app_secret",plaintext:"fixture-secret"}),updatedAt:Date.now()}).onConflictDoNothing().run();
-  const binding=new BotBindingStore(db).bind(ownerUserId,shadow.id,channelId);
+  const binding=new BotBindingStore(db).bind(ownerAccountId,shadow.id,channelId);
   return {agent_id:scope.agentId,shadow_id:shadow.id,binding_id:binding.id,bot_user_id:shadow.replyUserId};
 }
 
@@ -96,7 +119,7 @@ export function fixtureNamedSession(db: DrizzleDB, id: string, actor = "user") {
   const scope = fixtureScope(db, actor);
   db.insert(sessions).values({id, agent_id: scope.agentId, shadow_id: scope.shadowId,
     bot_user_id: new AgentStore(db).shadow(scope.shadowId).replyUserId,
-    channel_type: "dashboard", channel_id: "dashboard", created_by_user_id: actor,
+    channel_type: "dashboard", channel_id: "dashboard", created_by_user_id: scope.ownerUserId,
     created_at: Date.now(), updated_at: Date.now()}).run();
   return scope;
 }

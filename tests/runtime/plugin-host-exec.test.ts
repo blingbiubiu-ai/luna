@@ -38,7 +38,7 @@ afterEach(() => {
 
 function seedTask(id: string, taskScope: typeof scope) {
   database.db.insert(schema.tasks).values({
-    id, agent_id: taskScope.agentId, shadow_id: taskScope.shadowId, creator_user_id: owner,
+    id, agent_id: taskScope.agentId, shadow_id: taskScope.shadowId, creator_user_id: taskScope.ownerUserId,
     type: "work", title: id, status: "running", created_at: 1, updated_at: 1, last_activity_at: 1,
   }).run();
 }
@@ -62,12 +62,12 @@ function makeCtx(
     scope,
     resourceOwner: {type: "task", id: taskId},
     validate: () => {
-      new AgentStore(database.db).requireScope(owner, scope);
+      new AgentStore(database.db).requireScope(scope.ownerUserId, scope);
       new TaskScopeResolver(database.db).task(taskId);
     },
     hostPermissions: m.requestedHostPermissions,
     manifest: m,
-    invocation: { pluginId: "p", operationId: "p.op", invocationId: "inv", subject: { source: "task_runner", userId: owner } },
+    invocation: { pluginId: "p", operationId: "p.op", invocationId: "inv", subject: { source: "task_runner", userId: scope.ownerUserId } },
     ...(options.executionRoot === undefined
       ? {}
       : { executionRoot: options.executionRoot }),

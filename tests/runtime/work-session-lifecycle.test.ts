@@ -32,7 +32,7 @@ import { SessionInboxStore } from "../../src/sessions/session-inbox-store";
 import { MessageStore } from "../../src/sessions/message-store";
 import { runnerContextFilePath } from "../../src/runners/runner-context-file";
 import { SessionTurnStore } from "../../src/sessions/session-turn-store";
-import { fixtureObserveFeishuSender, fixtureFeishuSender, fixtureSessionOwnership } from "../helpers/platform-fixtures";
+import { fixtureObserveFeishuSender, fixtureFeishuSender, fixtureSessionOwnership, fixtureUser } from "../helpers/platform-fixtures";
 import { config, setLunaHome } from "../../src/shared";
 import { WorkSessionLauncher } from "../../src/work/work-session-launcher";
 import { FakeFeishuChannel } from "../../extensions/channels/fake/fake-feishu-channel";
@@ -48,8 +48,9 @@ beforeEach(() => {
   mkdirSync(join(testHome, "data"), { recursive: true });
   setLunaHome(testHome);
   database = new DataConnection(lunaSchema);
-  database.db.insert(users).values({ id: "u1", kind: "human", displayName: "Work user", status: "active", profileSource: "channel", createdAt: "1000", updatedAt: "1000" }).run();
-  fixtureSessionOwnership(database.db, "feishu", "feishu-main", "u1");
+  // "u1" owns the Agent; the channel sender "u1" in these turns is a human user of that Agent.
+  const ownership = fixtureSessionOwnership(database.db, "feishu", "feishu-main", "u1");
+  fixtureUser(database.db, ownership.agent_id, "u1");
   fixtureObserveFeishuSender(database.db, "feishu-main", "user-1");
 });
 
@@ -1337,7 +1338,7 @@ test("a memory maintenance turn runs silently in the Work session's provider con
   const session = new SessionStore(database.db).createWorkSession({
     channelType: "feishu", channelId: "feishu-main", groupId: "g-maint", threadId: "t-maint", rootMessageId: "t-maint",
   });
-  database.db.insert(lunaSchema.users).values({ id: "u-maint", kind: "human", displayName: "Maint", status: "active", createdAt: "now", updatedAt: "now" }).run();
+  fixtureUser(database.db, session.agent_id, "u-maint");
   const received: { prompt: string; runnerSessionId: string | undefined; runnerKind: string | undefined }[] = [];
   const runner = new WorkRunner({
     db: database.db, runnerType: "mock", channelForMessage: () => channel,

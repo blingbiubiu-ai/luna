@@ -42,7 +42,7 @@ function app(authenticated = true) {
       (c as any).set("lunaAuthorizationDb", connection.db);
       (c as any).set("dashboardAuthSession", {
         authenticated: true,
-        user: { id: "admin", name: "Admin", provider: "test" },
+        account: { id: "admin", name: "Admin", provider: "test" },
       });
       (c as any).set("lunaRequestAuthKind", "dashboard-cookie");
       await next();

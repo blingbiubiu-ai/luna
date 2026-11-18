@@ -12,6 +12,7 @@ import type { DrizzleDB } from "@/data";
 import {
   accessTokens,
   channelAuthTokens,
+  accounts,
   cliAuthSessions,
   users,
 } from "@/data/schema";
@@ -24,7 +25,10 @@ export interface LunaAccessTokenClaims {
   readonly agentId?:string;
   readonly shadowId?:string;
   readonly tokenId: string;
-  readonly actorUserId: string;
+  /** Runner tokens act as a user of their Agent. */
+  readonly actorUserId?: string;
+  /** Personal CLI/MCP tokens belong to an account. */
+  readonly accountId?: string;
   readonly source: LunaAccessTokenSource;
   readonly role: LunaAccessTokenRole;
   readonly issuedAt: number;
@@ -38,7 +42,10 @@ export interface LunaAccessTokenClaims {
 }
 
 export interface IssueLunaAccessTokenInput {
-  readonly userId: string;
+  /** Runner tokens: the user of the Agent the Runner acts for. */
+  readonly userId?: string;
+  /** Personal CLI/MCP tokens: the account. */
+  readonly accountId?: string;
   readonly name: string;
   readonly source: LunaAccessTokenSource;
   readonly role: LunaAccessTokenRole;
@@ -89,7 +96,7 @@ export type CliAuthSessionPollResult =
     readonly status: "approved";
     readonly accessToken: string;
     readonly expiresAt: number;
-    readonly user: { readonly id: string; readonly displayName: string };
+    readonly account: { readonly id: string; readonly displayName: string };
   };
 
 const CLI_ACCESS_TOKEN_TTL_MS = 30 * 24 * 60 * 60 * 1000;
@@ -100,6 +107,7 @@ const USER_CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 type AccessTokenRow = typeof accessTokens.$inferSelect;
 type ChannelAuthTokenRow = typeof channelAuthTokens.$inferSelect;
 type UserRow = typeof users.$inferSelect;
+type AccountRow = typeof accounts.$inferSelect;
 type AccessTokenDb = Pick<DrizzleDB, "insert" | "select" | "update">;
 
 export class AccessTokenService {
@@ -127,19 +135,22 @@ export class AccessTokenService {
     if (input.ttlMs <= 0) {
       throw new Error("invalid_access_token");
     }
-    const user = this._requireActiveUser(db, input.userId);
+    const runner = input.source === "runner";
+    if (runner ? !input.userId || input.accountId : !input.accountId || input.userId) throw new Error("invalid_access_token_subject");
+    const user = runner ? this._requireActiveUser(db, input.userId!) : undefined;
+    const account = runner ? undefined : this._requireActiveAccount(db, input.accountId!);
     const tokenId = uuid();
     const issuedAt = input.now;
     const expiresAt = input.now + input.ttlMs;
     if (input.source === "runner" && (!input.runnerKind || input.role !== "runner")) throw new Error("runner_scope_required");
     const scope=input.source==="runner"?resolveInvocationScope(this._input.db,{
-      actorUserId:input.userId,runnerKind:input.runnerKind!,runnerContextId:input.sourceRunnerJobId??"",
+      actorUserId:input.userId!,runnerKind:input.runnerKind!,runnerContextId:input.sourceRunnerJobId??"",
       sessionId:input.sourceSessionId??null,taskId:input.sourceTaskId??null,taskRunId:input.sourceTaskRunId??null,contextPackIds:[],
     }):undefined;
     const claims = normalizeLunaAccessTokenClaims({
       ...scope,
       tokenId,
-      actorUserId: user.id,
+      ...(user ? { actorUserId: user.id } : { accountId: account!.id }),
       source: input.source,
       role: input.role,
       issuedAt,
@@ -169,7 +180,8 @@ export class AccessTokenService {
         id: tokenId,
         tokenHash,
         agentId:scope?.agentId??null,shadowId:scope?.shadowId??null,
-        userId: user.id,
+        userId: user?.id ?? null,
+        accountId: account?.id ?? null,
         source: input.source,
         name: input.name,
         role: input.role,
@@ -194,8 +206,9 @@ export class AccessTokenService {
     };
   }
 
+  /** Resolves a bearer token to the user (runner) or account (personal) it acts as. */
   verifyBearer(token: string, options: { readonly now: number }): {
-    readonly user: { readonly id: string; readonly displayName: string };
+    readonly subject: { readonly kind: "user" | "account"; readonly id: string; readonly displayName: string };
     readonly claims: LunaAccessTokenClaims;
   } {
     const signedClaims = verifyLunaAccessToken(token, {
@@ -216,8 +229,10 @@ export class AccessTokenService {
     if (record.revokedAt !== null) {
       throw new Error("revoked_access_token");
     }
-    const user = this._activeUser(this._input.db, record.userId);
-    if (user === undefined) {
+    const subject = record.userId !== null
+      ? this._activeUser(this._input.db, record.userId)
+      : record.accountId !== null ? this._activeAccount(this._input.db, record.accountId) : undefined;
+    if (subject === undefined) {
       throw new Error("invalid_access_token");
     }
     this._input.db
@@ -226,16 +241,17 @@ export class AccessTokenService {
       .where(eq(accessTokens.id, record.id))
       .run();
     return {
-      user: { id: user.id, displayName: user.displayName },
+      subject: { kind: record.userId !== null ? "user" : "account", id: subject.id, displayName: subject.displayName },
       claims: signedClaims,
     };
   }
 
-  revokeToken(tokenId: string, userId: string, now: number): void {
+  /** Revokes one of an account's personal tokens. */
+  revokeToken(tokenId: string, accountId: string, now: number): void {
     this._input.db
       .update(accessTokens)
       .set({ revokedAt: now })
-      .where(and(eq(accessTokens.id, tokenId), eq(accessTokens.userId, userId)))
+      .where(and(eq(accessTokens.id, tokenId), eq(accessTokens.accountId, accountId)))
       .run();
   }
 
@@ -320,7 +336,7 @@ export class AccessTokenService {
         deviceCodeHash: hashAccessToken(deviceCode),
         userCodeHash: hashAccessToken(userCode),
         status: "pending",
-        approvedByUserId: null,
+        approvedByAccountId: null,
         createdAt: input.now,
         expiresAt,
         approvedAt: null,
@@ -336,8 +352,8 @@ export class AccessTokenService {
     };
   }
 
-  approveCliAuthSession(userCode: string, userId: string, now: number): void {
-    this._requireActiveUser(this._input.db, userId);
+  approveCliAuthSession(userCode: string, accountId: string, now: number): void {
+    this._requireActiveAccount(this._input.db, accountId);
     const session = this._input.db
       .select()
       .from(cliAuthSessions)
@@ -356,7 +372,7 @@ export class AccessTokenService {
       .update(cliAuthSessions)
       .set({
         status: "approved",
-        approvedByUserId: userId,
+        approvedByAccountId: accountId,
         approvedAt: now,
       })
       .where(eq(cliAuthSessions.id, session.id))
@@ -397,7 +413,10 @@ export class AccessTokenService {
       if (input.now >= proof.expiresAt) {
         throw new Error("expired_channel_auth_token");
       }
-      const user = this._requireActiveUser(tx, proof.userId);
+      // The chat identity must have been linked to an account; that account gets the CLI token.
+      const sender = this._requireActiveUser(tx, proof.userId);
+      if (sender.accountId === null) throw new Error("channel_identity_not_linked");
+      const account = this._requireActiveAccount(tx, sender.accountId);
       if (session.status !== "pending") {
         return;
       }
@@ -419,7 +438,7 @@ export class AccessTokenService {
         .update(cliAuthSessions)
         .set({
           status: "approved",
-          approvedByUserId: user.id,
+          approvedByAccountId: account.id,
           approvedAt: input.now,
         })
         .where(
@@ -482,7 +501,7 @@ export class AccessTokenService {
     if (session.status === "consumed") {
       return { status: "consumed" };
     }
-    if (session.status !== "approved" || session.approvedByUserId === null) {
+    if (session.status !== "approved" || session.approvedByAccountId === null) {
       return { status: "authorization_expired" };
     }
     return this._input.db.transaction((tx) => {
@@ -496,11 +515,11 @@ export class AccessTokenService {
       }
       if (
         freshSession.status !== "approved" ||
-        freshSession.approvedByUserId === null
+        freshSession.approvedByAccountId === null
       ) {
         return { status: "authorization_expired" };
       }
-      const user = this._requireActiveUser(tx, freshSession.approvedByUserId);
+      const account = this._requireActiveAccount(tx, freshSession.approvedByAccountId);
       const consumed = tx
         .update(cliAuthSessions)
         .set({ status: "consumed", consumedAt: options.now })
@@ -516,7 +535,7 @@ export class AccessTokenService {
         return { status: "consumed" };
       }
       const issued = this._issueTokenWithDb(tx, {
-        userId: user.id,
+        accountId: account.id,
         name: "Luna CLI",
         source: "cli",
         role: "user",
@@ -528,7 +547,7 @@ export class AccessTokenService {
         status: "approved",
         accessToken: issued.token,
         expiresAt: issued.record.expiresAt,
-        user: { id: user.id, displayName: user.displayName },
+        account: { id: account.id, displayName: account.displayName },
       };
     });
   }
@@ -552,6 +571,19 @@ export class AccessTokenService {
       .where(eq(users.id, userId))
       .get();
     return user === undefined || user.status !== "active" ? undefined : user;
+  }
+
+  private _activeAccount(db: AccessTokenDb, accountId: string): AccountRow | undefined {
+    const account = db.select().from(accounts).where(eq(accounts.id, accountId)).get();
+    return account?.status === "active" ? account : undefined;
+  }
+
+  private _requireActiveAccount(db: AccessTokenDb, accountId: string): AccountRow {
+    const account = this._activeAccount(db, accountId);
+    if (account === undefined) {
+      throw new Error("invalid_access_token");
+    }
+    return account;
   }
 
   private _requireActiveUser(db: AccessTokenDb, userId: string): UserRow {
@@ -653,7 +685,8 @@ function parseLunaAccessTokenClaims(payload: string): LunaAccessTokenClaims {
   }
   return normalizeLunaAccessTokenClaims({
     tokenId: requiredString(parsed.tokenId),
-    actorUserId: requiredString(parsed.actorUserId),
+    ...optionalStringClaim("actorUserId", parsed.actorUserId),
+    ...optionalStringClaim("accountId", parsed.accountId),
     source: requiredSource(parsed.source),
     role: requiredRole(parsed.role),
     issuedAt: requiredNumber(parsed.issuedAt),
@@ -674,7 +707,8 @@ function normalizeLunaAccessTokenClaims(
 ): LunaAccessTokenClaims {
   const claims: LunaAccessTokenClaims = {
     tokenId: requiredString(input.tokenId),
-    actorUserId: requiredString(input.actorUserId),
+    ...optionalStringClaim("actorUserId", input.actorUserId),
+    ...optionalStringClaim("accountId", input.accountId),
     source: requiredSource(input.source),
     role: requiredRole(input.role),
     issuedAt: requiredNumber(input.issuedAt),
@@ -688,6 +722,10 @@ function normalizeLunaAccessTokenClaims(
     ...optionalStringClaim("taskRunId", input.taskRunId),
     ...optionalStringClaim("runnerJobId", input.runnerJobId),
   };
+  // A runner token acts as a user, a personal token as an account; never both.
+  if (claims.source === "runner" ? !claims.actorUserId || claims.accountId : !claims.accountId || claims.actorUserId) {
+    throw new Error("invalid_access_token");
+  }
   if (claims.source === "runner" && (!claims.agentId || !claims.shadowId || !claims.runnerKind || claims.role !== "runner")) {
     throw new Error("runner_scope_required");
   }
@@ -704,7 +742,8 @@ function recordMatchesClaims(
   return (
     optionalRecordString(record.agentId)===claims.agentId && optionalRecordString(record.shadowId)===claims.shadowId &&
     record.id === claims.tokenId &&
-    record.userId === claims.actorUserId &&
+    optionalRecordString(record.userId) === claims.actorUserId &&
+    optionalRecordString(record.accountId) === claims.accountId &&
     record.source === claims.source &&
     record.role === claims.role &&
     record.issuedAt === claims.issuedAt &&
@@ -722,7 +761,7 @@ function optionalRecordString(value: string | null): string | undefined {
 }
 
 function optionalStringClaim<
-  TKey extends "agentId" | "shadowId" | "sessionId" | "turnId" | "taskId" | "taskRunId" | "runnerJobId",
+  TKey extends "actorUserId" | "accountId" | "agentId" | "shadowId" | "sessionId" | "turnId" | "taskId" | "taskRunId" | "runnerJobId",
 >(key: TKey, value: unknown): Partial<Pick<LunaAccessTokenClaims, TKey>> {
   if (value === undefined) {
     return {};
@@ -787,4 +826,10 @@ function timingSafeEqualString(left: string, right: string): boolean {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/** The user a runner token acts as; runner tokens always carry one. */
+export function runnerActorUserId(claims: LunaAccessTokenClaims): string {
+  if (claims.source !== "runner" || !claims.actorUserId) throw new Error("runner_token_required");
+  return claims.actorUserId;
 }

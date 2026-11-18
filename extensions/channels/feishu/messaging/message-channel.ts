@@ -2076,7 +2076,7 @@ export class FeishuMessageChannel
   }
 
   private async _resolveBotIdentity(): Promise<void> {
-    if (this._getConfiguredBotIdentity() !== undefined) {
+    if (this._getConfiguredBotIdentity()?.displayName !== undefined) {
       return;
     }
     try {
@@ -2118,8 +2118,21 @@ export class FeishuMessageChannel
     }
   }
 
+  /**
+   * A configured bot id is authoritative; the profile Feishu reports at start
+   * fills in the name and avatar when it names the same bot, so a rename in
+   * Feishu reaches Luna on the next start.
+   */
   private _getBotIdentity(): FeishuBotIdentity | undefined {
-    return this._getConfiguredBotIdentity() ?? this._resolvedBotIdentity;
+    const configured = this._getConfiguredBotIdentity(), resolved = this._resolvedBotIdentity;
+    if (configured === undefined) return resolved;
+    if (resolved === undefined || configured.displayName !== undefined
+      || (configured.openId !== undefined && configured.openId !== resolved.openId)) return configured;
+    return {
+      ...configured,
+      ...(resolved.displayName !== undefined ? { displayName: resolved.displayName } : {}),
+      ...(resolved.avatarUrl !== undefined ? { avatarUrl: resolved.avatarUrl } : {}),
+    };
   }
 
   private _getConfiguredBotIdentity(): FeishuBotIdentity | undefined {

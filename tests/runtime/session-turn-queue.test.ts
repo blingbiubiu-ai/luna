@@ -21,7 +21,7 @@ import {
 } from "../../src/data/schema";
 import * as lunaSchema from "../../src/data/schema";
 import { type SessionConfig, setLunaHome } from "../../src/shared";
-import { fixtureSessionOwnership } from "../helpers/platform-fixtures";
+import { fixtureOwnerUserId, fixtureSessionOwnership } from "../helpers/platform-fixtures";
 
 let testHome: string;
 let database: DataConnection<typeof lunaSchema>;
@@ -948,7 +948,7 @@ test("Runtime recovery retains the claimed turn and session lane instead of requ
     inboxStore.claimBatch({ turnId: turn.id, inboxIds: inboxRows.map(row => row.id) });
     database.db.run(sql`UPDATE session_inbox SET claimed_at = 1 WHERE turn_id = ${turn.id}`);
     const context = new RunnerContextStore(database.db).resolveForSession(session.id, "mock");
-    new InvocationStore(database.db).register({ id: "inv_resume", runnerKind: "work", actorUserId: "fixture-owner", runnerContextId: context.id, sessionId: session.id, taskId: null, taskRunId: null, originId: turn.id,
+    new InvocationStore(database.db).register({ id: "inv_resume", runnerKind: "work", actorUserId: fixtureOwnerUserId("fixture-owner"), runnerContextId: context.id, sessionId: session.id, taskId: null, taskRunId: null, originId: turn.id,
       inputSnapshot: { version: 1, kind: "work", input: { sessionId: session.id, turnId: turn.id, runnerContextId: context.id } } as never, contextPackIds: [] });
     const turns: string[] = [];
     const queue = new SessionQueue({ db: database.db, config: createSessionQueueConfig({ stale_claim_ms: 1 }), executeTurn: async input => { turns.push(input.turn.id); await gate.promise; } });

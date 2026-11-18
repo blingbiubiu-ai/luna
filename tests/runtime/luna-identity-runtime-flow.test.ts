@@ -55,7 +55,7 @@ test("first Feishu message runs for a new human sender and keeps bot mentions ou
     expect(humanUser).toBeDefined();
     expect(botUser).toBeDefined();
     expect(botUser).toMatchObject({
-      kind: "system",
+      kind: "shadow",
     });
     expect(canonicalUsers.some(user => user.displayName === "Monkey King")).toBe(false);
     expect(harness.db.select().from(sessionCommands).all()).toEqual([expect.objectContaining({
@@ -245,10 +245,12 @@ test("Task API does not fall back to external-id identity for unlinked canonical
   try {
     const now = Date.now();
     const isoNow = "2026-06-21T00:00:00.000Z";
+    const ownership = fixtureSessionOwnership(harness.db, "feishu", "feishu-main", "local-dashboard-user");
     harness.db
       .insert(users)
       .values({
         id: "canonical-user-without-link",
+        agentId: ownership.agent_id,
         kind: "human",
         displayName: "Canonical Without Link",
         avatarUrl: null,
@@ -275,7 +277,7 @@ test("Task API does not fall back to external-id identity for unlinked canonical
         created_by_user_id: null,
         created_at: now,
         updated_at: now,
-        last_activity_at: now, ...fixtureSessionOwnership(harness.db, "feishu", "feishu-main", "local-dashboard-user")})
+        last_activity_at: now, ...ownership})
       .run();
     harness.db
       .insert(channelIdentities)
@@ -406,9 +408,7 @@ test("Task API does not render channel identity when raw open_id is stored as cr
         updatedAt: isoNow,
       })
       .run();
-    harness.db
-      .insert(tasks)
-      .values({
+    const badTask = {
         id: "task-open-id-fallback",
         type: "task",
         title: "Bad creator id",
@@ -423,8 +423,10 @@ test("Task API does not render channel identity when raw open_id is stored as cr
         context_json: {},
         created_at: now,
         updated_at: now,
-        last_activity_at: now, ...fixtureTaskOwnership(harness.db,"session-open-id-fallback")})
-      .run();
+        last_activity_at: now, ...fixtureTaskOwnership(harness.db,"session-open-id-fallback")};
+    // A raw open_id is not a user of the Agent, so it can no longer be stored as a task creator.
+    expect(() => harness.db.insert(tasks).values(badTask).run()).toThrow("user_agent_mismatch");
+    harness.db.insert(tasks).values({ ...badTask, creator_user_id: null }).run();
     harness.db
       .insert(taskParticipants)
       .values({
@@ -463,7 +465,7 @@ test("Task API does not render channel identity when raw open_id is stored as cr
       }>;
     }>("/api/tasks/task-open-id-fallback");
 
-    expect(dashboardTask.creatorUserId).toBe("ou_bad_creator");
+    expect(dashboardTask.creatorUserId).toBeNull();
     expect(dashboardTask.creatorUser).toBeNull();
     expect(dashboardTask.participants).toEqual([
       expect.objectContaining({

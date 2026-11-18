@@ -1,6 +1,6 @@
 import {primaryKey,integer,sqliteTable,text} from "drizzle-orm/sqlite-core";
 import {lunaAgents} from "./luna-agents";
-import {users} from "./users";
+import {accounts} from "./accounts";
 import type {EncryptedSecret} from "@/agent-config/secret-cipher";
 
 /** Agent-owned activation/configuration. Registry installation remains platform-wide. */
@@ -11,6 +11,6 @@ export const agentPluginConfigs=sqliteTable("agent_plugin_configs",{
  enabled:integer("enabled",{mode:"boolean"}).notNull(),
  config:text("config_json",{mode:"json"}).$type<Record<string,unknown>>().notNull(),
  secrets:text("secrets_json",{mode:"json"}).$type<Record<string,EncryptedSecret & {revision:string}>>().notNull(),
- updatedBy:text("updated_by").notNull().references(()=>users.id),
+ updatedByAccountId:text("updated_by_account_id").notNull().references(()=>accounts.id),
  updatedAt:integer("updated_at").notNull(),
 },t=>[primaryKey({columns:[t.agentId,t.pluginId]})]);

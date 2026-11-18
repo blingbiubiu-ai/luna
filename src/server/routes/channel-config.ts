@@ -18,7 +18,7 @@ export function createChannelConfigRoutes(options:{db:DrizzleDB;store?:ChannelCo
  .get("/",c=>{
   const auth=requireDashboardOnly(c);if(isGuardResponse(auth))return auth;
   const agentId=c.req.query("agentId");if(!agentId)return c.json({code:"agent_scope_required"},400);
-  new AgentStore(options.db).requireOwner(auth.user.id,agentId);
+  new AgentStore(options.db).requireOwner(auth.account.id,agentId);
   return c.json({channels:store.list().filter(channel=>channel.agentId===agentId)});
  })
  .post("/",async c=>{
@@ -26,7 +26,7 @@ export function createChannelConfigRoutes(options:{db:DrizzleDB;store?:ChannelCo
   const body=await c.req.json().catch(()=>null);
   return enqueue(async()=>{
    let saved;
-   try{saved=await store.save(body,auth.user.id);}catch(error){if(error instanceof AgentError)return c.json({code:error.code},error.status);return c.json({message:"保存失败：请检查应用信息、App Secret 或重复的通道配置。"},400);}
+   try{saved=await store.save(body,auth.account.id);}catch(error){if(error instanceof AgentError)return c.json({code:error.code},error.status);return c.json({message:"保存失败：请检查应用信息、App Secret 或重复的通道配置。"},400);}
    try{await reload(saved.id);}
    catch{return c.json({saved:true,channel:saved,message:"配置已保存，但运行时应用失败。请检查连接后重新保存，或重启服务。"},503);}
    return c.json({channel:saved,saved:true});
@@ -37,7 +37,7 @@ export function createChannelConfigRoutes(options:{db:DrizzleDB;store?:ChannelCo
   const agentId=c.req.query("agentId");if(!agentId)return c.json({code:"agent_scope_required"},400);
   const {channelId,bindingId}=c.req.param();
   return enqueue(async()=>{
-   store.retire(auth.user.id,agentId,channelId,bindingId);
+   store.retire(auth.account.id,agentId,channelId,bindingId);
    try{await reload(channelId);}
    catch{return c.json({saved:true,message:"绑定已解除，但运行时应用失败。请重试。"},503);}
    return c.json({saved:true});

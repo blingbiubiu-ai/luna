@@ -1,4 +1,4 @@
-import {fixtureObserveFeishuSender, fixtureFeishuSender, fixtureNamedSession, fixturePlatformAdmin, fixtureRunnerContext, fixtureSessionOwnership, fixtureTaskOwnership} from "../helpers/platform-fixtures";
+import {fixtureObserveFeishuSender, fixtureFeishuSender, fixtureNamedSession, fixtureOwnerUserId, fixturePlatformAdmin, fixtureScope, fixtureRunnerContext, fixtureSessionOwnership, fixtureTaskOwnership} from "../helpers/platform-fixtures";
 import { writeRuntimeFixture } from "../fixtures/runtime-config";
 import { writePrivateJson } from "@luna/execution-store";
 import {
@@ -14,7 +14,7 @@ import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { Database as SQLiteDatabase } from "bun:sqlite";
-import { describe, expect, test } from "bun:test";
+import { afterAll, describe, expect, test } from "bun:test";
 import { eq } from "drizzle-orm";
 
 import { TaskRunStore } from "../../src/tasks/task-run-store";
@@ -56,8 +56,15 @@ import {
   stopAgentRuntime,
 } from "../../src";
 import { AccessTokenService } from "../../src/server/auth/access-token-service";
+import { AccountStore } from "../../src/identity/account-store";
 import { normalizedInboundFromDirectCallForTest } from "../../src/work/direct-call-inbound-adapter";
 import { createDeterministicMainRunner } from "./test-main-runner";
+
+// The kernel singleton opens the current Luna home on first import; keep it off the developer's real ~/.luna.
+const suiteLunaHome = mkdtempSync(join(tmpdir(), "luna-runtime-suite-"));
+mkdirSync(join(suiteLunaHome, "data"), { recursive: true });
+setLunaHome(suiteLunaHome);
+afterAll(() => rmSync(suiteLunaHome, { recursive: true, force: true }));
 
 const SessionConfigForTests = {
   coalesce_idle_ms: 1,
@@ -355,7 +362,7 @@ describe("agent runtime package shell", () => {
       const login = await auth.login("luna-local-dev");
       expect(login?.session).toEqual({
         authenticated: true,
-        user: {
+        account: {
           id: "local-dashboard-user",
           name: "Local dashboard user",
           provider: "local-token",
@@ -398,7 +405,7 @@ describe("agent runtime package shell", () => {
 
     expect(login?.session).toEqual({
       authenticated: true,
-      user: {
+      account: {
         id: "user-actual-dashboard",
         name: "Actual Dashboard User",
         provider: "company-sso",
@@ -1257,7 +1264,7 @@ describe("agent runtime package shell", () => {
       expect(login.status).toBe(200);
       expect(await login.json()).toEqual({
         authenticated: true,
-        user: {
+        account: {
           id: "local-dashboard-user",
           name: "Local dashboard user",
           provider: "local-token",
@@ -1275,7 +1282,7 @@ describe("agent runtime package shell", () => {
       expect(session.status).toBe(200);
       expect(await session.json()).toEqual({
         authenticated: true,
-        user: {
+        account: {
           id: "local-dashboard-user",
           name: "Local dashboard user",
           provider: "local-token",
@@ -1375,25 +1382,14 @@ describe("agent runtime package shell", () => {
       expect(pending.status).toBe(200);
       expect(await pending.json()).toEqual({ status: "authorization_pending" });
 
-      runtime.database.db
-        .insert(userRowsTable)
-        .values({
-          id: "local-dashboard-user",
-          kind: "human",
-          displayName: "Local dashboard user",
-          avatarUrl: null,
-          status: "active",
-          mergedIntoUserId: null,
-          profileSource: "dashboard",
-          createdAt: "1000",
-          updatedAt: "1000",
-        })
-        .run();
+      // The chat sender is the account's own user in its Agent, so the proof signs that account in.
+      fixtureScope(runtime.database.db, "local-dashboard-user");
+      new AccountStore(runtime.database.db).ensure({ id: "local-dashboard-user", name: "Local dashboard user" });
       const channelProof = new AccessTokenService({
         db: runtime.database.db,
         signingSecret: "access-secret",
       }).issueChannelAuthToken({
-        userId: "local-dashboard-user",
+        userId: fixtureOwnerUserId("local-dashboard-user"),
         channelType: "feishu",
         channelId: "feishu-main",
         channelIdentityId: "local-dashboard-channel-identity",
@@ -1425,11 +1421,11 @@ describe("agent runtime package shell", () => {
       const approvedFromChannelBody = await approvedFromChannel.json() as {
         status: string;
         accessToken: string;
-        user: { id: string; displayName: string };
+        account: { id: string; displayName: string };
       };
       expect(approvedFromChannelBody.status).toBe("approved");
       expect(approvedFromChannelBody.accessToken).toBeString();
-      expect(approvedFromChannelBody.user).toEqual({
+      expect(approvedFromChannelBody.account).toEqual({
         id: "local-dashboard-user",
         displayName: "Local dashboard user",
       });
@@ -1479,11 +1475,11 @@ describe("agent runtime package shell", () => {
       const approvedBody = await approved.json() as {
         status: string;
         accessToken: string;
-        user: { id: string; displayName: string };
+        account: { id: string; displayName: string };
       };
       expect(approvedBody.status).toBe("approved");
       expect(approvedBody.accessToken).toBeString();
-      expect(approvedBody.user).toEqual({
+      expect(approvedBody.account).toEqual({
         id: "local-dashboard-user",
         displayName: "Local dashboard user",
       });
@@ -1498,7 +1494,7 @@ describe("agent runtime package shell", () => {
         status: "ok",
         authenticated: true,
         authKind: "luna-access-token",
-        user: {
+        account: {
           id: "local-dashboard-user",
           displayName: "Local dashboard user",
         },
@@ -1518,7 +1514,7 @@ describe("agent runtime package shell", () => {
         status: "ok",
         authenticated: true,
         authKind: "dashboard-cookie",
-        user: {
+        account: {
           id: "local-dashboard-user",
           displayName: "Local dashboard user",
         },
@@ -1793,8 +1789,8 @@ describe("agent runtime package shell", () => {
         const ordinary = await status();
         expect(ordinary.status).toBe(200);
         expect(await ordinary.json()).toMatchObject({ status: "ok", channels: [] });
-        const session = await (await server.app.fetch(new Request("http://luna.test/api/auth/session", { headers: { cookie } }))).json() as { user: { id: string } };
-        fixturePlatformAdmin(statusDb.db, session.user.id);
+        const session = await (await server.app.fetch(new Request("http://luna.test/api/auth/session", { headers: { cookie } }))).json() as { account: { id: string } };
+        fixturePlatformAdmin(statusDb.db, session.account.id);
         const response = await status();
 
         expect(response.status).toBe(200);
@@ -2017,7 +2013,8 @@ session:
         db: kernel.database.db,
         signingSecret: "runtime-secret",
       }).issueToken({
-        userId: serviceUser?.id ?? "",
+        // A personal token of the owner account, even a platform administrator, cannot read the user directory.
+        accountId: "local-dashboard-user",
         name: "Runtime identity verification",
         source: "cli",
         role: "user",

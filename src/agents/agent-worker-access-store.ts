@@ -6,29 +6,29 @@ import {AgentError,AgentStore} from "./agent-store";
 /** Stores the Worker assignments for each Agent. */
 export class AgentWorkerAccessStore {
  constructor(private readonly db:DrizzleDB){}
- list(actor:string,agentId:string){
-  new AgentStore(this.db).requireOwner(actor,agentId);
+ list(accountId:string,agentId:string){
+  new AgentStore(this.db).requireOwner(accountId,agentId);
   return this.db.select().from(agentWorkerAccess).where(eq(agentWorkerAccess.agentId,agentId)).orderBy(asc(agentWorkerAccess.workerId)).all();
  }
  /** Only call with the Worker owner verified by the Runtime or the pairing code. */
- setOwned(ownerUserId: string, agentId: string, workerId: string, status: "active" | "disabled"): void {
+ setOwned(ownerAccountId: string, agentId: string, workerId: string, status: "active" | "disabled"): void {
   this.db.transaction(() => {
-   const agent = new AgentStore(this.db).requireOwner(ownerUserId, agentId);
+   const agent = new AgentStore(this.db).requireOwner(ownerAccountId, agentId);
    if (status === "active" && agent.status !== "active") throw new AgentError("agent_disabled", 409);
-   this.save(ownerUserId, agentId, workerId, status);
+   this.save(ownerAccountId, agentId, workerId, status);
   });
  }
- private save(actor: string, agentId: string, workerId: string, status: "active" | "disabled"): void {
-  const values = { agentId, workerId, status, updatedBy: actor, updatedAt: Date.now() };
+ private save(accountId: string, agentId: string, workerId: string, status: "active" | "disabled"): void {
+  const values = { agentId, workerId, status, updatedByAccountId: accountId, updatedAt: Date.now() };
   this.db.insert(agentWorkerAccess).values(values)
    .onConflictDoUpdate({
     target: [agentWorkerAccess.agentId, agentWorkerAccess.workerId],
     set: status === "disabled" ? {...values, paused: false} : values,
    }).run();
  }
- setPaused(actor: string, agentId: string, workerId: string, paused: boolean): void {
-  new AgentStore(this.db).requireOwner(actor, agentId);
-  const result = this.db.update(agentWorkerAccess).set({paused, updatedBy: actor, updatedAt: Date.now()})
+ setPaused(accountId: string, agentId: string, workerId: string, paused: boolean): void {
+  new AgentStore(this.db).requireOwner(accountId, agentId);
+  const result = this.db.update(agentWorkerAccess).set({paused, updatedByAccountId: accountId, updatedAt: Date.now()})
    .where(and(eq(agentWorkerAccess.agentId, agentId), eq(agentWorkerAccess.workerId, workerId), eq(agentWorkerAccess.status, "active")))
    .returning({workerId: agentWorkerAccess.workerId}).get();
   if (!result) throw new AgentError("worker_assignment_not_found", 404);

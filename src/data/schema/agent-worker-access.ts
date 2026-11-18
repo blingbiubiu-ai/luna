@@ -1,6 +1,6 @@
 import {integer,primaryKey,sqliteTable,text} from "drizzle-orm/sqlite-core";
 import {lunaAgents} from "./luna-agents";
-import {users} from "./users";
+import {accounts} from "./accounts";
 
 /** Worker IDs refer to the independently owned Runtime registry; approval is Service policy. */
 export const agentWorkerAccess=sqliteTable("agent_worker_access",{
@@ -8,6 +8,6 @@ export const agentWorkerAccess=sqliteTable("agent_worker_access",{
  workerId:text("worker_id").notNull(),
  status:text("status",{enum:["active","disabled"]}).notNull(),
  paused:integer("paused",{mode:"boolean"}).notNull().default(false),
- updatedBy:text("updated_by").notNull().references(()=>users.id),
+ updatedByAccountId:text("updated_by_account_id").notNull().references(()=>accounts.id),
  updatedAt:integer("updated_at").notNull(),
 },t=>[primaryKey({columns:[t.agentId,t.workerId]})]);

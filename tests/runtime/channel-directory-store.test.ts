@@ -43,6 +43,7 @@ afterEach(() => {
 describe("ChannelDirectoryStore", () => {
   test("upserts identities by channel and external id", async () => {
     const connection = await openFreshDatabase();
+    fixtureSessionOwnership(connection.db, "feishu", "main");
     const store = new ChannelDirectoryStore(connection.db);
 
     const identity = await store.upsertIdentity({
@@ -103,6 +104,7 @@ describe("ChannelDirectoryStore", () => {
 
   test("keeps existing provider-neutral profile fields when omitted", async () => {
     const connection = await openFreshDatabase();
+    fixtureSessionOwnership(connection.db, "feishu", "main");
     const store = new ChannelDirectoryStore(connection.db);
 
     const identity = await store.upsertIdentity({
@@ -190,6 +192,8 @@ describe("ChannelDirectoryStore", () => {
 
   test("materializes human mention targets into canonical users", async () => {
     const connection = await openFreshDatabase();
+    fixtureSessionOwnership(connection.db, "feishu", "main");
+    const existing = new Set(connection.db.select().from(users).all().map((row) => row.id));
     const store = new ChannelDirectoryStore(connection.db);
 
     const target = await store.ensureMentionTarget({
@@ -213,7 +217,7 @@ describe("ChannelDirectoryStore", () => {
     });
 
     expect(target.externalId).toBe("ou_human");
-    expect(connection.db.select().from(users).all()).toEqual([
+    expect(connection.db.select().from(users).all().filter((row) => !existing.has(row.id))).toEqual([
       expect.objectContaining({
         kind: "human",
         displayName: "示例用户",
@@ -262,6 +266,7 @@ describe("ChannelDirectoryStore", () => {
 
   test("repeated provider-neutral upserts keep a single row", async () => {
     const connection = await openFreshDatabase();
+    fixtureSessionOwnership(connection.db, "feishu", "main");
     const store = new ChannelDirectoryStore(connection.db);
 
     await Promise.all([

@@ -11,7 +11,7 @@ import {Hono} from "hono";
 import {DataConnection} from "@/data";
 import * as schema from "@/data/schema";
 import {setLunaHome} from "@/shared";
-import {fixtureScope,fixtureRunnerContext} from "../helpers/platform-fixtures";
+import {fixtureScope,fixtureRunnerContext,fixtureUser} from "../helpers/platform-fixtures";
 import {SessionStore} from "@/sessions/session-store";
 import {InvocationStore} from "@/runners/invocation-store";
 import {AccessTokenService} from "@/server/auth/access-token-service";
@@ -24,7 +24,7 @@ beforeEach(()=>{home=mkdtempSync(join(tmpdir(),"luna-agent-knowledge-"));setLuna
 afterEach(()=>{connection.close();rmSync(home,{recursive:true,force:true});});
 function app(actor:string,claims?:ReturnType<AccessTokenService["issueToken"]>["claims"]){
  return new Hono().use("*",async(c,next)=>{
-  (c as any).set("dashboardAuthSession",{authenticated:true,user:{id:actor,name:actor,provider:"test"}});
+  (c as any).set("dashboardAuthSession",{authenticated: true, account: {id:actor,name:actor,provider:"test"}});
   (c as any).set("lunaRequestAuthKind",claims ? "luna-access-token" : "dashboard-cookie");
   if(claims)(c as any).set("lunaAccessTokenClaims",claims);await next();
  }).route("/workspaces",createWorkspaceRoutes({db:connection.db,serviceHome:home}));
@@ -47,27 +47,27 @@ test("business grants do not open another owner’s knowledge workspace",async()
  const http=app("bob"),url=`/workspaces/knowledge/glob?agentId=${a.agentId}&pattern=**/*`;
  expect((await http.request(url)).status).toBe(403);
  expect(existsSync(join(home,"agents",a.agentId,"knowledge"))).toBe(false);
- new AuthorizationRuleStore(connection.db,{kind:"agent",agentId:a.agentId}).addGrant({subjectType:"user",subjectId:"bob",target:"workspace.knowledge.read",effect:"allow"});
+ new AuthorizationRuleStore(connection.db,{kind:"agent",agentId:a.agentId}).addGrant({subjectType:"user",subjectId:fixtureUser(connection.db,a.agentId,"bob"),target:"workspace.knowledge.read",effect:"allow"});
 
  expect((await http.request(url)).status).toBe(403);
 });
 
 test("Runner alias uses active invocation scope and requires business grant even for owner",async()=>{
- const session=new SessionStore(connection.db).createLocalSession("alice",a);
+ const session=new SessionStore(connection.db).createLocalSession("user:alice",a);
  connection.db.insert(schema.runnerContexts).values(fixtureRunnerContext(connection.db,{id:"context",owner_type:"session",owner_id:session.id,runner_type:"mock",runner_root_path:"/unused",created_at:1,updated_at:1})).run();
  const invocations=new InvocationStore(connection.db);
- invocations.register({id:"inv",runnerKind:"work",actorUserId:"alice",runnerContextId:"context",sessionId:session.id,taskId:null,taskRunId:null,originId:"turn",contextPackIds:[],inputSnapshot:decodeInvocation({version:1,kind:"work",input:{sessionId:session.id,runnerContextId:"context",turnId:"turn"}})});
+ invocations.register({id:"inv",runnerKind:"work",actorUserId:a.ownerUserId,runnerContextId:"context",sessionId:session.id,taskId:null,taskRunId:null,originId:"turn",contextPackIds:[],inputSnapshot:decodeInvocation({version:1,kind:"work",input:{sessionId:session.id,runnerContextId:"context",turnId:"turn"}})});
  mkdirSync(join(home, "skills"));
  mkdirSync(join(home, "prompts"));
  const builder = new AgentResourceBuilder(connection.db, home, new PluginRegistry(), {
   bundledSkillsDirectory: join(home, "skills"), promptAssetsDirectory: join(home, "prompts"), repoRoot: home,
  });
  const { selection } = new InvocationResources(connection.db, home).pin("inv", builder);
- invocations.createJob("runtime",{version: 2, scope:{...a,placementGeneration:1}, resources:selection,resourceRevision:selection.digest, jobId:"job",invocationId:"inv",environmentId:"luna",runnerContextId:"context",scopeKey:"session:context",runnerKind:"work",sessionId:session.id,input:{runnerType:"codex",prompt:"test"},credentialsRevision:1,timeoutMs:1000});
- const issued=new AccessTokenService({db:connection.db,signingSecret:"test"}).issueToken({userId:"alice",source:"runner",role:"runner",name:"runner",runnerKind:"work",sourceRunnerJobId:"context",sourceSessionId:session.id,ttlMs:60000,now:Date.now(),metadata:{invocationId:"inv"}});
+ invocations.createJob("runtime",{version: 2, scope:{agentId:a.agentId,shadowId:a.shadowId,placementGeneration:1}, resources:selection,resourceRevision:selection.digest, jobId:"job",invocationId:"inv",environmentId:"luna",runnerContextId:"context",scopeKey:"session:context",runnerKind:"work",sessionId:session.id,input:{runnerType:"codex",prompt:"test"},credentialsRevision:1,timeoutMs:1000});
+ const issued=new AccessTokenService({db:connection.db,signingSecret:"test"}).issueToken({userId:a.ownerUserId,source:"runner",role:"runner",name:"runner",runnerKind:"work",sourceRunnerJobId:"context",sourceSessionId:session.id,ttlMs:60000,now:Date.now(),metadata:{invocationId:"inv"}});
  const http=app("alice",issued.claims),url="/workspaces/knowledge/glob?pattern=**/*";
  expect((await http.request(url)).status).toBe(403);
- new AuthorizationRuleStore(connection.db,{kind:"agent",agentId:a.agentId}).addGrant({subjectType:"user",subjectId:"alice",target:"workspace.knowledge.read",effect:"allow"});
+ new AuthorizationRuleStore(connection.db,{kind:"agent",agentId:a.agentId}).addGrant({subjectType:"user",subjectId:a.ownerUserId,target:"workspace.knowledge.read",effect:"allow"});
  expect((await http.request(url)).status).toBe(200);
  expect((await http.request(url+`&agentId=${b.agentId}`)).status).toBe(403);
  invocations.revoke("inv","test");expect((await http.request(url)).status).toBe(409);

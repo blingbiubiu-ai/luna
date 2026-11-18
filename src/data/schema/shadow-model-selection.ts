@@ -2,7 +2,7 @@ import { sql } from "drizzle-orm";
 import { check, foreignKey, integer, sqliteTable, text } from "drizzle-orm/sqlite-core";
 import { agentShadows } from "./luna-agents";
 import { agentProfiles, agentProfileRevisions } from "./agent-profiles";
-import { users } from "./users";
+import {accounts} from "./accounts";
 
 export const shadowModelSelections = sqliteTable("shadow_model_selections", {
   shadowId: text("shadow_id").primaryKey(),
@@ -10,7 +10,7 @@ export const shadowModelSelections = sqliteTable("shadow_model_selections", {
   mode: text("mode", {enum: ["inherit", "fixed"]}).notNull(),
   profileId: text("profile_id"),
   revisionId: text("revision_id"),
-  updatedBy: text("updated_by").notNull().references(() => users.id),
+  updatedByAccountId: text("updated_by_account_id").notNull().references(() => accounts.id),
   updatedAt: integer("updated_at").notNull(),
 }, table => [
   foreignKey({columns:[table.agentId,table.shadowId],foreignColumns:[agentShadows.agentId,agentShadows.id]}),

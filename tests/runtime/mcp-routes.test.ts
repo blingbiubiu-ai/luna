@@ -12,7 +12,6 @@ import { Hono } from "hono";
 
 import { DataConnection } from "../../src/data";
 import * as schema from "../../src/data/schema";
-import { IdentityDirectory } from "../../src/identity/identity-directory";
 import {
   createDashboardAuthMiddleware,
   DashboardAuthService,
@@ -36,7 +35,6 @@ describe("Unified Service MCP route", () => {
   let agentId:string;
   let knowledgeRoot:string;
   let connection: DataConnection<typeof schema>;
-  let user: { id: string; displayName: string };
   let token: string;
   let server: ReturnType<typeof Bun.serve>;
   let previousDashboardToken: string | undefined;
@@ -54,20 +52,7 @@ describe("Unified Service MCP route", () => {
     Bun.env.LUNA_HOME = home;
     setLunaHome(home);
     connection = new DataConnection(schema);
-    user = new IdentityDirectory(connection.db).materializeIdentityClaims({
-      kind: "human",
-      displayName: "MCP User",
-      claims: [
-        {
-          namespace: "local",
-          kind: "local_id",
-          value: "mcp-user",
-          scope: "",
-          confidence: "manual",
-        },
-      ],
-    });
-    const scope=fixtureScope(connection.db,user.id);agentId=scope.agentId;
+    const scope=fixtureScope(connection.db,"mcp-account");agentId=scope.agentId;
     knowledgeRoot=createKnowledgeWorkspaceRepository(repoRoot,agentId).root;
     mkdirSync(join(knowledgeRoot, "wiki/domains"), { recursive: true });
     writeFileSync(
@@ -81,7 +66,7 @@ describe("Unified Service MCP route", () => {
     git(knowledgeRoot, ["commit", "-m", "seed"]);
     new AuthorizationRuleStore(connection.db,{kind:"agent",agentId}).addGrant({ matchType: "exact",
       subjectType: "user",
-      subjectId: user.id,
+      subjectId: scope.ownerUserId,
       target: "workspace.knowledge.read",
       effect: "allow",
     });
@@ -89,7 +74,7 @@ describe("Unified Service MCP route", () => {
       db: connection.db,
       signingSecret: "mcp-route-test-secret",
     }).issueToken({
-      userId: user.id,
+      accountId: "mcp-account",
       name: "MCP route test token",
       source: "cli",
       role: "user",

@@ -5,7 +5,7 @@ import { migrate } from "drizzle-orm/bun-sqlite/migrator";
 import { mkdtempSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { fixtureNamedSession, fixtureRunnerContext } from "../helpers/platform-fixtures";
+import { fixtureNamedSession, fixtureOwnerUserId, fixtureRunnerContext } from "../helpers/platform-fixtures";
 import { runnerContexts } from "../../src/data/schema";
 import { AgentResourceBuilder } from "../../src/runners/agent-resource-builder";
 import { InvocationResources } from "../../src/runners/invocation-resources";
@@ -14,7 +14,7 @@ import { InvocationStore } from "../../src/runners/invocation-store";
 import type { JobRequest } from "@luna/runner-protocol";
 
 const invocation = {
-  id: "inv1", runnerKind: "work" as const, actorUserId: "user1", runnerContextId: "ctx1", sessionId: "session1",
+  id: "inv1", runnerKind: "work" as const, actorUserId: fixtureOwnerUserId("user1"), runnerContextId: "ctx1", sessionId: "session1",
   taskId: null, taskRunId: null, originId: "turn1", contextPackIds: [],
   inputSnapshot: {version: 1 as const, kind: "work", input: {sessionId: "session1", runnerContextId: "ctx1", turnId: "turn1"}},
 };
@@ -39,7 +39,7 @@ test("invocation ledger survives restart, rolls back failed projection/settlemen
     };
     store.register(invocation);
     const job: JobRequest = {
-      version: 2, scope: {...scope, placementGeneration: 1}, ...pin(invocation.id),
+      version: 2, scope: {agentId: scope.agentId, shadowId: scope.shadowId, placementGeneration: 1}, ...pin(invocation.id),
       jobId: "job1", invocationId: "inv1", environmentId: "luna", runnerContextId: "ctx1",
       scopeKey: "session:ctx1", runnerKind: "work", sessionId: "session1",
       input: {runnerType: "claude", prompt: "test"}, credentialsRevision: 1, timeoutMs: 10000,

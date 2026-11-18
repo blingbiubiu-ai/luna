@@ -9,7 +9,7 @@ export const agentProfiles = sqliteTable(
     name: text("name").notNull(),
     agent_type: text("agent_type").notNull(),
     deleted_at: integer("deleted_at"),
-    created_by: text("created_by"),
+    created_by_account_id: text("created_by_account_id"),
     created_at: integer("created_at").notNull(),
     updated_at: integer("updated_at").notNull(),
   },
@@ -38,7 +38,7 @@ export const agentProfileRevisions = sqliteTable(
     validation_state: text("validation_state").notNull().default("draft"),
     validation_result_json: text("validation_result_json"),
     validated_at: integer("validated_at"),
-    created_by: text("created_by"),
+    created_by_account_id: text("created_by_account_id"),
     created_at: integer("created_at").notNull(),
   },
   (table) => [
@@ -61,7 +61,7 @@ export const agentProfileSecrets = sqliteTable(
     algorithm: text("algorithm").notNull(),
     key_version: integer("key_version").notNull(),
     credential_identity: text("credential_identity").notNull(),
-    updated_by: text("updated_by"),
+    updated_by_account_id: text("updated_by_account_id"),
     updated_at: integer("updated_at").notNull(),
   },
   (table) => [
@@ -78,7 +78,7 @@ export const activeAgentConfig = sqliteTable("active_agent_config", {
   profile_id: text("profile_id").notNull(),
   revision_id: text("revision_id").notNull(),
   activation_sequence: integer("activation_sequence").notNull(),
-  activated_by: text("activated_by"),
+  activated_by_account_id: text("activated_by_account_id"),
   activated_at: integer("activated_at").notNull(),
 }, (table) => [
   foreignKey({columns:[table.agent_id,table.profile_id],foreignColumns:[agentProfiles.agent_id,agentProfiles.id]}),

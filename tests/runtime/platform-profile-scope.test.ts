@@ -42,7 +42,7 @@ test("configuration API requires explicit Agent ownership before reading or decr
  const foreign=two.createProfile({...profileInput,secrets:{OPENAI_API_KEY:{set:"foreign-secret"}}});
  let executions=0;
  const app=new Hono().use("*",async(c,next)=>{
-  (c as any).set("dashboardAuthSession",{authenticated:true,user:{id:"alice",name:"Alice",provider:"test"}});
+  (c as any).set("dashboardAuthSession",{authenticated: true, account: {id:"alice",name:"Alice",provider:"test"}});
   (c as any).set("lunaRequestAuthKind","dashboard-cookie");await next();
  }).route("/config",createAgentConfigRoutes({db:connection.db,cipher,connectionExecutor:{execute:async()=>{executions++;return {success:true,output:"LUNA_AGENT_PROFILE_OK"};}}}));
  expect((await app.request("/config/profiles")).status).toBe(400);
@@ -107,9 +107,9 @@ test("Main resolves configuration using the persisted session and rejects a fore
  const inputs:MainRunnerRunInput[]=[];
  for(const actor of ["alice","bob"]){
   const scope=fixtureScope(connection.db,actor);
-  const session=new SessionStore(connection.db).createLocalSession(actor,scope);
+  const session=new SessionStore(connection.db).createLocalSession(scope.ownerUserId,scope);
   inputs.push({runnerContext:new RunnerContextStore(connection.db).resolveForSession(session.id,"codex"),
-   input:{type:"session_trigger",triggerId:"test",instruction:"test",requesterUserId:actor,
+   input:{type:"session_trigger",triggerId:"test",instruction:"test",requesterUserId:scope.ownerUserId,
     context:new MainRunnerContextBuilder(connection.db).buildForSession(session.id),artifactRefs:[],
     sourceSessionId:session.id,correlationId:"test",hops:0}});
  }

@@ -1,4 +1,4 @@
-import {fixtureScope} from "../helpers/platform-fixtures";
+import {fixtureOwnerUserId, fixtureScope} from "../helpers/platform-fixtures";
 import {AgentPluginStore} from "../../src/plugins/agent-plugin-store";
 import { registerFixtureOperations } from "../helpers/operation-fixtures";
 import { existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
@@ -11,7 +11,6 @@ import { DataConnection } from "../../src/data";
 import * as schema from "../../src/data/schema";
 import {
   operationInvocationAudits,
-  users,
 } from "../../src/data/schema";
 import { OperationDispatcher } from "../../src/plugins/dispatcher";
 import {
@@ -22,6 +21,8 @@ import {
 import { AuthorizationRuleStore } from "../../src/server/policy/authorization-rule-store";
 import { setLunaHome } from "../../src/shared";
 
+/** Account "user_1" owns the Agent; operations run as its owner user. */
+const ownerUserId = fixtureOwnerUserId("user_1");
 let testHome: string;
 let database: DataConnection<typeof schema>;
 
@@ -53,7 +54,7 @@ describe("OperationDispatcher", () => {
       invocationId: "cinv_denied",
       operationId: "alpha.echo",
       input: {},
-      subject: { userId: "user_1", source: "cli" },
+      subject: { userId: ownerUserId, source: "cli" },
     });
 
     expect(result.status).toBe("error");
@@ -106,7 +107,7 @@ describe("OperationDispatcher", () => {
     seedAlphaPolicyAndUser(database.db);
     new AuthorizationRuleStore(database.db,{kind:"agent",agentId:fixtureScope(database.db,"user_1").agentId}).addGrant({ matchType: "exact",
       subjectType: "user",
-      subjectId: "user_1",
+      subjectId: ownerUserId,
       target: "alpha.echo",
       effect: "allow",
     });
@@ -118,7 +119,7 @@ describe("OperationDispatcher", () => {
       invocationId: "cinv_allowed",
       operationId: "alpha.echo",
       input: {},
-      subject: { userId: "user_1", source: "cli" },
+      subject: { userId: ownerUserId, source: "cli" },
     });
 
     expect(result.status).toBe("success");
@@ -142,7 +143,7 @@ describe("OperationDispatcher", () => {
     seedAlphaPolicyAndUser(database.db);
     new AuthorizationRuleStore(database.db,{kind:"agent",agentId:fixtureScope(database.db,"user_1").agentId}).addGrant({ matchType: "exact",
       subjectType: "user",
-      subjectId: "user_1",
+      subjectId: ownerUserId,
       target: "alpha.echo",
       effect: "allow",
     });
@@ -154,7 +155,7 @@ describe("OperationDispatcher", () => {
       invocationId: "cinv_host_permission",
       operationId: "alpha.echo",
       input: {},
-      subject: { userId: "user_1", source: "cli" },
+      subject: { userId: ownerUserId, source: "cli" },
     });
 
     expect(result.status).toBe("error");
@@ -186,7 +187,7 @@ describe("OperationDispatcher", () => {
     seedAlphaPolicyAndUser(database.db);
     new AuthorizationRuleStore(database.db,{kind:"agent",agentId:fixtureScope(database.db,"user_1").agentId}).addGrant({ matchType: "exact",
       subjectType: "user",
-      subjectId: "user_1",
+      subjectId: ownerUserId,
       target: "alpha.echo",
       effect: "allow",
     });
@@ -198,7 +199,7 @@ describe("OperationDispatcher", () => {
       invocationId: "cinv_runtime_context",
       operationId: "alpha.echo",
       input: {},
-      subject: { userId: "user_1", source: "cli" },
+      subject: { userId: ownerUserId, source: "cli" },
     });
 
     expect(result.status).toBe("success");
@@ -213,13 +214,13 @@ describe("OperationDispatcher", () => {
     let invoked = false;
     const registry = twoCapRegistry(async () => { invoked = true; return { status: "success", summary: {}, artifacts: [] }; });
     seedTwoPolicies(database.db, "alpha.gate", "allow", "alpha.echo", "deny");
-    new AuthorizationRuleStore(database.db,{kind:"agent",agentId:fixtureScope(database.db,"user_1").agentId}).addGrant({ matchType: "exact", subjectType: "user", subjectId: "user_1", target: "alpha.gate", effect: "allow" });
+    new AuthorizationRuleStore(database.db,{kind:"agent",agentId:fixtureScope(database.db,"user_1").agentId}).addGrant({ matchType: "exact", subjectType: "user", subjectId: ownerUserId, target: "alpha.gate", effect: "allow" });
 
     const result = await new OperationDispatcher({ db: database.db, registry }).invoke({scope:fixtureScope(database.db,"user_1"),
       invocationId: "cinv_2phase_override_denied",
       operationId: "alpha.echo",
       input: {},
-      subject: { userId: "user_1", source: "cli" },
+      subject: { userId: ownerUserId, source: "cli" },
     });
     expect(result.status).toBe("error");
     if (result.status !== "error") throw new Error("expected error");
@@ -231,13 +232,13 @@ describe("OperationDispatcher", () => {
     let invoked = false;
     const registry = twoCapRegistry(async () => { invoked = true; return { status: "success", summary: {}, artifacts: [] }; });
     seedTwoPolicies(database.db, "alpha.gate", "deny", "alpha.echo", "allow");
-    new AuthorizationRuleStore(database.db,{kind:"agent",agentId:fixtureScope(database.db,"user_1").agentId}).addGrant({ matchType: "exact", subjectType: "user", subjectId: "user_1", target: "alpha.echo", effect: "allow" });
+    new AuthorizationRuleStore(database.db,{kind:"agent",agentId:fixtureScope(database.db,"user_1").agentId}).addGrant({ matchType: "exact", subjectType: "user", subjectId: ownerUserId, target: "alpha.echo", effect: "allow" });
 
     const result = await new OperationDispatcher({ db: database.db, registry }).invoke({scope:fixtureScope(database.db,"user_1"),
       invocationId: "cinv_2phase_entry_denied",
       operationId: "alpha.echo",
       input: {},
-      subject: { userId: "user_1", source: "cli" },
+      subject: { userId: ownerUserId, source: "cli" },
     });
     expect(result.status).toBe("success");
     expect(invoked).toBe(true);
@@ -246,11 +247,11 @@ describe("OperationDispatcher", () => {
   test("single operation authorization", async () => {
     const registry = alphaRegistry(async () => ({ status: "success", summary: {}, artifacts: [] }));
     seedAlphaPolicyAndUser(database.db);
-    new AuthorizationRuleStore(database.db,{kind:"agent",agentId:fixtureScope(database.db,"user_1").agentId}).addGrant({ matchType: "exact", subjectType: "user", subjectId: "user_1", target: "alpha.echo", effect: "allow" });
+    new AuthorizationRuleStore(database.db,{kind:"agent",agentId:fixtureScope(database.db,"user_1").agentId}).addGrant({ matchType: "exact", subjectType: "user", subjectId: ownerUserId, target: "alpha.echo", effect: "allow" });
     const result = await new OperationDispatcher({ db: database.db, registry }).invoke({scope:fixtureScope(database.db,"user_1"),
       operationId: "alpha.echo",
       input: {},
-      subject: { userId: "user_1", source: "cli" },
+      subject: { userId: ownerUserId, source: "cli" },
     });
     expect(result.status).toBe("success");
   });
@@ -296,14 +297,7 @@ function seedTwoPolicies(
         createdAt: now, updatedAt: now,
       });
   }
-  db.insert(users)
-    .values({
-      id: "user_1", kind: "human", displayName: "User 1", avatarUrl: null,
-      status: "active", mergedIntoUserId: null, profileSource: "test",
-      createdAt: now, updatedAt: now,
-    })
-    .onConflictDoNothing()
-    .run();
+  fixtureScope(db, "user_1");
 }
 
 function alphaRegistry(
@@ -368,17 +362,5 @@ function seedAlphaPolicyAndUser(db: DataConnection<typeof schema>["db"]): void {
       createdAt: now,
       updatedAt: now,
     });
-  db.insert(users)
-    .values({
-      id: "user_1",
-      kind: "human",
-      displayName: "User 1",
-      avatarUrl: null,
-      status: "active",
-      mergedIntoUserId: null,
-      profileSource: "test",
-      createdAt: now,
-      updatedAt: now,
-    })
-    .onConflictDoNothing().run();
+  fixtureScope(db, "user_1");
 }

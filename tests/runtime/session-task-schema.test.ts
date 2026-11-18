@@ -558,6 +558,8 @@ describe("session/task schema", () => {
 
     expect(getColumnNames(sqlite, "users")).toEqual([
       "id",
+      "agent_id",
+      "account_id",
       "kind",
       "display_name",
       "avatar_url",
@@ -631,20 +633,20 @@ describe("session/task schema", () => {
   test("task source context is represented by context pack source items", () => {
     const { connection } = openFreshDatabase();
 
-    fixtureNamedSession(connection.db, "session_1", "user_1");
+    const {ownerUserId} = fixtureNamedSession(connection.db, "session_1", "user_1");
     connection.db.insert(schema.tasks).values({
       ...fixtureTaskOwnership(connection.db, "session_1"), id: "task_1", primary_session_id: "session_1",
-      creator_user_id: "user_1", type: "work", title: "Source task", status: "completed",
+      creator_user_id: ownerUserId, type: "work", title: "Source task", status: "completed",
       created_at: 1, updated_at: 1, last_activity_at: 1,
     }).run();
     const message = new MessageStore(connection.db).append({
-      sessionId: "session_1", senderUserId: "user_1", role: "user", content: {text: "Source message"},
+      sessionId: "session_1", senderUserId: ownerUserId, role: "user", content: {text: "Source message"},
     });
     appendTaskSourceContextItem(connection.db, {
       taskId: "task_1",
       sessionId: "session_1",
       messageId: message.id,
-      userId: "user_1",
+      userId: ownerUserId,
       createdAt: 123,
     });
 

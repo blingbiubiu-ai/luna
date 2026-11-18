@@ -62,11 +62,12 @@ test("dispatcher selects only enabled Agent config and checks scoped grants and 
  store.put("alice",a.agentId,"alpha",{expectedRevision:null,enabled:true,config:{label:"Alice"}});
  store.put("bob",b.agentId,"alpha",{expectedRevision:null,enabled:true,config:{label:"Bob"}});
  const dispatcher=new OperationDispatcher({db:connection.db,registry});
- const input={scope:a,operationId:"alpha.echo",input:{},subject:{userId:"alice",source:"cli" as const}};
+ const input={scope:a,operationId:"alpha.echo",input:{},subject:{userId:a.ownerUserId,source:"cli" as const}};
  expect(await dispatcher.invoke(input)).toHaveProperty("errorCode","operation_not_granted");
- new AuthorizationRuleStore(connection.db,{kind:"agent",agentId:a.agentId}).addGrant({subjectType:"user",subjectId:"alice",target:"alpha.echo",effect:"allow"});
+ new AuthorizationRuleStore(connection.db,{kind:"agent",agentId:a.agentId}).addGrant({subjectType:"user",subjectId:a.ownerUserId,target:"alpha.echo",effect:"allow"});
  expect(await dispatcher.invoke(input)).toHaveProperty("status","success");expect(seen?.config).toEqual({label:"Alice"});expect(seen?.scope).toEqual(a);
- expect(await dispatcher.invoke({...input,scope:b})).toHaveProperty("errorCode","operation_not_granted");
+ // Alice's user belongs to Agent A only; it is not a user of Agent B.
+ expect(await dispatcher.invoke({...input,scope:b})).toHaveProperty("errorCode","agent_access_denied");
  const current=store.get("alice",a.agentId,"alpha");store.put("alice",a.agentId,"alpha",{expectedRevision:current.revision,enabled:false,config:{}});
  expect(()=>seen?.secrets?.get("TOKEN")).toThrow("plugin_invocation_inactive");
  expect(await dispatcher.invoke(input)).toHaveProperty("errorCode","agent_plugin_disabled");
@@ -103,16 +104,17 @@ test("the same Feishu user can invoke one business operation through both Shadow
   expect(seen?.scope).toEqual(entry.scope);
   expect(seen?.config).toEqual({label: "Shared Agent config"});
  }
+ // The Feishu user exists only in Agent A, so it cannot act in Agent B.
  expect(await dispatcher.invoke({scope: b, operationId: "alpha.echo", input: {},
-  subject: {userId, source: "cli"}})).toHaveProperty("errorCode", "agent_plugin_disabled");
+  subject: {userId, source: "cli"}})).toHaveProperty("errorCode", "agent_access_denied");
 });
 
 
 test("host execution has a scoped HOME, no inherited Service secrets, and rechecks revocation",async()=>{
  const old=process.env.LUNA_PLUGIN_TEST_SECRET;process.env.LUNA_PLUGIN_TEST_SECRET="never-inherit";
  try {
-  const runtime=createPluginRuntimeContext({db:connection.db,scope:a,validate:()=>{new AgentStore(connection.db).requireScope("alice",a);},
-   invocation:{pluginId:"alpha",operationId:"alpha.echo",invocationId:"environment",subject:{userId:"alice",source:"cli"}},
+  const runtime=createPluginRuntimeContext({db:connection.db,scope:a,validate:()=>{new AgentStore(connection.db).requireScope(a.ownerUserId,a);},
+   invocation:{pluginId:"alpha",operationId:"alpha.echo",invocationId:"environment",subject:{userId:a.ownerUserId,source:"cli"}},
    hostPermissions:["host.exec"],manifest:{allowedExecutables:["/usr/bin/env"],allowedEnvKeys:["EXPLICIT","HOME"]}});
   const result=await runtime.host.exec({cmd:"/usr/bin/env",args:[],env:{EXPLICIT:"allowed",HOME:"/foreign"}});
   expect(result.exitCode).toBe(0);expect(result.stdout).toContain("EXPLICIT=allowed");
@@ -125,7 +127,7 @@ test("host execution has a scoped HOME, no inherited Service secrets, and rechec
 
 test("Agent plugin management API requires owner and reports CAS conflicts without secret values",async()=>{
  const app=new Hono().use("*",async(c,next)=>{
-  (c as any).set("dashboardAuthSession",{authenticated:true,user:{id:"alice",name:"Alice",provider:"test"}});
+  (c as any).set("dashboardAuthSession",{authenticated: true, account: {id:"alice",name:"Alice",provider:"test"}});
   (c as any).set("lunaRequestAuthKind","dashboard-cookie");await next();
  }).route("/agents",createAgentPluginRoutes(connection.db,registry));
  expect((await app.request(`/agents/${b.agentId}/plugins/alpha`)).status).toBe(403);
@@ -153,9 +155,9 @@ test("owner can disable a plugin without decrypting retained credentials",()=>{
 
 
 test("plugin artifact registration cannot use a foreign Agent owner",()=>{
- const sessions=new SessionStore(connection.db),own=sessions.createLocalSession("alice",a),foreign=sessions.createLocalSession("bob",b);
- const runtime=createPluginRuntimeContext({db:connection.db,scope:a,validate:()=>{new AgentStore(connection.db).requireScope("alice",a);},
-  invocation:{pluginId:"alpha",operationId:"alpha.echo",invocationId:"artifacts",subject:{userId:"alice",source:"cli"}},hostPermissions:["artifact.create"],manifest:{}});
+ const sessions=new SessionStore(connection.db),own=sessions.createLocalSession("user:alice",a),foreign=sessions.createLocalSession("user:bob",b);
+ const runtime=createPluginRuntimeContext({db:connection.db,scope:a,validate:()=>{new AgentStore(connection.db).requireScope(a.ownerUserId,a);},
+  invocation:{pluginId:"alpha",operationId:"alpha.echo",invocationId:"artifacts",subject:{userId:a.ownerUserId,source:"cli"}},hostPermissions:["artifact.create"],manifest:{}});
  const input={scopeType:"session",scopeId:foreign.id,kind:"file",name:"note.txt",content:Buffer.from("test")};
  expect(()=>runtime.artifacts.registerContent(input)).toThrow("task_scope_mismatch");
  expect(connection.db.select().from(schema.managedArtifacts).all()).toHaveLength(0);

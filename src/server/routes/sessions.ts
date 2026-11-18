@@ -16,7 +16,7 @@ import { dashboardTimelineItemCursor, isInternalMessage, toDashboardSession, toD
 import { createDashboardArtifactSigner } from "@/dashboard-api/local-paths";
 import { SessionTimelineTools } from "@/main-runner/session-timeline-tools";
 import {
-  dashboardRequesterUserIdFromContext,
+  requesterAccountIdFromContext,
   lunaAccessTokenClaimsFromContext,
 } from "@/server/auth";
 import { RunnerArtifactGrantStore } from "@/server/auth/runner-artifact-grant-store";
@@ -65,7 +65,7 @@ export function createSessionsRoutes(options: SessionsRouteOptions = {}) {
     const db = routeDb();
     const row = requireSession(db, c.req.param("id"));
     const session = dashboardSessionRows(db, [row], dashboardArtifactSignerForContext(c, db))[0]!;
-    if (!dashboardRequesterUserIdFromContext(c)) return c.json(session);
+    if (!requesterAccountIdFromContext(c)) return c.json(session);
     const contexts = db.select({ id: runnerContexts.id }).from(runnerContexts)
       .where(and(eq(runnerContexts.owner_type, "session"), eq(runnerContexts.owner_id, row.id)))
       .orderBy(desc(runnerContexts.updated_at), desc(runnerContexts.id)).all();
@@ -258,7 +258,7 @@ export const sessionsRoutes = createSessionsRoutes();
 function dashboardArtifactSignerForContext(c: Context, db: DrizzleDB) {
   return createDashboardArtifactSigner({
     db,
-    requesterUserId: dashboardRequesterUserIdFromContext(c),
+    requesterAccountId: requesterAccountIdFromContext(c),
     accessTokenClaims: lunaAccessTokenClaimsFromContext(c),
   });
 }

@@ -23,7 +23,7 @@ function AgentConfigurationPage() {
   const { t } = useTranslation();
   const auth = useDashboardAuthSession();
   const agent = useRouteAgent();
-  if (auth.data?.user?.id === agent.ownerUserId && agent.status === "active") return <AgentProfiles agentId={agent.id} />;
+  if (auth.data?.account?.id === agent.ownerAccountId && agent.status === "active") return <AgentProfiles agentId={agent.id} />;
   return (
     <div className="mx-auto w-full max-w-7xl space-y-4 px-5 py-7 sm:px-8">
       <header className="flex flex-wrap items-center justify-between gap-4">

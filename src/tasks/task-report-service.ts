@@ -7,7 +7,7 @@ import { scanArtifactRefs } from "@luna/service-client/artifact-ref";
 import { ArtifactStore } from "@/timeline/artifact-store";
 import { TimelineStore } from "@/timeline/timeline-store";
 import { createArtifactAccessPolicy } from "@/server/artifact-access-policy";
-import type { LunaAccessTokenClaims } from "@/server/auth/access-token-service";
+import { runnerActorUserId, type LunaAccessTokenClaims } from "@/server/auth/access-token-service";
 import { GatewayError } from "@/server/gateway-error";
 import type { TaskResultForMainRunner } from "@/main-runner/types";
 import { createLogger } from "@/shared";
@@ -38,7 +38,7 @@ export class TaskReportService {
       throw new GatewayError("invalid_report", "A valid request ID and nonempty report up to 100000 characters are required", 400);
     const existing = taskReportForRun(this.db, scope.run.id);
     if (existing) {
-      if (existing.requestId !== requestId || existing.content !== content || existing.actorUserId !== scope.claims.actorUserId)
+      if (existing.requestId !== requestId || existing.content !== content || existing.actorUserId !== runnerActorUserId(scope.claims))
         throw new GatewayError("report_conflict", "This run already has a final report; retry with the same request ID and content", 409);
       return this.receipt(existing);
     }
@@ -47,7 +47,7 @@ export class TaskReportService {
     const registry = new ArtifactRegistry(this.db);
     const metadata = scope.token.metadataJson;
     const allowlist = Array.isArray(metadata?.artifactIds) ? metadata.artifactIds.filter((id): id is string => typeof id === "string") : [];
-    const policy = createArtifactAccessPolicy({db:this.db,requesterUserId: scope.claims.actorUserId, accessTokenClaims: scope.claims, runArtifactAllowlist: allowlist});
+    const policy = createArtifactAccessPolicy({db:this.db,accessTokenClaims: scope.claims, runArtifactAllowlist: allowlist});
     for (const id of scanArtifactRefs(content)) {
       const artifact = registry.getActive(id);
       if (!artifact || !policy.canReadMetadata(artifact)) throw new GatewayError("artifact_unavailable", "Report references an unavailable artifact", 403);
@@ -55,12 +55,12 @@ export class TaskReportService {
     const accepted = this.db.transaction(tx => {
       const db = tx as unknown as DrizzleDB;
       const managed = new ArtifactRegistry(db).registerContent({scopeType: "task", scopeId: task.id,
-        relatedUserId: scope.claims.actorUserId, producer: "task_runner", kind: "report", name: "final-report.md",
+        relatedUserId: runnerActorUserId(scope.claims), producer: "task_runner", kind: "report", name: "final-report.md",
         mimeType: "text/markdown", content: new TextEncoder().encode(content)});
       const artifact = new ArtifactStore(db).create({taskId: task.id, type: "report", name: "final-report.md",
         mimeType: "text/markdown", content, metadata: {managedArtifactId: managed.id, taskRunId: scope.run.id}});
       const row = {id: randomUUID(), taskId: task.id, taskRunId: scope.run.id, requestId,
-        actorUserId: scope.claims.actorUserId, content, reportArtifactId: artifact.id, createdAt: Date.now()};
+        actorUserId: runnerActorUserId(scope.claims), content, reportArtifactId: artifact.id, createdAt: Date.now()};
       db.insert(taskReportCommands).values(row).run();
       db.update(taskRuns).set({final_report_artifact_id: artifact.id}).where(eq(taskRuns.id, scope.run.id)).run();
       const result: TaskResultForMainRunner = {taskId: task.id, taskRunId: scope.run.id, runIndex: scope.run.run_index,
@@ -81,7 +81,7 @@ export class TaskReportService {
   get(claims: LunaAccessTokenClaims | undefined, id: string) {
     const scope = this.active(claims);
     const report = taskReportForRun(this.db, scope.run.id);
-    if (!report || report.id !== id || report.actorUserId !== scope.claims.actorUserId)
+    if (!report || report.id !== id || report.actorUserId !== runnerActorUserId(scope.claims))
       throw new GatewayError("report_not_found", "Report not found", 404);
     return this.receipt(report);
   }

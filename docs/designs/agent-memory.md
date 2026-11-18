@@ -353,22 +353,12 @@ confirmation" filter lists untrusted entries; confirming one shares it.
 
 ## Legacy Markdown memory and persona documents
 
-The per-Shadow USER/SOUL documents, their API (`/api/agents/:agentId/shadows/:shadowId/config`)
-and their publication into the snapshot's `config/` directory are removed.
-Migration `0002_agent_memories.sql` imports each non-empty document as a persona
-entry of its Shadow.
-
-Migration `0002_agent_memories.sql` imports each non-empty legacy memory file as
-one trusted `reference` entry with origin `migration`; consolidation then splits
-and classifies it. Files holding only whitespace are skipped. The forgetting
-clock of an imported entry starts at the upgrade, since the document was in
-every conversation until then. The import does not enforce the 8 KB body limit, so an
-oversized imported entry must be split before it can be edited. The document
-memory API and snapshot publication are removed. Once the documents are
-imported, `0004_memory_cleanup.sql` drops `agent_document_revisions`, the
-triggers that guarded it and the `luna_agents.memory_revision` and
-`agent_shadows.config_revision` pointers into it. The resource selection no
-longer has `agentMemoryRevision` or `shadowConfigRevision`, and snapshots no
+The per-Shadow USER/SOUL documents, the document memory API and their
+publication into resource snapshots are removed. Databases that held them are
+no longer upgraded: the schema is a single baseline, and
+`luna service admin import-config` copies only configuration (Agents, Shadows,
+bots, models, plugins) into a new database, not memory. Resource selections
+have no `agentMemoryRevision` or `shadowConfigRevision`, and snapshots no
 longer have `agent/memory/` or `shadow/config/` parts, so Service, Worker and
 the runner image's Executor must be upgraded together.
 

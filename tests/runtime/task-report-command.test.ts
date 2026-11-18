@@ -1,4 +1,4 @@
-import {fixtureTaskOwnership} from "../helpers/platform-fixtures";
+import {fixtureTaskOwnership, fixtureUser } from "../helpers/platform-fixtures";
 import {fixtureSessionOwnership} from "../helpers/platform-fixtures";
 import { RunnerContextStore } from "../../src/runners/runner-context-store";
 import { registerTestRunnerJob } from "./support/runner-job";
@@ -32,14 +32,14 @@ afterEach(() => {connection?.close(); if(home) rmSync(home,{recursive:true,force
 function fixture() {
   home=mkdtempSync(join(tmpdir(),"luna-report-"));setLunaHome(home);
   connection=new DataConnection(schema);const db=connection.db;
-  db.insert(schema.users).values({id:"user",kind:"human",displayName:"User",status:"active",createdAt:"now",updatedAt:"now"}).run();
   const sessionOwnership = fixtureSessionOwnership(db, "test", "test");
+  fixtureUser(db, sessionOwnership.agent_id, "user");
   db.insert(schema.sessions).values({id:"session",channel_type:"test",channel_id:"test",created_at:1,updated_at:1,...sessionOwnership}).run();
   db.insert(schema.tasks).values({id:"task",type:"task",title:"Report test",summary:"Original",status:"running",context_json:{knownFacts:["fact"]},created_at:1,updated_at:1,last_activity_at:1, ...fixtureTaskOwnership(db,"session")}).run();
   const context = new RunnerContextStore(db).resolveForTask("task", "codex");
   const store=new TaskRunStore(db);
   const run=store.createRun({taskId:"task",reason:"initial",inputSnapshot:{},runnerType:"codex",runnerContextId:context.id});
-  db.insert(schema.accessTokens).values({id:"token",tokenHash:"hash",userId:"user",source:"runner",name:"task",role:"runner",issuedAt:1,expiresAt:Date.now()+60000,createdAt:1,metadataJson:{invocationId:"invocation"}}).run();
+  db.insert(schema.accessTokens).values({id:"token",agentId:sessionOwnership.agent_id,tokenHash:"hash",userId:"user",source:"runner",name:"task",role:"runner",issuedAt:1,expiresAt:Date.now()+60000,createdAt:1,metadataJson:{invocationId:"invocation"}}).run();
   const controller=new AbortController();
   const claims:LunaAccessTokenClaims={tokenId:"token",actorUserId:"user",source:"runner",role:"runner",runnerKind:"task",agentId:context.agent_id,shadowId:context.shadow_id,taskId:"task",taskRunId:run.id,runnerJobId:context.id,issuedAt:1,expiresAt:Date.now()+60000};
   const finishJob = registerTestRunnerJob(db, "invocation", claims, {
@@ -158,9 +158,10 @@ test("Main downloads the managed report while Task Run retains its timeline arti
   const previous = process.env.LUNA_ACCESS_TOKEN_SECRET;
   process.env.LUNA_ACCESS_TOKEN_SECRET = "report-test";
   try {
-    f.db.insert(schema.users).values({ id: "recipient", kind: "human", displayName: "Recipient", status: "active", createdAt: "now", updatedAt: "now" }).run();
     const issuer = new AccessTokenService({ db: f.db, signingSecret: "report-test" });
-    f.db.insert(schema.sessions).values({ id: "report-session", channel_type: "test", channel_id: "test", created_by_user_id: "recipient", created_at: 1, updated_at: 1 , ...fixtureSessionOwnership(f.db,"test","test")}).run();
+    const reportOwnership = fixtureSessionOwnership(f.db,"test","test");
+    fixtureUser(f.db, reportOwnership.agent_id, "recipient");
+    f.db.insert(schema.sessions).values({ id: "report-session", channel_type: "test", channel_id: "test", created_by_user_id: "recipient", created_at: 1, updated_at: 1 , ...reportOwnership}).run();
     const readerContext = new RunnerContextStore(f.db).resolveForSession("report-session", "codex");
     const tokenInput = { userId: "recipient", name: "main-report", source: "runner" as const, role: "runner" as const, runnerKind: "main" as const, sourceRunnerJobId: readerContext.id, sourceSessionId: "report-session", sourceTaskId: "task", sourceTaskRunId: f.run.id, ttlMs: 60000, now: Date.now() };
     const token = issuer.issueToken({ ...tokenInput, metadata: { invocationId: "report-reader", artifactIds: ids } });

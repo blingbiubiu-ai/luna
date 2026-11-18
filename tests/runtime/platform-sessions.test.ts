@@ -15,10 +15,10 @@ import {BotBindingStore} from "@/agents/bot-binding-store";
 import {SessionStore} from "@/sessions/session-store";
 import {ChannelConfigStore} from "@/channels/config-store";
 import {AgentSecretCipher} from "@/agent-config";
-import {fixtureScope} from "../helpers/platform-fixtures";
+import {fixtureScope,fixtureUser,fixtureOwnerUserId} from "../helpers/platform-fixtures";
 let home:string,connection:DataConnection<typeof schema>,store:SessionStore;
 let scope:ReturnType<typeof fixtureScope>;
-const owner="session-owner";
+const owner="session-owner",ownerUser=fixtureOwnerUserId(owner);
 beforeEach(()=>{
  home=mkdtempSync(join(tmpdir(),"luna-platform-sessions-"));setLunaHome(home);
  connection=new DataConnection(schema);scope=fixtureScope(connection.db,owner);store=new SessionStore(connection.db);
@@ -31,13 +31,13 @@ async function bot(channelId:string,shadowId?:string){
  return shadow;
 }
 test("Dashboard scope is explicit and reply identity belongs to the selected Shadow",()=>{
- const local=store.createLocalSession(owner,scope);
+ const local=store.createLocalSession(ownerUser,scope);
  expect(local.agent_id).toBe(scope.agentId);expect(local.shadow_id).toBe(scope.shadowId);expect(local.binding_id).toBeNull();
  expect(store.requireReplyUserId(local.id)).toBe(new AgentStore(connection.db).shadow(scope.shadowId).replyUserId);
  expect(()=>store.resolveByChannelSurface({channelType:"dashboard",channelId:"luna-dashboard"})).toThrow("explicit_dashboard_scope_required");
  const foreign=fixtureScope(connection.db,"foreign-owner");
- expect(()=>store.createLocalSession(owner,foreign)).not.toThrow();
- expect(()=>store.createLocalSession(owner,{...scope,shadowId:foreign.shadowId})).toThrow("scope_mismatch");
+ expect(()=>store.createLocalSession(foreign.ownerUserId,foreign)).not.toThrow();
+ expect(()=>store.createLocalSession(ownerUser,{...scope,shadowId:foreign.shadowId})).toThrow("scope_mismatch");
 });
 test("two bots in one group keep sessions and replies isolated",async()=>{
  const a=await bot("bot-a"),b=await bot("bot-b");
@@ -60,27 +60,28 @@ test("rebinding creates a new surface and cannot repurpose historical conversati
  expect(store.channelBindings(old.id)).toHaveLength(1);
 });
 test("database rejects ownership mutation and forged reply authors",()=>{
- const local=store.createLocalSession(owner,scope),foreign=fixtureScope(connection.db,"foreign-owner");
+ const local=store.createLocalSession(ownerUser,scope),foreign=fixtureScope(connection.db,"foreign-owner");
  expect(()=>connection.db.update(schema.sessions).set({shadow_id:foreign.shadowId}).where(eq(schema.sessions.id,local.id)).run()).toThrow("session_scope_immutable");
- expect(()=>connection.db.insert(schema.sessions).values({...local,id:"forged",bot_user_id:owner}).run()).toThrow("session_scope_mismatch");
- expect(()=>store.bindBotUser(local.id,owner)).toThrow("session_reply_identity_mismatch");
+ expect(()=>connection.db.insert(schema.sessions).values({...local,id:"forged",bot_user_id:ownerUser}).run()).toThrow("session_scope_mismatch");
+ expect(()=>store.bindBotUser(local.id,ownerUser)).toThrow("session_reply_identity_mismatch");
 });
 
 test("execution visibility respects participation and an active actor",()=>{
  const policy=new SessionAccessPolicy(connection.db);
  fixtureScope(connection.db,"member");fixtureScope(connection.db,"another-member");
+ fixtureUser(connection.db,scope.agentId,"member");fixtureUser(connection.db,scope.agentId,"another-member");
  const local=store.createLocalSession("member",scope);
- expect(policy.requireAccess(owner,local.id).id).toBe(local.id);
+ expect(policy.requireAccess(ownerUser,local.id).id).toBe(local.id);
  expect(policy.requireAccess("member",local.id).id).toBe(local.id);
  expect(()=>policy.requireAccess("another-member",local.id)).toThrow("session_access_denied");
- connection.db.update(schema.users).set({status:"disabled"}).where(eq(schema.users.id,"member")).run();
+ connection.db.update(schema.users).set({status:"blocked"}).where(eq(schema.users.id,"member")).run();
  expect(()=>policy.requireAccess("member",local.id)).toThrow("active_user_required");
 });
 test("timeline and thread context reject cross Shadow message references",async()=>{
  const a=await bot("bot-a"),b=await bot("bot-b");
- const one=store.createLocalSession(owner,{agentId:scope.agentId,shadowId:a.id});
- const two=store.createLocalSession(owner,{agentId:scope.agentId,shadowId:b.id});
- const message=new MessageStore(connection.db).append({sessionId:one.id,channelMessageKey:"private-message",senderUserId:owner,role:"user",content:{text:"private"}});
+ const one=store.createLocalSession(ownerUser,{agentId:scope.agentId,shadowId:a.id});
+ const two=store.createLocalSession(ownerUser,{agentId:scope.agentId,shadowId:b.id});
+ const message=new MessageStore(connection.db).append({sessionId:one.id,channelMessageKey:"private-message",senderUserId:ownerUser,role:"user",content:{text:"private"}});
  expect(()=>new SessionTimelineStore(connection.db).appendReference({sessionId:two.id,messageId:message.id})).toThrow("message_reference_scope_mismatch");
  expect(()=>new LaunchContextBuilder(connection.db).buildForThreadSession({threadSessionId:two.id,rootSessionId:one.id,anchorExternalMessageId:"private-message",maxMessages:10,maxChars:1000})).toThrow("thread_context_scope_mismatch");
 });
@@ -88,14 +89,14 @@ test("timeline and thread context reject cross Shadow message references",async(
 test("provider message IDs and thread anchors are isolated across binding retirement",async()=>{
  await bot("bot-a");const input={channelType:"feishu",channelId:"bot-a",groupId:"same-group"};
  const old=store.resolveByChannelSurface(input),messages=new MessageStore(connection.db);
- const historical=messages.appendOnce({sessionId:old.id,channelMessageKey:"provider-message",senderUserId:owner,role:"user",content:{text:"Old private content"}}).row;
+ const historical=messages.appendOnce({sessionId:old.id,channelMessageKey:"provider-message",senderUserId:ownerUser,role:"user",content:{text:"Old private content"}}).row;
  new BotBindingStore(connection.db).retire(owner,old.binding_id!);
  const replacement=new AgentStore(connection.db).createShadow(owner,scope.agentId,{name:"Replacement"},"replacement");
  await bot("bot-a",replacement.id);
  const thread=store.resolveByChannelSurface({...input,threadId:"new-thread",rootMessageId:"provider-message"});
  expect(connection.db.select().from(schema.sessionTimelineEntries).where(eq(schema.sessionTimelineEntries.sessionId,thread.id)).all()).toHaveLength(0);
  expect(messages.findByExternalMessageId({sessionId:thread.id,...input,externalMessageId:"provider-message"})).toBeUndefined();
- const current=messages.appendOnce({sessionId:thread.id,channelMessageKey:"provider-message",senderUserId:owner,role:"user",content:{text:"New content"}});
+ const current=messages.appendOnce({sessionId:thread.id,channelMessageKey:"provider-message",senderUserId:ownerUser,role:"user",content:{text:"New content"}});
  expect(current.created).toBe(true);expect(current.row.id).not.toBe(historical.id);
  expect(messages.findByExternalMessageId({sessionId:old.id,...input,externalMessageId:"provider-message"})?.id).toBe(historical.id);
  expect(()=>messages.updateContentAndPresentation(historical.id,{sessionId:thread.id,role:"user",content:{text:"overwrite"}})).toThrow("message_scope_mismatch");

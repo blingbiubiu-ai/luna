@@ -26,10 +26,10 @@ export const runtimeRoutes = new Hono()
     const all = getKernel().channelStatuses();
     let channels: typeof all = [];
     if (agentId) {
-      new AgentStore(db).requireOwner(auth.user.id, agentId);
+      new AgentStore(db).requireOwner(auth.account.id, agentId);
       const own = new Set(db.select({ id: channelConfigs.id }).from(channelConfigs).where(eq(channelConfigs.agentId, agentId)).all().map(row => row.id));
       channels = all.filter(channel => own.has(channel.id));
-    } else if (isPlatformAdministrator(db, auth.user.id)) {
+    } else if (isPlatformAdministrator(db, auth.account.id)) {
       channels = all;
     }
     return c.json({ status: "ok", uptime: Math.floor((Date.now() - startTime) / 1000), channels });

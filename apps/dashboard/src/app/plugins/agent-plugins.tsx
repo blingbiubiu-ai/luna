@@ -39,7 +39,7 @@ export function AgentPluginsPage() {
       </header>
       {auth.error ? <p role="alert" className="text-destructive">无法加载 Agent。</p>
         : auth.isLoading ? <p>正在加载…</p>
-        : auth.data?.user?.id === agent.ownerUserId && agent.status === "active" ? <AgentPlugins agentId={agent.id} />
+        : auth.data?.account?.id === agent.ownerAccountId && agent.status === "active" ? <AgentPlugins agentId={agent.id} />
         : <p className="text-sm text-muted-foreground">只有 Agent 所有者可以配置启用中的 Agent。</p>}
     </section>
   );

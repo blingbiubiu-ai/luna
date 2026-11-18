@@ -15,6 +15,8 @@ import { runServerCli } from "../../src/cli/server-main";
 import { DataConnection } from "../../src/data";
 import * as schema from "../../src/data/schema";
 import { readMigrationFiles } from "drizzle-orm/migrator";
+import { eq } from "drizzle-orm";
+import { fixtureAgent } from "../helpers/platform-fixtures";
 
 let homes: string[] = [];
 
@@ -52,21 +54,23 @@ describe("Luna schema baseline", () => {
     const home = makeHome();
     await useHome(home);
     const first = new DataConnection(schema);
+    const agent = fixtureAgent(first.db, "baseline-account");
     first.close();
     const sqlite = new Database(join(home, "data", "luna.db"));
     const baseline = readMigrationFiles({ migrationsFolder: "src/data/drizzle" });
-    // The baseline plus 0002_agent_memories, 0003_memory_episodes, 0004_memory_cleanup and 0005_shadow_root_access, which upgrade existing databases in place.
-    expect(baseline).toHaveLength(5);
+    // A single squashed baseline; databases from before it are refused rather than upgraded.
+    expect(baseline).toHaveLength(1);
     expect(baseline[0]!.sql.length).toBeGreaterThan(0);
-    expect(sqlite.query("SELECT count(*) AS n FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name != '__drizzle_migrations'").get()).toEqual({n:88});
+    expect(sqlite.query("SELECT count(*) AS n FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name != '__drizzle_migrations'").get()).toEqual({n:89});
     expect(sqlite.query("SELECT hash, created_at FROM __drizzle_migrations").all()).toEqual([
       ...baseline.map(migration => ({ hash: migration.hash, created_at: migration.folderMillis })),
     ]);
     expect(sqlite.query("SELECT name FROM sqlite_master WHERE name IN ('runtime_generations','platform_migration_state','capability_grants','session_authorities')").all()).toEqual([]);
-    sqlite.run("INSERT INTO users(id,kind,display_name,status,created_at,updated_at) VALUES('baseline-user','human','Preserved','active','1','1')");
+    sqlite.run("INSERT INTO users(id,agent_id,kind,display_name,status,created_at,updated_at) VALUES('baseline-user',?,'human','Preserved','active','1','1')", [agent.id]);
     sqlite.close();
     const second = new DataConnection(schema);
-    expect(second.db.select().from(schema.users).all()).toHaveLength(1);
+    expect(second.db.select({displayName: schema.users.displayName, agentId: schema.users.agentId}).from(schema.users)
+      .where(eq(schema.users.id, "baseline-user")).all()).toEqual([{displayName: "Preserved", agentId: agent.id}]);
     second.close();
     const reopened = new Database(join(home, "data", "luna.db"), { readonly: true });
     try {

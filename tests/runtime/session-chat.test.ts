@@ -1,4 +1,6 @@
-import { fixtureScope, fixtureSessionOwnership } from "../helpers/platform-fixtures";
+import { fixtureOwnerUserId, fixtureScope, fixtureSessionOwnership } from "../helpers/platform-fixtures";
+/** The Dashboard account acts in its Agent as the owner's user. */
+const dashboardUserId = fixtureOwnerUserId("dashboard-user");
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -40,7 +42,7 @@ beforeEach(async () => {
 afterEach(async () => { await ingress?.stop(); db.close(); setLunaHome(previousHome); rmSync(home, { recursive: true, force: true }); });
 function app(kind = "dashboard-cookie") {
   return new Hono<{ Variables: Record<string, unknown> }>().use("*", async (c, next) => {
-    c.set("dashboardAuthSession", { authenticated: true, user: { id: "dashboard-user", name: "Tester", provider: "test" } });
+    c.set("dashboardAuthSession", { authenticated: true, account: { id: "dashboard-user", name: "Tester", provider: "test" } });
     c.set("lunaRequestAuthKind", kind);
     if (kind === "luna-access-token") c.set("lunaAccessTokenClaims", { source: "runner" });
     await next();
@@ -65,19 +67,19 @@ test("dashboard uses ordinary inbox, user-message Main input, turn entries and b
   const entries = db.db.select().from(schema.sessionTurnEntries).all();
   expect(entries.filter(row => row.turn_id === inbox[0]!.turn_id).length).toBeGreaterThanOrEqual(1);
   const rows = db.db.select().from(schema.messages).all();
-  expect(rows.find(row => row.id === result.messageId)).toMatchObject({ channelType: "dashboard", senderUserId: "dashboard-user" });
+  expect(rows.find(row => row.id === result.messageId)).toMatchObject({ channelType: "dashboard", senderUserId: dashboardUserId });
   const dashboardIdentity = db.db.select().from(schema.channelIdentities)
     .where(eq(schema.channelIdentities.channelType, "dashboard")).all()
-    .find(row => row.externalId === "dashboard-user")!;
+    .find(row => row.externalId === dashboardUserId)!;
   expect(db.db.select().from(schema.channelUserBindings)
-    .where(eq(schema.channelUserBindings.channelIdentityId, dashboardIdentity.id)).get()?.userId).toBe("dashboard-user");
+    .where(eq(schema.channelUserBindings.channelIdentityId, dashboardIdentity.id)).get()?.userId).toBe(dashboardUserId);
   expect(db.db.select().from(schema.userIdentityLinks)
     .where(eq(schema.userIdentityLinks.identityNamespace, "dashboard")).all())
-    .toEqual([expect.objectContaining({ userId: "dashboard-user", identityValue: "dashboard-user" })]);
+    .toEqual([expect.objectContaining({ userId: dashboardUserId, identityValue: dashboardUserId })]);
   const reply = rows.find(row => row.role === "assistant")!;
   expect(reply.senderUserId).toBe(feishuReplyUserId);
   expect(db.db.select().from(schema.channelIdentities).all().filter(row => row.channelType === "dashboard" && row.identityKind === "bot")).toHaveLength(0);
-  expect(db.db.select().from(schema.users).where(eq(schema.users.id, reply.senderUserId)).get()?.kind).toBe("system");
+  expect(db.db.select().from(schema.users).where(eq(schema.users.id, reply.senderUserId)).get()?.kind).toBe("shadow");
   expect(new SessionStore(db.db).channelBindings(sessionId).map(row => row.channelId)).toEqual(["test"]);
   expect(db.db.select().from(schema.sessionCommands).all()[0]).toMatchObject({status: "sent", providerMessageId: expect.any(String)});
   expect(feishu.outbound).toHaveLength(1);
@@ -111,9 +113,9 @@ test("rejects unauthenticated and runner access, empty input, unavailable sessio
   expect((await send(app("luna-access-token"))).status).toBe(403);
   expect((await send(app(), "   ")).status).toBe(400);
   expect((await send(app(), "hello", "test", "missing")).status).toBe(404);
-  db.db.update(schema.users).set({ status: "inactive" }).where(eq(schema.users.id, "dashboard-user")).run();
+  db.db.update(schema.users).set({ status: "blocked" }).where(eq(schema.users.id, dashboardUserId)).run();
   expect((await send(app())).status).toBe(403);
-  db.db.update(schema.users).set({ status: "active" }).where(eq(schema.users.id, "dashboard-user")).run();
+  db.db.update(schema.users).set({ status: "active" }).where(eq(schema.users.id, dashboardUserId)).run();
   db.db.update(schema.sessions).set({ status: "closed" }).where(eq(schema.sessions.id, sessionId)).run();
   expect((await send(app())).status).toBe(404);
 });
@@ -140,7 +142,7 @@ test("execution rejection accepts the message and persists one error reply while
   });
   await ingress.registerChannel(feishu);
   await ingress.registerChannel(channel);
-  sessionId = new SessionStore(db.db).createLocalSession("dashboard-user", fixtureScope(db.db, "dashboard-user")).id;
+  sessionId = new SessionStore(db.db).createLocalSession(dashboardUserId,fixtureScope(db.db,"dashboard-user")).id;
   const server = app();
   const response = await send(server);
   expect(response.status).toBe(202);
@@ -208,7 +210,7 @@ test("Feishu and Dashboard replies share the canonical bot established before de
   expect(db.db.select().from(schema.channelIdentities).all().some(i => i.externalId === "wrong-receipt-bot")).toBe(false);
 });
 test("Dashboard-only sessions reply as Luna without any external bot", async () => {
-  const local = new SessionStore(db.db).createLocalSession("dashboard-user", fixtureScope(db.db, "dashboard-user"));
+  const local = new SessionStore(db.db).createLocalSession(dashboardUserId,fixtureScope(db.db,"dashboard-user"));
   sessionId = local.id;
   const localReplyUserId = new SessionStore(db.db).requireReplyUserId(sessionId);
   expect(localReplyUserId).not.toBe(feishuReplyUserId);
@@ -235,7 +237,7 @@ test("Agent owner can create a standalone Dashboard session without external cha
   });
   expect(result.status).toBe(201);
   const {sessionId:created}=await result.json() as {sessionId:string};
-  expect(new SessionStore(db.db).getById(created)).toMatchObject({channel_id:"luna-dashboard",shadow_id:shadowId,created_by_user_id:"dashboard-user"});
+  expect(new SessionStore(db.db).getById(created)).toMatchObject({channel_id:"luna-dashboard",shadow_id:shadowId,created_by_user_id:dashboardUserId});
   expect(new SessionStore(db.db).channelBindings(created)).toHaveLength(0);
   expect(db.db.select().from(schema.sessionSurfaceAliases).all().filter(row => row.session_id === created)).toHaveLength(0);
   expect((await send(app(),"hello","standalone",created)).status).toBe(202);await ingress.waitForIdle();expect(feishu.outbound).toHaveLength(0);
@@ -250,7 +252,7 @@ test("Dashboard cannot be attached as an outbound channel", () => {
 
 test("startup skips deleted sessions while binding channel bots", async () => {
   const { deleteDashboardSession } = await import("../../src/dashboard-api/deletion");
-  const local = new SessionStore(db.db).createLocalSession("dashboard-user",fixtureScope(db.db,"dashboard-user"));
+  const local = new SessionStore(db.db).createLocalSession(dashboardUserId,fixtureScope(db.db,"dashboard-user"));
   deleteDashboardSession(db.db, sessionId);
   deleteDashboardSession(db.db, local.id);
   await ingress.start();
@@ -265,9 +267,9 @@ test("reply identity is explicit and invalid identity prevents command acceptanc
   expect(store.requireReplyUserId(sessionId)).toBe(feishuReplyUserId);
   expect(() => db.db.update(schema.sessions).set({ bot_user_id: null }).where(eq(schema.sessions.id, sessionId)).run())
     .toThrow("session_scope_immutable");
-  db.db.update(schema.users).set({ status: "deleted" }).where(eq(schema.users.id, feishuReplyUserId)).run();
+  db.db.update(schema.users).set({ status: "removed" }).where(eq(schema.users.id, feishuReplyUserId)).run();
   const commands = new SessionCommandService({ db: db.db, channelFor: () => feishu });
-  expect(() => commands.accept({ userId: "dashboard-user", sourceSessionId: sessionId, originId: "test" }, sessionId, "message.send", "missing-identity", { content: "Must not be sent" }))
+  expect(() => commands.accept({ userId: dashboardUserId, sourceSessionId: sessionId, originId: "test" }, sessionId, "message.send", "missing-identity", { content: "Must not be sent" }))
     .toThrow("Shadow reply identity is unavailable");
   expect(db.db.select().from(schema.messages).all()).toHaveLength(0);
   expect(db.db.select().from(schema.sessionCommands).all()).toHaveLength(0);

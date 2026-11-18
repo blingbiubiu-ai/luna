@@ -41,7 +41,7 @@ export function createOperationsRoutes(options: OperationsRouteOptions = {}) {
         const auth = requireDashboardOnly(c);
         if (isGuardResponse(auth)) return auth;
         const db = getDb();
-        new AgentStore(db).requireOwner(auth.user.id, agentId);
+        new AgentStore(db).requireOwner(auth.account.id, agentId);
         return c.json({
           status: "ok",
           operations: listOperationSuggestions(db, stringQuery(c.req.query("namespace")))
@@ -84,19 +84,17 @@ export function createOperationsRoutes(options: OperationsRouteOptions = {}) {
     .post("/:id/invoke", async (c) => {
       const body = await c.req.json().catch(() => ({}));
       const requestBody = isRecord(body) ? body : {};
+      const {actorUserId, ...authorized} = pluginRequestScope(c,getDb());
       const result = await new OperationDispatcher({
         db: getDb(),
         registry: getPluginRegistry(),
       }).invoke({
-        ...pluginRequestScope(c,getDb()),
+        ...authorized,
         operationId: c.req.param("id"),
         input: requestBody.input ?? {},
         subject: {
           source: invocationSource(c),
-          ...optionalField(
-            "userId",
-            dashboardAuthSessionFromContext(c)?.user?.id,
-          ),
+          userId: actorUserId,
         },
 
 

@@ -48,11 +48,11 @@ export function createAgentContainerRoutes(
     throw error;
   }).get("/:agentId/containers", async c => {
     const auth = requireDashboardOnly(c); if (isGuardResponse(auth)) return auth;
-    const agent = agents.requireOwner(auth.user.id, c.req.param("agentId"));
+    const agent = agents.requireOwner(auth.account.id, c.req.param("agentId"));
     const gateway = getGateway();
     if (!gateway) return c.json({ status: "error", code: "runtime_not_ready" }, 503);
-    const assigned = assignedWorkers(auth.user.id, agent.id);
-    const allShadows = agents.listShadows(auth.user.id, agent.id);
+    const assigned = assignedWorkers(auth.account.id, agent.id);
+    const allShadows = agents.listShadows(auth.account.id, agent.id);
     const names = new Map(allShadows.map(shadow => [shadow.id, shadow.name]));
     const shadows = allShadows.filter(shadow => shadow.status === "active").map(shadow => ({ shadowId: shadow.id, shadowName: shadow.name }));
     const workers = gateway.list().filter(worker => assigned.has(worker.workerId) && worker.connected && !worker.revoked);
@@ -70,9 +70,10 @@ export function createAgentContainerRoutes(
   }).post("/:agentId/containers", async c => {
     // Pre-create and start a Shadow's container before its first Job so the owner can log in or install packages.
     const auth = requireDashboardOnly(c); if (isGuardResponse(auth)) return auth;
-    const agent = agents.requireOwner(auth.user.id, c.req.param("agentId"));
+    const agent = agents.requireOwner(auth.account.id, c.req.param("agentId"));
     const { shadowId, workerId: requestedWorkerId } = ProvisionBody.parse(await c.req.json());
-    const shadow = agents.requireScope(auth.user.id, { agentId: agent.id, shadowId });
+    const ownerUserId = agents.ownerUserId(agent.id);
+    const shadow = agents.requireScope(ownerUserId, { agentId: agent.id, shadowId });
     const gateway = getGateway();
     if (!gateway) return c.json({ status: "error", code: "runtime_not_ready" }, 503);
     const allowed = access.allowed(agent.id);
@@ -86,7 +87,7 @@ export function createAgentContainerRoutes(
       const workerInfo = gateway.list().find(item => item.workerId === placement.workerId && item.connected && !item.revoked);
       const supported = workerInfo?.health?.capabilities?.includes(CONTAINER_STREAMS_CAPABILITY) === true;
       if (!supported) return c.json({ status: "error", code: "worker_streams_unsupported", message: resetMessages.worker_streams_unsupported }, 409);
-      const bundle = getResourceBuilder().capture(auth.user.id, { agentId: agent.id, shadowId });
+      const bundle = getResourceBuilder().capture(ownerUserId, { agentId: agent.id, shadowId });
       const rootAccess = new ShadowRootAccessStore(db).enabled(shadowId);
       const spec = {
         protocolVersion: 2 as const,
@@ -103,7 +104,7 @@ export function createAgentContainerRoutes(
       const reply = await gateway.scheduler.workers.client(placement.workerId)
         .call<{ container: unknown }>("POST", "/v1/containers/provision", { bundle, spec }, AbortSignal.timeout(60000));
       const container = Summary.parse(reply.container);
-      logger.info({ event: "provision", userId: auth.user.id, agentId: agent.id, shadowId, workerId: placement.workerId, environmentId: container.environmentId }, "container_provisioned");
+      logger.info({ event: "provision", accountId: auth.account.id, agentId: agent.id, shadowId, workerId: placement.workerId, environmentId: container.environmentId }, "container_provisioned");
       return c.json({ container: { ...container, workerId: placement.workerId, shadowName: shadow.name, supported: true } });
     } catch (error) {
       const code = error instanceof ExecutionError ? error.code : "worker_unreachable";
@@ -113,10 +114,10 @@ export function createAgentContainerRoutes(
   }).post("/:agentId/containers/:workerId/:environmentId/reset", async c => {
     // Resetting removes the container's writable system layer (apt packages etc.); HOME stays.
     const auth = requireDashboardOnly(c); if (isGuardResponse(auth)) return auth;
-    const agent = agents.requireOwner(auth.user.id, c.req.param("agentId"));
+    const agent = agents.requireOwner(auth.account.id, c.req.param("agentId"));
     const workerId = Id.parse(c.req.param("workerId"));
     const environmentId = Id.parse(c.req.param("environmentId"));
-    if (!assignedWorkers(auth.user.id, agent.id).has(workerId)) throw new AgentError("worker_assignment_not_found", 404);
+    if (!assignedWorkers(auth.account.id, agent.id).has(workerId)) throw new AgentError("worker_assignment_not_found", 404);
     const gateway = getGateway();
     if (!gateway) return c.json({ status: "error", code: "runtime_not_ready" }, 503);
     try {
@@ -127,14 +128,14 @@ export function createAgentContainerRoutes(
       const status = error instanceof ExecutionError && [403, 404, 409].includes(error.status) ? error.status as 403 | 404 | 409 : 503;
       return c.json({ status: "error", code, message: resetMessages[code] ?? code }, status);
     }
-    logger.info({ event: "reset", userId: auth.user.id, agentId: agent.id, workerId, environmentId }, "container_system_disk_reset");
+    logger.info({ event: "reset", accountId: auth.account.id, agentId: agent.id, workerId, environmentId }, "container_system_disk_reset");
     return c.json({ ok: true });
   }).post("/:agentId/containers/:workerId/:environmentId/desktop/stop", async c => {
     const auth = requireDashboardOnly(c); if (isGuardResponse(auth)) return auth;
-    const agent = agents.requireOwner(auth.user.id, c.req.param("agentId"));
+    const agent = agents.requireOwner(auth.account.id, c.req.param("agentId"));
     const workerId = Id.parse(c.req.param("workerId"));
     const environmentId = Id.parse(c.req.param("environmentId"));
-    if (!assignedWorkers(auth.user.id, agent.id).has(workerId)) throw new AgentError("worker_assignment_not_found", 404);
+    if (!assignedWorkers(auth.account.id, agent.id).has(workerId)) throw new AgentError("worker_assignment_not_found", 404);
     const gateway = getGateway();
     if (!gateway) return c.json({ status: "error", code: "runtime_not_ready" }, 503);
     try {
@@ -144,18 +145,18 @@ export function createAgentContainerRoutes(
       const status = error instanceof ExecutionError && [403, 404, 409].includes(error.status) ? error.status as 403 | 404 | 409 : 503;
       return c.json({ status: "error", code, message: resetMessages[code] ?? code }, status);
     }
-    logger.info({ event: "desktop_stop", userId: auth.user.id, agentId: agent.id, workerId, environmentId }, "container_desktop_stopped");
+    logger.info({ event: "desktop_stop", accountId: auth.account.id, agentId: agent.id, workerId, environmentId }, "container_desktop_stopped");
     return c.json({ ok: true });
   }).get("/:agentId/containers/:workerId/:environmentId/stream", async c => {
     const auth = requireDashboardOnly(c); if (isGuardResponse(auth)) return auth;
-    const agent = agents.requireOwner(auth.user.id, c.req.param("agentId"));
+    const agent = agents.requireOwner(auth.account.id, c.req.param("agentId"));
     const workerId = Id.parse(c.req.param("workerId"));
     const environmentId = Id.parse(c.req.param("environmentId"));
     const query = StreamQuery.parse(c.req.query());
     // Cookie-authenticated WebSockets must come from the Dashboard's own origin.
     const origin = c.req.header("origin");
     if (!origin || new URL(origin).host !== c.req.header("host")) return c.json({ status: "error", code: "origin_denied" }, 403);
-    if (!assignedWorkers(auth.user.id, agent.id).has(workerId)) throw new AgentError("worker_assignment_not_found", 404);
+    if (!assignedWorkers(auth.account.id, agent.id).has(workerId)) throw new AgentError("worker_assignment_not_found", 404);
     const gateway = getGateway();
     if (!gateway) return c.json({ status: "error", code: "runtime_not_ready" }, 503);
     // The Worker re-checks agent ownership of the environment before opening the stream.
@@ -174,7 +175,7 @@ export function createAgentContainerRoutes(
       return c.json({ status: "error", code: "websocket_required" }, 426);
     }
     const session = new ContainerConsoleSession(gateway, {
-      userId: auth.user.id, agentId: agent.id, shadowId: container.shadowId, workerId, environmentId,
+      accountId: auth.account.id, agentId: agent.id, shadowId: container.shadowId, workerId, environmentId,
       kind: query.kind, user: query.kind === "vnc" ? "runner" : query.user, cols: query.cols, rows: query.rows,
     });
     if (!server.upgrade(c.req.raw, { data: { kind: "container-console", session } })) return c.json({ status: "error", code: "websocket_required" }, 426);

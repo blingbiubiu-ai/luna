@@ -11,6 +11,7 @@ import {
   authorizationRules,
   groupMemberships,
   groups,
+  accounts,
   users,
 } from "@/data/schema";
 import { uuid } from "@/shared";
@@ -192,10 +193,10 @@ export class AuthorizationRuleStore {
     return rows.map(operationGrantRecord);
   }
 
+  /** Effective rules of a subject: an account in the platform scope, a user of the Agent in an Agent scope. */
   getEffectiveGrantsForUser(userId: string): AuthorizationRuleRecord[] {
     authorizationScopeFields(this._scope);
-    const user = this._requireUser(userId);
-    if (user.status !== "active") {
+    if (this._subjectStatus(userId) !== "active") {
       return [];
     }
 
@@ -243,8 +244,7 @@ export class AuthorizationRuleStore {
 
   getIndirectGrantsForUser(userId: string): AuthorizationRuleRecord[] {
     authorizationScopeFields(this._scope);
-    const user = this._requireUser(userId);
-    if (user.status !== "active") {
+    if (this._subjectStatus(userId) !== "active") {
       return [];
     }
 
@@ -302,8 +302,8 @@ export class AuthorizationRuleStore {
       throw new Error(`Unsupported authorization subject type: ${subjectType}`);
     }
     if (subjectType === "user") {
-      if (this._requireUser(subjectId).status === "deleted") {
-        throw new HTTPException(409, { message: "已删除用户不能添加权限" });
+      if (this._subjectStatus(subjectId) !== "active") {
+        throw new HTTPException(409, { message: "只能给有效的用户添加权限" });
       }
       return;
     }
@@ -314,16 +314,17 @@ export class AuthorizationRuleStore {
     }
   }
 
-  private _requireUser(userId: string): typeof users.$inferSelect {
-    const user = this._db
-      .select()
-      .from(users)
-      .where(eq(users.id, userId))
-      .get();
-    if (user === undefined) {
-      throw new HTTPException(404, {message: `User not found: ${userId}`});
+  /** Platform rules name accounts; Agent rules name users of that Agent. */
+  private _subjectStatus(subjectId: string): string {
+    const scope = this._scope;
+    const status = scope?.kind === "agent"
+      ? this._db.select({ status: users.status }).from(users)
+        .where(and(eq(users.id, subjectId), eq(users.agentId, scope.agentId))).get()?.status
+      : this._db.select({ status: accounts.status }).from(accounts).where(eq(accounts.id, subjectId)).get()?.status;
+    if (status === undefined) {
+      throw new HTTPException(404, {message: `User not found: ${subjectId}`});
     }
-    return user;
+    return status;
   }
 
   private _findGroup(groupId: string): typeof groups.$inferSelect | undefined {

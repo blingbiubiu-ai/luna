@@ -1,5 +1,5 @@
 import {fixtureTaskOwnership} from "../helpers/platform-fixtures";
-import { fixtureAgent, fixtureNamedSession, fixturePlatformAdmin, fixtureScope, fixtureSessionOwnership } from "../helpers/platform-fixtures";
+import { fixtureAccount, fixtureAgent, fixtureNamedSession, fixtureOwnerUserId, fixturePlatformAdmin, fixtureScope, fixtureSessionOwnership } from "../helpers/platform-fixtures";
 import { registerTestRunnerJob } from "./support/runner-job";
 import { TaskRunStore } from "../../src/tasks/task-run-store";
 import { RunnerContextStore } from "../../src/runners/runner-context-store";
@@ -134,14 +134,16 @@ function git(cwd: string, args: readonly string[]): string {
 
 test("Dashboard owner can read inactive Shadow task history without granting that access to members or tokens", async () => {
   await withFreshDb("luna-task-history-", async ({ db }) => {
-    const owner = materializeLocalUser(db, "history-owner");
-    const member = materializeLocalUser(db, "history-member");
+    const owner = localAccount(db, "history-owner");
+    const member = localAccount(db, "history-member");
     const scope = fixtureScope(db, owner.id);
+    // The member writes in the owner's Agent through a channel; their account owns nothing there.
+    const memberUser = materializeLocalUser(db, scope.agentId, "history-member");
     const agents = new AgentStore(db);
     const shadow = agents.createShadow(owner.id, scope.agentId, { name: "History" }, "history-shadow");
     db.insert(lunaSchema.tasks).values({
       id: "history-task", agent_id: scope.agentId, shadow_id: shadow.id, type: "work", title: "Past work",
-      status: "completed", creator_user_id: member.id, created_at: 1, updated_at: 1, last_activity_at: 1,
+      status: "completed", creator_user_id: memberUser.id, created_at: 1, updated_at: 1, last_activity_at: 1,
     }).run();
     const dashboard = (user: typeof owner, claims?: LunaAccessTokenClaims) => new Hono()
       .use("*", authenticateTestUser(user, claims))
@@ -165,7 +167,7 @@ test("Dashboard owner can read inactive Shadow task history without granting tha
 describe("unified API namespaces", () => {
   test("exposes agent, knowledge, plugins, groups, and typed grant routes", async () => {
     await withFreshDb("luna-api-namespaces-", async ({ db }) => {
-      const admin = materializeLocalUser(db, "dashboard-admin");
+      const admin = localAccount(db, "dashboard-admin");
       const {id: agentId} = fixtureAgent(db, admin.id);
       const app = new Hono()
         .use("*", authenticateTestAdmin(db, admin))
@@ -203,7 +205,7 @@ describe("unified API namespaces", () => {
       process.env.LUNA_ACCESS_TOKEN_SECRET = TEST_ACCESS_TOKEN_SECRET;
       Bun.env.LUNA_ACCESS_TOKEN_SECRET = TEST_ACCESS_TOKEN_SECRET;
       await withFreshDb("luna-access-token-api-", async ({ db }) => {
-        const user = materializeLocalUser(db, "access-token-user");
+        const user = localAccount(db, "access-token-user");
         const token = issueAccessToken(db, user).token;
         const server = new HonoServer({ db });
 
@@ -218,7 +220,7 @@ describe("unified API namespaces", () => {
           status: "ok",
           authenticated: true,
           authKind: "luna-access-token",
-          user: { id: user.id },
+          account: { id: user.id },
           token: { source: "cli", role: "user" },
         });
 
@@ -271,9 +273,9 @@ describe("unified API namespaces", () => {
       Bun.env.LUNA_ACCESS_TOKEN_SECRET = TEST_ACCESS_TOKEN_SECRET;
       setLunaHome(firstHome);
       firstDatabase = new DataConnection(lunaSchema);
-      const firstUser = materializeLocalUser(firstDatabase.db, "first-user");
       fixturePlatformAdmin(firstDatabase.db, "local-dashboard-user");
       const firstAgent = fixtureAgent(firstDatabase.db, "local-dashboard-user");
+      const firstUser = materializeLocalUser(firstDatabase.db, firstAgent.id, "first-user");
       const firstGroups = new GroupStore(firstDatabase.db);
       const firstGroup = firstGroups.createGroup({
         agentId: firstAgent.id,
@@ -284,9 +286,9 @@ describe("unified API namespaces", () => {
 
       setLunaHome(secondHome);
       secondDatabase = new DataConnection(lunaSchema);
-      const secondUser = materializeLocalUser(secondDatabase.db, "second-user");
       fixturePlatformAdmin(secondDatabase.db, "local-dashboard-user");
       const secondAgent = fixtureAgent(secondDatabase.db, "local-dashboard-user");
+      const secondUser = materializeLocalUser(secondDatabase.db, secondAgent.id, "second-user");
       const secondGroups = new GroupStore(secondDatabase.db);
       const secondGroup = secondGroups.createGroup({
         agentId: secondAgent.id,
@@ -401,7 +403,7 @@ describe("unified API namespaces", () => {
 
   test("operation routes list registry and filter by namespace", async () => {
     await withFreshDb("luna-operation-routes-", async ({ db }) => {
-      const admin = materializeLocalUser(db, "dashboard-admin");
+      const admin = localAccount(db, "dashboard-admin");
       const app = new Hono()
         .use("*", authenticateTestAdmin(db, admin))
         .route(
@@ -432,9 +434,9 @@ describe("unified API namespaces", () => {
 
   test("group and operation grant stores resolve indirect group grants", async () => {
     await withFreshDb("luna-subject-grants-", async ({ db }) => {
-      const user = materializeLocalUser(db, "granted-user");
       const groups = new GroupStore(db);
-      const agentId = fixtureAgent(db, user.id).id;
+      const agentId = fixtureAgent(db, "granted-owner").id;
+      const user = materializeLocalUser(db, agentId, "granted-user");
       const grants = new AuthorizationRuleStore(db, {kind: "agent", agentId});
       const group = groups.createGroup({
         agentId,
@@ -472,9 +474,9 @@ describe("unified API namespaces", () => {
 
   test("operation grant store updates duplicate grants and excludes inactive subjects", async () => {
     await withFreshDb("luna-subject-grants-update-", async ({ db }) => {
-      const activeUser = materializeLocalUser(db, "active-user");
-      const inactiveUser = materializeLocalUser(db, "inactive-user");
-      const agentId = fixtureAgent(db, activeUser.id).id;
+      const agentId = fixtureAgent(db, "grant-owner").id;
+      const activeUser = materializeLocalUser(db, agentId, "active-user");
+      const inactiveUser = materializeLocalUser(db, agentId, "inactive-user");
       const grants = new AuthorizationRuleStore(db, {kind: "agent", agentId});
       const first = grants.addGrant({ matchType: "exact",
         subjectType: "user",
@@ -497,7 +499,7 @@ describe("unified API namespaces", () => {
         effect: "allow",
       });
 
-      db.update(users).set({status: "disabled"}).where(eq(users.id, inactiveUser.id)).run();
+      db.update(users).set({status: "blocked"}).where(eq(users.id, inactiveUser.id)).run();
       expect(second.id).toBe(first.id);
       expect(
         grants.getEffectiveGrantsForUser(activeUser.id)[0]?.id,
@@ -508,8 +510,9 @@ describe("unified API namespaces", () => {
 
   test("operation policy engine allows matching grants and denies missing grants", async () => {
     await withFreshDb("luna-policy-engine-", async ({ db }) => {
-      const user = materializeLocalUser(db, "policy-user");
-      const grants = new AuthorizationRuleStore(db, {kind: "agent", agentId: fixtureAgent(db, user.id).id});
+      const agentId = fixtureAgent(db, "policy-owner").id;
+      const user = materializeLocalUser(db, agentId, "policy-user");
+      const grants = new AuthorizationRuleStore(db, {kind: "agent", agentId});
       grants.addGrant({ matchType: "exact",
         subjectType: "user",
         subjectId: user.id,
@@ -558,9 +561,9 @@ describe("unified API namespaces", () => {
 
   test("groups, users, and typed grant API expose the new authorization model", async () => {
     await withFreshDb("luna-group-routes-", async ({ db }) => {
-      const user = materializeLocalUser(db, "api-user");
-      const admin = materializeLocalUser(db, "dashboard-admin");
+      const admin = localAccount(db, "dashboard-admin");
       const agentId = fixtureAgent(db, admin.id).id;
+      const user = materializeLocalUser(db, agentId, "api-user");
       const app = new Hono()
         .use("*", authenticateTestAdmin(db, admin))
         .route("/api/users", createUsersRoutes({ db }))
@@ -578,7 +581,7 @@ describe("unified API namespaces", () => {
       expect(created.status).toBe(200);
       const group = ((await created.json()) as { group: { id: string } }).group;
 
-      const otherOwner = materializeLocalUser(db, "other-group-owner");
+      const otherOwner = localAccount(db, "other-group-owner");
       const otherAgent = fixtureAgent(db, otherOwner.id);
       const otherGroup = new GroupStore(db).createGroup({
         agentId: otherAgent.id,
@@ -690,8 +693,10 @@ describe("unified API namespaces", () => {
           userId: user.id,
         }),
       });
+      // Leaving every group does not take a user out of its Agent.
       const userAfterRemove = await app.request(`/api/users/${user.id}?agentId=${agentId}`);
-      expect(userAfterRemove.status).toBe(404);
+      expect(userAfterRemove.status).toBe(200);
+      expect(await userAfterRemove.json()).toMatchObject({id: user.id, groups: [], indirectGrants: []});
       expect(scopedRules.getIndirectGrantsForUser(user.id)).toEqual([]);
       expect((await app.request("/api/principals")).status).toBe(404);
     });
@@ -699,9 +704,12 @@ describe("unified API namespaces", () => {
 
   test("users list only returns active canonical users", async () => {
     await withFreshDb("luna-users-route-", async ({ db }) => {
-      const canonical = materializeLocalUser(db, "canonical-user");
+      const owner = localAccount(db, "users-owner");
+      const agent = fixtureAgent(db, owner.id);
+      const canonical = materializeLocalUser(db, agent.id, "canonical-user");
       db.insert(users).values({
         id: "merged-user",
+        agentId: agent.id,
         kind: "human",
         displayName: "Merged User",
         avatarUrl: null,
@@ -713,19 +721,19 @@ describe("unified API namespaces", () => {
       }).run();
       db.insert(users).values({
         id: "inactive-user",
+        agentId: agent.id,
         kind: "human",
         displayName: "Inactive User",
         avatarUrl: null,
-        status: "inactive",
+        status: "removed",
         mergedIntoUserId: null,
         profileSource: "channel",
         createdAt: "2",
         updatedAt: "2",
       }).run();
 
-      const agent = fixtureAgent(db, canonical.id);
       const app = new Hono()
-        .use("*", authenticateTestAdmin(db, canonical))
+        .use("*", authenticateTestAdmin(db, owner))
         .route("/api/users", createUsersRoutes({ db }));
 
       const response = await app.request(`/api/users?agentId=${agent.id}`);
@@ -741,9 +749,12 @@ describe("unified API namespaces", () => {
 
   test("user detail canonicalizes merged user ids", async () => {
     await withFreshDb("luna-user-detail-", async ({ db }) => {
-      const canonical = materializeLocalUser(db, "canonical-user");
+      const owner = localAccount(db, "users-owner");
+      const agent = fixtureAgent(db, owner.id);
+      const canonical = materializeLocalUser(db, agent.id, "canonical-user");
       db.insert(users).values({
         id: "merged-user",
+        agentId: agent.id,
         kind: "human",
         displayName: "Merged User",
         avatarUrl: null,
@@ -754,9 +765,8 @@ describe("unified API namespaces", () => {
         updatedAt: "1",
       }).run();
 
-      const agent = fixtureAgent(db, canonical.id);
       const app = new Hono()
-        .use("*", authenticateTestAdmin(db, canonical))
+        .use("*", authenticateTestAdmin(db, owner))
         .route("/api/users", createUsersRoutes({ db }));
 
       const response = await app.request(`/api/users/merged-user?agentId=${agent.id}`);
@@ -770,9 +780,10 @@ describe("unified API namespaces", () => {
 
   test("operation grant API batches grants atomically and deletes direct grants", async () => {
     await withFreshDb("luna-operation-grant-batch-", async ({ db }) => {
-      const firstUser = materializeLocalUser(db, "batch-user-a");
-      const secondUser = materializeLocalUser(db, "batch-user-b");
-      const admin = materializeLocalUser(db, "dashboard-admin");
+      // Platform rules name accounts.
+      const firstUser = localAccount(db, "batch-user-a");
+      const secondUser = localAccount(db, "batch-user-b");
+      const admin = localAccount(db, "dashboard-admin");
       const app = new Hono()
         .use("*", authenticateTestAdmin(db, admin))
         .route("/api/users", createUsersRoutes({ db }))
@@ -865,14 +876,14 @@ describe("unified API namespaces", () => {
         "utf-8",
       );
       await withFreshDb("luna-knowledge-admin-write-db-", async ({ db }) => {
-        const user = materializeLocalUser(db, "knowledge-admin-writer");
+        const user = localAccount(db, "knowledge-admin-writer");
         const app = new Hono()
           .use("*", authenticateTestUser(user, defaultClaims()))
           .route("/api/workspaces", createWorkspaceRoutes({ serviceHome: root, db }));
 
         new AuthorizationRuleStore(db, {kind: "agent", agentId: fixtureAgent(db, user.id).id}).addGrant({ matchType: "exact",
           subjectType: "user",
-          subjectId: user.id,
+          subjectId: fixtureOwnerUserId(user.id),
           target: "workspace.knowledge.write",
           effect: "allow",
         });
@@ -893,8 +904,8 @@ describe("unified API namespaces", () => {
       process.env.LUNA_ACCESS_TOKEN_SECRET = TEST_ACCESS_TOKEN_SECRET;
       Bun.env.LUNA_ACCESS_TOKEN_SECRET = TEST_ACCESS_TOKEN_SECRET;
       await withFreshDb("luna-signed-artifact-content-", async ({ db, root }) => {
-        const owner = materializeLocalUser(db, "artifact-owner");
-        const other = materializeLocalUser(db, "artifact-other");
+        const owner = localAccount(db, "artifact-owner");
+        const other = localAccount(db, "artifact-other");
         const ownerToken = issueAccessToken(db, owner).token;
         const otherToken = issueAccessToken(db, other).token;
         fixtureNamedSession(db, "session-1", owner.id);
@@ -903,7 +914,7 @@ describe("unified API namespaces", () => {
         const row = new ArtifactRegistry(db).registerLocalFile({
           scopeType: "session",
           scopeId: "session-1",
-          relatedUserId: owner.id,
+          relatedUserId: fixtureOwnerUserId(owner.id),
           producer: "test",
           kind: "image",
           name: "owned-image.png",
@@ -974,7 +985,7 @@ describe("unified API namespaces", () => {
 
   test("artifact content renders browser-previewable formats inline", async () => {
     await withFreshDb("luna-inline-artifact-content-", async ({ db, root }) => {
-      const owner = materializeLocalUser(db, "artifact-inline-owner");
+      const owner = localAccount(db, "artifact-inline-owner");
       const scope = fixtureScope(db, owner.id);
       const sibling = new AgentStore(db).createShadow(owner.id, scope.agentId, {name: "Foreign Shadow"}, "foreign-shadow");
       createArtifactTask(db, owner.id, "task-inline", scope);
@@ -995,7 +1006,7 @@ describe("unified API namespaces", () => {
       const image = registry.registerLocalFile({
         scopeType: "task",
         scopeId: "task-inline",
-        relatedUserId: owner.id,
+        relatedUserId: scope.ownerUserId,
         producer: "test",
         kind: "image",
         name: "preview.png",
@@ -1005,7 +1016,7 @@ describe("unified API namespaces", () => {
       const foreignImage = registry.registerLocalFile({
         scopeType: "task",
         scopeId: "task-inline-foreign",
-        relatedUserId: owner.id,
+        relatedUserId: scope.ownerUserId,
         producer: "test",
         kind: "image",
         name: "foreign-preview.png",
@@ -1030,7 +1041,7 @@ describe("unified API namespaces", () => {
       const markdown = registry.registerLocalFile({
         scopeType: "task",
         scopeId: "task-inline",
-        relatedUserId: owner.id,
+        relatedUserId: scope.ownerUserId,
         producer: "test",
         kind: "file",
         name: "report.md",
@@ -1040,7 +1051,7 @@ describe("unified API namespaces", () => {
       const html = registry.registerLocalFile({
         scopeType: "task",
         scopeId: "task-inline",
-        relatedUserId: owner.id,
+        relatedUserId: scope.ownerUserId,
         producer: "test",
         kind: "file",
         name: "report.html",
@@ -1050,7 +1061,7 @@ describe("unified API namespaces", () => {
       const text = registry.registerLocalFile({
         scopeType: "task",
         scopeId: "task-inline",
-        relatedUserId: owner.id,
+        relatedUserId: scope.ownerUserId,
         producer: "test",
         kind: "file",
         name: "notes.txt",
@@ -1060,7 +1071,7 @@ describe("unified API namespaces", () => {
       const json = registry.registerLocalFile({
         scopeType: "task",
         scopeId: "task-inline",
-        relatedUserId: owner.id,
+        relatedUserId: scope.ownerUserId,
         producer: "test",
         kind: "file",
         name: "data.json",
@@ -1070,7 +1081,7 @@ describe("unified API namespaces", () => {
       const zip = registry.registerLocalFile({
         scopeType: "task",
         scopeId: "task-inline",
-        relatedUserId: owner.id,
+        relatedUserId: scope.ownerUserId,
         producer: "test",
         kind: "file",
         name: "archive.zip",
@@ -1178,7 +1189,7 @@ describe("unified API namespaces", () => {
 
   test("registered artifacts remain readable after the source file is removed", async () => {
     await withFreshDb("luna-managed-artifact-storage-", async ({ db, root }) => {
-      const owner = materializeLocalUser(db, "artifact-managed-owner");
+      const owner = localAccount(db, "artifact-managed-owner");
       createArtifactTask(db, owner.id, "task-1");
       const artifactPath = join(root, "runner", "result.json");
       mkdirSync(join(root, "runner"), { recursive: true });
@@ -1186,7 +1197,7 @@ describe("unified API namespaces", () => {
       const row = new ArtifactRegistry(db).registerLocalFile({
         scopeType: "task",
         scopeId: "task-1",
-        relatedUserId: owner.id,
+        relatedUserId: fixtureOwnerUserId(owner.id),
         producer: "runner",
         kind: "raw_json",
         name: "result.json",
@@ -1214,13 +1225,13 @@ describe("unified API namespaces", () => {
       process.env.LUNA_ACCESS_TOKEN_SECRET = TEST_ACCESS_TOKEN_SECRET;
       Bun.env.LUNA_ACCESS_TOKEN_SECRET = TEST_ACCESS_TOKEN_SECRET;
       await withFreshDb("luna-artifact-create-route-", async ({ db, root }) => {
-        const user = materializeLocalUser(db, "artifact-api-user");
+        const user = localAccount(db, "artifact-api-user");
         createArtifactTask(db, user.id, "task-api");
         const internalToken = new AccessTokenService({
           db,
           signingSecret: TEST_ACCESS_TOKEN_SECRET,
         }).issueToken({
-          userId: user.id,
+          accountId: user.id,
           name: "internal service token",
           source: "mcp",
           role: "user",
@@ -1258,7 +1269,7 @@ describe("unified API namespaces", () => {
           body: JSON.stringify({
             scopeType: "task",
             scopeId: "task-api",
-            relatedUserId: user.id,
+            relatedUserId: fixtureOwnerUserId(user.id),
             producer: "test",
             kind: "text",
             name: "api-artifact.txt",
@@ -1289,8 +1300,8 @@ describe("unified API namespaces", () => {
       process.env.LUNA_ACCESS_TOKEN_SECRET = TEST_ACCESS_TOKEN_SECRET;
       Bun.env.LUNA_ACCESS_TOKEN_SECRET = TEST_ACCESS_TOKEN_SECRET;
       await withFreshDb("luna-dashboard-artifact-signing-", async ({ db, root }) => {
-        const owner = materializeLocalUser(db, "dashboard-artifact-owner");
-        const other = materializeLocalUser(db, "dashboard-artifact-other");
+        const owner = localAccount(db, "dashboard-artifact-owner");
+        const other = localAccount(db, "dashboard-artifact-other");
         fixtureNamedSession(db, "session-dashboard", owner.id);
         fixtureNamedSession(db, "foreign-session", other.id);
         const ownerToken = issueAccessToken(db, owner).token;
@@ -1302,7 +1313,7 @@ describe("unified API namespaces", () => {
         const owned = registry.registerLocalFile({
           scopeType: "session",
           scopeId: "session-dashboard",
-          relatedUserId: owner.id,
+          relatedUserId: fixtureOwnerUserId(owner.id),
           producer: "test",
           kind: "image",
           name: "owned.png",
@@ -1311,7 +1322,7 @@ describe("unified API namespaces", () => {
         const foreign = registry.registerLocalFile({
           scopeType: "session",
           scopeId: "foreign-session",
-          relatedUserId: other.id,
+          relatedUserId: fixtureOwnerUserId(other.id),
           producer: "test",
           kind: "image",
           name: "other.png",
@@ -1363,8 +1374,8 @@ describe("unified API namespaces", () => {
       process.env.LUNA_DASHBOARD_TOKEN = "dashboard-secret";
       Bun.env.LUNA_DASHBOARD_TOKEN = "dashboard-secret";
       await withFreshDb("luna-dashboard-session-artifact-signing-", async ({ db, root }) => {
-        const owner = materializeLocalUser(db, "feishu-artifact-owner");
-        fixtureNamedSession(db, "session-dashboard-cookie", "local-dashboard-user");
+        const {agentId} = fixtureNamedSession(db, "session-dashboard-cookie", "local-dashboard-user");
+        const owner = materializeLocalUser(db, agentId, "feishu-artifact-owner");
         const registry = new ArtifactRegistry(db);
         const imagePath = join(root, "feishu-owned.png");
         writeFileSync(imagePath, "image-bytes");
@@ -1429,9 +1440,9 @@ describe("unified API namespaces", () => {
 
   test("default session DTOs expose canonical latest sender users without sender identities", async () => {
     await withFreshDb("luna-session-user-first-routes-", async ({ db }) => {
-      const requester = materializeLocalUser(db, "session-requester");
-      const admin = materializeLocalUser(db, "session-admin");
+      const admin = localAccount(db, "session-admin");
       const {agent_id: agentId} = fixtureSessionOwnership(db, "feishu", "main", admin.id);
+      const requester = materializeLocalUser(db, agentId, "session-requester");
       const session = new SessionStore(db).resolveByChannelSurface({
         channelType: "feishu",
         channelId: "main",
@@ -1467,9 +1478,9 @@ describe("unified API namespaces", () => {
 
   test("default task DTOs expose canonical users for creator, participants, timeline, and source messages", async () => {
     await withFreshDb("luna-task-user-first-routes-", async ({ db }) => {
-      const requester = materializeLocalUser(db, "task-requester");
-      const admin = materializeLocalUser(db, "task-admin");
-      fixtureSessionOwnership(db, "feishu", "main", admin.id);
+      const admin = localAccount(db, "task-admin");
+      const {agent_id: agentId} = fixtureSessionOwnership(db, "feishu", "main", admin.id);
+      const requester = materializeLocalUser(db, agentId, "task-requester");
       const session = new SessionStore(db).resolveByChannelSurface({
         channelType: "feishu",
         channelId: "main",
@@ -1567,9 +1578,9 @@ describe("unified API namespaces", () => {
 
   test("user detail activity is derived from sender_user_id when no sender identity is present", async () => {
     await withFreshDb("luna-user-activity-user-first-", async ({ db }) => {
-      const requester = materializeLocalUser(db, "user-activity-requester");
-      const admin = materializeLocalUser(db, "user-activity-admin");
+      const admin = localAccount(db, "user-activity-admin");
       const {agent_id: agentId} = fixtureSessionOwnership(db, "feishu", "main", admin.id);
+      const requester = materializeLocalUser(db, agentId, "user-activity-requester");
       const session = new SessionStore(db).resolveByChannelSurface({
         channelType: "feishu",
         channelId: "main",
@@ -1606,9 +1617,10 @@ describe("unified API namespaces", () => {
       process.env.LUNA_ACCESS_TOKEN_SECRET = TEST_ACCESS_TOKEN_SECRET;
       Bun.env.LUNA_ACCESS_TOKEN_SECRET = TEST_ACCESS_TOKEN_SECRET;
       await withFreshDb("luna-runner-artifact-register-", async ({ db }) => {
-        const user = materializeLocalUser(db, "runner-artifact-register-user");
+        const user = localAccount(db, "runner-artifact-register-user");
         createArtifactTask(db, user.id, "task_runner_register");
-        const issuedRunnerToken = issueTaskArtifactToken(db, user.id, "task_runner_register", []);
+        // The Runner acts as the owner's user of the task's Agent.
+        const issuedRunnerToken = issueTaskArtifactToken(db, fixtureOwnerUserId(user.id), "task_runner_register", []);
         const runnerToken = issuedRunnerToken.token;
         const app = new Hono()
           .use("*", createDashboardAuthMiddleware(new DashboardAuthService(), { db }))
@@ -1668,7 +1680,7 @@ describe("unified API namespaces", () => {
         expect(artifact).toMatchObject({
           scope_type: "task",
           scope_id: "task_runner_register",
-          related_user_id: user.id,
+          related_user_id: fixtureOwnerUserId(user.id),
           producer: "runner",
           kind: "report",
           name: "yellow-content-check.md",
@@ -1703,7 +1715,7 @@ describe("unified API namespaces", () => {
       process.env.LUNA_ACCESS_TOKEN_SECRET = TEST_ACCESS_TOKEN_SECRET;
       Bun.env.LUNA_ACCESS_TOKEN_SECRET = TEST_ACCESS_TOKEN_SECRET;
       await withFreshDb("luna-runner-artifact-allowlist-", async ({ db, root }) => {
-        const user = materializeLocalUser(db, "runner-artifact-user");
+        const user = localAccount(db, "runner-artifact-user");
         createArtifactTask(db, user.id, "task-allowlist");
         createArtifactTask(db, user.id, "task-allowlist-sibling");
         const allowedPath = join(root, "allowed.txt");
@@ -1727,7 +1739,7 @@ describe("unified API namespaces", () => {
           name: "denied.txt",
           path: deniedPath,
         });
-        const runnerToken = issueTaskArtifactToken(db, user.id, "task-allowlist", [allowed.id]).token;
+        const runnerToken = issueTaskArtifactToken(db, fixtureOwnerUserId(user.id), "task-allowlist", [allowed.id]).token;
         const app = new Hono()
           .use("*", createDashboardAuthMiddleware(new DashboardAuthService(), { db }))
           .route("/api/artifacts", createArtifactsRoutes({ db }));
@@ -1757,7 +1769,7 @@ describe("unified API namespaces", () => {
       process.env.LUNA_ACCESS_TOKEN_SECRET = TEST_ACCESS_TOKEN_SECRET;
       Bun.env.LUNA_ACCESS_TOKEN_SECRET = TEST_ACCESS_TOKEN_SECRET;
       await withFreshDb("luna-runner-owned-artifact-", async ({ db, root }) => {
-        const user = materializeLocalUser(db, "runner-owned-artifact-user");
+        const user = localAccount(db, "runner-owned-artifact-user");
         const scope = fixtureScope(db, user.id);
         const sibling = new AgentStore(db).createShadow(user.id, scope.agentId, {name: "Other Shadow"}, "other-shadow");
         createArtifactTask(db, user.id, "task-owned-artifact", scope);
@@ -1770,7 +1782,7 @@ describe("unified API namespaces", () => {
         const ownArtifact = registry.registerLocalFile({
           scopeType: "task",
           scopeId: "task-owned-artifact",
-          relatedUserId: user.id,
+          relatedUserId: scope.ownerUserId,
           producer: "plugin:diagnosis",
           kind: "text",
           name: "own.txt",
@@ -1779,13 +1791,13 @@ describe("unified API namespaces", () => {
         const otherArtifact = registry.registerLocalFile({
           scopeType: "task",
           scopeId: "task-other-artifact",
-          relatedUserId: user.id,
+          relatedUserId: scope.ownerUserId,
           producer: "plugin:diagnosis",
           kind: "text",
           name: "other.txt",
           path: otherPath,
         });
-        const runnerToken = issueTaskArtifactToken(db, user.id, "task-owned-artifact", [otherArtifact.id]).token;
+        const runnerToken = issueTaskArtifactToken(db, scope.ownerUserId, "task-owned-artifact", [otherArtifact.id]).token;
         const app = new Hono()
           .use("*", createDashboardAuthMiddleware(new DashboardAuthService(), { db }))
           .route("/api/artifacts", createArtifactsRoutes({ db }));
@@ -1815,8 +1827,10 @@ describe("unified API namespaces", () => {
       process.env.LUNA_ACCESS_TOKEN_SECRET = TEST_ACCESS_TOKEN_SECRET;
       Bun.env.LUNA_ACCESS_TOKEN_SECRET = TEST_ACCESS_TOKEN_SECRET;
       await withFreshDb("luna-runner-timeline-grants-", async ({ db, root }) => {
-        const user = materializeLocalUser(db, "runner-timeline-user");
-        fixtureSessionOwnership(db, "feishu", "main", user.id);
+        const account = localAccount(db, "runner-timeline-user");
+        const {agent_id: agentId} = fixtureSessionOwnership(db, "feishu", "main", account.id);
+        // The Runner and the message sender are the owner's user of this Agent.
+        const user = {id: fixtureOwnerUserId(account.id)};
         const session = new SessionStore(db).resolveByChannelSurface({
           channelType: "feishu",
           channelId: "main",
@@ -1834,7 +1848,7 @@ describe("unified API namespaces", () => {
           return registry.registerLocalFile({
             scopeType: "session",
             scopeId: otherSession.id,
-            relatedUserId: materializeLocalUser(db, "artifact-owner").id,
+            relatedUserId: materializeLocalUser(db, agentId, "artifact-owner").id,
             producer: "test",
             kind: "text",
             name: `${name}.txt`,
@@ -1998,9 +2012,9 @@ describe("unified API namespaces", () => {
       process.env.LUNA_DASHBOARD_TOKEN = TEST_DASHBOARD_TOKEN;
       Bun.env.LUNA_DASHBOARD_TOKEN = TEST_DASHBOARD_TOKEN;
       await withFreshDb("luna-dashboard-generic-timeline-", async ({ db }) => {
-        const sender = materializeLocalUser(db, "timeline-message-sender");
-        fixtureSessionOwnership(db, "feishu", "main", "local-dashboard-user");
-        fixtureSessionOwnership(db, "feishu", "foreign", sender.id);
+        const {agent_id: agentId} = fixtureSessionOwnership(db, "feishu", "main", "local-dashboard-user");
+        fixtureSessionOwnership(db, "feishu", "foreign", "foreign-owner");
+        const sender = materializeLocalUser(db, agentId, "timeline-message-sender");
         const session = new SessionStore(db).resolveByChannelSurface({
           channelType: "feishu",
           channelId: "main",
@@ -2062,7 +2076,7 @@ describe("unified API namespaces", () => {
       process.env.LUNA_ACCESS_TOKEN_SECRET = TEST_ACCESS_TOKEN_SECRET;
       Bun.env.LUNA_ACCESS_TOKEN_SECRET = TEST_ACCESS_TOKEN_SECRET;
       await withFreshDb("luna-no-files-route-", async ({ db, root }) => {
-        const user = materializeLocalUser(db, "files-route-user");
+        const user = localAccount(db, "files-route-user");
         const token = issueAccessToken(db, user).token;
         mkdirSync(join(root, "workspace", "uploads", "images"), { recursive: true });
         writeFileSync(join(root, "workspace", "uploads", "images", "topic.jpeg"), "image");
@@ -2105,11 +2119,20 @@ async function withFreshDb(
   }
 }
 
+/** A signed-in Dashboard account; it owns an Agent only when a fixture gives it one. */
+function localAccount(db: DataConnection<typeof lunaSchema>["db"], id: string) {
+  fixtureAccount(db, id);
+  return { id, displayName: id };
+}
+
+/** A user inside one Agent, materialized from local identity evidence as a channel sender is. */
 function materializeLocalUser(
   db: DataConnection<typeof lunaSchema>["db"],
+  agentId: string,
   id: string,
 ) {
   return new IdentityDirectory(db).materializeIdentityClaims({
+    agentId,
     kind: "human",
     displayName: id,
     claims: [
@@ -2130,7 +2153,7 @@ function createArtifactTask(
   const now = Date.now();
   db.insert(lunaSchema.tasks).values({
     id, agent_id: scope.agentId, shadow_id: scope.shadowId, type: "task", title: "Test", status: "running",
-    creator_user_id: ownerId, created_at: now, updated_at: now, last_activity_at: now,
+    creator_user_id: scope.ownerUserId, created_at: now, updated_at: now, last_activity_at: now,
   }).run();
 }
 
@@ -2157,9 +2180,10 @@ function issueTaskArtifactToken(
   return token;
 }
 
+/** A personal CLI token of an account. */
 function issueAccessToken(
   db: DataConnection<typeof lunaSchema>["db"],
-  user: { readonly id: string; readonly displayName?: string },
+  account: { readonly id: string; readonly displayName?: string },
 ): {
   readonly token: string;
   readonly claims: LunaAccessTokenClaims;
@@ -2169,7 +2193,7 @@ function issueAccessToken(
     db,
     signingSecret: TEST_ACCESS_TOKEN_SECRET,
   }).issueToken({
-    userId: user.id,
+    accountId: account.id,
     name: "Route test token",
     source: "cli",
     role: "user",
@@ -2185,7 +2209,6 @@ function issueAccessToken(
 function defaultClaims(): LunaAccessTokenClaims {
   return {
     tokenId: "test-token",
-    actorUserId: "test-user",
     source: "cli",
     role: "user",
     issuedAt: 1000,
@@ -2193,25 +2216,26 @@ function defaultClaims(): LunaAccessTokenClaims {
   };
 }
 
-function authenticateTestAdmin(db: DataConnection<typeof lunaSchema>["db"], user: {id: string; displayName?: string}): MiddlewareHandler {
-  fixturePlatformAdmin(db, user.id);
-  const authenticate = authenticateTestUser(user);
+function authenticateTestAdmin(db: DataConnection<typeof lunaSchema>["db"], account: {id: string; displayName?: string}): MiddlewareHandler {
+  fixturePlatformAdmin(db, account.id);
+  const authenticate = authenticateTestUser(account);
   return (c, next) => {
     c.set("lunaAuthorizationDb", db);
     return authenticate(c, next);
   };
 }
 
+/** Signs in an account by Dashboard cookie, or by its personal token when claims are given. */
 function authenticateTestUser(
-  user: { id: string; displayName?: string },
+  account: { id: string; displayName?: string },
   claims?: LunaAccessTokenClaims,
 ): MiddlewareHandler {
   return async (c, next) => {
     c.set("dashboardAuthSession", {
       authenticated: true,
-      user: {
-        id: user.id,
-        name: user.displayName ?? user.id,
+      account: {
+        id: account.id,
+        name: account.displayName ?? account.id,
         provider: "test-access-token",
       },
     });
@@ -2219,7 +2243,7 @@ function authenticateTestUser(
       c.set("lunaRequestAuthKind", "luna-access-token");
       c.set("lunaAccessTokenClaims", {
         ...claims,
-        actorUserId: user.id,
+        accountId: account.id,
       });
     } else {
       c.set("lunaRequestAuthKind", "dashboard-cookie");

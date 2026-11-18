@@ -14,6 +14,7 @@ import { FakeFeishuChannel } from "../../extensions/channels/fake/fake-feishu-ch
 import { LunaMessageIngress } from "../../src/messaging/gateway/luna-message-ingress";
 import type { InboundChannelMessage } from "../../src/sessions/types";
 import { fixtureSessionOwnership } from "../helpers/platform-fixtures";
+import { AccountLinkService } from "../../src/identity/account-link";
 import { config, setLunaHome } from "../../src/shared";
 import { normalizedInboundFromDirectCallForTest } from "../../src/work/direct-call-inbound-adapter";
 
@@ -22,6 +23,7 @@ describe("inbound auth command", () => {
   let connection: DataConnection<typeof schema>;
   let previousAccessSecret: string | undefined;
   let previousBunAccessSecret: string | undefined;
+  let agentId: string;
 
   beforeEach(() => {
     previousHome = config.paths.home;
@@ -33,7 +35,7 @@ describe("inbound auth command", () => {
     Bun.env.LUNA_ACCESS_TOKEN_SECRET = "inbound-auth-command-secret";
     setLunaHome(home);
     connection = new DataConnection(schema);
-    fixtureSessionOwnership(connection.db, "feishu", "feishu-main");
+    agentId = fixtureSessionOwnership(connection.db, "feishu", "feishu-main").agent_id;
   });
 
   afterEach(() => {
@@ -52,6 +54,20 @@ describe("inbound auth command", () => {
     });
     await ingress.registerChannel(channel);
 
+    // #auth signs in an account, so the chat identity must first be linked to one by the Agent owner.
+    await channel.emitNormalizedInbound(
+      normalizedInboundFromDirectCallForTest(feishuInbound({
+        id: "msg-link-private",
+        chatType: "p2p",
+        groupId: undefined,
+        text: "#link",
+      })),
+    );
+    await ingress.waitForIdle();
+    const linkToken = channel.outbound[0]?.content.split("\n")[2] ?? "";
+    new AccountLinkService(connection.db).link("fixture-owner", agentId, linkToken);
+    channel.outbound.length = 0;
+
     await channel.emitNormalizedInbound(
       normalizedInboundFromDirectCallForTest(feishuInbound({
         id: "msg-auth-private",
@@ -65,7 +81,8 @@ describe("inbound auth command", () => {
     expect(channel.outbound).toHaveLength(1);
     expect(channel.outbound[0]?.replyMode).toBe("direct_message");
     expect(channel.outbound[0]?.content).toContain("One-time login token");
-    expect(connection.db.select().from(channelAuthTokens).all()).toHaveLength(1);
+    expect(connection.db.select({ purpose: channelAuthTokens.purpose }).from(channelAuthTokens).all())
+      .toEqual([{ purpose: "account_link" }, { purpose: "cli_login" }]);
     expect(connection.db.select().from(messages).all()).toHaveLength(0);
     expect(connection.db.select().from(sessionInbox).all()).toHaveLength(0);
   });

@@ -14,23 +14,23 @@ import {MessageStore} from "@/sessions/message-store";
 import {TaskResolver} from "@/tasks/task-resolver";
 import {TaskSubscriptionStore} from "@/tasks/task-subscription-store";
 import {ContextPackStore} from "@/context/context-pack-store";
-import {fixtureScope} from "../helpers/platform-fixtures";
+import {fixtureScope,fixtureOwnerUserId} from "../helpers/platform-fixtures";
 let home:string,connection:DataConnection<typeof schema>,scope:ReturnType<typeof fixtureScope>;
 let first:string,second:string,resolver:TaskResolver;
-const owner="task-owner";
+const owner="task-owner",ownerUser=fixtureOwnerUserId(owner);
 beforeEach(()=>{
  home=mkdtempSync(join(tmpdir(),"luna-platform-tasks-"));setLunaHome(home);connection=new DataConnection(schema);
  scope=fixtureScope(connection.db,owner);const agents=new AgentStore(connection.db);
  const shadow=agents.createShadow(owner,scope.agentId,{name:"Other"},"other");
- const sessions=new SessionStore(connection.db);first=sessions.createLocalSession(owner,scope).id;
- second=sessions.createLocalSession(owner,{...scope,shadowId:shadow.id}).id;resolver=new TaskResolver(connection.db);
+ const sessions=new SessionStore(connection.db);first=sessions.createLocalSession(ownerUser,scope).id;
+ second=sessions.createLocalSession(ownerUser,{...scope,shadowId:shadow.id}).id;resolver=new TaskResolver(connection.db);
 });
 afterEach(()=>{connection.close();rmSync(home,{recursive:true,force:true});});
 function source(sessionId:string){
- const message=new MessageStore(connection.db).append({sessionId,senderUserId:owner,role:"user",content:{text:"task source"}});
+ const message=new MessageStore(connection.db).append({sessionId,senderUserId:ownerUser,role:"user",content:{text:"task source"}});
  return {sessionId,messageId:message.id};
 }
-const base={text:"Do work",title:"Work",workflow:"task" as const,creatorUserId:owner};
+const base={text:"Do work",title:"Work",workflow:"task" as const,creatorUserId:ownerUser};
 test("task creation requires scope and inherits its source session",()=>{
  expect(()=>resolver.resolvePersistentTask(base)).toThrow("task_scope_required");
  const input={...base,source:source(first)};
@@ -60,7 +60,7 @@ test("task ownership is immutable and paused Agent rejects task creation",()=>{
  const task=resolver.resolvePersistentTask({...base,scope}).persistentTask;
  expect(()=>connection.db.update(schema.tasks).set({primary_session_id:second}).where(eq(schema.tasks.id,task.id)).run()).toThrow("task_session_scope_mismatch");
  const foreign=fixtureScope(connection.db,"foreign-owner");
- expect(()=>connection.db.update(schema.tasks).set({agent_id:foreign.agentId,shadow_id:foreign.shadowId}).where(eq(schema.tasks.id,task.id)).run()).toThrow("task_scope_immutable");
+ expect(()=>connection.db.update(schema.tasks).set({agent_id:foreign.agentId,shadow_id:foreign.shadowId,creator_user_id:foreign.ownerUserId}).where(eq(schema.tasks.id,task.id)).run()).toThrow("task_scope_immutable");
  connection.db.update(schema.lunaAgents).set({status:"disabled"}).where(eq(schema.lunaAgents.id,scope.agentId)).run();
  expect(()=>resolver.resolvePersistentTask({...base,scope})).toThrow("shadow_disabled");
 });
@@ -68,7 +68,7 @@ test("task ownership is immutable and paused Agent rejects task creation",()=>{
 test("task commands cannot redirect work or late dispatch to another Shadow",()=>{
  const fail=()=>{throw new Error("must not dispatch");};
  const commands=new TaskCommandService(connection.db,{startInitialRun:fail,restartTaskRun:fail,cancelTaskRun:fail});
- const context:OperationContext={sessionId:first,actorUserId:owner,originId:"turn",sourceMessageIds:[],inbound:{
+ const context:OperationContext={sessionId:first,actorUserId:ownerUser,originId:"turn",sourceMessageIds:[],inbound:{
   id:"request",channel:{type:"dashboard",id:"luna-dashboard"},surface:{externalId:first,kind:"p2p"},sender:{externalId:owner,kind:"user"},text:"Work",mentions:[],addressing:{addressedToBot:true,reason:"p2p"}}};
  const request={kind:"task.create" as const,payload:{title:"Work",summary:"Work",facts:[],taskType:"task" as const,sessionId:second}};
  expect(()=>commands.prepare("cross",request,context)).toThrow("task_scope_mismatch");

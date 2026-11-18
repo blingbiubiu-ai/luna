@@ -15,11 +15,11 @@ import {SessionStore} from "@/sessions/session-store";
 import {InvocationStore} from "@/runners/invocation-store";
 import {AccessTokenService} from "@/server/auth/access-token-service";
 import {ContextPackStore} from "@/context/context-pack-store";
-import {fixtureScope} from "../helpers/platform-fixtures";
+import {fixtureScope,fixtureOwnerUserId,fixtureUser} from "../helpers/platform-fixtures";
 
 let home: string, connection: DataConnection<typeof schema>;
 let first: string, second: string, scope: ReturnType<typeof fixtureScope>;
-const owner = "owner";
+const owner = "owner", ownerUser = fixtureOwnerUserId(owner);
 beforeEach(() => {
   home = mkdtempSync(join(tmpdir(), "luna-runner-scope-"));
   setLunaHome(home);
@@ -27,15 +27,15 @@ beforeEach(() => {
   scope = fixtureScope(connection.db, owner);
   const shadow = new AgentStore(connection.db).createShadow(owner, scope.agentId, {name: "Other"}, "other");
   const sessions = new SessionStore(connection.db);
-  first = sessions.createLocalSession(owner, scope).id;
-  second = sessions.createLocalSession(owner, {...scope, shadowId: shadow.id}).id;
+  first = sessions.createLocalSession(ownerUser, scope).id;
+  second = sessions.createLocalSession(ownerUser, {...scope, shadowId: shadow.id}).id;
   for (const [id, session] of [["context", first], ["foreign", second]]) {
     connection.db.insert(schema.runnerContexts).values(fixtureRunnerContext(connection.db, {id: id!, owner_type: "session", owner_id: session!, runner_type: "mock", runner_root_path: "/unused", created_at: 1, updated_at: 1})).run();
   }
 });
 afterEach(() => {connection.close(); rmSync(home, {recursive: true, force: true});});
 function invocation() {
-  return {id: "invocation", runnerKind: "work" as const, actorUserId: owner, runnerContextId: "context", sessionId: first, taskId: null, taskRunId: null, originId: "turn", contextPackIds: [], inputSnapshot: {version: 1 as const, kind: "work", input: {sessionId: first, runnerContextId: "context", turnId: "turn"}}};
+  return {id: "invocation", runnerKind: "work" as const, actorUserId: ownerUser, runnerContextId: "context", sessionId: first, taskId: null, taskRunId: null, originId: "turn", contextPackIds: [], inputSnapshot: {version: 1 as const, kind: "work", input: {sessionId: first, runnerContextId: "context", turnId: "turn"}}};
 }
 test("invocation scope is derived from its real owner and rejects foreign context or snapshot", () => {
   const store = new InvocationStore(connection.db);
@@ -43,22 +43,22 @@ test("invocation scope is derived from its real owner and rejects foreign contex
   const forged = invocation(); forged.inputSnapshot.input.sessionId = second;
   expect(() => store.register(forged)).toThrow("invocation_snapshot_scope_mismatch");
   expect(connection.db.select().from(schema.runnerInvocations).all()).toHaveLength(0);
-  expect(store.register(invocation())).toMatchObject(scope);
+  expect(store.register(invocation())).toMatchObject({agentId: scope.agentId, shadowId: scope.shadowId});
 });
 test("invocation cannot import another Shadow's context pack", () => {
   const pack = new ContextPackStore(connection.db).createPack({ownerType: "session", ownerId: second, kind: "session_launch", selectionStrategy: "test"});
   expect(() => new InvocationStore(connection.db).register({...invocation(), contextPackIds: [pack.id]})).toThrow("task_scope_mismatch");
 });
 test("runner token carries authoritative scope and disabled actor prevents issuing it again", () => {
-  fixtureScope(connection.db, "member");
+  fixtureUser(connection.db, scope.agentId, "member");
   const service = new AccessTokenService({db: connection.db, signingSecret: "test-secret"});
   const input = {userId: "member", name: "runner", source: "runner" as const, role: "runner" as const, runnerKind: "work" as const, sourceRunnerJobId: "context", sourceSessionId: first, ttlMs: 60_000, now: Date.now()};
   const issued = service.issueToken(input);
-  expect(issued.claims).toMatchObject(scope);
-  expect(issued.record).toMatchObject(scope);
-  expect(service.verifyBearer(issued.token, {now: Date.now()}).claims).toMatchObject(scope);
+  expect(issued.claims).toMatchObject({agentId: scope.agentId, shadowId: scope.shadowId});
+  expect(issued.record).toMatchObject({agentId: scope.agentId, shadowId: scope.shadowId});
+  expect(service.verifyBearer(issued.token, {now: Date.now()}).claims).toMatchObject({agentId: scope.agentId, shadowId: scope.shadowId});
   expect(() => service.issueToken({...input, sourceRunnerJobId: "foreign"})).toThrow("invocation_context_scope_mismatch");
-  connection.db.update(schema.users).set({status:"disabled"}).where(eq(schema.users.id,"member")).run();
+  connection.db.update(schema.users).set({status:"blocked"}).where(eq(schema.users.id,"member")).run();
   expect(() => service.issueToken(input)).toThrow("invalid_access_token");
 });
 

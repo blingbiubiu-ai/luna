@@ -7,6 +7,7 @@ import {AgentError,AgentStore} from "@/agents/agent-store";
 import {SessionAccessPolicy} from "@/agents/session-access";
 import {TaskAccessPolicy} from "@/agents/task-access";
 import {requireAuthenticated,requireDashboardOnly,isGuardResponse} from "../auth/guards";
+import {actorFor} from "../auth/agent-actor";
 
 type ResourceType="session"|"task";
 
@@ -24,10 +25,11 @@ export class ResourceRouteAccess {
       if((type==="session"?auth.token.sessionId:auth.token.taskId)!==id)throw new AgentError("runner_resource_access_denied",403);
     }
     const options = {readHistory: auth.authKind === "dashboard-cookie" && c.req.method === "GET"};
+    const agentId = this.agentOf(type, id);
+    const {userId} = actorFor(auth, this.db, agentId, {includeDeleted: options.readHistory});
     const row = type === "session"
-      ? new SessionAccessPolicy(this.db).requireAccess(auth.user.id, id, options)
-      : new TaskAccessPolicy(this.db).requireAccess(auth.user.id, id, options);
-    if (!this.isRunner(auth)) new AgentStore(this.db).requireOwner(auth.user.id, row.agent_id, {includeDeleted: options.readHistory});
+      ? new SessionAccessPolicy(this.db).requireAccess(userId, id, options)
+      : new TaskAccessPolicy(this.db).requireAccess(userId, id, options);
     this.requireAgentMatch(c, type, row.agent_id);
     return row;
   }
@@ -42,7 +44,14 @@ export class ResourceRouteAccess {
     const agentId = row?.agentId ?? this.db.all<{ agentId: string | null }>(tombstone)[0]?.agentId;
     if (!agentId) throw new AgentError(type === "session" ? "session_not_found" : "task_not_found", 404);
     this.requireAgentMatch(c, type, agentId);
-    new AgentStore(this.db).requireOwner(auth.user.id, agentId);
+    new AgentStore(this.db).requireOwner(auth.account.id, agentId);
+  }
+  /** The Agent of a session or task; a missing one is reported as not found. */
+  private agentOf(type: ResourceType, id: string): string {
+    const rows = type === "session" ? sessions : tasks;
+    const row = this.db.select({ agentId: rows.agent_id }).from(rows).where(eq(rows.id, id)).get();
+    if (!row) throw new AgentError(type === "session" ? "session_not_found" : "task_not_found", 404);
+    return row.agentId;
   }
   private isRunner(auth: ReturnType<ResourceRouteAccess["actor"]>): boolean {
     return auth.authKind === "luna-access-token" && auth.token.source === "runner";
@@ -59,10 +68,10 @@ export class ResourceRouteAccess {
     const auth=this.actor(c),agentId=c.req.query("agentId");
     if(!agentId)throw new AgentError("agent_scope_required",400);
     const options = {readHistory: auth.authKind === "dashboard-cookie"};
-    if (!this.isRunner(auth)) new AgentStore(this.db).requireOwner(auth.user.id, agentId, {includeDeleted: options.readHistory});
-    const predicate=type==="session"?new SessionAccessPolicy(this.db).listPredicate(auth.user.id,agentId,options):new TaskAccessPolicy(this.db).listPredicate(auth.user.id,agentId,options);
+    const {userId}=actorFor(auth,this.db,agentId,{includeDeleted: options.readHistory});
+    const predicate=type==="session"?new SessionAccessPolicy(this.db).listPredicate(userId,agentId,options):new TaskAccessPolicy(this.db).listPredicate(userId,agentId,options);
     const shadowId=c.req.query("shadowId");
-    if(shadowId)new AgentStore(this.db).requireScope(auth.user.id,{agentId,shadowId},options);
+    if(shadowId)new AgentStore(this.db).requireScope(userId,{agentId,shadowId},options);
     let runnerId:string|undefined;
     if(auth.authKind==="luna-access-token"&&auth.token.source==="runner"){
       runnerId=type==="session"?auth.token.sessionId:auth.token.taskId;

@@ -50,7 +50,7 @@ function ShadowsPage() {
     <main className="mx-auto w-full max-w-5xl space-y-6 p-6">
       {auth.error ? <p role="alert" className="text-destructive">无法加载登录用户。</p>
         : auth.isLoading ? <p>正在加载…</p>
-        : auth.data?.user?.id === agent.ownerUserId && <AgentShadows agent={agent} />}
+        : auth.data?.account?.id === agent.ownerAccountId && <AgentShadows agent={agent} />}
     </main>
   );
 }
@@ -129,6 +129,9 @@ function AgentShadows({ agent }: { agent: DashboardAgentChoice }) {
   const canConfigureBot = agentActive && (!target || targetStatus === "active");
   const name = (creation?.name ?? shadowName).trim();
   const nameChanged = Boolean(target && name !== target.name);
+  // A Shadow with a Feishu bot may leave its name empty to follow the bot's name.
+  const followsBot = Boolean(target && editing?.bindingId);
+  const nameReady = Boolean(name) || followsBot;
   const routingChanged = routingMode !== initialRouting.mode || (routingMode === "bound" && boundWorkerId !== initialRouting.workerId);
   const validRouting = routingMode === "automatic" || routingOptions.some(worker => worker.workerId === boundWorkerId);
   const botChanged = canConfigureBot && configureBot &&
@@ -167,7 +170,7 @@ function AgentShadows({ agent }: { agent: DashboardAgentChoice }) {
 
   async function save(event: FormEvent) {
     event.preventDefault();
-    if (busy || !agentActive || !name || !validRouting || (!creation && !nameChanged && !botChanged && !routingChanged && !modelChanged)) return;
+    if (busy || !agentActive || !nameReady || !validRouting || (!creation && !nameChanged && !botChanged && !routingChanged && !modelChanged)) return;
     setBusy(true);
     setError(null);
     let shadow = target ?? creation?.shadow;
@@ -310,7 +313,8 @@ function AgentShadows({ agent }: { agent: DashboardAgentChoice }) {
           </SheetHeader>
           <form className="space-y-5 p-6" onSubmit={save}>
             <label className="block space-y-2 text-sm">分身名称
-              <Input required maxLength={100} disabled={busy || !agentActive || Boolean(creation?.shadow)} value={creation?.name ?? shadowName}
+              <Input required={!followsBot} maxLength={100} disabled={busy || !agentActive || Boolean(creation?.shadow)} value={creation?.name ?? shadowName}
+                placeholder={followsBot ? "留空则跟随飞书机器人名称" : undefined}
                 onChange={event => {
                   if (creation) setCreation({ key: randomId(), name: event.target.value });
                   else setShadowName(event.target.value);
@@ -353,7 +357,7 @@ function AgentShadows({ agent }: { agent: DashboardAgentChoice }) {
               </label>
             </fieldset>}
             {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
-            <Button disabled={busy || !agentActive || !name || !validRouting || (!creation && !nameChanged && !botChanged && !routingChanged && !modelChanged)} type="submit" className="w-full">
+            <Button disabled={busy || !agentActive || !nameReady || !validRouting || (!creation && !nameChanged && !botChanged && !routingChanged && !modelChanged)} type="submit" className="w-full">
               {busy && <Loader2Icon className="size-4 animate-spin" />}
               {busy ? "正在保存…" : creation && !creation.shadow ? "创建分身" : "保存并应用"}
             </Button>

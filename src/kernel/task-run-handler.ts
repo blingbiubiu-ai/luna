@@ -453,7 +453,7 @@ async function _runAgentTask(input: {
     runnerKind:"task",agentConfig:snapshot,invocationId,runnerContextId:runnerContext.id,
     sessionId:taskRow?.primary_session_id??undefined,taskId:input.taskId,taskRunId:input.taskRunId,
     artifactIds:runnerArtifactAllowlistFromInput({prompt:input.materializedPrompt,snapshot:input.inputSnapshot}),
-    requestedByIdentity,requestedByUserId:canonicalUserIdForRequestedIdentity(input.db,requestedByIdentity),db:input.db,
+    requestedByIdentity,requestedByUserId:canonicalUserIdForRequestedIdentity(input.db,snapshot.agentId,requestedByIdentity),db:input.db,
   });
   if(!new InvocationStore(input.db).require(invocationId).activeJobId){
     const subscriptions=new TaskSubscriptionStore(input.db).listForTask(input.taskId);

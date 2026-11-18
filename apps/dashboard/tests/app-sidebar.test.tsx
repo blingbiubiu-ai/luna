@@ -13,7 +13,7 @@ import { SidebarProvider } from "../src/components/ui/sidebar";
 test("rail user menu renders the authenticated dashboard user", () => {
   const session = {
     authenticated: true,
-    user: {
+    account: {
       id: "user-actual-dashboard",
       name: "Actual Dashboard User",
       provider: "company-sso",

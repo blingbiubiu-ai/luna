@@ -42,7 +42,7 @@ async function executePlan(db: DrizzleDB, input: MainRunnerRunInput, plan: TestM
  const session=db.select().from(sessions).where(eq(sessions.id,sessionId)).get()!;
  let userId=(input.input.type === "user_messages" ? input.input.requesterUserId ?? input.input.messages.at(-1)?.senderUserId : undefined) ?? (input.input.type === "task_result" ? db.select().from(tasks).where(eq(tasks.id,input.input.taskId)).get()?.creator_user_id : undefined) ?? session.created_by_user_id!;
  if (!db.select().from(users).where(eq(users.id,userId)).get()) {
-   userId = new IdentityDirectory(db).materializeIdentityClaims({kind: "human", displayName: userId ?? "Test requester",
+   userId = new IdentityDirectory(db).materializeIdentityClaims({agentId: session.agent_id, kind: "human", displayName: userId ?? "Test requester",
      claims: [{namespace: "local", kind: "local_id", value: userId ?? "test-requester", scope: "", confidence: "manual"}]}).id;
  }
  const originId=mainMessageOrigin(input);

@@ -14,13 +14,13 @@ export class TaskAccessPolicy {
     return task;
   }
   listPredicate(actorUserId:string,agentId:string,options:AgentAccessOptions={}){
-    const agent=new AgentStore(this.db).requireAccess(actorUserId,agentId,options);
+    const agents=new AgentStore(this.db),agent=agents.requireAccess(actorUserId,agentId,options),owner=agents.isOwnerUser(agent.id,actorUserId);
     const participated=this.db.select({one:sql`1`}).from(taskParticipants).where(and(
       eq(taskParticipants.task_id,tasks.id),eq(taskParticipants.user_id,actorUserId)));
     const activeShadow=this.db.select({one:sql`1`}).from(agentShadows).where(and(
       eq(agentShadows.id,tasks.shadow_id),eq(agentShadows.agentId,agentId),eq(agentShadows.status,"active")));
-    const shadowFilter=options.readHistory && agent.ownerUserId===actorUserId ? undefined : exists(activeShadow);
-    return and(shadowFilter,eq(tasks.agent_id,agentId),agent.ownerUserId===actorUserId?undefined:
+    const shadowFilter=options.readHistory && owner ? undefined : exists(activeShadow);
+    return and(shadowFilter,eq(tasks.agent_id,agentId),owner?undefined:
       or(eq(tasks.creator_user_id,actorUserId),exists(participated)));
   }
 }

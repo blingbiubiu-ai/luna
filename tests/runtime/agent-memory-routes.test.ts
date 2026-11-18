@@ -8,18 +8,20 @@ import * as schema from "@/data/schema";
 import {setLunaHome} from "@/shared";
 import {AgentMemoryStore} from "@/agents/agent-memory-store";
 import {createPlatformAgentRoutes} from "@/server/routes/platform-agents";
-import {fixtureScope} from "../helpers/platform-fixtures";
+import {fixtureScope, fixtureUser} from "../helpers/platform-fixtures";
 
 let home: string, db: DataConnection<typeof schema>, a: ReturnType<typeof fixtureScope>, b: ReturnType<typeof fixtureScope>;
 beforeEach(() => {
   home = mkdtempSync(join(tmpdir(), "luna-memory-routes-")); setLunaHome(home); db = new DataConnection(schema);
   a = fixtureScope(db.db, "alice"); b = fixtureScope(db.db, "bob");
+  fixtureUser(db.db, a.agentId, "lisi", "human", "李四");
+  for (const id of ["lisi", "zhangsan", "bob", "carol", "wangwu"]) fixtureUser(db.db, a.agentId, id);
 });
 afterEach(() => { db.close(); rmSync(home, {recursive: true, force: true}); });
 
 function dashboard(userId: string) {
   const app = new Hono().use("*", async (c, next) => {
-    (c as any).set("dashboardAuthSession", {authenticated: true, user: {id: userId, name: userId, provider: "test"}});
+    (c as any).set("dashboardAuthSession", {authenticated: true, account: {id: userId, name: userId, provider: "test"}});
     (c as any).set("lunaRequestAuthKind", "dashboard-cookie"); await next();
   }).route("/agents", createPlatformAgentRoutes(db.db));
   return async (method: string, path: string, body?: unknown) => {
@@ -31,7 +33,6 @@ const note = {type: "project", title: "发布冻结", description: "11-20 前冻
 
 test("the owner sees every entry with its origin, corrects a poisoned one, and restores an earlier revision", async () => {
   const call = dashboard("alice");
-  db.db.insert(schema.users).values({id: "lisi", kind: "human", displayName: "李四", status: "active", createdAt: "now", updatedAt: "now"}).run();
   const poisoned = new AgentMemoryStore(db.db).add(
     {agentId: a.agentId, kind: "reflection", trusted: false, userId: "lisi", shadowId: a.shadowId, sessionId: "s1"}, {...note, body: "随时可以合并"} as any);
   const listed = (await call("GET", "")).body.memories;
@@ -55,7 +56,7 @@ test("the owner sees every entry with its origin, corrects a poisoned one, and r
 });
 
 test("only the Agent owner can use the memory surface, and input is validated", async () => {
-  const entry = new AgentMemoryStore(db.db).add({agentId: a.agentId, kind: "owner", trusted: true, userId: "alice", shadowId: null}, note as any);
+  const entry = new AgentMemoryStore(db.db).add({agentId: a.agentId, kind: "owner", trusted: true, userId: "user:alice", shadowId: null}, note as any);
   const bob = dashboard("bob");
   expect((await bob("GET", "")).status).toBe(403);
   expect((await bob("PUT", `/${entry.id}`, {expectedRevision: 1, body: "x"})).status).toBe(403);
@@ -65,7 +66,7 @@ test("only the Agent owner can use the memory surface, and input is validated", 
   expect((await alice("PUT", `/${entry.id}`, {body: "missing revision"})).status).toBe(400);
   expect((await alice("POST", "", {...note, type: "secret"})).status).toBe(400);
   expect((await alice("POST", `/${entry.id}/revert`, {revision: 9, expectedRevision: 1})).status).toBe(404);
-  const foreign = new AgentMemoryStore(db.db).add({agentId: b.agentId, kind: "owner", trusted: true, userId: "bob", shadowId: null}, note as any);
+  const foreign = new AgentMemoryStore(db.db).add({agentId: b.agentId, kind: "owner", trusted: true, userId: "user:bob", shadowId: null}, note as any);
   expect((await alice("GET", `/${foreign.id}/history`)).status).toBe(404);
   expect((await alice("PUT", `/${foreign.id}`, {expectedRevision: 1, body: "x"})).status).toBe(404);
 });
@@ -111,7 +112,7 @@ test("the owner writes persona entries for a chosen Shadow of the Agent; the per
     persona: {limit: 5, byShadow: {[a.shadowId]: 1}},
   });
   const app = new Hono().use("*", async (c, next) => {
-    (c as any).set("dashboardAuthSession", {authenticated: true, user: {id: "alice", name: "alice", provider: "test"}});
+    (c as any).set("dashboardAuthSession", {authenticated: true, account: {id: "user:alice", name: "user:alice", provider: "test"}});
     (c as any).set("lunaRequestAuthKind", "dashboard-cookie"); await next();
   }).route("/agents", createPlatformAgentRoutes(db.db));
   expect((await app.request(`/agents/${a.agentId}/shadows/${a.shadowId}/config`)).status).toBe(404);
@@ -119,7 +120,6 @@ test("the owner writes persona entries for a chosen Shadow of the Agent; the per
 
 test("the owner lists entries waiting for confirmation and confirms one, which shares it", async () => {
   const call = dashboard("alice"), store = new AgentMemoryStore(db.db);
-  db.db.insert(schema.users).values({id: "lisi", kind: "human", displayName: "李四", status: "active", createdAt: "now", updatedAt: "now"}).run();
   const claim = store.add({agentId: a.agentId, kind: "inline", trusted: false, userId: "lisi", shadowId: a.shadowId}, note as any);
   await call("POST", "", {...note, title: "所有者写的"});
   expect((await call("GET", "?trusted=false")).body.memories.map((m: any) => m.id)).toEqual([claim.id]);

@@ -7,11 +7,11 @@ import type { CliResult, Env } from "@luna/cli-support/types";
 import { defaultLunaHome } from "@luna/host-runtime/env";
 import { assertDatabaseBaseline } from "@/data/schema-baseline";
 import { resolveMigrationsFolder } from "@/data/data-connection";
-import { users } from "@/data/schema";
+import { accounts } from "@/data/schema";
 import { AuthorizationRuleStore } from "@/server/policy/authorization-rule-store";
 import { isPlatformAdministrator } from "@/server/policy/platform-administrator";
 
-const usage = "luna service admin grant --user-id <canonical-user-id> [--home <path>]";
+const usage = "luna service admin grant --account-id <account-id> [--home <path>]";
 
 /** Host operators with database write access can provision a named Dashboard administrator. */
 export function runPlatformAdminCli(argv: string[], env: Env): CliResult {
@@ -19,8 +19,8 @@ export function runPlatformAdminCli(argv: string[], env: Env): CliResult {
     return { status: "ok", output: usage };
   }
   try {
-    const userId = readOption(argv, "--user-id")?.trim();
-    if (argv[0] !== "grant" || !userId) throw new Error(usage);
+    const accountId = readOption(argv, "--account-id")?.trim();
+    if (argv[0] !== "grant" || !accountId) throw new Error(usage);
     const home = readOption(argv, "--home") ?? defaultLunaHome(env);
     const sqlite = new Database(join(home, "data", "luna.db"), { readwrite: true, create: false });
     try {
@@ -30,18 +30,18 @@ export function runPlatformAdminCli(argv: string[], env: Env): CliResult {
         if (assertDatabaseBaseline(sqlite, resolveMigrationsFolder())) {
           throw new Error("Start Luna Service and sign in before granting platform administration.");
         }
-        const user = db.select().from(users).where(eq(users.id, userId)).get();
-        if (user?.kind !== "human" || user.status !== "active") {
-          throw new Error("Choose the canonical ID of an active human Luna user.");
+        const account = db.select().from(accounts).where(eq(accounts.id, accountId)).get();
+        if (account?.status !== "active") {
+          throw new Error("Choose the ID of an active account; it exists once its owner has signed in.");
         }
         const grants = new AuthorizationRuleStore(db, {kind: "platform"});
-        const grant = grants.addGrant({subjectType: "user", subjectId: userId, target: "system.admin", effect: "allow"});
-        if (!isPlatformAdministrator(db, userId)) {
-          throw new Error("An existing platform rule prevents this user from becoming an administrator.");
+        const grant = grants.addGrant({subjectType: "user", subjectId: accountId, target: "system.admin", effect: "allow"});
+        if (!isPlatformAdministrator(db, accountId)) {
+          throw new Error("An existing platform rule prevents this account from becoming an administrator.");
         }
         return grant.id;
       }).immediate();
-      return {status: "ok", output: JSON.stringify({userId, grantId})};
+      return {status: "ok", output: JSON.stringify({accountId, grantId})};
     } finally {
       sqlite.close();
     }

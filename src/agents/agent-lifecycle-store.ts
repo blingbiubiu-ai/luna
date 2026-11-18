@@ -11,14 +11,14 @@ export type AgentLifecycleJob = typeof agentLifecycleJobs.$inferSelect;
 export class AgentLifecycleStore {
   constructor(private readonly db: DrizzleDB) {}
 
-  request(actorUserId: string, target: {agentId: string; shadowId?: string}, status: AgentLifeStatus, key: string): AgentLifecycleJob {
+  request(accountId: string, target: {agentId: string; shadowId?: string}, status: AgentLifeStatus, key: string): AgentLifecycleJob {
     if (!key || key.trim() !== key || key.length > 200) throw new AgentError("invalid_idempotency_key", 400);
     const shadowId = target.shadowId ?? null;
     const hash = createHash("sha256").update(JSON.stringify([target.agentId, shadowId, status])).digest("hex");
     return this.db.transaction(tx => {
       const agents = new AgentStore(tx);
-      const agent = agents.requireOwner(actorUserId, target.agentId, {includeDeleted: true});
-      const prior = tx.select().from(agentLifecycleJobs).where(and(eq(agentLifecycleJobs.actorUserId, actorUserId), eq(agentLifecycleJobs.idempotencyKey, key))).get();
+      const agent = agents.requireOwner(accountId, target.agentId, {includeDeleted: true});
+      const prior = tx.select().from(agentLifecycleJobs).where(and(eq(agentLifecycleJobs.actorAccountId, accountId), eq(agentLifecycleJobs.idempotencyKey, key))).get();
       if (prior) {
         if (prior.requestHash !== hash) throw new AgentError("idempotency_conflict", 409);
         return prior;
@@ -36,7 +36,7 @@ export class AgentLifecycleStore {
       )).get();
       if (unfinished) throw new AgentError("lifecycle_pending", 409);
       const now = Date.now();
-      const job: AgentLifecycleJob = {id: randomUUID(), agentId: agent.id, shadowId, actorUserId,
+      const job: AgentLifecycleJob = {id: randomUUID(), agentId: agent.id, shadowId, actorAccountId: accountId,
         idempotencyKey: key, requestHash: hash, targetStatus: status,
         status: status === "active" ? "completed" : "pending", lastError: null,
         createdAt: now, completedAt: status === "active" ? now : null};

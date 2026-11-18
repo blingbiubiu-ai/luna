@@ -1,6 +1,6 @@
 import {fixtureJobScope} from "../helpers/job-scope";
 import {fixtureExecutionReference} from "../helpers/platform-fixtures";
-import {fixtureRunnerContext, fixtureNamedSession} from "../helpers/platform-fixtures";
+import {fixtureRunnerContext, fixtureNamedSession, fixtureOwnerUserId} from "../helpers/platform-fixtures";
 import { Database } from "bun:sqlite";
 import { expect, test } from "bun:test";
 import { drizzle } from "drizzle-orm/bun-sqlite";
@@ -67,7 +67,7 @@ for (const action of ["cancel", "detach"] as const) test(`pre-Job drain wait dis
   f.db.insert(runnerContexts).values(fixtureRunnerContext(f.db, { id: "context", owner_type: "session", owner_id: "session", runner_type: "codex", runner_root_path: f.root, created_at: 0, updated_at: 0 })).run();
   f.db.insert(runnerContextOrigins).values({ contextId: "context", runtimeId: "runtime" }).run();
   const store = new InvocationStore(f.db);
-  store.register({ agentConfig:fixtureExecutionReference(f.db), id: "inv", runnerKind: "work", actorUserId: "user", runnerContextId: "context", sessionId: "session", taskId: null, taskRunId: null, originId: "turn", inputSnapshot: decodeInvocation({ version: 1, kind: "work", input: {sessionId: "session", runnerContextId: "context", turnId: "turn"} }), contextPackIds: [] });
+  store.register({ agentConfig:fixtureExecutionReference(f.db), id: "inv", runnerKind: "work", actorUserId: fixtureOwnerUserId("user"), runnerContextId: "context", sessionId: "session", taskId: null, taskRunId: null, originId: "turn", inputSnapshot: decodeInvocation({ version: 1, kind: "work", input: {sessionId: "session", runnerContextId: "context", turnId: "turn"} }), contextPackIds: [] });
   const transport = new RuntimeAgentTransport(f.db, f.client); const cancellation = new AbortController();
   try {
     const iterator = transport.stream({ id: "message", role: "user", session_id: "session", content: [{ type: "text", text: "work" }] }, { cwd: f.root, runnerContextId: "context", isNewSession: true, signal: cancellation.signal, env: { LUNA_INVOCATION_ID: "inv" } }, "codex", undefined, {});
@@ -89,7 +89,7 @@ test("Service transport binds a configured project without a legacy verification
   f.db.insert(runnerContexts).values(fixtureRunnerContext(f.db, { id: "context", owner_type: "session", owner_id: "session", runner_type: "codex", runner_root_path: f.root, created_at: 0, updated_at: 0 })).run();
   f.db.insert(runnerContextOrigins).values({ contextId: "context", runtimeId: "runtime" }).run();
   const store = new InvocationStore(f.db);
-  store.register({ agentConfig:fixtureExecutionReference(f.db), id: "inv", runnerKind: "work", actorUserId: "user", runnerContextId: "context", sessionId: "session", taskId: null, taskRunId: null, originId: "turn", inputSnapshot: decodeInvocation({ version: 1, kind: "work", input: { sessionId: "session", runnerContextId: "context", turnId: "turn" } }), contextPackIds: [] });
+  store.register({ agentConfig:fixtureExecutionReference(f.db), id: "inv", runnerKind: "work", actorUserId: fixtureOwnerUserId("user"), runnerContextId: "context", sessionId: "session", taskId: null, taskRunId: null, originId: "turn", inputSnapshot: decodeInvocation({ version: 1, kind: "work", input: { sessionId: "session", runnerContextId: "context", turnId: "turn" } }), contextPackIds: [] });
   const invocation = store.require("inv");
   const builder = new AgentResourceBuilder(f.db, f.root, new PluginRegistry());
   const { selection } = new InvocationResources(f.db, f.root).pin(invocation.id, builder);
@@ -118,7 +118,7 @@ for (const action of ["cancel", "detach"] as const) test(`pre-Job health failure
   f.db.insert(runnerContexts).values(fixtureRunnerContext(f.db, { id: "context", owner_type: "session", owner_id: "session", runner_type: "codex", runner_root_path: f.root, created_at: 0, updated_at: 0 })).run();
   f.db.insert(runnerContextOrigins).values({ contextId: "context", runtimeId: "runtime" }).run();
   const store = new InvocationStore(f.db);
-  store.register({ agentConfig:fixtureExecutionReference(f.db), id: "inv", runnerKind: "work", actorUserId: "user", runnerContextId: "context", sessionId: "session", taskId: null, taskRunId: null, originId: "turn", inputSnapshot: decodeInvocation({ version: 1, kind: "work", input: {sessionId: "session", runnerContextId: "context", turnId: "turn"} }), contextPackIds: [] });
+  store.register({ agentConfig:fixtureExecutionReference(f.db), id: "inv", runnerKind: "work", actorUserId: fixtureOwnerUserId("user"), runnerContextId: "context", sessionId: "session", taskId: null, taskRunId: null, originId: "turn", inputSnapshot: decodeInvocation({ version: 1, kind: "work", input: {sessionId: "session", runnerContextId: "context", turnId: "turn"} }), contextPackIds: [] });
   const transport = new RuntimeAgentTransport(f.db, f.client); const cancellation = new AbortController();
   try {
     const iterator = transport.stream({ id: "message", role: "user", session_id: "session", content: [{ type: "text", text: "work" }] }, { cwd: f.root, runnerContextId: "context", isNewSession: true, signal: cancellation.signal, env: { LUNA_INVOCATION_ID: "inv" } }, "codex", undefined, {});

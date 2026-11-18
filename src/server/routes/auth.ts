@@ -1,3 +1,4 @@
+import { AccountStore } from "@/identity/account-store";
 import { Hono } from "hono";
 import { and, desc, eq, inArray } from "drizzle-orm";
 
@@ -5,7 +6,8 @@ import type { DrizzleDB } from "@/data";
 import { accessTokens } from "@/data/schema";
 import {
   type DashboardAuthService,
-  ensureDashboardUser,
+  ensureDashboardAccount,
+  withStoredProfile,
   resolveLunaAccessTokenSigningSecret,
 } from "../auth";
 import { AccessTokenService } from "../auth/access-token-service";
@@ -27,41 +29,55 @@ export function createAuthRoutes(
   options: AuthRouteOptions = {},
 ): Hono {
   return new Hono()
-    .get("/session", (c) => c.json(auth.sessionFromRequest(c)))
+    .get("/session", (c) => {
+      const session = auth.sessionFromRequest(c);
+      // The cookie stays the answer when no database serves this process (a bare server or a shut-down kernel).
+      let stored;
+      try {
+        const db = authDb(options);
+        stored = db !== undefined && session.account ? new AccountStore(db).get(session.account.id) : undefined;
+      } catch {
+        stored = undefined;
+      }
+      return c.json(stored ? withStoredProfile(session, stored) : session);
+    })
     .post("/login", async (c) => {
       const body = await readLoginBody(c.req.raw);
       const login = await auth.login(body.token);
       if (login === null) {
         return c.json({ error: "invalid_token" }, 401);
       }
-      if (options.db && login.session.user) {
-        ensureDashboardUser(options.db, login.session.user, { bindDashboardIdentity: true });
+      let session = login.session;
+      if (options.db && login.session.account) {
+        const account = ensureDashboardAccount(options.db, login.session.account);
+        if (account.status !== "active") return c.json({ error: "account_inactive" }, 403);
+        session = withStoredProfile(session, account);
       }
       auth.setSessionCookie(c, login.sessionToken);
-      return c.json(login.session);
+      return c.json(session);
     })
     .post("/logout", (c) => {
       auth.clearSessionCookie(c);
-      return c.json({ authenticated: false, user: null });
+      return c.json({ authenticated: false, account: null });
     })
     .get("/me", (c) => {
       const current = requireAuthenticated(c);
       if (isGuardResponse(current)) {
         return current;
       }
+      const account = current.account;
       return c.json({
         status: "ok",
         authenticated: true,
         authKind: current.authKind,
-        user: {
-          id: current.user.id,
-          displayName: current.user.name,
-          provider: current.user.provider,
-        },
+        // An account for the Dashboard and personal tokens; a runner token acts as a user of its Agent.
+        ...(account
+          ? { account: { id: account.id, displayName: account.name, provider: account.provider } }
+          : { user: { id: current.authKind === "luna-access-token" ? current.token.actorUserId : undefined } }),
         // Lets the Dashboard show platform pages; the platform APIs enforce it themselves.
         isPlatformAdmin: (() => {
           const db = authDb(options);
-          return db !== undefined && isPlatformAdministrator(db, current.user.id);
+          return db !== undefined && account !== undefined && isPlatformAdministrator(db, account.id);
         })(),
         ...(current.authKind === "luna-access-token"
           ? {
@@ -108,7 +124,7 @@ export function createAuthRoutes(
       if (isGuardResponse(dashboard)) {
         return dashboard;
       }
-      const userId = dashboard.user.id;
+      const accountId = dashboard.account.id;
       const body = await readJsonRecord(c.req.raw);
       if (typeof body.userCode !== "string" || body.userCode.trim().length === 0) {
         return c.json({ status: "error", code: "missing_user_code" }, 400);
@@ -118,7 +134,7 @@ export function createAuthRoutes(
         return c.json({ status: "error", code: "access_token_unavailable" }, 503);
       }
       try {
-        service.approveCliAuthSession(body.userCode, userId, Date.now());
+        service.approveCliAuthSession(body.userCode, accountId, Date.now());
       } catch (error) {
         return c.json({ status: "error", code: errorCode(error) }, 400);
       }
@@ -168,12 +184,12 @@ export function createAuthRoutes(
       return c.json({ status: "approved" });
     })
     .get("/tokens", (c) => {
-      // Personal CLI/MCP tokens: every signed-in Dashboard user manages their own.
+      // Personal CLI/MCP tokens: every signed-in account manages its own.
       const self = requireDashboardOnly(c);
       if (isGuardResponse(self)) {
         return self;
       }
-      const userId = self.user.id;
+      const accountId = self.account.id;
       const db = authDb(options);
       if (db === undefined) {
         return c.json({ status: "error", code: "access_token_unavailable" }, 503);
@@ -181,18 +197,18 @@ export function createAuthRoutes(
       const rows = db
         .select()
         .from(accessTokens)
-        .where(and(eq(accessTokens.userId, userId), inArray(accessTokens.source, ["cli", "mcp"])))
+        .where(and(eq(accessTokens.accountId, accountId), inArray(accessTokens.source, ["cli", "mcp"])))
         .orderBy(desc(accessTokens.createdAt))
         .all();
       return c.json({ tokens: rows.map(publicTokenRecord) });
     })
     .post("/tokens", async (c) => {
-      // Personal CLI/MCP tokens: every signed-in Dashboard user manages their own.
+      // Personal CLI/MCP tokens: every signed-in account manages its own.
       const self = requireDashboardOnly(c);
       if (isGuardResponse(self)) {
         return self;
       }
-      const userId = self.user.id;
+      const accountId = self.account.id;
       const body = await readJsonRecord(c.req.raw);
       const source = body.source === "mcp" ? "mcp" : "cli";
       const service = accessTokenService(options);
@@ -200,7 +216,7 @@ export function createAuthRoutes(
         return c.json({ status: "error", code: "access_token_unavailable" }, 503);
       }
       const issued = service.issueToken({
-        userId,
+        accountId,
         name: typeof body.name === "string" && body.name.trim().length > 0
           ? body.name.trim()
           : source === "mcp"
@@ -229,21 +245,24 @@ export function createAuthRoutes(
       if (service === null) {
         return c.json({ status: "error", code: "access_token_unavailable" }, 503);
       }
-      service.revokeToken(claims.tokenId, claims.actorUserId, Date.now());
+      // Only a personal token revokes itself here; a runner token ends with its invocation.
+      if (claims.accountId === undefined) {
+        return c.json({ status: "error", code: "personal_token_required" }, 403);
+      }
+      service.revokeToken(claims.tokenId, claims.accountId, Date.now());
       return c.json({ status: "revoked" });
     })
     .delete("/tokens/:tokenId", (c) => {
-      // Personal CLI/MCP tokens: every signed-in Dashboard user manages their own.
+      // Personal CLI/MCP tokens: every signed-in account manages its own.
       const self = requireDashboardOnly(c);
       if (isGuardResponse(self)) {
         return self;
       }
-      const userId = self.user.id;
       const service = accessTokenService(options);
       if (service === null) {
         return c.json({ status: "error", code: "access_token_unavailable" }, 503);
       }
-      service.revokeToken(c.req.param("tokenId"), userId, Date.now());
+      service.revokeToken(c.req.param("tokenId"), self.account.id, Date.now());
       return c.json({ status: "revoked" });
     })
     .get("/sso/start", (c) =>

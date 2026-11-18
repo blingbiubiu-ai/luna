@@ -22,7 +22,7 @@ beforeEach(()=>{home=mkdtempSync(join(tmpdir(),"luna-worker-access-"));setLunaHo
 afterEach(()=>{connection.close();rmSync(home,{recursive:true,force:true});});
 function app(actor:string,gateway?:WorkerGateway){
  return new Hono().use("*",async(c,next)=>{
-  (c as any).set("dashboardAuthSession",{authenticated:true,user:{id:actor,name:actor,provider:"test"}});
+  (c as any).set("dashboardAuthSession",{authenticated: true, account: {id:actor,name:actor,provider:"test"}});
   (c as any).set("lunaRequestAuthKind","dashboard-cookie");(c as any).set("lunaAuthorizationDb",connection.db);await next();
  }).route("/",createAgentWorkerAccessRoutes(connection.db,()=>gateway));
 }

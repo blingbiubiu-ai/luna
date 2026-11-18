@@ -44,7 +44,7 @@ import { DataConnection } from "../../../src/data";
 import * as schema from "../../../src/data/schema";
 import { HonoServer } from "../../../src/server/server";
 import { config, setLunaHome } from "../../../src/shared/config";
-import { fixturePlatformAdmin, fixtureScope, fixtureSessionOwnership } from "../../../tests/helpers/platform-fixtures";
+import { fixtureOwnerUserId, fixturePlatformAdmin, fixtureScope, fixtureSessionOwnership } from "../../../tests/helpers/platform-fixtures";
 
 const now = Date.parse("2026-05-30T10:00:00.000Z");
 const senderColumn = ["sender", "user", "id"].join("_");
@@ -126,7 +126,7 @@ beforeAll(async () => {
   fixturePlatformAdmin(connection.db, fixtureOwnerId);
   fixtureAgentId = fixtureScope(connection.db, fixtureOwnerId).agentId;
   connection.db.insert(schema.users).values({
-    id: "luna-system", kind: "system", displayName: "Luna System", status: "active",
+    id: "luna-system", agentId: fixtureAgentId, kind: "system", displayName: "Luna System", status: "active",
     createdAt: String(now), updatedAt: String(now),
   }).onConflictDoNothing().run();
   app = new HonoServer({ db: connection.db }).app;
@@ -224,7 +224,7 @@ describe("luna dashboard api", () => {
     expect(anonymousSession.status).toBe(200);
     expect(await anonymousSession.json()).toEqual({
       authenticated: false,
-      user: null,
+      account: null,
     });
 
     const invalidLogin = await app.fetch(
@@ -249,7 +249,7 @@ describe("luna dashboard api", () => {
     expect(cookie).toContain("luna_dashboard_session=");
     expect(await validLogin.json()).toEqual({
       authenticated: true,
-      user: {
+      account: {
         id: "local-dashboard-user",
         name: "Local dashboard user",
         provider: "local-token",
@@ -264,7 +264,7 @@ describe("luna dashboard api", () => {
     expect(authenticatedSession.status).toBe(200);
     expect(await authenticatedSession.json()).toEqual({
       authenticated: true,
-      user: {
+      account: {
         id: "local-dashboard-user",
         name: "Local dashboard user",
         provider: "local-token",
@@ -511,7 +511,7 @@ describe("luna dashboard api", () => {
     const { users } = await getJson<{ users: DashboardUser[] }>(`/api/users?agentId=${fixtureAgentId}`);
     const ids = users.map(user => user.id);
     expect(ids).toContain(live.replyUserId);
-    expect(ids).toContain(fixtureOwnerId);
+    expect(ids).toContain(fixtureOwnerUserId(fixtureOwnerId));
     expect(ids).not.toContain(removed.replyUserId);
     expect(ids).not.toContain(agents.shadow(other.defaultShadowId).replyUserId);
     const historical = await getJson<DashboardUser>(`/api/users/${removed.replyUserId}?agentId=${fixtureAgentId}`);
@@ -1381,7 +1381,7 @@ describe("luna dashboard api", () => {
       init?: RequestInit,
     ) => {
       fetchCalls.push({ url: String(input), init });
-      return new Response(JSON.stringify({ authenticated: false, user: null }), {
+      return new Response(JSON.stringify({ authenticated: false, account: null }), {
         status: 200,
         headers: { "content-type": "application/json" },
       });
@@ -3108,7 +3108,7 @@ describe("luna dashboard api", () => {
 
   test("Agent memory lists entries with their origin for the owner", async () => {
     new AgentMemoryStore(connection.db).add(
-      { agentId: fixtureAgentId, kind: "owner", trusted: true, userId: fixtureOwnerId, shadowId: null },
+      { agentId: fixtureAgentId, kind: "owner", trusted: true, userId: fixtureOwnerUserId(fixtureOwnerId), shadowId: null },
       { type: "project", title: "Fixture memory", description: "Fixture description", body: "Fixture body" },
     );
     const memory = await getJson<{ memories: Array<Record<string, unknown>> }>(
@@ -8102,9 +8102,10 @@ function installDashboardFixtureWriteShim(db: Database): void {
     AFTER INSERT ON fixture_messages
     BEGIN
       INSERT OR IGNORE INTO users
-        (id, kind, display_name, avatar_url, status, merged_into_user_id, profile_source, created_at, updated_at)
+        (id, agent_id, kind, display_name, avatar_url, status, merged_into_user_id, profile_source, created_at, updated_at)
       SELECT
         id,
+        (SELECT agent_id FROM sessions WHERE id = NEW.session_id),
         CASE WHEN identity_kind = 'bot' THEN 'bot' ELSE 'human' END,
         COALESCE(display_name, external_id),
         avatar_url,
@@ -8304,10 +8305,11 @@ function insertCanonicalUserFixture(
 ): void {
   db.run(
     `INSERT OR IGNORE INTO users
-      (id, kind, display_name, avatar_url, status, merged_into_user_id, profile_source, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      (id, agent_id, kind, display_name, avatar_url, status, merged_into_user_id, profile_source, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       input.userId,
+      fixtureAgentId,
       input.kind,
       input.displayName,
       input.avatarUrl ?? null,
@@ -8321,10 +8323,11 @@ function insertCanonicalUserFixture(
   const claimId = `link-${input.userId}-${input.identityKind ?? "open_id"}`;
   db.run(
     `INSERT OR IGNORE INTO user_identity_links
-      (id, user_id, identity_namespace, identity_kind, identity_value, identity_scope, confidence, is_primary, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      (id, agent_id, user_id, identity_namespace, identity_kind, identity_value, identity_scope, confidence, is_primary, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       claimId,
+      fixtureAgentId,
       input.userId,
       "lark",
       input.identityKind ?? "open_id",

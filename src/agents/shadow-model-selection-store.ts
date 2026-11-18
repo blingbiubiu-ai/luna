@@ -30,7 +30,7 @@ export class ShadowModelSelectionStore {
   save(actor:string,scope:AgentScope,input:{mode:"inherit"}|{mode:"fixed";revisionId:string}) {
     return this.db.transaction(()=>{
       this.authorize(actor,scope);
-      new AgentStore(this.db).requireAccess(actor,scope.agentId);
+      const agents=new AgentStore(this.db);agents.requireAccess(agents.ownerUserId(scope.agentId),scope.agentId);
       let selection:ModelSelection={mode:"inherit",profileId:null,revisionId:null};
       if(input.mode==="fixed") {
         const revision=this.db.select().from(agentProfileRevisions).where(eq(agentProfileRevisions.id,input.revisionId)).get();
@@ -39,7 +39,7 @@ export class ShadowModelSelectionStore {
         if(revision.validation_state!=="validated")throw new AgentError("shadow_model_not_validated",409);
         selection={mode:"fixed",profileId:profile.id,revisionId:revision.id};
       }
-      const values={...scope,...selection,updatedBy:actor,updatedAt:Date.now()};
+      const values={...scope,...selection,updatedByAccountId:actor,updatedAt:Date.now()};
       this.db.insert(shadowModelSelections).values(values).onConflictDoUpdate({target:shadowModelSelections.shadowId,set:values}).run();
       return this.view(scope);
     });

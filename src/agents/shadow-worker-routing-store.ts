@@ -24,7 +24,8 @@ export class ShadowWorkerRoutingStore {
   save(actor: string, scope: AgentScope, routing: WorkerRouting): WorkerRouting {
     return this.db.transaction(() => {
       this.authorize(actor, scope);
-      new AgentStore(this.db).requireAccess(actor, scope.agentId);
+      const agents = new AgentStore(this.db);
+      agents.requireAccess(agents.ownerUserId(scope.agentId), scope.agentId);
       if (routing.mode === "bound") {
         const assigned = this.db.select().from(agentWorkerAccess).where(and(
           eq(agentWorkerAccess.agentId, scope.agentId), eq(agentWorkerAccess.workerId, routing.workerId),
@@ -32,7 +33,7 @@ export class ShadowWorkerRoutingStore {
         )).get();
         if (!assigned) throw new AgentError("worker_assignment_not_found", 409);
       }
-      const values = { ...scope, ...routing, updatedBy: actor, updatedAt: Date.now() };
+      const values = { ...scope, ...routing, updatedByAccountId: actor, updatedAt: Date.now() };
       this.db.insert(shadowWorkerRouting).values(values).onConflictDoUpdate({
         target: shadowWorkerRouting.shadowId, set: values,
       }).run();

@@ -1,6 +1,6 @@
 import { AgentMemoryStore } from "../../src/agents/agent-memory-store";
 import {fixtureTaskOwnership} from "../helpers/platform-fixtures";
-import {fixtureSessionOwnership} from "../helpers/platform-fixtures";
+import {fixtureOwnerUserId, fixtureSessionOwnership} from "../helpers/platform-fixtures";
 import { AgentLifecycleStore } from "../../src/agents/agent-lifecycle-store";
 import type { MainRunnerCompletion } from "../../src/main-runner/types";
 import {
@@ -98,8 +98,10 @@ function selectTaskSourceContextItems(db: DrizzleDB) {
   return new ContextPackStore(db).listTaskSourceItems();
 }
 
+/** A requester inside the Agent that owns the `feishu-main` test sessions. */
 function materializeTestRequester(displayName: string) {
   return new IdentityDirectory(database.db).materializeIdentityClaims({
+    agentId: fixtureSessionOwnership(database.db, "feishu", "feishu-main").agent_id,
     kind: "human",
     displayName,
     claims: [
@@ -1947,7 +1949,7 @@ function seedTaskResultSubscription(input: {
       severity: null,
       title: input.title,
       summary: input.summary,
-      creator_user_id: "fixture-owner",
+      creator_user_id: fixtureOwnerUserId("fixture-owner"),
       context_json: null,
       created_at: now,
       updated_at: now,

@@ -1,4 +1,4 @@
-import {fixtureSessionOwnership} from "../helpers/platform-fixtures";
+import {fixtureSessionOwnership, fixtureUser } from "../helpers/platform-fixtures";
 import {fixtureTaskOwnership} from "../helpers/platform-fixtures";
 import { registerTestRunnerJob } from "./support/runner-job";
 import { encodeInvocation } from "../../src/runners/invocation-codec";
@@ -33,8 +33,8 @@ afterEach(()=>{connection?.close();if(home)rmSync(home,{recursive:true,force:tru
 function fixture(hold?: Promise<void>) {
   home=mkdtempSync(join(tmpdir(),"luna-thread-command-"));setLunaHome(home);
   connection=new DataConnection(schema);const db=connection.db;
-  db.insert(schema.users).values({id:"user",kind:"human",displayName:"User",status:"active",createdAt:"now",updatedAt:"now"}).run();
   const ownership=fixtureSessionOwnership(db,"feishu","test");
+  fixtureUser(db,ownership.agent_id,"user");
   const sessions=new SessionStore(db);
   const session=sessions.resolveByChannelSurface({channelType:"feishu",channelId:"test",groupId:"chat"});
   const inbound:NormalizedInboundMessage={id:"om_anchor",channel:{id:"test",type:"feishu"},surface:{externalId:"chat",kind:"group"},sender:{externalId:"user",kind:"user",requesterIdentity:{provider:"local",externalUserId:"user",canonicalUserId:"user"}},text:"Investigate",mentions:[],addressing:{addressedToBot:true,reason:"p2p"}};
@@ -44,7 +44,7 @@ function fixture(hold?: Promise<void>) {
   const context=new RunnerContextStore(db).resolveForSession(session.id,"codex");
   const input: Parameters<typeof encodeInvocation>[1] = {invocationId:"invocation",turnId:"turn",runnerContext:context,input:{type:"user_messages",messages:[{...runnerMessageEnvelopeFromRow({row:anchor,rawMessage:inbound}),rawMessage:inbound}],latestMessage:inbound,context:{sessionId:session.id,candidateOpenTasks:[]}}};
   const claims:LunaAccessTokenClaims={agentId:session.agent_id,shadowId:session.shadow_id,tokenId:"token",actorUserId:"user",source:"runner",role:"runner",runnerKind:"main",sessionId:session.id,runnerJobId:context.id,issuedAt:1,expiresAt:Date.now()+60000};
-  db.insert(schema.accessTokens).values({id:"token",tokenHash:"hash",userId:"user",source:"runner",name:"main",role:"runner",issuedAt:1,expiresAt:Date.now()+60000,createdAt:1,metadataJson:{invocationId:"invocation"}}).run();
+  db.insert(schema.accessTokens).values({id:"token",agentId:claims.agentId,tokenHash:"hash",userId:"user",source:"runner",name:"main",role:"runner",issuedAt:1,expiresAt:Date.now()+60000,createdAt:1,metadataJson:{invocationId:"invocation"}}).run();
   registerTestRunnerJob(db, "invocation", claims, encodeInvocation("main", input), "turn");
   const channel=new FakeFeishuChannel("test");
   const dispatcher=new SessionReplyDispatcher(db,()=>channel);
@@ -378,7 +378,7 @@ test.each(["topic", "group"] as const)("%s handoff invokes target Main; its open
         expect(JSON.stringify(input.input.context)).toContain(f.history.id);
         expect(f.db.select().from(schema.tasks).all()).toHaveLength(0);
         const claims = {...f.claims, tokenId: "target-token", sessionId: targetId, runnerJobId: input.runnerContext.id};
-        f.db.insert(schema.accessTokens).values({id: claims.tokenId, tokenHash: "target-hash", userId: "user", source: "runner", name: "main", role: "runner", issuedAt: 1, expiresAt: Date.now()+60000, createdAt: 1, metadataJson: {invocationId: "target-invocation"}}).run();
+        f.db.insert(schema.accessTokens).values({id: claims.tokenId, agentId: claims.agentId, tokenHash: "target-hash", userId: "user", source: "runner", name: "main", role: "runner", issuedAt: 1, expiresAt: Date.now()+60000, createdAt: 1, metadataJson: {invocationId: "target-invocation"}}).run();
         const finishJob = registerTestRunnerJob(f.db, "target-invocation", claims, encodeInvocation("main", input), input.turnId!);
         const {RunnerMessageService} = await import("../../src/messaging/runner-message-service");
         const messaging = new RunnerMessageService(f.db, () => f.channel);

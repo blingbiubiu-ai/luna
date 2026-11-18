@@ -3,6 +3,7 @@ import { useState } from "react";
 
 import { useUsers } from "@/lib/api";
 
+import { AccountLinks } from "./account-links";
 import { UsersList } from "./users-list";
 
 export const Route = createFileRoute("/$agentId/users/")({ component: UsersPage });
@@ -13,12 +14,15 @@ function UsersPage() {
   const [query, setQuery] = useState("");
 
   return (
-    <UsersList
-      users={users ?? []}
-      query={query}
-      setQuery={setQuery}
-      loading={isLoading}
-      error={isError ? error : null}
-    />
+    <div className="flex h-full min-h-0 flex-1 flex-col">
+      <AccountLinks agentId={agentId} />
+      <UsersList
+        users={users ?? []}
+        query={query}
+        setQuery={setQuery}
+        loading={isLoading}
+        error={isError ? error : null}
+      />
+    </div>
   );
 }

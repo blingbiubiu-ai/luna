@@ -1,4 +1,4 @@
-import { fixtureSessionOwnership } from "../helpers/platform-fixtures";
+import { fixtureOwnerUserId, fixtureSessionOwnership } from "../helpers/platform-fixtures";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -20,7 +20,6 @@ import {
   taskRuns,
   tasks,
 } from "../../src/data/schema";
-import { IdentityDirectory } from "../../src/identity/identity-directory";
 import type { MainRunnerRunInput } from "../../src/main-runner/main-runner";
 import { MainRunner } from "../../src/main-runner/main-runner";
 import type { TestMainPlan } from "./support/main-command-plan";
@@ -625,7 +624,7 @@ function contextSessionRow(input: {
     parent_session_id: input.parentSessionId ?? null,
     title: input.title,
     status: "active",
-    created_by_user_id: "user-1",
+    created_by_user_id: fixtureOwnerUserId(ownerId),
     created_at: input.now,
     updated_at: input.now,
     last_activity_at: input.now,
@@ -643,26 +642,14 @@ async function getJson<T>(path: string): Promise<T> {
 }
 
 function issueDashboardApiToken(db: DrizzleDB): string {
-  const user = new IdentityDirectory(db).materializeIdentityClaims({
-    kind: "human",
-    displayName: "Dashboard API Test User",
-    claims: [
-      {
-        namespace: "local",
-        kind: "local_id",
-        value: "dashboard-api-test-user",
-        scope: "",
-        confidence: "manual",
-      },
-    ],
-  });
-  ownerId = user.id;
+  // The Dashboard API is called with the owner account's personal token.
+  ownerId = "dashboard-api-test-user";
   ({agent_id: agentId} = fixtureSessionOwnership(db, "feishu", "feishu-main", ownerId));
   return new AccessTokenService({
     db,
     signingSecret: TEST_ACCESS_TOKEN_SECRET,
   }).issueToken({
-    userId: user.id,
+    accountId: ownerId,
     name: "Context pack dashboard API test token",
     source: "cli",
     role: "user",

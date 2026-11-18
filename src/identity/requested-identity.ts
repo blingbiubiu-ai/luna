@@ -1,5 +1,7 @@
 import type { NormalizedInboundMessage } from "@/channels";
+import { eq } from "drizzle-orm";
 import type { DrizzleDB } from "@/data";
+import { users } from "@/data/schema";
 
 import { IdentityDirectory } from "./identity-directory";
 
@@ -49,17 +51,25 @@ export function requiresExplicitRequesterIdentity(
   );
 }
 
+/**
+ * The user of `agentId` a requester names. A local identity names a user id
+ * directly; it must not name a user of another Agent. Provider evidence is only
+ * matched against the evidence of this Agent's users.
+ */
 export function canonicalUserIdForRequestedIdentity(
   db: DrizzleDB,
+  agentId: string,
   identity: RequestedIdentityContext | undefined,
 ): string | undefined {
   if (identity === undefined) {
     return undefined;
   }
   if (identity.provider === "local") {
-    return identity.canonicalUserId ?? identity.externalUserId;
+    const id = identity.canonicalUserId ?? identity.externalUserId;
+    const owner = db.select({ agentId: users.agentId }).from(users).where(eq(users.id, id)).get();
+    return owner === undefined || owner.agentId === agentId ? id : undefined;
   }
-  return new IdentityDirectory(db).resolveUserIdForIdentity({
+  return new IdentityDirectory(db).resolveUserIdForIdentity(agentId, {
     namespace: identity.identityNamespace ?? identity.provider,
     kind: identity.identityKind ?? "external_id",
     value: identity.externalUserId,

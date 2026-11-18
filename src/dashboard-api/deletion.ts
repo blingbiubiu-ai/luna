@@ -1,10 +1,10 @@
 import { deleteOwnerExecution } from "@/runners/execution-cleanup";
 import { drainSessionFileCleanup, assertCleanupPath } from "@/data/session-file-cleanup";
 import { createSessionRunnerPaths } from "@/shared/runner-paths";
-import { sql, and, eq, inArray, isNull, or } from "drizzle-orm";
+import { sql, and, eq, inArray, isNull, ne, or } from "drizzle-orm";
 import { HTTPException } from "hono/http-exception";
 import type { DrizzleDB } from "@/data";
-import { runnerOperations, accessTokens, authorizationRules, channelAuthTokens, channelUserBindings, cliAuthSessions, directRecipients, groupMemberships, identityObservations, messages, sessionChannelBindings, sessionCommands, sessionInbox, sessionSchedules, sessions, sessionSurfaceAliases, sessionTimelineEntries, sessionTriggers, sessionTurns, taskSubscriptions, tasks, userIdentityLinks, users } from "@/data/schema";
+import { runnerOperations, accounts, lunaAgents, accessTokens, authorizationRules, channelAuthTokens, channelUserBindings, cliAuthSessions, directRecipients, groupMemberships, identityObservations, messages, sessionChannelBindings, sessionCommands, sessionInbox, sessionSchedules, sessions, sessionSurfaceAliases, sessionTimelineEntries, sessionTriggers, sessionTurns, taskSubscriptions, tasks, userIdentityLinks, users } from "@/data/schema";
 
 function deletionError(status: 404 | 409, message: string): never {
   throw new HTTPException(status, { message, res: Response.json({ message }, { status }) });
@@ -119,31 +119,24 @@ export function deleteDashboardSession(db: DrizzleDB, id: string): void {
   drainSessionFileCleanup(db, id);
 }
 
-export function deleteDashboardUser(db: DrizzleDB, id: string, requesterId: string | undefined): void {
+/**
+ * Deletes a platform account. Its Agents must be deleted first. Its personal
+ * tokens and platform rules go; where it took part in other Agents, its user
+ * there is taken off the list but its history stays.
+ */
+export function deleteAccount(db: DrizzleDB, id: string, requesterAccountId: string | undefined): void {
   db.transaction(tx => {
-    const user = tx.select().from(users).where(eq(users.id, id)).get();
-    if (!user) deletionError(404, "用户不存在");
-    if (id === requesterId) deletionError(409, "不能删除当前登录用户。");
-    if (user.kind === "system") deletionError(409, "系统身份不能删除。");
-    if (tx.select().from(sessions).where(and(eq(sessions.bot_user_id, id), eq(sessions.status, "active"))).get())
-      deletionError(409, "此机器人仍被会话使用，请先解除会话绑定。");
-    if (user.status === "deleted") return;
-    const owned = tx.select({ id: sessions.id }).from(sessions).where(eq(sessions.created_by_user_id, id)).all();
-    const participated = tx.select({ id: sessionTimelineEntries.sessionId }).from(sessionTimelineEntries).innerJoin(messages, eq(messages.id, sessionTimelineEntries.messageId)).where(eq(messages.senderUserId, id)).all();
-    for (const sessionId of new Set([...owned, ...participated].map(row => row.id))) if (sessionId) assertSessionIdle(tx, sessionId);
-    if (tx.select().from(sessionCommands).where(and(eq(sessionCommands.actorUserId, id), inArray(sessionCommands.status, ["pending", "running"]))).get()) busy();
-    tx.update(sessionSchedules).set({ enabled: false }).where(eq(sessionSchedules.actorUserId, id)).run();
-    tx.update(accessTokens).set({ revokedAt: Date.now() }).where(and(eq(accessTokens.userId, id), isNull(accessTokens.revokedAt))).run();
-    tx.delete(channelAuthTokens).where(eq(channelAuthTokens.userId, id)).run();
-    tx.delete(cliAuthSessions).where(eq(cliAuthSessions.approvedByUserId, id)).run();
-    tx.delete(identityObservations).where(or(
-      inArray(identityObservations.claimId, tx.select({id: userIdentityLinks.id}).from(userIdentityLinks).where(eq(userIdentityLinks.userId, id))),
-      inArray(identityObservations.channelIdentityId, tx.select({id: channelUserBindings.channelIdentityId}).from(channelUserBindings).where(eq(channelUserBindings.userId, id))),
-    )).run();
-    tx.delete(channelUserBindings).where(eq(channelUserBindings.userId, id)).run();
-    tx.delete(userIdentityLinks).where(eq(userIdentityLinks.userId, id)).run();
-    tx.delete(groupMemberships).where(eq(groupMemberships.userId, id)).run();
-    tx.delete(authorizationRules).where(and(eq(authorizationRules.subjectType, "user"), eq(authorizationRules.subjectId, id))).run();
-    tx.update(users).set({ status: "deleted", updatedAt: String(Date.now()) }).where(eq(users.id, id)).run();
+    const account = tx.select().from(accounts).where(eq(accounts.id, id)).get();
+    if (!account) deletionError(404, "账号不存在");
+    if (id === requesterAccountId) deletionError(409, "不能删除当前登录账号。");
+    if (account.status === "deleted") return;
+    if (tx.select({ id: lunaAgents.id }).from(lunaAgents).where(and(eq(lunaAgents.ownerAccountId, id), ne(lunaAgents.status, "deleted"))).get())
+      deletionError(409, "请先删除此账号拥有的 Agent。");
+    const now = Date.now();
+    tx.update(accessTokens).set({ revokedAt: now }).where(and(eq(accessTokens.accountId, id), isNull(accessTokens.revokedAt))).run();
+    tx.delete(cliAuthSessions).where(eq(cliAuthSessions.approvedByAccountId, id)).run();
+    tx.delete(authorizationRules).where(and(eq(authorizationRules.scopeType, "platform"), eq(authorizationRules.subjectType, "user"), eq(authorizationRules.subjectId, id))).run();
+    tx.update(users).set({ status: "removed", updatedAt: String(now) }).where(and(eq(users.accountId, id), ne(users.status, "merged"))).run();
+    tx.update(accounts).set({ status: "deleted", updatedAt: now }).where(eq(accounts.id, id)).run();
   });
 }

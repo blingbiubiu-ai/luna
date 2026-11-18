@@ -23,10 +23,10 @@ beforeEach(() => {
   mkdirSync(join(testHome, "data"), { recursive: true });
   setLunaHome(testHome);
   database = new DataConnection(schema);
-  scope = fixtureScope(database.db, "user_1");
+  scope = fixtureScope(database.db, "account_1");
   database.db.insert(schema.tasks).values({
     id: "task_1", agent_id: scope.agentId, shadow_id: scope.shadowId,
-    creator_user_id: "user_1", type: "work", title: "Plugin artifact owner", status: "completed",
+    creator_user_id: scope.ownerUserId, type: "work", title: "Plugin artifact owner", status: "completed",
     created_at: 1, updated_at: 1, last_activity_at: 1,
   }).run();
 });
@@ -52,7 +52,7 @@ describe("plugin artifact attribution", () => {
         operationId: "media.behavior.query",
         invocationId: "cinv_1",
         source: "cli",
-        subjectId: "user_1",
+        subjectId: scope.ownerUserId,
         messageId: "message_1",
       },
     });
@@ -68,7 +68,7 @@ describe("plugin artifact attribution", () => {
     expect(persisted?.operation_id).toBe("media.behavior.query");
     expect(persisted?.invocation_id).toBe("cinv_1");
     expect(persisted?.invocation_source).toBe("cli");
-    expect(persisted?.invocation_subject_id).toBe("user_1");
+    expect(persisted?.invocation_subject_id).toBe(scope.ownerUserId);
     expect(persisted?.message_id).toBe("message_1");
   });
 
@@ -88,7 +88,7 @@ describe("plugin artifact attribution", () => {
         operationId: "media.behavior.query",
         invocationId: "cinv_2",
         source: "task_runner",
-        subjectId: "user_1",
+        subjectId: scope.ownerUserId,
       },
     });
 
@@ -103,6 +103,6 @@ describe("plugin artifact attribution", () => {
     expect(persisted?.operation_id).toBe("media.behavior.query");
     expect(persisted?.invocation_id).toBe("cinv_2");
     expect(persisted?.invocation_source).toBe("task_runner");
-    expect(persisted?.invocation_subject_id).toBe("user_1");
+    expect(persisted?.invocation_subject_id).toBe(scope.ownerUserId);
   });
 });

@@ -20,7 +20,7 @@ import { AuthorizationRuleStore } from "../../src/server/policy/authorization-ru
 import { AgentMemoryStore } from "../../src/agents/agent-memory-store";
 import type { LunaAccessTokenClaims } from "../../src/server/auth/access-token-service";
 import type { NormalizedInboundMessage } from "../../src/channels";
-import { fixtureSessionOwnership } from "../helpers/platform-fixtures";
+import { fixtureOwnerUserId, fixtureSessionOwnership, fixtureUser } from "../helpers/platform-fixtures";
 
 let home: string;
 let connection: DataConnection<typeof schema>;
@@ -30,8 +30,7 @@ afterEach(() => { connection?.close(); if (home) rmSync(home, { recursive: true,
 function fixture() {
   home = mkdtempSync(join(tmpdir(), "luna-memory-api-")); setLunaHome(home);
   connection = new DataConnection(schema); const db = connection.db;
-  db.insert(schema.users).values({id:"user",kind:"human",displayName:"User",status:"active",createdAt:"now",updatedAt:"now"}).run();
-  fixtureSessionOwnership(db, "feishu", "test");
+  fixtureUser(db, fixtureSessionOwnership(db, "feishu", "test").agent_id, "user", "human", "User");
   const inbound: NormalizedInboundMessage = { id: "external-1", channel: { id: "test", type: "feishu" }, surface: { externalId: "chat", kind: "p2p" }, sender: { externalId: "user", kind: "user" }, text: "hello", mentions: [], addressing: { addressedToBot: true, reason: "p2p" } };
   const session = new SessionResolver(new SessionStore(db)).resolveFromNormalizedInbound(inbound);
   const row = new MessageStore(db).appendOnce({ sessionId: session.id, channelMessageKey: inbound.id, role: "user", senderUserId: "user", content: [{ type: "text", text: "hello" }], inbound, channel: inbound.channel, surface: inbound.surface, sender: inbound.sender }).row;
@@ -40,7 +39,7 @@ function fixture() {
   controller.signal.addEventListener("abort", () => new InvocationStore(db).revoke("invocation", "test cancelled"));
   mainInvocations(db).set("invocation", { invocationId: "invocation", turnId: "logical-turn", runnerContext: context, signal: controller.signal, input: { type: "user_messages", messages: [{ ...runnerMessageEnvelopeFromRow({ row, rawMessage: inbound }), rawMessage: inbound }], latestMessage: inbound, context: { sessionId: session.id, candidateOpenTasks: [] } } });
   const claims: LunaAccessTokenClaims = { tokenId: "token", actorUserId: "user", source: "runner", role: "runner", runnerKind: "main", agentId: session.agent_id, shadowId: session.shadow_id, sessionId: session.id, runnerJobId: context.id, issuedAt: 1, expiresAt: Date.now() + 10000 };
-  db.insert(schema.accessTokens).values({ id: "token", tokenHash: "hash", userId: "user", source: "runner", name: "test", role: "runner", issuedAt: 1, expiresAt: Date.now() + 10000, createdAt: 1, metadataJson: { invocationId: "invocation" } }).run();
+  db.insert(schema.accessTokens).values({ id: "token", agentId: claims.agentId, tokenHash: "hash", userId: "user", source: "runner", name: "test", role: "runner", issuedAt: 1, expiresAt: Date.now() + 10000, createdAt: 1, metadataJson: { invocationId: "invocation" } }).run();
   registerTestRunnerJob(db, "invocation", claims, encodeInvocation("main", mainInvocations(db).get("invocation")!), "logical-turn");
   let current: LunaAccessTokenClaims | undefined = claims;
   const app = new Hono<{ Variables: { lunaAccessTokenClaims: LunaAccessTokenClaims | undefined } }>();
@@ -85,7 +84,8 @@ test("trust follows the invocation actor: untrusted by default, trusted with a m
 test("person entries about people outside the session and other Shadows' private entries are hidden", async () => {
   const f = fixture();
   const store = new AgentMemoryStore(f.db);
-  const owner = { agentId: f.session.agent_id, kind: "owner" as const, trusted: true, userId: "fixture-owner", shadowId: null };
+  const owner = { agentId: f.session.agent_id, kind: "owner" as const, trusted: true, userId: fixtureOwnerUserId("fixture-owner"), shadowId: null };
+  fixtureUser(f.db, f.session.agent_id, "zhangsan");
   const absent = store.add(owner, { type: "person", title: "张三", description: "d", body: "b", subjectUserId: "zhangsan" });
   const present = store.add(owner, { type: "person", title: "User", description: "d", body: "b", subjectUserId: "user" });
   const elsewhere = store.add({ ...owner, shadowId: "other-shadow" }, { ...project, visibility: "shadow" } as any);
@@ -175,7 +175,7 @@ test("a Runner cannot write persona for anyone but the Agent owner, even with me
   f.grant("allow", "memory.write");
   expect(await f.call("POST", "", soul)).toMatchObject({ status: 403, body: { error: "memory_write_forbidden" } });
   const mine = new AgentMemoryStore(f.db).add(
-    { agentId: f.session.agent_id, kind: "owner", trusted: true, owner: true, userId: "fixture-owner", shadowId: f.session.shadow_id }, soul as any);
+    { agentId: f.session.agent_id, kind: "owner", trusted: true, owner: true, userId: fixtureOwnerUserId("fixture-owner"), shadowId: f.session.shadow_id }, soul as any);
   expect((await f.call("GET", `/${mine.id}`)).body.memory).toMatchObject({ type: "persona", body: "你叫小黑", visibility: "shadow" });
   expect(await f.call("PUT", `/${mine.id}`, { expectedRevision: 1, body: "你叫小白" })).toMatchObject({ status: 403, body: { error: "memory_protected" } });
   expect((await f.call("DELETE", `/${mine.id}?expectedRevision=1`)).status).toBe(403);
@@ -198,7 +198,7 @@ test("a Runner records an episode with the invocation's participants and reads t
   expect((await f.call("GET", "/timeline?limit=0")).status).toBe(400);
   expect((await f.call("GET", "")).body.memories).toEqual([]);
   // An episode someone else took part in is not on this actor's timeline.
-  new AgentMemoryStore(f.db).add({ agentId: f.session.agent_id, kind: "owner", trusted: true, userId: "fixture-owner", shadowId: f.session.shadow_id },
-    { type: "episode", title: "所有者的事", description: "d", body: "b" }, { participants: ["fixture-owner"] });
+  new AgentMemoryStore(f.db).add({ agentId: f.session.agent_id, kind: "owner", trusted: true, userId: fixtureOwnerUserId("fixture-owner"), shadowId: f.session.shadow_id },
+    { type: "episode", title: "所有者的事", description: "d", body: "b" }, { participants: [fixtureOwnerUserId("fixture-owner")] });
   expect((await f.call("GET", "/timeline")).body.episodes).toHaveLength(2);
 });

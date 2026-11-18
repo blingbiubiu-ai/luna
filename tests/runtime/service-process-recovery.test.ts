@@ -102,18 +102,18 @@ test("Service process restart settles a cancelled intent and reattaches an activ
     const resources = new InvocationResources(db, root);
     const jobScope = (id: string) => {
       const {selection} = resources.pin(id, builder);
-      return {scope: {...scope, placementGeneration: 1}, resources: selection, resourceRevision: selection.digest};
+      return {scope: {agentId: scope.agentId, shadowId: scope.shadowId, placementGeneration: 1}, resources: selection, resourceRevision: selection.digest};
     };
     db.insert(sessionTurns).values({ id: "turn", session_id: "session", turn_kind: "execution", status: "running", runner_invoked: true, reason: "addressed", started_at: 0, created_at: 0, updated_at: 0 }).run();
     const invocations = new InvocationService(db);
-    invocations.store.register({ id: "inv", runnerKind: "work", actorUserId: "actor", runnerContextId: "context",
+    invocations.store.register({ id: "inv", runnerKind: "work", actorUserId: scope.ownerUserId, runnerContextId: "context",
       sessionId: "session", taskId: null, taskRunId: null, originId: "turn", contextPackIds: [],
       inputSnapshot: encodeInvocation("work", { sessionId: "session", runnerContextId: "context", turnId: "turn" }) });
     invocations.store.createJob("runtime", { version: 2, ...jobScope("inv"), jobId: "job", invocationId: "inv",
       environmentId: "luna", runnerContextId: "context", scopeKey: "session:context", runnerKind: "work",
       sessionId: "session", input: { runnerType: "codex", prompt: "Unsubmitted intent" }, credentialsRevision: 1, timeoutMs: 30000 });
     const tokens = new AccessTokenService({ db, signingSecret });
-    const issued = tokens.issueToken({ userId: "actor", name: "Work test", source: "runner", role: "runner",
+    const issued = tokens.issueToken({ userId: scope.ownerUserId, name: "Work test", source: "runner", role: "runner",
       runnerKind: "work", sourceRunnerJobId: "context", sourceSessionId: "session", metadata: { invocationId: "inv" }, ttlMs: 60000, now: Date.now() });
     invocations.store.bindToken("inv", issued.record.id);
     const commandRequest = () => fetch(url + "/api/runner/commands/absent", {
@@ -158,7 +158,7 @@ test("Service process restart settles a cancelled intent and reattaches an activ
     const taskId = "active-task", taskRunId = "active-run", contextId = "task-context";
     db.insert(tasks).values({
       id: taskId, type: "execution", title: "Recovery test", status: "running",
-      context_json: { requestedByIdentity: { provider: "local", externalUserId: "actor" } },
+      context_json: { requestedByIdentity: { provider: "local", externalUserId: scope.ownerUserId } },
       created_at: 1, updated_at: 1, last_activity_at: 1, agent_id: scope.agentId, shadow_id: scope.shadowId}).run();
     db.insert(runnerContexts).values(fixtureRunnerContext(db, {
       id: contextId, owner_type: "task", owner_id: taskId, runner_type: "codex",
@@ -169,12 +169,12 @@ test("Service process restart settles a cancelled intent and reattaches an activ
     db.update(taskRuns).set({ materialized_prompt: "Original Task prompt" }).where(eq(taskRuns.id, taskRunId)).run();
     const invocationId = "task-invocation";
     invocations.store.register({
-      id: invocationId, runnerKind: "task", actorUserId: "actor", runnerContextId: contextId,
+      id: invocationId, runnerKind: "task", actorUserId: scope.ownerUserId, runnerContextId: contextId,
       sessionId: null, taskId, taskRunId, originId: taskRunId, contextPackIds: [], agentConfig,
       inputSnapshot: encodeInvocation("task", { taskId, taskRunId, runnerContextId: contextId }),
     });
     const expired = tokens.issueToken({
-      userId: "actor", name: "Old Task token", source: "runner", role: "runner", runnerKind: "task",
+      userId: scope.ownerUserId, name: "Old Task token", source: "runner", role: "runner", runnerKind: "task",
       sourceRunnerJobId: contextId, sourceTaskId: taskId, sourceTaskRunId: taskRunId,
       metadata: { invocationId }, ttlMs: 60000, now: Date.now() - 120000,
     });
@@ -222,7 +222,7 @@ test("Service process restart settles a cancelled intent and reattaches an activ
     expect(resumed.status, resumed.error ?? "Task remains active").toBe("running");
     expect(Boolean(reissuedToken && reissuedToken !== expired.token)).toBe(true);
     expect(tokens.verifyBearer(reissuedToken!, { now: Date.now() }).claims).toMatchObject({
-      actorUserId: "actor", runnerKind: "task", taskId, taskRunId, runnerJobId: contextId,
+      actorUserId: scope.ownerUserId, runnerKind: "task", taskId, taskRunId, runnerJobId: contextId,
     });
     expect(invocations.store.job(taskJob.jobId)!.cursor).toBeGreaterThanOrEqual(priorCursor);
     const report = () => fetch(url + "/api/runner/task-reports", {

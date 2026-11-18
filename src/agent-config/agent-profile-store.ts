@@ -106,7 +106,7 @@ export class AgentProfileStore {
       name,
       agent_type: validated.agentType,
       deleted_at: null,
-      created_by: input.actorId ?? null,
+      created_by_account_id: input.actorId ?? null,
       created_at: now,
       updated_at: now,
     } satisfies ProfileRow;
@@ -266,7 +266,7 @@ export class AgentProfileStore {
       validation_state: "draft",
       validation_result_json: null,
       validated_at: null,
-      created_by: actorId ?? null,
+      created_by_account_id: actorId ?? null,
       created_at: now,
     } satisfies RevisionRow;
     db.insert(agentProfileRevisions).values(revision).run();
@@ -332,7 +332,7 @@ function toSecretRow(
     algorithm: encrypted.algorithm,
     key_version: encrypted.keyVersion,
     credential_identity: encrypted.credentialIdentity,
-    updated_by: actorId ?? null,
+    updated_by_account_id: actorId ?? null,
     updated_at: now,
   };
 }

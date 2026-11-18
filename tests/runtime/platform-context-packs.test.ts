@@ -15,20 +15,20 @@ import {MessageStore} from "@/sessions/message-store";
 import {TaskResolver} from "@/tasks/task-resolver";
 import {TaskSubscriptionStore} from "@/tasks/task-subscription-store";
 import {ContextPackStore} from "@/context/context-pack-store";
-import {fixtureScope} from "../helpers/platform-fixtures";
+import {fixtureScope,fixtureOwnerUserId,fixtureUser} from "../helpers/platform-fixtures";
 let home:string,connection:DataConnection<typeof schema>,scope:ReturnType<typeof fixtureScope>;
 let first:string,second:string,resolver:TaskResolver;
-const owner="task-owner";
+const owner="task-owner",ownerUser=fixtureOwnerUserId(owner);
 beforeEach(()=>{
  home=mkdtempSync(join(tmpdir(),"luna-platform-context-"));setLunaHome(home);connection=new DataConnection(schema);
  scope=fixtureScope(connection.db,owner);const agents=new AgentStore(connection.db);
  const shadow=agents.createShadow(owner,scope.agentId,{name:"Other"},"other");
- const sessions=new SessionStore(connection.db);first=sessions.createLocalSession(owner,scope).id;
- second=sessions.createLocalSession(owner,{...scope,shadowId:shadow.id}).id;resolver=new TaskResolver(connection.db);
+ const sessions=new SessionStore(connection.db);first=sessions.createLocalSession(ownerUser,scope).id;
+ second=sessions.createLocalSession(ownerUser,{...scope,shadowId:shadow.id}).id;resolver=new TaskResolver(connection.db);
 });
 afterEach(()=>{connection.close();rmSync(home,{recursive:true,force:true});});
 function source(sessionId:string){
- const message=new MessageStore(connection.db).append({sessionId,senderUserId:owner,role:"user",content:{text:"task source"}});
+ const message=new MessageStore(connection.db).append({sessionId,senderUserId:ownerUser,role:"user",content:{text:"task source"}});
  return {sessionId,messageId:message.id};
 }
 
@@ -75,17 +75,17 @@ test("runner seed cannot borrow another owner's context or a different pack's it
 
 test("durable session commands reject cross Shadow sends and invokes before acceptance",()=>{
  const service=new SessionCommandService({db:connection.db,channelFor:()=>undefined});
- const actor={userId:owner,sourceSessionId:first,originId:"turn"};
+ const actor={userId:ownerUser,sourceSessionId:first,originId:"turn"};
  expect(()=>service.accept(actor,second,"message.send","send",{content:"private"})).toThrow("task_scope_mismatch");
  expect(()=>service.accept(actor,second,"session.invoke","invoke",{content:"execute"})).toThrow("task_scope_mismatch");
  expect(connection.db.select().from(schema.sessionCommands).all()).toHaveLength(0);
 });
 
 test("queued commands recheck actor status before any delivery",async()=>{
- fixtureScope(connection.db,"member");
+ fixtureUser(connection.db,scope.agentId,"member");
  const service=new SessionCommandService({db:connection.db,channelFor:()=>{throw new Error("must not reach delivery");}});
  const command=service.accept({userId:"member",sourceSessionId:first,originId:"turn"},first,"message.send","queued",{content:"queued reply"});
- connection.db.update(schema.users).set({status:"disabled"}).where(eq(schema.users.id,"member")).run();
+ connection.db.update(schema.users).set({status:"blocked"}).where(eq(schema.users.id,"member")).run();
  await service.waitForIdle();
  expect(service.get(command.id)?.status).toBe("failed");
  expect(service.get(command.id)?.error).toContain("active_user_required");

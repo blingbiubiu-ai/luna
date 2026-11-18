@@ -6,19 +6,21 @@ import { Hono } from "hono";
 import { DataConnection } from "@/data";
 import * as schema from "@/data/schema";
 import { setLunaHome } from "@/shared";
-import { fixtureScope } from "../helpers/platform-fixtures";
+import { fixtureAccount, fixtureScope, fixtureUser } from "../helpers/platform-fixtures";
 import { ROOT_OPERATION, ShadowRootAccessStore } from "@/agents/shadow-root-access-store";
 import { AuthorizationRuleStore } from "@/server/policy/authorization-rule-store";
 import { createShadowRootAccessRoutes } from "@/server/routes/shadow-root-access";
 import { createRunnerRootRoutes } from "@/server/routes/runner-root";
 
 let home: string, connection: DataConnection<typeof schema>, store: ShadowRootAccessStore;
-let alice: ReturnType<typeof fixtureScope>, bobId: string, carolId: string;
+let alice: ReturnType<typeof fixtureScope>, ownerId: string, bobId: string, carolId: string;
 beforeEach(() => {
   home = mkdtempSync(join(tmpdir(), "luna-root-access-")); setLunaHome(home);
   connection = new DataConnection(schema); store = new ShadowRootAccessStore(connection.db);
-  alice = fixtureScope(connection.db, "alice"); fixtureScope(connection.db, "bob"); fixtureScope(connection.db, "carol");
-  bobId = "bob"; carolId = "carol";
+  alice = fixtureScope(connection.db, "alice"); ownerId = alice.ownerUserId;
+  // "bob" is both a signed-in account that does not own Alice's Agent and, separately, a user inside it.
+  fixtureAccount(connection.db, "bob");
+  bobId = fixtureUser(connection.db, alice.agentId, "bob"); carolId = fixtureUser(connection.db, alice.agentId, "carol");
 });
 afterEach(() => { connection.close(); rmSync(home, { recursive: true, force: true }); });
 
@@ -28,8 +30,8 @@ function group(id: string, members: string[]) {
   for (const userId of members) connection.db.insert(schema.groupMemberships).values({ id: `${id}-${userId}`, groupId: id, userId, createdAt: now, updatedAt: now }).run();
 }
 test("only the Agent owner reads or changes the switch", () => {
-  expect(() => store.settings(bobId, alice)).toThrow();
-  expect(() => store.setEnabled(bobId, alice, true)).toThrow();
+  expect(() => store.settings("bob", alice)).toThrow();
+  expect(() => store.setEnabled("bob", alice, true)).toThrow();
   expect(store.setEnabled("alice", alice, true)).toEqual({ shadowId: alice.shadowId, enabled: true });
 });
 
@@ -38,7 +40,7 @@ const grant = (subjectType: "user" | "group", subjectId: string, effect: "allow"
   new AuthorizationRuleStore(connection.db, { kind: "agent", agentId }).addGrant({ subjectType, subjectId, target: ROOT_OPERATION, effect });
 
 test("trust is the owner or an agent.root grant, direct or through a group, on this Agent only", () => {
-  expect(store.trusted(alice, "alice")).toBe(true);
+  expect(store.trusted(alice, ownerId)).toBe(true);
   expect(store.trusted(alice, bobId)).toBe(false);
   grant("user", bobId);
   expect(store.trusted(alice, bobId)).toBe(true);
@@ -51,20 +53,23 @@ test("trust is the owner or an agent.root grant, direct or through a group, on t
   expect(store.trusted(alice, carolId)).toBe(false);
   // A grant on another Agent does not count here.
   const other = fixtureScope(connection.db, "dave");
-  grant("user", "dave", "allow", other.agentId);
-  expect(store.trusted(alice, "dave")).toBe(false);
-  expect(store.trusted(other, "dave")).toBe(true);
+  const daveId = fixtureUser(connection.db, other.agentId, "dave");
+  grant("user", daveId, "allow", other.agentId);
+  expect(store.trusted(alice, daveId)).toBe(false);
+  expect(store.trusted(other, daveId)).toBe(true);
+  // Alice's owner user is not a user of the other Agent.
+  expect(store.trusted(other, ownerId)).toBe(false);
   expect(store.trusted(alice, null)).toBe(false);
 });
 
 test("routes require the owner's Dashboard session", async () => {
   const app = (actor: string) => new Hono().use("*", async (c, next) => {
-    (c as any).set("dashboardAuthSession", { authenticated: true, user: { id: actor, name: actor, provider: "test" } });
+    (c as any).set("dashboardAuthSession", { authenticated: true, account: { id: actor, name: actor, provider: "test" } });
     (c as any).set("lunaRequestAuthKind", "dashboard-cookie"); await next();
   }).route("/", createShadowRootAccessRoutes(connection.db));
   const path = `/${alice.agentId}/shadows/${alice.shadowId}/root`;
   const put = (actor: string, body: unknown) => app(actor).request(path, { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
-  expect((await put(bobId, { enabled: true })).status).not.toBe(200);
+  expect((await put("bob", { enabled: true })).status).not.toBe(200);
   expect(await (await put("alice", { enabled: true })).json()).toEqual({ shadowId: alice.shadowId, enabled: true });
   expect((await put("alice", { enabled: "yes" })).status).toBe(400);
 });
@@ -81,7 +86,7 @@ test("luna root status answers for the runner token's own Shadow only", async ()
   expect(await status("")).toEqual({ status: 200, body: { rootAccess: false } });
   store.setEnabled("alice", alice, true);
   grant("user", bobId);
-  expect((await status("?user=alice")).body).toEqual({ rootAccess: true, user: "alice", trusted: true });
+  expect((await status(`?user=${ownerId}`)).body).toEqual({ rootAccess: true, user: ownerId, trusted: true });
   expect((await status(`?user=${bobId}`)).body).toMatchObject({ trusted: true });
   expect((await status(`?user=${carolId}`)).body).toMatchObject({ trusted: false });
   expect((await status("?user=nobody")).body).toMatchObject({ trusted: false });
@@ -91,12 +96,12 @@ test("luna root status answers for the runner token's own Shadow only", async ()
   expect((await status("", { ...claims, source: "cli", role: "user" })).status).toBe(403);
   // Another Shadow's token sees its own switch, not this one.
   const other = fixtureScope(connection.db, "dave");
-  expect((await status("?user=alice", { ...claims, agentId: other.agentId, shadowId: other.shadowId })).body).toEqual({ rootAccess: false, user: "alice", trusted: false });
+  expect((await status(`?user=${ownerId}`, { ...claims, agentId: other.agentId, shadowId: other.shadowId })).body).toEqual({ rootAccess: false, user: ownerId, trusted: false });
 });
 
 test("invocationPrivileged gates kernel-level sudo to invocations with a trusted requester", () => {
   const base = { agentId: alice.agentId, shadowId: alice.shadowId };
-  expect(store.invocationPrivileged({ ...base, actorUserId: "alice" })).toEqual({ rootAccess: false, privileged: false });
+  expect(store.invocationPrivileged({ ...base, actorUserId: ownerId })).toEqual({ rootAccess: false, privileged: false });
 
   store.setEnabled("alice", alice, true);
   grant("user", bobId);
@@ -104,7 +109,7 @@ test("invocationPrivileged gates kernel-level sudo to invocations with a trusted
   // Untrusted DM or turn: container keeps rootAccess, but Runner subprocess stays restricted (privileged: false).
   expect(store.invocationPrivileged({ ...base, actorUserId: carolId })).toEqual({ rootAccess: true, privileged: false });
   // Owner and agent.root grantee get privileged: true.
-  expect(store.invocationPrivileged({ ...base, actorUserId: "alice" })).toEqual({ rootAccess: true, privileged: true });
+  expect(store.invocationPrivileged({ ...base, actorUserId: ownerId })).toEqual({ rootAccess: true, privileged: true });
   expect(store.invocationPrivileged({ ...base, actorUserId: bobId })).toEqual({ rootAccess: true, privileged: true });
 
   // Group turn batch: if at least one user message in the batch comes from a trusted sender, privileged is true.

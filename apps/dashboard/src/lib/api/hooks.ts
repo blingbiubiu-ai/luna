@@ -399,8 +399,8 @@ export interface UserIdentityLink {
 
 export interface DashboardUser {
   canManageUsers?: boolean;
-  /** Deleting a user removes a platform-wide account: platform administrators only. */
-  canDeleteUsers?: boolean;
+  /** This user is the Agent owner; the owner cannot be blocked or removed. */
+  isOwner?: boolean;
   id: string;
   kind: UserKind;
   displayName: string;
@@ -443,7 +443,8 @@ export interface DashboardRuntimeStatus {
   channels: DashboardRuntimeChannelStatus[];
 }
 
-export interface DashboardAuthUser {
+/** A signed-in Dashboard account. */
+export interface DashboardAccount {
   id: string;
   name: string;
   provider: string;
@@ -452,12 +453,12 @@ export interface DashboardAuthUser {
 
 export interface DashboardAuthSession {
   authenticated: boolean;
-  user: DashboardAuthUser | null;
+  account: DashboardAccount | null;
 }
 
 export interface DashboardAccessToken {
   id: string;
-  userId: string;
+  accountId: string | null;
   source: "cli" | "mcp";
   name: string;
   role: string;
@@ -481,11 +482,11 @@ export interface CreatedAccessToken {
   readonly token: DashboardAccessToken;
 }
 
-/** Signed-in user with platform role; platform APIs still enforce it themselves. */
+/** Signed-in account with platform role; platform APIs still enforce it themselves. */
 export function useDashboardMe() {
   return useQuery({
     queryKey: ["luna", "auth", "me"],
-    queryFn: () => apiFetch<{ user: { id: string; displayName: string }; isPlatformAdmin: boolean }>("/auth/me"),
+    queryFn: () => apiFetch<{ account?: { id: string; displayName: string }; isPlatformAdmin: boolean }>("/auth/me"),
   });
 }
 
@@ -543,6 +544,8 @@ export function useAccessTokenRevokeMutation() {
 export interface DashboardAgentChoice {
   id: string;
   name: string;
+  ownerAccountId: string;
+  /** The owner's user inside the Agent. */
   ownerUserId: string;
   defaultShadowId: string;
   status: string;
@@ -623,6 +626,69 @@ export function useUsers(agentId: string) {
       return json.users;
     },
   });
+}
+
+/** The owner renames, blocks or unblocks a user of the Agent. */
+export function useUserUpdateMutation(userId: string, agentId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (input: { displayName?: string; status?: "active" | "blocked" }) =>
+      apiFetch<{ user: DashboardUser }>(`/users/${encodeURIComponent(userId)}?agentId=${encodeURIComponent(agentId)}`,
+        { method: "PATCH", body: JSON.stringify(input) }),
+    onSuccess: () => { void queryClient.invalidateQueries({ queryKey: ["luna", "users"] }); },
+  });
+}
+
+/** Takes a user off the Agent's list; a later message from them brings them back. */
+export function useUserRemoveMutation(userId: string, agentId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: () => apiFetch(`/users/${encodeURIComponent(userId)}?agentId=${encodeURIComponent(agentId)}`, { method: "DELETE" }),
+    onSuccess: () => { void queryClient.invalidateQueries({ queryKey: ["luna", "users"] }); },
+  });
+}
+
+export interface AccountLinkPreview {
+  userId: string;
+  channelIdentityId: string;
+  channelId: string;
+  channelName: string;
+  shadowName: string | null;
+  displayName: string;
+  avatarUrl: string | null;
+}
+
+export interface LinkedChannelIdentity {
+  channelIdentityId: string;
+  channelId: string;
+  channelName: string;
+  displayName: string | null;
+  avatarUrl: string | null;
+}
+
+/** Chat identities linked to the owner's account in this Agent, and their link/unlink operations. */
+export function useAccountLinks(agentId: string) {
+  const queryClient = useQueryClient();
+  const base = `/agents/${encodeURIComponent(agentId)}/account-links`;
+  const key = ["luna", "account-links", agentId];
+  const refresh = () => {
+    void queryClient.invalidateQueries({ queryKey: key });
+    void queryClient.invalidateQueries({ queryKey: ["luna", "users"] });
+  };
+  return {
+    list: useQuery({ queryKey: key, queryFn: async () => (await apiFetch<{ links: LinkedChannelIdentity[] }>(base)).links }),
+    preview: useMutation({
+      mutationFn: (token: string) => apiFetch<{ link: AccountLinkPreview }>(`${base}/preview`, { method: "POST", body: JSON.stringify({ token }) }).then(result => result.link),
+    }),
+    link: useMutation({
+      mutationFn: (token: string) => apiFetch<{ link: AccountLinkPreview }>(base, { method: "POST", body: JSON.stringify({ token }) }).then(result => result.link),
+      onSuccess: refresh,
+    }),
+    unlink: useMutation({
+      mutationFn: (channelIdentityId: string) => apiFetch(`${base}/${encodeURIComponent(channelIdentityId)}`, { method: "DELETE" }),
+      onSuccess: refresh,
+    }),
+  };
 }
 
 export function useUser(userId: string, agentId: string) {

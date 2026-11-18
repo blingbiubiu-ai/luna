@@ -4,11 +4,8 @@ import type { Context, MiddlewareHandler } from "hono";
 import { deleteCookie, getCookie, setCookie } from "hono/cookie";
 
 import type { DrizzleDB } from "@/data";
-import { ChannelDirectoryStore } from "@/channels/directory-store";
-import { DASHBOARD_CHANNEL_ID } from "@/channels/dashboard/dashboard-channel";
 import { InvocationService } from "@/runners/invocation-service";
-import { users } from "@/data/schema";
-import { eq } from "drizzle-orm";
+import { AccountStore } from "@/identity/account-store";
 
 import { DEFAULT_LUNA_DASHBOARD_TOKEN } from "@luna/host-runtime/defaults";
 import {
@@ -19,13 +16,16 @@ import { getKernel } from "./routes/kernel";
 
 const SESSION_COOKIE = "luna_dashboard_session";
 const SESSION_TTL_SECONDS = 60 * 60 * 12;
-const LOCAL_USER = {
+/** The local-token sign-in has no person behind it, so its name is a placeholder a linked chat identity may replace. */
+export const LOCAL_ACCOUNT_NAME = "Local dashboard user";
+const LOCAL_ACCOUNT = {
   id: "local-dashboard-user",
-  name: "Local dashboard user",
+  name: LOCAL_ACCOUNT_NAME,
   provider: "local-token",
 } as const;
 
-export interface DashboardAuthUser {
+/** A signed-in Dashboard account. */
+export interface DashboardAccount {
   readonly id: string;
   readonly name: string;
   readonly provider: string;
@@ -34,14 +34,14 @@ export interface DashboardAuthUser {
 
 export interface DashboardAuthSession {
   readonly authenticated: boolean;
-  readonly user: DashboardAuthUser | null;
+  readonly account: DashboardAccount | null;
 }
 
 export type LunaRequestAuthKind = "dashboard-cookie" | "luna-access-token";
 
 export interface DashboardAuthProvider {
   readonly id: string;
-  authenticateToken(token: string): Promise<DashboardAuthUser | null>;
+  authenticateToken(token: string): Promise<DashboardAccount | null>;
 }
 
 export interface DashboardAuthMiddlewareOptions {
@@ -49,7 +49,8 @@ export interface DashboardAuthMiddlewareOptions {
 }
 
 interface ServiceBearerAuthResult {
-  readonly user: DashboardAuthUser;
+  /** The account of a personal token; absent for a runner token, which acts as `claims.actorUserId`. */
+  readonly account?: DashboardAccount;
   readonly claims: LunaAccessTokenClaims;
 }
 
@@ -59,7 +60,7 @@ export function createLocalTokenAuthProvider(
   return {
     id: "local-token",
     async authenticateToken(candidate: string) {
-      return secureEqual(candidate, token) ? LOCAL_USER : null;
+      return secureEqual(candidate, token) ? LOCAL_ACCOUNT : null;
     },
   };
 }
@@ -91,22 +92,22 @@ export class DashboardAuthService {
     readonly sessionToken: string;
     readonly session: DashboardAuthSession;
   } | null> {
-    const user = await this._provider.authenticateToken(token);
-    if (user === null) {
+    const account = await this._provider.authenticateToken(token);
+    if (account === null) {
       return null;
     }
     const sessionToken = this._signSession({
-      sub: user.id,
-      name: user.name,
-      provider: user.provider,
-      ...(user.avatarUrl === undefined ? {} : { avatarUrl: user.avatarUrl }),
+      sub: account.id,
+      name: account.name,
+      provider: account.provider,
+      ...(account.avatarUrl === undefined ? {} : { avatarUrl: account.avatarUrl }),
       exp: Math.floor(Date.now() / 1000) + SESSION_TTL_SECONDS,
     });
     return {
       sessionToken,
       session: {
         authenticated: true,
-        user,
+        account,
       },
     };
   }
@@ -114,15 +115,15 @@ export class DashboardAuthService {
   sessionFromRequest(c: Context): DashboardAuthSession {
     const token = getCookie(c, SESSION_COOKIE);
     if (!token) {
-      return { authenticated: false, user: null };
+      return { authenticated: false, account: null };
     }
     const claims = this._verifySession(token);
     if (claims === null) {
-      return { authenticated: false, user: null };
+      return { authenticated: false, account: null };
     }
     return {
       authenticated: true,
-      user: {
+      account: {
         id: claims.sub,
         name: claims.name,
         provider: claims.provider,
@@ -214,15 +215,15 @@ export function createDashboardAuthMiddleware(
       await next();
       return;
     }
-    const session = auth.sessionFromRequest(c);
+    let session = auth.sessionFromRequest(c);
     if (session.authenticated) {
-      if (options.db !== undefined && session.user !== null) {
-        const user = options.db.select().from(users).where(eq(users.id, session.user.id)).get();
-        if (user?.status === "deleted") {
+      if (options.db !== undefined && session.account !== null) {
+        const account = ensureDashboardAccount(options.db, session.account);
+        if (account.status !== "active") {
           deleteCookie(c, SESSION_COOKIE);
-          return c.json({ status: "error", message: "用户已删除，请重新登录。" }, 401);
+          return c.json({ status: "error", message: "账号已停用或删除，请联系管理员。" }, 401);
         }
-        ensureDashboardUser(options.db, session.user, { bindDashboardIdentity: true });
+        session = withStoredProfile(session, account);
       }
       c.set("lunaRequestAuthKind", "dashboard-cookie" satisfies LunaRequestAuthKind);
       c.set("dashboardAuthSession", session);
@@ -233,14 +234,11 @@ export function createDashboardAuthMiddleware(
       ? authenticateServiceBearer(c, options.db)
       : null;
     if (bearerAuth !== null) {
-      if (options.db !== undefined) {
-        ensureDashboardUser(options.db, bearerAuth.user);
-      }
       c.set("lunaRequestAuthKind", "luna-access-token" satisfies LunaRequestAuthKind);
       c.set("lunaAccessTokenClaims", bearerAuth.claims);
       c.set("dashboardAuthSession", {
         authenticated: true,
-        user: bearerAuth.user,
+        account: bearerAuth.account ?? null,
       } satisfies DashboardAuthSession);
       await next();
       return;
@@ -273,12 +271,13 @@ export function dashboardAuthSessionFromContext(
     null;
 }
 
-export function dashboardRequesterUserIdFromContext(
+/** The signed-in account of a Dashboard cookie or a personal token; undefined for a runner token. */
+export function requesterAccountIdFromContext(
   c: Context,
 ): string | undefined {
   const session = dashboardAuthSessionFromContext(c);
-  return session?.authenticated === true && session.user !== null
-    ? session.user.id
+  return session?.authenticated === true && session.account !== null
+    ? session.account.id
     : undefined;
 }
 
@@ -288,49 +287,15 @@ export function lunaAccessTokenClaimsFromContext(
   return c.get("lunaAccessTokenClaims") as LunaAccessTokenClaims | undefined;
 }
 
-export function ensureDashboardUser(
-  db: DrizzleDB,
-  user: DashboardAuthUser,
-  options: { bindDashboardIdentity?: boolean } = {},
-): void {
-  const now = String(Date.now());
-  const existing = db.select().from(users).where(eq(users.id, user.id)).get();
-  if (existing === undefined) {
-    db.insert(users)
-      .values({
-        id: user.id,
-        kind: "human",
-        displayName: user.name,
-        avatarUrl: user.avatarUrl ?? null,
-        status: "active",
-        mergedIntoUserId: null,
-        profileSource: "dashboard",
-        createdAt: now,
-        updatedAt: now,
-      })
-      .run();
-  } else if (
-    existing.displayName !== user.name ||
-    existing.profileSource !== "dashboard" ||
-    (user.avatarUrl !== undefined && existing.avatarUrl !== user.avatarUrl)
-  ) {
-    db.update(users)
-      .set({
-        displayName: user.name,
-        ...(user.avatarUrl === undefined ? {} : { avatarUrl: user.avatarUrl }),
-        profileSource: "dashboard",
-        updatedAt: now,
-      })
-      .where(eq(users.id, user.id))
-      .run();
-  }
-  if (options.bindDashboardIdentity && (existing === undefined || existing.status === "active")) {
-    new ChannelDirectoryStore(db).ensureAuthenticatedIdentity(
-      { type: "dashboard", id: DASHBOARD_CHANNEL_ID },
-      { externalId: user.id, kind: "user", displayName: user.name },
-      user.id,
-    );
-  }
+/** Records a signed-in account and keeps its profile current. */
+export function ensureDashboardAccount(db: DrizzleDB, account: DashboardAccount) {
+  return new AccountStore(db).ensure({...account, placeholderName: account.provider === "local-token"});
+}
+
+/** The session shows the account's stored name and avatar, which may differ from the sign-in's placeholder. */
+export function withStoredProfile(session: DashboardAuthSession, stored: {displayName: string; avatarUrl: string | null}): DashboardAuthSession {
+  if (!session.account) return session;
+  return {...session, account: {...session.account, name: stored.displayName, ...(stored.avatarUrl ? {avatarUrl: stored.avatarUrl} : {})}};
 }
 
 export function isPublicPath(pathname: string): boolean {
@@ -399,11 +364,9 @@ function authenticateServiceBearer(
       new InvocationService(authDb).requireActive(verified.claims, verified.claims.runnerKind);
     }
     return {
-      user: {
-        id: verified.user.id,
-        name: verified.user.displayName,
-        provider: "luna-access-token",
-      },
+      ...(verified.subject.kind === "account"
+        ? { account: { id: verified.subject.id, name: verified.subject.displayName, provider: "luna-access-token" } }
+        : {}),
       claims: verified.claims,
     };
   } catch {

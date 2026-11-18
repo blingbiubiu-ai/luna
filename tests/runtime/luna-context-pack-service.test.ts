@@ -1,4 +1,4 @@
-import { fixtureSessionOwnership } from "../helpers/platform-fixtures";
+import { fixtureAccount, fixtureSessionOwnership } from "../helpers/platform-fixtures";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -9,7 +9,6 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import type { NormalizedInboundMessage } from "../../src/channels";
 import { DataConnection, type DrizzleDB } from "../../src/data";
 import * as lunaSchema from "../../src/data/schema";
-import { IdentityDirectory } from "../../src/identity/identity-directory";
 import type { MainRunnerRunInput } from "../../src/main-runner/main-runner";
 import { MainRunner } from "../../src/main-runner/main-runner";
 import type { TestMainPlan } from "./support/main-command-plan";
@@ -236,26 +235,13 @@ async function requestApi(path: string): Promise<Response> {
 }
 
 function issueDashboardApiToken(db: DrizzleDB): string {
-  const user = new IdentityDirectory(db).materializeIdentityClaims({
-    kind: "human",
-    displayName: "Dashboard API Test User",
-    claims: [
-      {
-        namespace: "local",
-        kind: "local_id",
-        value: "dashboard-api-test-user",
-        scope: "",
-        confidence: "manual",
-      },
-    ],
-  });
-  ownerId = user.id;
+  ownerId = fixtureAccount(db, "dashboard-api-test-account").id;
   ({agent_id: agentId} = fixtureSessionOwnership(db, "feishu", "feishu-main", ownerId));
   return new AccessTokenService({
     db,
     signingSecret: TEST_ACCESS_TOKEN_SECRET,
   }).issueToken({
-    userId: user.id,
+    accountId: ownerId,
     name: "Context pack service API test token",
     source: "cli",
     role: "user",

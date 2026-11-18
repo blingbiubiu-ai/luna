@@ -9,11 +9,12 @@ import { DataConnection, type DrizzleDB } from "../../src/data";
 import * as schema from "../../src/data/schema";
 import { config, setLunaHome } from "../../src/shared/config/index";
 import { moveTimelineEntriesToCanonicalSession } from "../../src/sessions/session-timeline-merge";
-import { fixtureNamedSession, fixtureRunnerContext, fixtureTaskOwnership } from "../helpers/platform-fixtures";
+import { fixtureNamedSession, fixtureOwnerUserId, fixtureRunnerContext, fixtureTaskOwnership } from "../helpers/platform-fixtures";
 
 const databases: {home: string; connection: DataConnection<typeof schema>}[] = [];
 let originalHome: string | undefined;
 const owner = "context-test-owner";
+const ownerUser = fixtureOwnerUserId(owner);
 
 function openFreshDatabase(): DataConnection<typeof schema> {
   const home = mkdtempSync(join(tmpdir(), "luna-context-pack-store-"));
@@ -37,7 +38,7 @@ afterEach(() => {
 
 function seedTask(db: DrizzleDB, taskId: string, sessionId: string) {
   db.insert(schema.tasks).values({
-    ...fixtureTaskOwnership(db, sessionId), id: taskId, primary_session_id: sessionId, creator_user_id: owner,
+    ...fixtureTaskOwnership(db, sessionId), id: taskId, primary_session_id: sessionId, creator_user_id: ownerUser,
     type: "work", title: taskId, status: "completed", created_at: 1, updated_at: 1, last_activity_at: 1,
   }).run();
 }
@@ -47,7 +48,7 @@ function seedMessage(db: DrizzleDB, sessionId: string, messageId: string, entryI
   db.insert(schema.messages).values({
     id: messageId, agentId: scope.agent_id, shadowId: scope.shadow_id, ownerSessionId: sessionId,
     channelType: "dashboard", channelId: "dashboard", externalMessageId: messageId,
-    senderUserId: owner, senderIdentityId, role: "user", contentKind: "text", presentationKind: "plain",
+    senderUserId: ownerUser, senderIdentityId, role: "user", contentKind: "text", presentationKind: "plain",
     contentJson: [{type: "text", text: messageId}], occurredAt: 1, createdAt: 1,
   }).run();
   if (entryId) {

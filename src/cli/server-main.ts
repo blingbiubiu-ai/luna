@@ -31,6 +31,10 @@ export async function runServerCli(
     return { status: "ok", output: serverHelpText() };
   }
   if (command === "runtime") { const { runRuntimeCli } = await import("./commands/runtime"); return runRuntimeCli(rest, env); }
+  if (command === "admin" && rest[0] === "import-config") {
+    const { runImportConfigCli } = await import("./commands/import-config");
+    return runImportConfigCli(rest, env);
+  }
   if (command === "admin") {
     const { runPlatformAdminCli } = await import("./commands/platform-admin");
     return runPlatformAdminCli(rest, env);
@@ -82,7 +86,8 @@ function serverHelpText(): string {
     "  luna service restart [--dry-run]",
     "  luna service status [--dry-run]",
     "  luna service db reset --yes",
-    "  luna service admin grant --user-id <canonical-user-id> [--home <path>]",
+    "  luna service admin grant --account-id <account-id> [--home <path>]",
+    "  luna service admin import-config --from <old luna.db> --account-id <owner account id> [--from-key-file <path>] [--home <path>]",
     "  luna service mcp bridge --stdio",
     "  luna service runtime init|start|status|workers",
     "  luna service version",

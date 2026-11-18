@@ -24,7 +24,7 @@ import { createRunnerMessageRoutes } from "../../src/server/routes/runner-messag
 import type { LunaAccessTokenClaims } from "../../src/server/auth/access-token-service";
 import type { NormalizedInboundMessage } from "../../src/channels";
 import type { WorkReplyChannel } from "../../src/work/types";
-import { fixtureSessionOwnership } from "../helpers/platform-fixtures";
+import { fixtureSessionOwnership, fixtureUser } from "../helpers/platform-fixtures";
 import { feishuIdentityMetadata } from "../../src/identity/feishu-identity-scopes";
 
 let home: string;
@@ -34,8 +34,8 @@ afterEach(() => { connection?.close(); if (home) rmSync(home, { recursive: true,
 function fixture(withActiveJob = true, runnerKind: "main" | "work" = "main", botLookup?: WorkReplyChannel["listGroupBots"]) {
   home = mkdtempSync(join(tmpdir(), "luna-message-api-")); setLunaHome(home);
   connection = new DataConnection(schema); const db = connection.db;
-  db.insert(schema.users).values({id:"user",kind:"human",displayName:"User",status:"active",createdAt:"now",updatedAt:"now"}).onConflictDoNothing().run();
   const scope = fixtureSessionOwnership(db, "feishu", "test");
+  fixtureUser(db, scope.agent_id, "user");
   fixtureSessionOwnership(db, "feishu", "private");
   const inbound: NormalizedInboundMessage = { id: "external-1", channel: { id: "test", type: "feishu" }, surface: { externalId: "chat", kind: botLookup ? "group" : "p2p" }, sender: { externalId: "user", kind: "user" }, text: "hello", mentions: [], addressing: { addressedToBot: true, reason: botLookup ? "mention" : "p2p" } };
   if (botLookup) new ChannelDirectoryStore(db).upsertSurface({ channel: inbound.channel, surface: inbound.surface });
@@ -47,7 +47,7 @@ function fixture(withActiveJob = true, runnerKind: "main" | "work" = "main", bot
   controller.signal.addEventListener("abort", () => store.revoke("invocation", "test cancelled"));
   mainInvocations(db).set("invocation", { invocationId: "invocation", turnId: "logical-turn", runnerContext: context, signal: controller.signal, input: { type: "user_messages", messages: [{ ...runnerMessageEnvelopeFromRow({ row, rawMessage: inbound }), rawMessage: inbound }], latestMessage: inbound, context: { sessionId: session.id, candidateOpenTasks: [] } } });
   const claims: LunaAccessTokenClaims = { tokenId: "token", actorUserId: "user", source: "runner", role: "runner", runnerKind, agentId: session.agent_id, shadowId: session.shadow_id, sessionId: session.id, runnerJobId: context.id, issuedAt: 1, expiresAt: Date.now() + 10000 };
-  db.insert(schema.accessTokens).values({ id: "token", tokenHash: "hash", userId: "user", source: "runner", name: "test", role: "runner", issuedAt: 1, expiresAt: Date.now() + 10000, createdAt: 1, metadataJson: { invocationId: "invocation" } }).run();
+  db.insert(schema.accessTokens).values({ id: "token", agentId: claims.agentId, tokenHash: "hash", userId: "user", source: "runner", name: "test", role: "runner", issuedAt: 1, expiresAt: Date.now() + 10000, createdAt: 1, metadataJson: { invocationId: "invocation" } }).run();
   if (withActiveJob) {
     const snapshot = runnerKind === "main" ? encodeInvocation("main", mainInvocations(db).get("invocation")!)
       : encodeInvocation("work", {sessionId: session.id, runnerContextId: context.id, turnId: "logical-turn"});
@@ -265,7 +265,7 @@ test("signed Runner HTTP calls use the invocation's bound Feishu application", a
     expect(db.select().from(schema.sessionCommands).all()).toHaveLength(0);
     expect((await request("/api/runner/messages", {kind: "user", userId: recipient!.id})).status).toBe(202);
     expect(db.select().from(schema.sessionCommands).get()?.payload.directAddress).toMatchObject({channelId: "test", idType: "open_id", recipientId: "ou_current"});
-    db.update(schema.users).set({status:"disabled"}).where(eq(schema.users.id,"user")).run();
+    db.update(schema.users).set({status:"blocked"}).where(eq(schema.users.id,"user")).run();
     expect((await request("/api/runner/users")).status).toBe(401);
   } finally {
     server.stop(true);
@@ -426,8 +426,10 @@ test("CLI calendar creation reaches Runner API and matches dashboard recurrence 
   setLunaHome(home);
   connection = new DataConnection(schema);
   const db = connection.db;
-  const userId = "schedule-owner";
-  const scope = fixtureScope(db, userId);
+  // The Dashboard signs in as the account; the Runner acts as its owner user in the Agent.
+  const accountId = "schedule-owner";
+  const scope = fixtureScope(db, accountId);
+  const userId = scope.ownerUserId;
   const session = new SessionStore(db).createLocalSession(userId, scope);
   const context = new RunnerContextStore(db).resolveForSession(session.id, "codex");
   const invocationId = "schedule-invocation";
@@ -443,7 +445,7 @@ test("CLI calendar creation reaches Runner API and matches dashboard recurrence 
   invocations.createJob("test-runtime", {
     version: 2, jobId: "schedule-job", invocationId, environmentId: "luna",
     runnerContextId: context.id, scopeKey: `session:${context.id}`, runnerKind: "work", sessionId: session.id,
-    scope: { ...scope, placementGeneration: 1 }, resources: selection, resourceRevision: selection.digest,
+    scope: { agentId: scope.agentId, shadowId: scope.shadowId, placementGeneration: 1 }, resources: selection, resourceRevision: selection.digest,
     input: { runnerType: "codex", prompt: "Schedule test" }, credentialsRevision: 1, timeoutMs: 60_000,
   });
   const { claims } = new AccessTokenService({ db, signingSecret: "schedule-test" }).issueToken({
@@ -453,7 +455,7 @@ test("CLI calendar creation reaches Runner API and matches dashboard recurrence 
   });
   const app = new Hono().use("*", async (c, next) => {
     c.set("lunaAccessTokenClaims" as never, claims as never);
-    c.set("dashboardAuthSession" as never, { authenticated: true, user: { id: userId, name: "Test", provider: "local" } } as never);
+    c.set("dashboardAuthSession" as never, { authenticated: true, account: { id: accountId, name: "Test", provider: "local" } } as never);
     c.set("lunaRequestAuthKind" as never, "dashboard-cookie" as never);
     await next();
   }).route("/api/runner", createRunnerMessageRoutes({ db, channelFor: () => undefined }))

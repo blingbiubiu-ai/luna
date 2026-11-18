@@ -14,35 +14,35 @@ test("write-time display updates respect source priority after platform conversi
   migrate(db, { migrationsFolder: "src/data/drizzle" });
   sqlite.exec("PRAGMA foreign_keys=OFF");
   const now = "1";
-  db.insert(schema.users).values({ id: "u", kind: "human", displayName: "ou_test", createdAt: now, updatedAt: now }).run();
+  db.insert(schema.users).values({ id: "u", agentId: "agent", kind: "human", displayName: "ou_test", createdAt: now, updatedAt: now }).run();
   db.insert(schema.channelIdentities).values({ id: "identity", channelType: "feishu", channelId: "feishu-default", externalId: "ou_test", identityKind: "user", firstSeenAt: now, lastSeenAt: now, createdAt: now, updatedAt: now }).run();
   db.insert(schema.channelUserBindings).values({channelIdentityId: "identity", userId: "u", createdAt: Date.now()}).run();
-  db.insert(schema.userIdentityLinks).values({ id: "link", userId: "u", identityNamespace: "lark", identityKind: "open_id", identityValue: "ou_test", identityScope: "app:one", confidence: "verified", createdAt: now, updatedAt: now }).run();
+  db.insert(schema.userIdentityLinks).values({ id: "link", agentId: "agent", userId: "u", identityNamespace: "lark", identityKind: "open_id", identityValue: "ou_test", identityScope: "app:one", confidence: "verified", createdAt: now, updatedAt: now }).run();
   for (const [index, label] of ["@旧名字", "@吕嘉宁", "@ou_test", "@unknown", "   "].entries()) {
     db.insert(schema.messageMentions).values({ id: String(index), messageId: "m", mentionKey: String(index), mentionLabel: label, targetIdentityId: "identity", targetExternalId: "ou_test", targetKind: "user", createdAt: index }).run();
   }
   new IdentityDirectory(db).applyMentionDisplayName("identity", "@吕嘉宁");
-  expect(loadDashboardUserRows(db)[0]).toMatchObject({ displayName: "吕嘉宁", displayNameSource: "mention", avatarUrl: null });
+  expect(loadDashboardUserRows(db, "agent")[0]).toMatchObject({ displayName: "吕嘉宁", displayNameSource: "mention", avatarUrl: null });
   expect(db.select().from(schema.users).get()?.displayName).toBe("吕嘉宁");
   db.delete(schema.messageMentions).run();
-  expect(loadDashboardUserRows(db)[0]?.displayName).toBe("吕嘉宁");
-  new IdentityDirectory(db).materializeIdentityClaims({kind: "human", displayName: "ou_test", channelIdentityId: "identity", claims: []});
+  expect(loadDashboardUserRows(db, "agent")[0]?.displayName).toBe("吕嘉宁");
+  new IdentityDirectory(db).materializeIdentityClaims({agentId: "agent", kind: "human", displayName: "ou_test", channelIdentityId: "identity", claims: []});
   expect(db.select().from(schema.users).get()?.displayName).toBe("吕嘉宁");
   db.update(schema.users).set({ displayName: "正式姓名", profileSource: "channel" }).where(eq(schema.users.id, "u")).run();
-  expect(loadDashboardUserRows(db)[0]).toMatchObject({ displayName: "正式姓名", displayNameSource: "channel" });
+  expect(loadDashboardUserRows(db, "agent")[0]).toMatchObject({ displayName: "正式姓名", displayNameSource: "channel" });
   db.update(schema.users).set({ displayName: "手动姓名", profileSource: "manual" }).run();
-  expect(loadDashboardUserRows(db)[0]).toMatchObject({ displayName: "手动姓名", displayNameSource: "manual" });
+  expect(loadDashboardUserRows(db, "agent")[0]).toMatchObject({ displayName: "手动姓名", displayNameSource: "manual" });
   db.update(schema.users).set({ displayName: "ou_test", profileSource: "channel" }).run();
   const directory = new IdentityDirectory(db);
   directory.applyMentionDisplayName("identity", "@新姓名");
   directory.applyMentionDisplayName("identity", "@ou_test");
   expect(db.select().from(schema.users).get()).toMatchObject({displayName: "新姓名", profileSource: "mention"});
-  directory.materializeIdentityClaims({kind: "human", displayName: "正式更新", channelIdentityId: "identity", claims: []});
+  directory.materializeIdentityClaims({agentId: "agent", kind: "human", displayName: "正式更新", channelIdentityId: "identity", claims: []});
   directory.applyMentionDisplayName("identity", "@不能覆盖");
   expect(db.select().from(schema.users).get()).toMatchObject({displayName: "正式更新", profileSource: "channel"});
   db.update(schema.users).set({displayName: "ou_test"}).run();
   db.delete(schema.userIdentityLinks).run();
-  expect(loadDashboardUserRows(db)[0]).toMatchObject({ displayName: "ou_test", displayNameSource: "id" });
+  expect(loadDashboardUserRows(db, "agent")[0]).toMatchObject({ displayName: "ou_test", displayNameSource: "id" });
   sqlite.close();
 });
 

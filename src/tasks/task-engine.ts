@@ -112,7 +112,7 @@ export class TaskEngine {
     input: CreateOrUpdateTaskInput,
   ): Promise<PersistentTaskResolved> {
     const workSessionId = this._workSessionId(input);
-    const canonicalCreatorUserId = this._canonicalRequesterUserId(input.inbound);
+    const canonicalCreatorUserId = this._canonicalRequesterUserId(input.inbound, workSessionId);
     const persistedCreatorIdentity = this._persistedRequesterIdentity(input.inbound);
     const result = this._taskResolver.resolvePersistentTask({
       text: input.inbound.text,
@@ -206,7 +206,7 @@ export class TaskEngine {
       input.messageRowId,
       input.sourceEntryId,
       input.sourceTurnEntryId,
-      this._canonicalRequesterUserId(input.inbound),
+      this._canonicalRequesterUserId(input.inbound, workSessionId),
     );
 
     this._taskResolver.touch(persistentTask.id);
@@ -217,14 +217,17 @@ export class TaskEngine {
     return input.primarySessionId ?? input.sessionId;
   }
 
+  /** The requester as a user of the session's Agent. */
   private _canonicalRequesterUserId(
     inbound: NormalizedInboundMessage,
+    sessionId: string,
   ): string | undefined {
     const requestedByIdentity = requestedIdentityFromInbound(inbound);
     this._assertProviderScopedRequesterIsExplicit(inbound, requestedByIdentity);
     this._materializeRequesterIdentity(inbound, requestedByIdentity);
     return canonicalUserIdForRequestedIdentity(
       this._options.db,
+      new TaskScopeResolver(this._options.db).session(sessionId).agentId,
       requestedByIdentity,
     );
   }

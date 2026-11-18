@@ -10,7 +10,8 @@ import type {LunaAccessTokenClaims} from "./auth/access-token-service";
 export interface ArtifactAccessPolicyInput {
   readonly db:DrizzleDB;
   readonly readHistory?: boolean;
-  readonly requesterUserId?:string|undefined;
+  /** The signed-in account (Dashboard or personal token); a runner token reads as `accessTokenClaims.actorUserId`. */
+  readonly requesterAccountId?:string|undefined;
   readonly accessTokenClaims?:LunaAccessTokenClaims|undefined;
   readonly runArtifactAllowlist?:readonly string[];
 }
@@ -31,15 +32,16 @@ export function createArtifactAccessPolicy(input:ArtifactAccessPolicyInput){
       .from(table).where(eq(table.id,id)).get();
   };
   const canRead=(artifact:ManagedArtifactRow,readHistory=false):boolean=>{
-    const actor=input.requesterUserId;
-    if(!actor||artifact.status!=="active"||artifact.deleted_at!==null)return false;
+    const account=input.requesterAccountId,runnerUser=claims?.source==="runner"?claims.actorUserId:undefined;
+    if((!account&&!runnerUser)||artifact.status!=="active"||artifact.deleted_at!==null)return false;
     try{
       const resource=owner(artifact.scope_type,artifact.scope_id);
       if(!resource || resource.agent_id !== artifact.agent_id || resource.shadow_id !== artifact.shadow_id)return false;
       const agents = new AgentStore(input.db);
       const options = {readHistory: readHistory && input.readHistory === true && claims === undefined};
       if(claims?.source==="runner"){
-        if(claims.role!=="runner"||claims.actorUserId!==actor)return false;
+        const actor=claims.actorUserId;
+        if(claims.role!=="runner"||!actor)return false;
         const scope = runnerArtifactScope(claims);
         if (!scope) return false;
         const runner=owner(scope.scopeType,scope.scopeId);
@@ -47,7 +49,9 @@ export function createArtifactAccessPolicy(input:ArtifactAccessPolicyInput){
         agents.requireScope(actor,{agentId:runner.agent_id,shadowId:runner.shadow_id});
         return allowlist.has(artifact.id)||(artifact.scope_type===scope.scopeType&&artifact.scope_id===scope.scopeId);
       }
-      agents.requireOwner(actor, resource.agent_id, {includeDeleted: options.readHistory});
+      if(!account)return false;
+      agents.requireOwner(account, resource.agent_id, {includeDeleted: options.readHistory});
+      const actor=agents.ownerUserId(resource.agent_id);
       agents.requireScope(actor,{agentId:resource.agent_id,shadowId:resource.shadow_id},options);
       if(artifact.scope_type==="session")new SessionAccessPolicy(input.db).requireAccess(actor,artifact.scope_id,options);
       else new TaskAccessPolicy(input.db).requireAccess(actor,artifact.scope_id,options);

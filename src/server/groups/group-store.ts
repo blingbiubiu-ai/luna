@@ -104,10 +104,8 @@ export class GroupStore {
     readonly role?: GroupRole;
   }): GroupMemberRecord {
     const group = this.requireGroup(input.groupId);
+    // Only an active user of the group's Agent can join it.
     new AgentStore(this._db).requireAccess(input.userId, group.agentId);
-    if (this._requireUser(input.userId).status === "deleted") {
-      throw new HTTPException(409, { message: "已删除用户不能加入用户组" });
-    }
     const now = String(Date.now());
     const role = input.role ?? "member";
 

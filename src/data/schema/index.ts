@@ -22,6 +22,7 @@ export * from "./task-runs";
 export * from "./task-run-notifications";
 export * from "./tasks";
 export * from "./timeline";
+export * from "./accounts";
 export * from "./users";
 export * from "./session-triggers";
 export * from "./session-commands";

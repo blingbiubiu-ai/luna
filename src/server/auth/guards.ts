@@ -5,19 +5,23 @@ import {isPlatformAdministrator} from "../policy/platform-administrator";
 import {
   dashboardAuthSessionFromContext,
   lunaAccessTokenClaimsFromContext,
-  type DashboardAuthUser,
+  type DashboardAccount,
   type LunaRequestAuthKind,
 } from "../auth";
 import type { LunaAccessTokenClaims } from "./access-token-service";
 
 export interface AuthenticatedDashboardContext {
   readonly authKind: "dashboard-cookie";
-  readonly user: DashboardAuthUser;
+  readonly account: DashboardAccount;
 }
 
+/**
+ * A bearer token. A personal CLI/MCP token carries its `account`; a runner
+ * token has none and acts as `token.actorUserId`, a user of its Agent.
+ */
 export interface AuthenticatedAccessTokenContext {
   readonly authKind: "luna-access-token";
-  readonly user: DashboardAuthUser;
+  readonly account?: DashboardAccount;
   readonly token: LunaAccessTokenClaims;
 }
 
@@ -27,19 +31,17 @@ export type AuthenticatedContext =
 
 export function requireAuthenticated(c: Context): AuthenticatedContext | Response {
   const session = dashboardAuthSessionFromContext(c);
-  const user = session?.authenticated === true && session.user !== null
-    ? session.user
-    : undefined;
-  if (user === undefined) {
+  if (session?.authenticated !== true) {
     return unauthorized(c);
   }
+  const account = session.account ?? undefined;
   const authKind = c.get("lunaRequestAuthKind") as LunaRequestAuthKind | undefined;
   const token = lunaAccessTokenClaimsFromContext(c);
   if (authKind === "luna-access-token" && token !== undefined) {
-    return { authKind, user, token };
+    return { authKind, token, ...(account ? { account } : {}) };
   }
-  if (authKind === "dashboard-cookie") {
-    return { authKind, user };
+  if (authKind === "dashboard-cookie" && account !== undefined) {
+    return { authKind, account };
   }
   return unauthorized(c);
 }
@@ -66,7 +68,7 @@ export function requireAdmin(c: Context): AuthenticatedDashboardContext | Respon
   if (isGuardResponse(auth)) return auth;
   // Only the authentication middleware supplies this database, never request data.
   const db = c.get("lunaAuthorizationDb") as DrizzleDB | undefined;
-  if(db && isPlatformAdministrator(db,auth.user.id))return auth;
+  if(db && isPlatformAdministrator(db,auth.account.id))return auth;
   return c.json({status: "error", code: "platform_admin_required", message: "Platform administrator permission is required"}, 403);
 }
 

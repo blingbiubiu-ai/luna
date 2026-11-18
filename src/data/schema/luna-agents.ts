@@ -1,18 +1,19 @@
 import { sql } from "drizzle-orm";
 import { check, foreignKey, index, integer, primaryKey, sqliteTable, text, uniqueIndex, type AnySQLiteColumn } from "drizzle-orm/sqlite-core";
-import { users } from "./users";
+import {accounts} from "./accounts";
+import {users} from "./users";
 
-/** User-owned Agent; its default Shadow is enforced by a deferred composite FK. */
+/** Account-owned Agent; its default Shadow is enforced by a deferred composite FK. */
 export const lunaAgents = sqliteTable("luna_agents", {
   id: text("id").primaryKey(),
-  ownerUserId: text("owner_user_id").notNull().references(() => users.id),
+  ownerAccountId: text("owner_account_id").notNull().references(() => accounts.id),
   name: text("name").notNull(),
   defaultShadowId: text("default_shadow_id").notNull(),
   status: text("status", {enum: ["active", "disabled", "deleted"]}).notNull(),
   createdAt: integer("created_at").notNull(),
   updatedAt: integer("updated_at").notNull(),
 }, t => [
-  index("luna_agents_owner_idx").on(t.ownerUserId),
+  index("luna_agents_owner_idx").on(t.ownerAccountId),
   check("luna_agents_status_check", sql`${t.status} IN ('active','disabled','deleted')`),
   foreignKey({columns: [t.id, t.defaultShadowId], foreignColumns: [agentShadows.agentId, agentShadows.id] as [AnySQLiteColumn, AnySQLiteColumn]}),
 ]);
@@ -22,7 +23,7 @@ export const agentShadows = sqliteTable("agent_shadows", {
   id: text("id").primaryKey(),
   agentId: text("agent_id").notNull().references((): AnySQLiteColumn => lunaAgents.id),
   name: text("name").notNull(),
-  replyUserId: text("reply_user_id").notNull().references(() => users.id),
+  replyUserId: text("reply_user_id").notNull().references((): AnySQLiteColumn => users.id),
   status: text("status", {enum: ["active", "disabled", "deleted"]}).notNull(),
   createdAt: integer("created_at").notNull(),
   updatedAt: integer("updated_at").notNull(),
@@ -34,10 +35,10 @@ export const agentShadows = sqliteTable("agent_shadows", {
 
 /** Request receipts are scoped to the actor and operation, with a payload hash. */
 export const agentMutationReceipts = sqliteTable("agent_mutation_receipts", {
-  actorUserId: text("actor_user_id").notNull().references(() => users.id),
+  actorAccountId: text("actor_account_id").notNull().references(() => accounts.id),
   operation: text("operation").notNull(),
   key: text("key").notNull(),
   requestHash: text("request_hash").notNull(),
   entityId: text("entity_id").notNull(),
   createdAt: integer("created_at").notNull(),
-}, t => [primaryKey({columns: [t.actorUserId, t.operation, t.key]})]);
+}, t => [primaryKey({columns: [t.actorAccountId, t.operation, t.key]})]);

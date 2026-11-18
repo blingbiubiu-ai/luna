@@ -69,7 +69,7 @@ describe("plugin routes", () => {
       .use("*", async (c, next) => {
         (c as any).set("dashboardAuthSession", {
           authenticated: true,
-          user: {
+          account: {
             id: "user_1",
             name: "User 1",
             provider: "test",
@@ -413,7 +413,7 @@ describe("plugin routes", () => {
       .use("*", async (c, next) => {
         (c as any).set("dashboardAuthSession", {
           authenticated: true,
-          user: { id: "user_1", name: "User 1", provider: "test" },
+          account: { id: "user_1", name: "User 1", provider: "test" },
         });
         (c as any).set("lunaRequestAuthKind", "dashboard-cookie");
         await next();
@@ -439,7 +439,7 @@ describe("plugin routes", () => {
     expect(body.status).toBe("success");
     expect(body.output).toEqual({ message: "hello" });
     const deny = new AuthorizationRuleStore(database.db, {kind: "agent", agentId: scope.agentId}).addGrant({
-      subjectType:"user",subjectId:"user_1",target:"alpha.echo",matchType:"exact",effect:"deny",
+      subjectType:"user",subjectId:scope.ownerUserId,target:"alpha.echo",matchType:"exact",effect:"deny",
     });
     const denied = await app.request(scopedPath("/api/plugins/commands/resolve-and-invoke"), {
       method:"POST",body:JSON.stringify({path:["alpha"],args:["echo","--message","hello"]}),
@@ -643,7 +643,7 @@ describe("plugin routes", () => {
       .use("*", async (c, next) => {
         (c as any).set("dashboardAuthSession", {
           authenticated: true,
-          user: { id: "user_1", name: "User 1", provider: "test" },
+          account: { id: "user_1", name: "User 1", provider: "test" },
         });
         (c as any).set("lunaRequestAuthKind", "dashboard-cookie");
         await next();
@@ -784,7 +784,7 @@ describe("plugin routes", () => {
     seedAlphaPolicyAndGrant(database.db, registry);
     const app = new Hono()
       .use("*", async (c, next) => {
-        (c as any).set("dashboardAuthSession", { authenticated: true, user: { id: "user_1", name: "User 1", provider: "test" } });
+        (c as any).set("dashboardAuthSession", { authenticated: true, account: { id: "user_1", name: "User 1", provider: "test" } });
         (c as any).set("lunaRequestAuthKind", "dashboard-cookie");
         await next();
       })
@@ -963,7 +963,7 @@ function seedAlphaPolicyAndGrant(db: DataConnection<typeof schema>["db"], regist
   enableFixturePlugin(db, registry, "alpha");
   new AuthorizationRuleStore(db, {kind: "agent", agentId: scope.agentId}).addGrant({ matchType: "exact",
     subjectType: "user",
-    subjectId: "user_1",
+    subjectId: scope.ownerUserId,
     target: "alpha.echo",
     effect: "allow",
   });
@@ -1011,13 +1011,13 @@ function seedLogToolPolicyAndGrant(db: DataConnection<typeof schema>["db"], regi
   const grants = new AuthorizationRuleStore(db, {kind: "agent", agentId: scope.agentId});
   grants.addGrant({ matchType: "exact",
     subjectType: "user",
-    subjectId: "user_1",
+    subjectId: scope.ownerUserId,
     target: "logtool.run",
     effect: "allow",
   });
   grants.addGrant({ matchType: "exact",
     subjectType: "user",
-    subjectId: "user_1",
+    subjectId: scope.ownerUserId,
     target: "logtool.tool.log",
     effect: "allow",
   });
@@ -1046,7 +1046,7 @@ function enableFixturePlugin(db: DataConnection<typeof schema>["db"], registry: 
 }
 
 function seedPluginTask(id: string): void {
-  database.db.insert(schema.tasks).values({id, type: "task", title: "Plugin task", status: "new", creator_user_id: "user_1",
+  database.db.insert(schema.tasks).values({id, type: "task", title: "Plugin task", status: "new", creator_user_id: scope.ownerUserId,
     agent_id: scope.agentId, shadow_id: scope.shadowId, created_at: 1, updated_at: 1, last_activity_at: 1}).run();
 }
 
@@ -1055,7 +1055,7 @@ function appWithDashboardAuth(): Hono {
   return new Hono().use("*", async (c, next) => {
     (c as any).set("dashboardAuthSession", {
       authenticated: true,
-      user: {
+      account: {
         id: "user_1",
         name: "User 1",
         provider: "test",
@@ -1071,7 +1071,7 @@ function appWithAccessTokenAuth(): Hono {
   return new Hono().use("*", async (c, next) => {
     (c as any).set("dashboardAuthSession", {
       authenticated: true,
-      user: {
+      account: {
         id: "user_1",
         name: "User 1",
         provider: "test-access-token",
@@ -1080,7 +1080,7 @@ function appWithAccessTokenAuth(): Hono {
     (c as any).set("lunaRequestAuthKind", "luna-access-token");
     (c as any).set("lunaAccessTokenClaims", {
       tokenId: "token_1",
-      actorUserId: "user_1",
+      accountId: "user_1",
       source: "cli",
       role: "user",
       issuedAt: 1000,
@@ -1095,11 +1095,11 @@ function appWithRunnerAuth(runnerJobId: string, registry: PluginRegistry): Hono 
   const context = db.select().from(schema.runnerContexts).where(eq(schema.runnerContexts.id, runnerJobId)).get();
   const run = context ? new TaskRunStore(db).createRun({taskId: context.owner_id, reason: "initial",
     inputSnapshot: {}, runnerType: "codex", runnerContextId: context.id}) : undefined;
-  const claims: LunaAccessTokenClaims = {tokenId: "runner_token_1", actorUserId: "user_1", source: "runner", role: "runner",
-    runnerKind: "task", runnerJobId, ...scope, issuedAt: Date.now(), expiresAt: Date.now() + 60_000,
+  const claims: LunaAccessTokenClaims = {tokenId: "runner_token_1", actorUserId: scope.ownerUserId, source: "runner", role: "runner",
+    runnerKind: "task", runnerJobId, agentId: scope.agentId, shadowId: scope.shadowId, issuedAt: Date.now(), expiresAt: Date.now() + 60_000,
     ...(context && run ? {taskId: context.owner_id, taskRunId: run.id} : {})};
   if (context && run) {
-    db.insert(schema.accessTokens).values({id: claims.tokenId, tokenHash: "fixture", userId: claims.actorUserId,
+    db.insert(schema.accessTokens).values({id: claims.tokenId, agentId: claims.agentId, tokenHash: "fixture", userId: claims.actorUserId,
       source: "runner", name: "Plugin test", role: "runner", issuedAt: claims.issuedAt, expiresAt: claims.expiresAt,
       createdAt: claims.issuedAt, metadataJson: {invocationId: "plugin-invocation"}}).run();
     registerTestRunnerJob(db, "plugin-invocation", claims, {version: 1, kind: "task",
@@ -1108,7 +1108,7 @@ function appWithRunnerAuth(runnerJobId: string, registry: PluginRegistry): Hono 
   return new Hono().use("*", async (c, next) => {
     (c as any).set("dashboardAuthSession", {
       authenticated: true,
-      user: {
+      account: {
         id: "user_1",
         name: "User 1",
         provider: "test-access-token",

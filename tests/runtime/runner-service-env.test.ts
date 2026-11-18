@@ -220,7 +220,10 @@ function withFreshDb<T>(
   setLunaHome(home);
   const connection = new DataConnection(schema);
   try {
+    // The requester is a user of the Agent that owns the session.
+    const scope = fixtureNamedSession(connection.db, "session_1", "runner-owner");
     const user = new IdentityDirectory(connection.db).materializeIdentityClaims({
+      agentId: scope.agentId,
       kind: "human",
       displayName: "Runner User",
       claims: [
@@ -233,7 +236,7 @@ function withFreshDb<T>(
         },
       ],
     });
-    seedOwnedResources(connection.db,user.id);
+    seedOwnedResources(connection.db,scope,user.id);
     return fn({ db: connection.db, user });
   } finally {
     connection.close();
@@ -252,7 +255,10 @@ async function withFreshDbAsync<T>(
   setLunaHome(home);
   const connection = new DataConnection(schema);
   try {
+    // The requester is a user of the Agent that owns the session.
+    const scope = fixtureNamedSession(connection.db, "session_1", "runner-owner");
     const user = new IdentityDirectory(connection.db).materializeIdentityClaims({
+      agentId: scope.agentId,
       kind: "human",
       displayName: "Runner User",
       claims: [
@@ -265,7 +271,7 @@ async function withFreshDbAsync<T>(
         },
       ],
     });
-    seedOwnedResources(connection.db,user.id);
+    seedOwnedResources(connection.db,scope,user.id);
     return await fn({ db: connection.db, user });
   } finally {
     connection.close();
@@ -366,8 +372,7 @@ test("Main invocation capability expires after a silent turn", async () => {
   });
 });
 
-function seedOwnedResources(db:DataConnection<typeof schema>["db"],userId:string){
- const scope=fixtureNamedSession(db,"session_1",userId);
+function seedOwnedResources(db:DataConnection<typeof schema>["db"],scope:{agentId:string;shadowId:string},userId:string){
  db.insert(schema.tasks).values({id:"task_1",agent_id:scope.agentId,shadow_id:scope.shadowId,type:"test",title:"Test",status:"running",creator_user_id:userId,primary_session_id:"session_1",created_at:0,updated_at:0,last_activity_at:0}).run();
  for(const id of ["runner_context_main","runner_context_task"]){
   const owner_type=id==="runner_context_task" ? "task" : "session",owner_id=owner_type==="task" ? "task_1" : "session_1";

@@ -24,7 +24,7 @@ afterEach(() => {
 
 test("an unconfigured plugin source is reported as such, not as a server error", async () => {
   const app = new Hono().use("*", async (c, next) => {
-    (c as any).set("dashboardAuthSession", { authenticated: true, user: { id: "admin", name: "admin", provider: "test" } });
+    (c as any).set("dashboardAuthSession", { authenticated: true, account: { id: "admin", name: "admin", provider: "test" } });
     (c as any).set("lunaRequestAuthKind", "dashboard-cookie"); (c as any).set("lunaAuthorizationDb", connection.db); await next();
   }).route("/plugins", createPluginsRoutes({ db: connection.db }));
   for (const path of ["/plugins", "/plugins/echo"]) {

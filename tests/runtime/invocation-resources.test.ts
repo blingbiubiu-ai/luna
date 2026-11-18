@@ -27,7 +27,7 @@ beforeEach(()=>{
  builder=new AgentResourceBuilder(connection.db,home,new PluginRegistry(),{bundledSkillsDirectory:join(home,"skills"),promptAssetsDirectory:join(home,"prompts"),repoRoot:home});
 });
 afterEach(()=>{connection.close();rmSync(home,{recursive:true,force:true});});
-function register(id:string){return store.register({id,runnerKind:"work",actorUserId:"alice",runnerContextId:"context",sessionId:"session",taskId:null,taskRunId:null,originId:id,
+function register(id:string){return store.register({id,runnerKind:"work",actorUserId:scope.ownerUserId,runnerContextId:"context",sessionId:"session",taskId:null,taskRunId:null,originId:id,
  inputSnapshot:{version:1,kind:"work",input:{sessionId:"session",runnerContextId:"context",turnId:id}} as never,contextPackIds:[]});}
 function job(id:string){const selection=resources.read(id).selection;return {version: 2,scope:{agentId:scope.agentId,shadowId:scope.shadowId,placementGeneration:1},resources:selection,resourceRevision:selection.digest, jobId:`job-${id}`,invocationId:id,environmentId:"luna",runnerContextId:"context",scopeKey:"session:context",runnerKind:"work",sessionId:"session",input:{runnerType:"claude",prompt:"test"},credentialsRevision:1,timeoutMs:10000} as const;}
 
@@ -64,9 +64,9 @@ test("refuses to invent a resource snapshot for an existing attempt",()=>{
 });
 test("SQL refuses cross-scope references and immutable snapshot changes",()=>{
  register("first");const first=resources.pin("first",builder);
- fixtureNamedSession(connection.db,"other","bob");
+ const other=fixtureNamedSession(connection.db,"other","bob");
  connection.db.insert(schema.runnerContexts).values(fixtureRunnerContext(connection.db,{id:"other-context",owner_type:"session",owner_id:"other",runner_type:"claude",runner_root_path:join(home,"other-context"),created_at:0,updated_at:0})).run();
- store.register({id:"other",runnerKind:"work",actorUserId:"bob",runnerContextId:"other-context",sessionId:"other",taskId:null,taskRunId:null,originId:"other",
+ store.register({id:"other",runnerKind:"work",actorUserId:other.ownerUserId,runnerContextId:"other-context",sessionId:"other",taskId:null,taskRunId:null,originId:"other",
  inputSnapshot:{version:1,kind:"work",input:{sessionId:"other",runnerContextId:"other-context",turnId:"other"}} as never,contextPackIds:[]});
  expect(()=>connection.db.insert(schema.invocationResourceSnapshots).values({invocationId:"other",digest:first.selection.digest,createdAt:0}).run()).toThrow("scope_mismatch");
  expect(()=>connection.db.update(schema.runnerResourceSnapshots).set({shadowId:"other"}).run()).toThrow("immutable");
@@ -75,7 +75,7 @@ test("SQL refuses cross-scope references and immutable snapshot changes",()=>{
 test("production service env pins resources before issuing model-configured token",()=>{
  const ref=fixtureExecutionReference(connection.db),snapshot=new ActiveAgentConfigService(connection.db,undefined).resolveRevisionSnapshot(scope.agentId,ref.revisionId);
  workInvocations(connection.db).set("first",{sessionId:"session",runnerContextId:"context",turnId:"first"});
- const input={runnerKind:"work" as const,invocationId:"first",runnerContextId:"context",sessionId:"session",requestedByUserId:"alice",db:connection.db,agentConfig:snapshot,resourceBuilder:builder,accessTokenSigningSecret:"test-secret"};
+ const input={runnerKind:"work" as const,invocationId:"first",runnerContextId:"context",sessionId:"session",requestedByUserId:scope.ownerUserId,db:connection.db,agentConfig:snapshot,resourceBuilder:builder,accessTokenSigningSecret:"test-secret"};
  const env=buildLunaServiceRunnerEnv(input),first=resources.read("first");
  expect(env.LUNA_ACCESS_TOKEN).toBeTruthy();expect(resources.retainedReferences(first.selection.digest)).toBe(1);
  writeFileSync(join(home,"prompts","MAIN.md"),"updated");
@@ -90,7 +90,7 @@ test("Worker preparation rejects missing snapshot before dispatch and rechecks i
  Object.defineProperty(kernel,"database",{configurable:true,value:connection});
  Object.defineProperty(kernel,"executionRuntime",{configurable:true,value:{prepareContext:async(request:import("@luna/runner-protocol").ContextPreparation)=>{
   calls++;
-  expect(request.protocolVersion).toBe(2);expect(request.scope).toEqual(scope);
+  expect(request.protocolVersion).toBe(2);expect(request.scope).toEqual({agentId:scope.agentId,shadowId:scope.shadowId});
   expect(request.resources).toEqual(pinned!.selection);
   if(revokeDuringPrepare)store.revoke("first","during preparation");
   expect(resources.read("first").selection.digest).toBe(pinned!.selection.digest);

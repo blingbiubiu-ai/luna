@@ -88,7 +88,7 @@ export function linkDashboardArtifactReferencesInMarkdown(
 
 export function createDashboardArtifactSigner(input: {
   readonly db: DrizzleDB;
-  readonly requesterUserId?: string | undefined;
+  readonly requesterAccountId?: string | undefined;
   readonly accessTokenClaims?: LunaAccessTokenClaims | undefined;
   readonly now?: () => number;
 }): DashboardArtifactUrlSigner {
@@ -96,7 +96,7 @@ export function createDashboardArtifactSigner(input: {
   const policy = createArtifactAccessPolicy({
     db:input.db,
     readHistory: true,
-    requesterUserId: input.requesterUserId,
+    requesterAccountId: input.requesterAccountId,
     accessTokenClaims: input.accessTokenClaims,
   });
   const url = (artifactId: string, variant: "preview" | "content") => {

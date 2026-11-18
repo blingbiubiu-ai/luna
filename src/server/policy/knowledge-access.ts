@@ -4,6 +4,7 @@ import type {DrizzleDB} from "@/data";
 import {AgentError,AgentStore} from "@/agents/agent-store";
 import {InvocationService} from "@/runners/invocation-service";
 import {requireAuthenticated,isGuardResponse} from "../auth/guards";
+import {actorFor} from "../auth/agent-actor";
 import {AuthorizationRuleStore} from "./authorization-rule-store";
 import {ruleMatchesOperation} from "./operation-policy";
 
@@ -19,10 +20,9 @@ export function requireKnowledgeAgent(c:Context,db:DrizzleDB,operationId:string)
   agentId=invocation.agentId;
  }
  if(!agentId) throw new AgentError("agent_scope_required",400);
- const agents = new AgentStore(db);
- if (!runner) agents.requireOwner(auth.user.id, agentId);
- agents.requireAccess(auth.user.id, agentId);
- const grants=new AuthorizationRuleStore(db,{kind:"agent",agentId}).getEffectiveGrantsForUser(auth.user.id);
+ const {userId}=actorFor(auth,db,agentId);
+ new AgentStore(db).requireAccess(userId, agentId);
+ const grants=new AuthorizationRuleStore(db,{kind:"agent",agentId}).getEffectiveGrantsForUser(userId);
  if(grants.some(g=>g.effect==="deny" && ruleMatchesOperation(g,operationId))) throw new AgentError("knowledge_access_denied",403);
  if(!runner) return agentId;
  if(!grants.some(g=>g.effect==="allow" && ruleMatchesOperation(g,operationId))) throw new AgentError("knowledge_access_denied",403);

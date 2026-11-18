@@ -91,7 +91,7 @@ export function createPluginsRoutes(options: PluginsRouteOptions = {}) {
         }, 500);
       }
       try {
-        const authorized=pluginRequestScope(c,db);
+        const {actorUserId,...authorized}=pluginRequestScope(c,db);
         new AgentPluginStore(db,registry).requireEnabled(authorized.scope.agentId,resolved.pluginId);
         const raw = plugin.parseCommandInput({
           command: resolved.command,
@@ -118,9 +118,6 @@ export function createPluginsRoutes(options: PluginsRouteOptions = {}) {
 
         const mainOperationId = overrideOperationId ?? resolved.command.operationId;
         if (mainOperationId === undefined) throw new Error("Command parser did not resolve an operation");
-        const claims = lunaAccessTokenClaimsFromContext(c);
-        const runnerUserId = claims?.source === "runner" ? claims.actorUserId : undefined;
-        const dashboardUserId = dashboardAuthSessionFromContext(c)?.user?.id;
 
         const result = await new OperationDispatcher({ db, registry }).invoke({
           ...authorized,
@@ -128,9 +125,7 @@ export function createPluginsRoutes(options: PluginsRouteOptions = {}) {
           input: parsed.input,
           subject: {
             source: invocationSource(c),
-            ...(runnerUserId !== undefined
-              ? { userId: runnerUserId }
-              : (dashboardUserId !== undefined ? { userId: dashboardUserId } : {})),
+            userId: actorUserId,
           },
 
 

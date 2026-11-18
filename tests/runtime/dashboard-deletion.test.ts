@@ -1,7 +1,7 @@
 import {fixtureArtifact} from "../helpers/platform-fixtures";
 import {fixtureTaskOwnership} from "../helpers/platform-fixtures";
 import {fixtureScope} from "../helpers/platform-fixtures";
-import { fixtureAgent, fixturePlatformAdmin, fixtureSessionOwnership } from "../helpers/platform-fixtures";
+import { fixtureAccount, fixturePlatformAdmin, fixtureSessionOwnership } from "../helpers/platform-fixtures";
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -17,7 +17,7 @@ import { SessionStore } from "../../src/sessions/session-store";
 import { IdentityDirectory } from "../../src/identity/identity-directory";
 import { createSessionsRoutes } from "../../src/server/routes/sessions";
 import { createUsersRoutes } from "../../src/server/routes/users";
-import { deleteDashboardSession, deleteDashboardUser } from "../../src/dashboard-api/deletion";
+import { deleteDashboardSession } from "../../src/dashboard-api/deletion";
 
 let home: string, previousHome: string, connection: DataConnection<typeof schema>, store: SessionStore;
 beforeEach(() => {
@@ -31,7 +31,7 @@ function app(kind = "dashboard-cookie") {
   return new Hono<{ Variables: Record<string, unknown> }>().use("*", async (c, next) => {
     fixturePlatformAdmin(connection.db, "admin");
     c.set("lunaAuthorizationDb", connection.db);
-    c.set("dashboardAuthSession", { authenticated: true, user: { id: "admin", name: "Admin", provider: "test" } });
+    c.set("dashboardAuthSession", { authenticated: true, account: { id: "admin", name: "Admin", provider: "test" } });
     c.set("lunaRequestAuthKind", kind);
     if (kind !== "dashboard-cookie") c.set("lunaAccessTokenClaims", { source: "runner" });
     await next();
@@ -59,132 +59,109 @@ test("pending inbox blocks deletion without changing routing", async () => {
   expect(store.getById(session.id)?.status).toBe("active");
   expect(store.resolveByChannelSurface(surface).id).toBe(session.id);
 });
-test("session deletion requires a Dashboard owner and platform user deletion requires an administrator", async () => {
-  const session = store.createLocalSession("admin",fixtureScope(connection.db,"admin"));
+test("session deletion and user removal require the Dashboard owner", async () => {
+  const session = store.createLocalSession("user:admin",fixtureScope(connection.db,"admin"));
+  const scope = `?agentId=${session.agent_id}`;
   expect((await app("luna-access-token").request(`/sessions/${session.id}`, { method: "DELETE" })).status).toBe(403);
-  expect((await app("luna-access-token").request(`/users/admin`, { method: "DELETE" })).status).toBe(403);
+  expect((await app("luna-access-token").request(`/users/user:admin${scope}`, { method: "DELETE" })).status).toBe(403);
   expect((await app().request("/sessions/missing", { method: "DELETE" })).status).toBe(404);
-  expect((await app().request("/users/missing", { method: "DELETE" })).status).toBe(404);
-});
-test("deleted users lose bindings and grants; subsequent identity resolution creates a new user", async () => {
-  const directory = new IdentityDirectory(connection.db);
-  const channelDirectory = new ChannelDirectoryStore(connection.db);
-  const sender = {
-    channel: {type: "feishu", id: "test"},
-    identity: {kind: "user" as const, displayName: "Test user", externalId: "ou_test",
-      ...feishuIdentityMetadata({environment: "feishu", appId: "test:feishu:test", tenantKey: "tenant"}, {open_id: "ou_test", user_id: "same-user"})},
-  };
-  fixtureSessionOwnership(connection.db, "feishu", "second", "admin");
-  const secondSender = {
-    channel: {type: "feishu", id: "second"},
-    identity: {...sender.identity, externalId: "ou_second",
-      ...feishuIdentityMetadata({environment: "feishu", appId: "test:feishu:second", tenantKey: "tenant"}, {open_id: "ou_second", user_id: "same-user"})},
-  };
-  const observed = channelDirectory.upsertIdentity(sender);
-  const other = channelDirectory.upsertIdentity(secondSender);
-  const bound = (identityId: string) => connection.db.select().from(schema.channelUserBindings)
-    .where(eq(schema.channelUserBindings.channelIdentityId, identityId)).get();
-  const old = {id: bound(observed.id)!.userId};
-  expect(bound(other.id)?.userId).toBe(old.id);
-  connection.db.insert(schema.authorizationRules).values({ scopeType: "agent", agentId: fixtureAgent(connection.db).id, id: "grant", subjectType: "user", subjectId: old.id, target: "test", matchType: "exact", effect: "allow", createdAt: "1", updatedAt: "1" }).run();
-  const scope = `?agentId=${fixtureAgent(connection.db, "admin").id}`;
-  expect((await app().request(`/users/${old.id}`, { method: "DELETE" })).status).toBe(200);
-  const detail = await app().request(`/users/${old.id}${scope}`);
-  expect(detail.status).toBe(404);
-  expect(((await (await app().request("/users" + scope)).json()) as { users: { id: string }[] }).users.some((user: { id: string }) => user.id === old.id)).toBe(false);
-  expect((await app().request(`/users/${old.id}/group-memberships`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ groupId: "any", role: "member" }) })).status).toBe(404);
-  expect((await app().request(`/users/${old.id}/authorization-rules/batch${scope}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ items: [{ target: "agent.root", effect: "allow" }] }) })).status).toBe(404);
-  expect(connection.db.select().from(schema.users).where(eq(schema.users.id, old.id)).get()?.status).toBe("deleted");
-  expect(connection.db.select().from(schema.authorizationRules).where(eq(schema.authorizationRules.subjectId, old.id)).all()).toHaveLength(0);
-  expect(bound(observed.id)).toBeUndefined();
-  expect(bound(other.id)).toBeUndefined();
-  expect(connection.db.select().from(schema.identityObservations).all()).toHaveLength(0);
-  expect(channelDirectory.upsertIdentity(sender).id).toBe(observed.id);
-  expect(channelDirectory.upsertIdentity(secondSender).id).toBe(other.id);
-  const next = bound(observed.id)!.userId;
-  expect(bound(other.id)?.userId).toBe(next);
-  expect(next).not.toBe(old.id);
-  expect(directory.resolveUserIdForIdentity({namespace: "feishu", kind: "open_id", value: "ou_test", scope: "app:test:feishu:test"})).toBe(next);
-});
-test("system identities and the current user are protected", () => {
-  const session = store.createLocalSession("admin",fixtureScope(connection.db,"admin"));
-  expect(() => deleteDashboardUser(connection.db, session.bot_user_id!, "admin")).toThrow("系统身份");
-  expect(() => deleteDashboardUser(connection.db, "admin", "admin")).toThrow("不能删除当前登录用户");
-});
-test("deletion disables schedules and revokes tokens without deleting historical users", () => {
-  const session = store.createLocalSession("admin",fixtureScope(connection.db,"admin"));
-  connection.db.insert(schema.sessionSchedules).values({ id: "schedule", actorUserId: "admin", sourceSessionId: session.id, targetSessionId: session.id, action: {}, timezone: "UTC", nextAt: 999, enabled: true, revision: 1, overlap: "skip", misfire: "skip", expiresAfterMs: 1000, createdAt: 1 }).run();
-  connection.db.insert(schema.accessTokens).values({ id: "token", tokenHash: "hash", userId: "admin", source: "runner", name: "test", role: "runner", sourceSessionId: session.id, issuedAt: 1, expiresAt: 999, createdAt: 1 }).run();
-  deleteDashboardSession(connection.db, session.id);
-  expect(connection.db.select().from(schema.sessionSchedules).get()).toBeUndefined();
-  expect(connection.db.select().from(schema.accessTokens).get()?.revokedAt).toBeGreaterThan(0);
-  expect(connection.db.select().from(schema.users).where(eq(schema.users.id, session.bot_user_id!)).get()?.kind).toBe("system");
+  expect((await app().request(`/users/missing${scope}`, { method: "DELETE" })).status).toBe(404);
 });
 
-test("deleted dashboard users cannot reuse a previously signed cookie", async () => {
+const feishuSender = () => ({
+  channel: {type: "feishu", id: "test"},
+  identity: {kind: "user" as const, displayName: "Test user", externalId: "ou_test",
+    ...feishuIdentityMetadata({environment: "feishu", appId: "test:feishu:test", tenantKey: "tenant"}, {open_id: "ou_test", user_id: "same-user"})},
+});
+
+test("a removed user leaves the Agent's list and comes back unchanged when they write again", async () => {
+  const channelDirectory = new ChannelDirectoryStore(connection.db);
+  const observed = channelDirectory.upsertIdentity(feishuSender());
+  const userId = connection.db.select().from(schema.channelUserBindings).where(eq(schema.channelUserBindings.channelIdentityId, observed.id)).get()!.userId;
+  const agentId = connection.db.select().from(schema.users).where(eq(schema.users.id, userId)).get()!.agentId;
+  const scope = `?agentId=${agentId}`;
+  const listed = async () => ((await (await app().request("/users" + scope)).json()) as { users: { id: string }[] }).users.map(user => user.id);
+  expect(await listed()).toContain(userId);
+  expect((await app().request(`/users/${userId}${scope}`, { method: "DELETE" })).status).toBe(200);
+  expect(connection.db.select().from(schema.users).where(eq(schema.users.id, userId)).get()?.status).toBe("removed");
+  expect(await listed()).not.toContain(userId);
+  channelDirectory.upsertIdentity(feishuSender());
+  expect(connection.db.select().from(schema.users).where(eq(schema.users.id, userId)).get()?.status).toBe("active");
+  expect(await listed()).toContain(userId);
+});
+
+test("the owner renames and blocks users of the Agent, but cannot block or remove themselves", async () => {
+  const observed = new ChannelDirectoryStore(connection.db).upsertIdentity(feishuSender());
+  const userId = connection.db.select().from(schema.channelUserBindings).where(eq(schema.channelUserBindings.channelIdentityId, observed.id)).get()!.userId;
+  const agentId = connection.db.select().from(schema.users).where(eq(schema.users.id, userId)).get()!.agentId;
+  const scope = `?agentId=${agentId}`;
+  const patch = (id: string, body: unknown) => app().request(`/users/${id}${scope}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  expect((await patch(userId, { displayName: "测试同学" })).status).toBe(200);
+  expect(connection.db.select().from(schema.users).where(eq(schema.users.id, userId)).get()).toMatchObject({ displayName: "测试同学", profileSource: "manual" });
+  expect((await patch(userId, { status: "blocked" })).status).toBe(200);
+  const { AgentStore } = await import("../../src/agents/agent-store");
+  expect(() => new AgentStore(connection.db).requireAccess(userId, agentId)).toThrow("active_user_required");
+  expect((await patch(userId, { status: "active" })).status).toBe(200);
+  const owner = new AgentStore(connection.db).ownerUserId(agentId);
+  expect((await patch(owner, { status: "blocked" })).status).toBe(409);
+  expect((await app().request(`/users/${owner}${scope}`, { method: "DELETE" })).status).toBe(409);
+  // A user of another Agent is not found here.
+  const foreign = fixtureScope(connection.db, "someone-else");
+  expect((await patch(foreign.ownerUserId, { displayName: "x" })).status).toBe(404);
+});
+
+test("account deletion is refused for the requester and for Agent owners, and revokes what the account held", async () => {
+  const { deleteAccount } = await import("../../src/dashboard-api/deletion");
+  const { AccessTokenService } = await import("../../src/server/auth/access-token-service");
+  const { AuthorizationRuleStore } = await import("../../src/server/policy/authorization-rule-store");
+  expect(() => deleteAccount(connection.db, "admin", "admin")).toThrow("不能删除当前登录账号");
+  expect(() => deleteAccount(connection.db, "admin", "other")).toThrow("请先删除此账号拥有的 Agent");
+  fixtureAccount(connection.db, "leaving");
+  const token = new AccessTokenService({ db: connection.db, signingSecret: "test" }).issueToken({ accountId: "leaving", name: "cli", source: "cli", role: "user", ttlMs: 60000, now: Date.now() });
+  new AuthorizationRuleStore(connection.db, {kind: "platform"}).addGrant({ subjectType: "user", subjectId: "leaving", target: "system.admin", effect: "allow" });
+  deleteAccount(connection.db, "leaving", "admin");
+  expect(connection.db.select().from(schema.accounts).where(eq(schema.accounts.id, "leaving")).get()?.status).toBe("deleted");
+  expect(connection.db.select().from(schema.accessTokens).where(eq(schema.accessTokens.id, token.record.id)).get()?.revokedAt).toBeGreaterThan(0);
+  expect(connection.db.select().from(schema.authorizationRules).where(eq(schema.authorizationRules.subjectId, "leaving")).all()).toHaveLength(0);
+});
+
+test("a deleted account cannot reuse a previously signed cookie", async () => {
   const { DashboardAuthService, createDashboardAuthMiddleware } = await import("../../src/server/auth");
+  const { deleteAccount } = await import("../../src/dashboard-api/deletion");
   const auth = new DashboardAuthService({ provider: { id: "test", authenticateToken: async () => ({ id: "victim", name: "Victim", provider: "test" }) } });
   const login = await auth.login("test");
   const server = new Hono().use("*", createDashboardAuthMiddleware(auth, { db: connection.db })).get("/api/private", c => c.json({ ok: true }));
   const request = () => server.request("/api/private", { headers: { Cookie: `luna_dashboard_session=${login!.sessionToken}` } });
   expect((await request()).status).toBe(200);
-  deleteDashboardUser(connection.db, "victim", "admin");
+  deleteAccount(connection.db, "victim", "admin");
   expect((await request()).status).toBe(401);
 });
 
-
-test("historical message authors retain deleted status and resolve to read-only details", async () => {
-  const user = new IdentityDirectory(connection.db).materializeIdentityClaims({ kind: "human", displayName: "Historical author", claims: [] });
-  const session = store.createLocalSession("admin",fixtureScope(connection.db,"admin"));
-  connection.db.insert(schema.messages).values({ id: "historical-message", agentId:session.agent_id,shadowId:session.shadow_id,bindingId:session.binding_id, channelType: "dashboard", channelId: "luna-dashboard", externalMessageId: "historical", senderUserId: user.id, role: "user", contentKind: "text", presentationKind: "plain", contentJson: { type: "text", text: "Historical message" }, occurredAt: 1, createdAt: 1 }).run();
-  connection.db.insert(schema.sessionTimelineEntries).values({ id: "historical-entry", sessionId: session.id, messageId: "historical-message", entryKind: "message", createdAt: 1 }).run();
-  deleteDashboardUser(connection.db, user.id, "admin");
-  const response = await app().request(`/sessions/${session.id}/messages`);
-  expect(response.status).toBe(200);
-  expect(await response.json()).toMatchObject([{ senderUser: { id: user.id, status: "deleted", displayName: "Historical author" } }]);
-  const detail = await app().request(`/users/${user.id}?agentId=${session.agent_id}`);
-  expect(await detail.json()).toMatchObject({ id: user.id, status: "deleted", messageCount: 1, sessionCount: 1 });
-});
-
-
-test("shared membership and permission writes also reject deleted users", async () => {
-  const { GroupStore } = await import("../../src/server/groups/group-store");
-  const { AuthorizationRuleStore } = await import("../../src/server/policy/authorization-rule-store");
-  const user = new IdentityDirectory(connection.db).materializeIdentityClaims({ kind: "human", displayName: "Read-only user", claims: [] });
-  deleteDashboardUser(connection.db, user.id, "admin");
-  connection.db.insert(schema.groups).values({ agentId: fixtureAgent(connection.db).id, id: "group", slug: "group", displayName: "Group", createdAt: "1", updatedAt: "1" }).run();
-  expect(() => new GroupStore(connection.db).addMember({ groupId: "group", userId: user.id })).toThrow("active_user_required");
-  expect(() => new AuthorizationRuleStore(connection.db, {kind: "platform"}).addGrant({ subjectType: "user", subjectId: user.id, target: "system.admin", effect: "allow" })).toThrow("已删除用户");
-  expect(connection.db.select().from(schema.groupMemberships).all()).toHaveLength(0);
-  expect(connection.db.select().from(schema.authorizationRules).all()).toHaveLength(0);
-});
-
-test("deletion protects system kind rather than bot kind or profile source", () => {
-  const directory = new IdentityDirectory(connection.db);
-  const system = directory.materializeIdentityClaims({ kind: "system", displayName: "System", claims: [] });
-  expect(() => deleteDashboardUser(connection.db, system.id, "admin")).toThrow("系统身份");
-  const bot = directory.materializeIdentityClaims({ kind: "bot", displayName: "Old bot", claims: [] });
-  connection.db.update(schema.users).set({ profileSource: "system" }).where(eq(schema.users.id, bot.id)).run();
-  deleteDashboardUser(connection.db, bot.id, "admin");
-  expect(connection.db.select().from(schema.users).where(eq(schema.users.id, bot.id)).get()?.status).toBe("deleted");
+test("session deletion disables schedules and revokes tokens without deleting historical users", () => {
+  const session = store.createLocalSession("user:admin",fixtureScope(connection.db,"admin"));
+  connection.db.insert(schema.sessionSchedules).values({ id: "schedule", actorUserId: "user:admin", sourceSessionId: session.id, targetSessionId: session.id, action: {}, timezone: "UTC", nextAt: 999, enabled: true, revision: 1, overlap: "skip", misfire: "skip", expiresAfterMs: 1000, createdAt: 1 }).run();
+  connection.db.insert(schema.accessTokens).values({ id: "token", agentId: session.agent_id, tokenHash: "hash", userId: "user:admin", source: "runner", name: "test", role: "runner", sourceSessionId: session.id, issuedAt: 1, expiresAt: 999, createdAt: 1 }).run();
+  deleteDashboardSession(connection.db, session.id);
+  expect(connection.db.select().from(schema.sessionSchedules).get()).toBeUndefined();
+  expect(connection.db.select().from(schema.accessTokens).get()?.revokedAt).toBeGreaterThan(0);
+  expect(connection.db.select().from(schema.users).where(eq(schema.users.id, session.bot_user_id!)).get()?.kind).toBe("shadow");
 });
 
 test("a session reply identity cannot be replaced with a provider bot user", () => {
-  const bot = new IdentityDirectory(connection.db).materializeIdentityClaims({ kind: "bot", displayName: "Provider bot", claims: [] });
-  const session = store.createLocalSession("admin",fixtureScope(connection.db,"admin"));
+  const session = store.createLocalSession("user:admin",fixtureScope(connection.db,"admin"));
+  const bot = new IdentityDirectory(connection.db).materializeIdentityClaims({ agentId: session.agent_id, kind: "bot", displayName: "Provider bot", claims: [] });
   expect(() => connection.db.update(schema.sessions).set({ bot_user_id: bot.id }).where(eq(schema.sessions.id, session.id)).run())
     .toThrow("session_scope_immutable");
   expect(() => store.bindBotUser(session.id, bot.id)).toThrow("session_reply_identity_mismatch");
-  deleteDashboardUser(connection.db, bot.id, "admin");
   expect(store.requireReplyUserId(session.id)).toBe(session.bot_user_id!);
 });
 
 test("deleting owner scrubs messages and keeps safe reference placeholders; deleting references does not delete owners", async () => {
   const { MessageStore } = await import("../../src/sessions/message-store");
   const { SessionTimelineStore } = await import("../../src/sessions/session-timeline-store");
-  const owner = store.createLocalSession("admin",fixtureScope(connection.db,"admin"));
-  const reference = store.createLocalSession("admin",fixtureScope(connection.db,"admin"));
-  const secondary = store.createLocalSession("admin",fixtureScope(connection.db,"admin"));
+  const owner = store.createLocalSession("user:admin",fixtureScope(connection.db,"admin"));
+  const reference = store.createLocalSession("user:admin",fixtureScope(connection.db,"admin"));
+  const secondary = store.createLocalSession("user:admin",fixtureScope(connection.db,"admin"));
   const messages = new MessageStore(connection.db);
   const message = messages.append({ sessionId: owner.id, senderUserId: store.requireReplyUserId(owner.id), role: "assistant", content: [{ type: "text", text: "SECRET_BODY" }], rawPayload: { secret: "SECRET_RAW" } });
   const timeline = new SessionTimelineStore(connection.db);
@@ -214,7 +191,7 @@ test("session cleanup deletes managed files and runner context and keeps indepen
   const { mkdirSync, writeFileSync, existsSync } = await import("node:fs");
   const { config } = await import("../../src/shared");
   const { createSessionRunnerPaths } = await import("../../src/shared/runner-paths");
-  const session = store.createLocalSession("admin",fixtureScope(connection.db,"admin"));
+  const session = store.createLocalSession("user:admin",fixtureScope(connection.db,"admin"));
   const root = createSessionRunnerPaths(session.id).runnerRootPath;
   mkdirSync(root, { recursive: true }); writeFileSync(join(root, "context.txt"), "private");
   mkdirSync(config.paths.artifacts, { recursive: true });
@@ -231,7 +208,7 @@ test("session cleanup deletes managed files and runner context and keeps indepen
 test("busy reference prevents erasure, and a completed delete cannot recreate inbox work", async () => {
   const { MessageStore } = await import("../../src/sessions/message-store");
   const { SessionTimelineStore } = await import("../../src/sessions/session-timeline-store");
-  const owner = store.createLocalSession("admin",fixtureScope(connection.db,"admin")), ref = store.createLocalSession("admin",fixtureScope(connection.db,"admin"));
+  const owner = store.createLocalSession("user:admin",fixtureScope(connection.db,"admin")), ref = store.createLocalSession("user:admin",fixtureScope(connection.db,"admin"));
   const message = new MessageStore(connection.db).append({ sessionId: owner.id, senderUserId: store.requireReplyUserId(owner.id), role: "assistant", content: { text: "Keep until idle" } });
   new SessionTimelineStore(connection.db).appendReference({ sessionId: ref.id, messageId: message.id });
   connection.db.insert(schema.sessionInbox).values({ id: "busy", session_id: ref.id, message_id: message.id, entry_id: "ref", status: "processing", received_at: 1, created_at: 1, updated_at: 1 }).run();
@@ -259,7 +236,7 @@ test("an artifact referenced by another owner survives with its new owner", asyn
   const { MessageStore } = await import("../../src/sessions/message-store");
   const { mkdirSync, writeFileSync, existsSync } = await import("node:fs");
   const { config } = await import("../../src/shared");
-  const owner = store.createLocalSession("admin",fixtureScope(connection.db,"admin")), other = store.createLocalSession("admin",fixtureScope(connection.db,"admin"));
+  const owner = store.createLocalSession("user:admin",fixtureScope(connection.db,"admin")), other = store.createLocalSession("user:admin",fixtureScope(connection.db,"admin"));
   mkdirSync(config.paths.artifacts, { recursive: true });
   const file = join(config.paths.artifacts, "shared.txt"); writeFileSync(file, "shared");
   connection.db.insert(schema.managedArtifacts).values(fixtureArtifact(connection.db, { id: "shared-artifact", scope_type: "session", scope_id: owner.id, producer: "test", kind: "file", name: "shared.txt", storage_key: file, created_at: 1 })).run();
@@ -273,7 +250,7 @@ test("an artifact referenced by another owner survives with its new owner", asyn
 
 for (const state of ["active", "revoked"] as const) test(`session deletion waits for ${state} Runtime invocation settlement`, async () => {
   const session = store.resolveByChannelSurface(surface);
-  connection.db.insert(schema.runnerInvocations).values({ agentId: session.agent_id, shadowId: session.shadow_id, id: "runtime-inv", runnerKind: "work", actorUserId: "admin", runnerContextId: "runtime-context", sessionId: session.id, originId: "runtime-origin", state, inputSnapshot: { version: 1, input: {} }, contextPackIds: [], createdAt: 1 }).run();
+  connection.db.insert(schema.runnerInvocations).values({ agentId: session.agent_id, shadowId: session.shadow_id, id: "runtime-inv", runnerKind: "work", actorUserId: "user:admin", runnerContextId: "runtime-context", sessionId: session.id, originId: "runtime-origin", state, inputSnapshot: { version: 1, input: {} }, contextPackIds: [], createdAt: 1 }).run();
   expect((await app().request(`/sessions/${session.id}`, { method: "DELETE" })).status).toBe(409);
   expect(store.getById(session.id)?.status).toBe("active");
   expect(store.resolveByChannelSurface(surface).id).toBe(session.id);

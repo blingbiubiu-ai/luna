@@ -1,4 +1,4 @@
-import {fixtureTaskOwnership} from "../helpers/platform-fixtures";
+import {fixtureTaskOwnership, fixtureUser} from "../helpers/platform-fixtures";
 import {fixtureSessionOwnership} from "../helpers/platform-fixtures";
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -1894,7 +1894,8 @@ describe("session inbound router", () => {
     });
     const now = Date.now();
     database.db.insert(lunaSchema.users).values({
-      id: "stored-user", kind: "human", displayName: "Stored User", status: "active",
+      id: "stored-user", agentId: fixtureSessionOwnership(database.db,"feishu","stored-channel").agent_id,
+      kind: "human", displayName: "Stored User", status: "active",
       createdAt: String(now), updatedAt: String(now),
     }).run();
 
@@ -3025,6 +3026,9 @@ function seedTaskForSession(input: {
   readonly status: string;
 }): void {
   const now = Date.now();
+  const ownership = fixtureTaskOwnership(database.db, input.sessionId);
+  // The creator is a user of the task's Agent.
+  fixtureUser(database.db, ownership.agent_id, "user-1");
   database.db
     .insert(tasks)
     .values({
@@ -3043,7 +3047,7 @@ function seedTaskForSession(input: {
       },
       created_at: now,
       updated_at: now,
-      last_activity_at: now, ...fixtureTaskOwnership(database.db, input.sessionId)})
+      last_activity_at: now, ...ownership})
     .run();
 }
 
