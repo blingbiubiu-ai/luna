@@ -151,3 +151,12 @@ test("purgeable lists only placed Shadows that are deleted with no lifecycle job
   lifecycle.request(owner, {agentId: scope.agentId}, "disabled", "disable-agent");
   expect(lifecycle.purgeable([deleted])).toEqual([]);
 });
+
+test("live keeps only Shadows this Service knows, of the right Agent, with neither deleted", () => {
+  const lifecycle = new AgentLifecycleStore(connection.db);
+  const live = {agentId: scope.agentId, shadowId: scope.shadowId}, deleted = {agentId: scope.agentId, shadowId};
+  connection.db.update(schema.agentShadows).set({status: "deleted"}).where(eq(schema.agentShadows.id, shadowId)).run();
+  expect(lifecycle.live([live, deleted, {agentId: scope.agentId, shadowId: "unknown"}, {agentId: "unknown", shadowId: scope.shadowId}])).toEqual([live]);
+  connection.db.update(schema.lunaAgents).set({status: "deleted"}).where(eq(schema.lunaAgents.id, scope.agentId)).run();
+  expect(lifecycle.live([live])).toEqual([]);
+});

@@ -1,4 +1,5 @@
 import { createAccountRoutes } from "./routes/accounts";
+import { createPlatformSettingsRoutes } from "./routes/platform-settings";
 import {createPlatformAgentRoutes} from "./routes/platform-agents";
 import type {AgentLifecycleJob} from "@/agents/agent-lifecycle-store";
 import { getKernel } from "@/server/routes/kernel";
@@ -158,6 +159,7 @@ function createApp(
       .route("/api/channel-config", db === undefined ? new Hono() : createChannelConfigRoutes({db}))
       .route("/api/agent", agentRoutes)
       .route("/api/accounts", db === undefined ? new Hono() : createAccountRoutes(db))
+      .route("/api/platform-settings", db === undefined ? new Hono() : createPlatformSettingsRoutes(db))
       .route("/api/agents",db === undefined ? new Hono() : createPlatformAgentRoutes(db,pluginRegistry,resumeChannels))
       .route(
         "/api/agent-config",

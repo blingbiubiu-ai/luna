@@ -59,7 +59,7 @@ export class ServiceLink {
     const config = this.manager.driver.config;
     this.send({ type: "heartbeat", health: { workerId: config.workerId, imageDigest: config.imageDigest, capacity: config.capacity,
       occupied: this.manager.store.list().reduce((n, e) => n + this.manager.store.active(e.id).length, 0), ready: this.ready,
-      capabilities:["shadow-scope-v2","container-streams-v1"], error: this.localError ?? this.error, projects: config.projects.map(p => p.projectId) } });
+      capabilities:["shadow-scope-v2","container-streams-v1","scope-reconcile-v1"], error: this.localError ?? this.error, projects: config.projects.map(p => p.projectId) } });
   }
   events(jobId: string, instanceId: string, body: unknown): void {
     if (this.socket?.readyState !== WebSocket.OPEN) throw new ExecutionError(503, "service_disconnected");

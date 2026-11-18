@@ -15,7 +15,7 @@ import {
   useDashboardMe,
   type DashboardAuthSession,
 } from "@/lib/api";
-import { navigateInApp } from "@/lib/app-history";
+import { appHistory, navigateInApp } from "@/lib/app-history";
 import { useTranslation } from "@/lib/i18n";
 
 interface RailItem {
@@ -130,7 +130,7 @@ function RailUserMenuContent({ session }: { readonly session: DashboardAuthSessi
           <UserIdentity userInfo={userInfo} />
         </div>
         <DropdownMenuSeparator />
-        <DropdownMenuItem data-testid="sidebar-settings-menu-item">
+        <DropdownMenuItem data-testid="sidebar-settings-menu-item" onSelect={() => { if (appHistory.location.pathname !== "/platform/settings") appHistory.push("/platform/settings"); }}>
           <SettingsIcon />
           <span>{t("Settings")}</span>
         </DropdownMenuItem>

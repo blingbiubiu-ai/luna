@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { Toaster } from "@/components/ui/sonner";
 import { PluginDetailDashboard, PluginsDashboard } from "@/app/plugins/plugins-dashboard";
+import { PlatformSettingsPage } from "@/app/platform-settings";
 import {
   useDashboardAgents, useDashboardMe, useDisablePlugin, useEnablePlugin, usePlugin, usePlugins,
   useRefreshPlugins, useRollbackPlugin, useUpgradePlugin,
@@ -25,7 +26,10 @@ export function PlatformShell({ pathname }: { readonly pathname: string }) {
   const detail = /^\/platform\/plugins\/([^/]+)$/.exec(path);
   let title = "Agents";
   let page: ReactNode = <AgentsLanding />;
-  if (path === "/platform/plugins" || detail) {
+  if (path === "/platform/settings") {
+    title = "设置";
+    page = <PlatformSettingsPage />;
+  } else if (path === "/platform/plugins" || detail) {
     title = "插件管理";
     page = me.isPending ? <p role="status" className="p-6">正在加载…</p>
       : !isAdmin ? <p role="alert" className="p-6 text-sm text-muted-foreground">插件管理需要平台管理员权限。</p>

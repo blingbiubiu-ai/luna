@@ -12,6 +12,15 @@ import type { ExecutionRuntime, PreparedContext, ContextPreparation } from "./ex
 import { RuntimeFiles } from "./files";
 import { RuntimeScheduler, type AllowedWorkers } from "./scheduler";
 import { runtimeServer } from "./server";
+import { OrphanCleanupStore } from "./orphan-cleanup";
+
+/** Workers that report their Shadows and remove the data of those Service no longer knows. */
+export const SCOPE_RECONCILE_CAPABILITY = "scope-reconcile-v1";
+export interface WorkerScopeReport {
+  workerId: string;
+  result?: { stopped: ResourceScope[]; purged: ResourceScope[]; busy: ResourceScope[] };
+  error?: string;
+}
 
 /** Service owns the scheduler, database and Executor callback/admin listener. */
 export class Runtime implements ExecutionRuntime {
@@ -25,6 +34,8 @@ export class Runtime implements ExecutionRuntime {
   private closing?: Promise<void>;
   private readonly stopped = new AbortController();
   private readonly pending = new Set<Promise<unknown>>();
+  private orphanCleanupStore?: OrphanCleanupStore;
+  private readonly scopeReconciledAt = new Map<string, number>();
 
   constructor(
     private readonly scheduler: RuntimeScheduler,
@@ -134,6 +145,37 @@ export class Runtime implements ExecutionRuntime {
   }
   /** Shadows that still have a placement (and possibly Worker data). */
   placedShadows(): ResourceScope[] { return this.scheduler.placements.placed(); }
+  /** The platform's setting for Worker data Service no longer knows. */
+  orphanCleanup(): OrphanCleanupStore {
+    this.check();
+    return this.orphanCleanupStore ??= new OrphanCleanupStore(this.db!);
+  }
+  /**
+   * Ask each connected Worker that supports it which Shadows it holds and tell it which of
+   * those `live` still names; the Worker removes the others' data. A Worker reconciled
+   * within `intervalMs` is skipped, so one that connects later is reconciled on the next call.
+   */
+  reconcileWorkerScopes(live: (scopes: ResourceScope[]) => ResourceScope[], intervalMs: number, retentionMs: number): Promise<WorkerScopeReport[]> {
+    return this.run(async () => {
+      const reports: WorkerScopeReport[] = [];
+      for (const worker of this.scheduler.workers.list()) {
+        if (worker.lastSeen <= Date.now() - 30000 || !worker.health?.capabilities?.includes(SCOPE_RECONCILE_CAPABILITY)) continue;
+        if ((this.scopeReconciledAt.get(worker.workerId) ?? 0) > Date.now() - intervalMs) continue;
+        this.scopeReconciledAt.set(worker.workerId, Date.now());
+        try {
+          const client = this.scheduler.workers.client(worker.workerId);
+          const { scopes } = await client.call<{ scopes: ResourceScope[] }>("GET", "/v1/scopes", undefined,
+            AbortSignal.any([this.stopped.signal, AbortSignal.timeout(30000)]));
+          const result = await client.call<NonNullable<WorkerScopeReport["result"]>>("POST", "/v1/scopes/reconcile", { checked: scopes, valid: live(scopes), retentionMs },
+            AbortSignal.any([this.stopped.signal, AbortSignal.timeout(600000)]));
+          reports.push({ workerId: worker.workerId, result });
+        } catch (error) {
+          reports.push({ workerId: worker.workerId, error: error instanceof ExecutionError ? error.code : error instanceof Error ? error.message : String(error) });
+        }
+      }
+      return reports;
+    });
+  }
   delete(id: string, signal?: AbortSignal): Promise<void> { return this.run(() => this.scheduler.delete(Id.parse(id)), signal); }
   async *events(id: string, after: number, detach: AbortSignal): AsyncGenerator<RuntimeEvent> {
     Id.parse(id);

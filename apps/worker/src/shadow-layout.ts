@@ -49,8 +49,7 @@ export class WorkerShadowLayouts {
   * the HOME and resource directories the caller must delete.
   */
  remove(scope:ResourceScope):string[] {
-  const resourceRoot=this.resourceRoot(scope);
-  const home=join(this.root,"agents",scope.agentId,"shadows",scope.shadowId);
+  const directories=this.directories(scope);
   transaction(this.db,()=>{
    const tables=new Set((this.db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all() as {name:string}[]).map(row=>row.name));
    const contexts="SELECT context_id FROM worker_shadow_context_paths WHERE shadow_id=?";
@@ -60,7 +59,17 @@ export class WorkerShadowLayouts {
    this.db.prepare("DELETE FROM worker_shadow_context_paths WHERE shadow_id=?").run(scope.shadowId);
    this.db.prepare("DELETE FROM worker_shadow_layouts WHERE shadow_id=? AND agent_id=?").run(scope.shadowId,scope.agentId);
   });
-  return [home,resourceRoot];
+  return directories;
+ }
+
+ /** A Shadow's HOME and resource directories on this Worker. */
+ directories(scope:ResourceScope):string[] {
+  return [join(this.root,"agents",scope.agentId,"shadows",scope.shadowId),this.resourceRoot(scope)];
+ }
+
+ /** Shadows with a HOME layout here, whether or not an environment still exists. */
+ scopes():ResourceScope[] {
+  return this.db.prepare("SELECT agent_id AS agentId,shadow_id AS shadowId FROM worker_shadow_layouts").all() as ResourceScope[];
  }
 
  /** Executor configuration is stored outside Runner HOME. */

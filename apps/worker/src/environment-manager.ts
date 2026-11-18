@@ -13,6 +13,17 @@ import { validateScopedResources } from "@luna/host-runtime/scoped-runner-resour
 import { EnvironmentStore, environmentKey, type ReservationRecord, type EnvironmentRecord } from "./environment-store";
 import { DockerEnvironmentDriver } from "./docker-driver";
 import { ProjectMounts } from "./project-mounts";
+import { PruneRequest, ScopeReconcile, WorkerOrphans, scopeKey } from "./orphans";
+import type { ResourceScope } from "@luna/host-runtime/scoped-runner-resources";
+
+export interface ReconcileResult { stopped: ResourceScope[]; purged: ResourceScope[]; busy: ResourceScope[]; }
+export interface PrunePlan {
+  shadows: (ResourceScope & { orphanSince: number | null; containers: string[]; volumes: string[]; directories: string[] })[];
+  strays: { containers: string[]; volumes: string[] };
+  applied: boolean;
+  /** Shadows left in place because work still runs in them. */
+  busy: ResourceScope[];
+}
 
 interface ExecutorHealth { instanceId: string; bootId: string; activeJobs: number; scope:EnvironmentSpec["scope"]; }
 export interface PreparedEnvironment { handle: EnvironmentHandle; controlCredential: { credentialId: string; token: string }; }
@@ -28,7 +39,8 @@ export class EnvironmentManager {
   private readonly locks = new Map<string, Promise<unknown>>();
   private readonly streamCounts = new Map<string, number>();
   private streamCloser?: (environmentId: string, reason: string) => void;
-  constructor(readonly store: EnvironmentStore, readonly driver: DockerEnvironmentDriver) {}
+  readonly orphans: WorkerOrphans;
+  constructor(readonly store: EnvironmentStore, readonly driver: DockerEnvironmentDriver) { this.orphans = new WorkerOrphans(store.db); }
 
   setStreamCloser(closer: (environmentId: string, reason: string) => void): void { this.streamCloser = closer; }
   activeStreams(id: string): number { return this.streamCounts.get(id) ?? 0; }
@@ -346,6 +358,79 @@ export class EnvironmentManager {
       });
     }
     await this.driver.purgeShadowFiles(scope);
+  }
+
+  /** Every Shadow this Worker holds data for: its environments and its HOME layouts. */
+  heldScopes(): ResourceScope[] {
+    const scopes = new Map<string, ResourceScope>();
+    for (const { spec: { scope } } of this.store.list()) scopes.set(scopeKey(scope), { agentId: scope.agentId, shadowId: scope.shadowId });
+    for (const scope of this.driver.layoutScopes()) scopes.set(scopeKey(scope), scope);
+    return [...scopes.values()];
+  }
+
+  /**
+   * Act on Service's answer for the Shadows this Worker reported. A Shadow Service no longer
+   * knows loses its containers now; its /data volumes and HOME go once it has stayed unknown
+   * for the retention period. A Shadow Service knows again is no longer an orphan. Shadows with
+   * running work are left for the next round.
+   */
+  async reconcileScopes(raw: unknown, now = Date.now()): Promise<ReconcileResult> {
+    const { checked, valid, retentionMs } = ScopeReconcile.parse(raw);
+    const known = new Set(valid.map(scopeKey));
+    const held = new Set(this.heldScopes().map(scopeKey));
+    const result: ReconcileResult = { stopped: [], purged: [], busy: [] };
+    for (const scope of checked) {
+      if (known.has(scopeKey(scope)) || !held.has(scopeKey(scope))) { this.orphans.clear(scope); continue; }
+      const since = this.orphans.mark(scope, now);
+      try {
+        if (now - since >= retentionMs) { await this.purgeShadow(scope); this.orphans.clear(scope); result.purged.push(scope); }
+        else { await this.stopShadow(scope); result.stopped.push(scope); }
+      } catch (error) {
+        if (!(error instanceof ExecutionError) || error.status !== 409) throw error;
+        result.busy.push(scope);
+      }
+    }
+    return result;
+  }
+
+  /**
+   * What `luna worker prune` deletes: Shadows Service declared orphaned (and, with
+   * `keepAgents`, every Shadow of another Agent) plus this Worker's containers and volumes
+   * that no environment names. Only lists them unless `apply`; applying skips the retention.
+   */
+  async prune(raw: unknown): Promise<PrunePlan> {
+    const { keepAgents, apply } = PruneRequest.parse(raw);
+    const orphanSince = new Map(this.orphans.list().map(orphan => [scopeKey(orphan), orphan.since]));
+    const environments = this.store.list();
+    const shadows = this.heldScopes()
+      .filter(scope => orphanSince.has(scopeKey(scope)) || (keepAgents !== undefined && !keepAgents.includes(scope.agentId)))
+      .map(scope => {
+        const own = environments.filter(environment => scopeKey(environment.spec.scope) === scopeKey(scope));
+        return { ...scope, orphanSince: orphanSince.get(scopeKey(scope)) ?? null, containers: own.map(environment => this.driver.name(environment)),
+          volumes: own.map(environment => this.driver.volume(environment)), directories: this.driver.shadowDirectories(scope) };
+      });
+    const strays = await this.driver.strays(environments);
+    const plan: PrunePlan = { shadows, strays, applied: apply, busy: [] };
+    if (!apply) return plan;
+    for (const shadow of shadows) {
+      const scope = { agentId: shadow.agentId, shadowId: shadow.shadowId };
+      try { await this.purgeShadow(scope); this.orphans.clear(scope); }
+      catch (error) {
+        if (!(error instanceof ExecutionError) || error.status !== 409) throw error;
+        plan.busy.push(scope);
+      }
+    }
+    await this.driver.removeStrays(strays);
+    return plan;
+  }
+
+  /** Remove a Shadow's containers; its /data volumes, HOME and records stay. */
+  private async stopShadow(scope: ResourceScope): Promise<void> {
+    for (const environment of this.store.list().filter(item => scopeKey(item.spec.scope) === scopeKey(scope))) {
+      if (environment.state === "stopped" && environment.containerId === null && !(await this.driver.inspect(environment))) continue;
+      this.streamCloser?.(environment.id, "shadow_orphaned");
+      await this.destroy(environment.id);
+    }
   }
 
   async drain(id: string): Promise<void> { await this.lock(id, async () => { this.store.drain(id); }); }

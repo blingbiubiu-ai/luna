@@ -148,6 +148,7 @@ class Kernel {
   /** Enabled channels skipped because their saved App Secret cannot be decrypted. */
   private readonly _unreadableChannels = new Map<string, string>();
   private _lastShadowPurgeSweep = 0;
+  private _orphanWork: Promise<void> | undefined;
 
   reloadChannel(id: string): Promise<void> {
     if (this._channelReloadsClosed) return Promise.reject(new Error("Kernel is stopping"));
@@ -366,6 +367,10 @@ class Kernel {
         this._lifecycleWork ??= this._reconcileAgentLifecycle()
           .catch(error => this._logger.warn({error}, "Agent lifecycle reconciliation remains pending"))
           .finally(() => {this._lifecycleWork = undefined;});
+        // Apart from lifecycle work: a Worker may take minutes to remove orphaned data.
+        this._orphanWork ??= this._reconcileWorkerOrphans()
+          .catch(error => this._logger.warn({error}, "Worker orphan reconciliation failed"))
+          .finally(() => {this._orphanWork = undefined;});
       }, 1000);
       this._started = true;
     } catch (err) {
@@ -651,6 +656,24 @@ class Kernel {
   }
 
   /**
+   * Workers drop the data of Shadows this Service no longer knows, e.g. after its database
+   * was replaced, as the platform's orphan cleanup setting says. Off means nothing is asked.
+   */
+  private async _reconcileWorkerOrphans(): Promise<void> {
+    const runtime = this._executionRuntime;
+    if (!runtime) return;
+    const settings = runtime.orphanCleanup().get();
+    if (!settings.enabled) return;
+    const lifecycle = new AgentLifecycleStore(this._database.db);
+    for (const report of await runtime.reconcileWorkerScopes(scopes => lifecycle.live(scopes),
+      settings.intervalMinutes * 60_000, settings.retentionDays * 86_400_000)) {
+      if (report.error) this._logger.warn(report, "Worker orphan reconciliation failed");
+      else if (report.result && (report.result.stopped.length || report.result.purged.length || report.result.busy.length))
+        this._logger.info(report, "Worker removed data of Shadows this Service does not know");
+    }
+  }
+
+  /**
    * Stop the kernel and release runtime resources.
    */
   async stop(): Promise<void> {
@@ -660,6 +683,7 @@ class Kernel {
     this._channelReloadsClosed = true;
     clearInterval(this._lifecycleTimer);
     await this._lifecycleWork;
+    await this._orphanWork;
     await Promise.allSettled([...this._channelReloads.values()]);
     await this._runtimeAgentTransport?.detach();
     await this._runtimeRecovery;

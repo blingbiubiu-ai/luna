@@ -159,7 +159,32 @@ export class DockerEnvironmentDriver {
     await this.docker(["exec", "-u", user, containerId, "ln", "-s", change.target, temporary]);
     await this.docker(["exec", "-u", user, containerId, "mv", "-T", temporary, change.link]);
   }
-  private volume(environment: EnvironmentRecord): string { return `luna-${contentHash(this.config.workerId).slice(0, 12)}-${environment.id}`; }
+  volume(environment: EnvironmentRecord): string { return `luna-${contentHash(this.config.workerId).slice(0, 12)}-${environment.id}`; }
+  /** Shadows with a HOME layout on this Worker. */
+  layoutScopes(): ResourceScope[] { return this.layouts.scopes(); }
+  /** A Shadow's HOME and resource directories, as purgeShadowFiles would delete them. */
+  shadowDirectories(scope: ResourceScope): string[] { return this.layouts.directories(scope); }
+  /**
+   * This Worker's containers and /data volumes that no environment record names, e.g. left
+   * behind when the Worker database was replaced. Only objects labelled for this Worker count.
+   */
+  async strays(environments: readonly EnvironmentRecord[]): Promise<{ containers: string[]; volumes: string[] }> {
+    const label = `label=luna.worker=${this.config.workerId}`;
+    const names = new Set(environments.map(environment => this.name(environment)));
+    const volumes = new Set(environments.map(environment => this.volume(environment)));
+    const prefix = `luna-${contentHash(this.config.workerId).slice(0, 12)}-`;
+    const lines = (output: string) => output.split("\n").map(line => line.trim()).filter(Boolean);
+    return {
+      containers: lines(await this.docker(["container", "ls", "--all", "--filter", label, "--format", "{{.Names}}"]))
+        .filter(name => name.startsWith("luna-exec-") && !names.has(name)),
+      volumes: lines(await this.docker(["volume", "ls", "--filter", label, "--format", "{{.Name}}"]))
+        .filter(name => name.startsWith(prefix) && !volumes.has(name)),
+    };
+  }
+  async removeStrays(strays: { containers: readonly string[]; volumes: readonly string[] }): Promise<void> {
+    for (const name of strays.containers) await this.docker(["container", "rm", "--force", name]);
+    for (const name of strays.volumes) await this.docker(["volume", "rm", "--force", name]);
+  }
   /** The environment's /data volume; only a deleted Shadow's environments are removed with it. */
   async removeVolume(environment: EnvironmentRecord): Promise<void> {
     await this.docker(["volume", "rm", "--force", this.volume(environment)]);

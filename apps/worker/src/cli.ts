@@ -8,6 +8,7 @@ import { defaultLunaHome, loadLunaEnvAt } from "@luna/host-runtime/env";
 import { defaultWorkerHome, WorkerConfig, WorkerLocalConfig, WorkerBindingConfig } from "./config";
 import { readPrivateJson, writePrivateJson } from "@luna/execution-store";
 import { ExecutionClient } from "@luna/execution-transport";
+import type { PrunePlan } from "./environment-manager";
 
 type Env = Record<string, string | undefined>;
 interface CliResult { status: "ok" | "error"; code?: string; message?: string; output?: string; }
@@ -21,7 +22,7 @@ function readOption(argv: readonly string[], name: string): string | undefined {
 
 export async function runWorkerCli(argv: string[], env: Env = process.env): Promise<CliResult> {
   const command = argv[0];
-  if (!command || command === "help" || argv.includes("--help") || argv.includes("-h")) return { status: "ok", output: "luna worker init [--image IMAGE] [--port PORT] [--home DIR] [--config FILE]; luna worker bind --service URL [--local] [--runtime-config FILE] [--home DIR] [--config FILE]; luna worker start|status [--home DIR] [--config FILE]" };
+  if (!command || command === "help" || argv.includes("--help") || argv.includes("-h")) return { status: "ok", output: "luna worker init [--image IMAGE] [--port PORT] [--home DIR] [--config FILE]; luna worker bind --service URL [--local] [--runtime-config FILE] [--home DIR] [--config FILE]; luna worker start|status [--home DIR] [--config FILE]; luna worker prune [--keep AGENT_ID]... [--yes] [--home DIR] [--config FILE]" };
   const home = resolve(readOption(argv, "--home") ?? env.LUNA_WORKER_HOME ?? (readOption(argv, "--config") ? dirname(resolve(readOption(argv, "--config")!)) : defaultWorkerHome(env)));
   env = loadLunaEnvAt(home, { ...env, LUNA_WORKER_HOME: home });
   const file = resolve(readOption(argv, "--config") ?? join(home, "worker.json"));
@@ -103,6 +104,29 @@ export async function runWorkerCli(argv: string[], env: Env = process.env): Prom
       const host = config.listenHost;
       return { status: "ok", output: JSON.stringify(await new ExecutionClient(`http://${host}:${config.port}`, config.controlToken).call("GET", "/v1/health")) };
     }
+    if (command === "prune") {
+      const keepAgents = argv.flatMap((arg, index) => arg === "--keep" ? [readOption(argv.slice(index), "--keep")!] : []);
+      const plan = await new ExecutionClient(`http://${config.listenHost}:${config.port}`, config.controlToken).call<PrunePlan>("POST", "/v1/prune",
+        { apply: argv.includes("--yes"), ...(keepAgents.length ? { keepAgents } : {}) });
+      return { status: "ok", output: pruneReport(plan) };
+    }
     return { status: "error", code: "unknown_worker_command", message: "Unknown Worker command" };
   } catch { return { status: "error", code: "worker_command_failed", message: "Check private configuration, Docker, image and Worker connectivity" }; }
+}
+
+/** What prune deleted, or would delete without --yes. */
+export function pruneReport(plan: PrunePlan): string {
+  const lines: string[] = [];
+  for (const shadow of plan.shadows) {
+    const reason = shadow.orphanSince === null ? "not kept" : `orphaned since ${new Date(shadow.orphanSince).toISOString()}`;
+    lines.push(`Shadow ${shadow.agentId}/${shadow.shadowId} (${reason})`,
+      ...shadow.containers.map(name => `  container ${name}`), ...shadow.volumes.map(name => `  volume ${name}`),
+      ...shadow.directories.map(path => `  directory ${path}`));
+  }
+  lines.push(...plan.strays.containers.map(name => `Unowned container ${name}`), ...plan.strays.volumes.map(name => `Unowned volume ${name}`));
+  if (!lines.length) return "Nothing to prune.";
+  const busy = new Set(plan.busy.map(scope => `${scope.agentId}/${scope.shadowId}`));
+  if (busy.size) lines.push(`Skipped while work runs: ${[...busy].join(", ")}`);
+  lines.push(plan.applied ? busy.size ? "Deleted the rest." : "Deleted." : "Dry run: nothing was deleted. Run again with --yes to delete.");
+  return lines.join("\n");
 }

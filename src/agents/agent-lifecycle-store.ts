@@ -99,6 +99,18 @@ export class AgentLifecycleStore {
     });
   }
 
+  /**
+   * Of the Shadows a Worker holds, those this Service still knows: the Shadow belongs to
+   * the Agent and neither is deleted. A Worker removes the data of the rest.
+   */
+  live(scopes: readonly AgentScope[]): AgentScope[] {
+    return scopes.filter(scope => {
+      const shadow = this.db.select({agentId: agentShadows.agentId, status: agentShadows.status}).from(agentShadows).where(eq(agentShadows.id, scope.shadowId)).get();
+      const agent = this.db.select({status: lunaAgents.status}).from(lunaAgents).where(eq(lunaAgents.id, scope.agentId)).get();
+      return shadow !== undefined && agent !== undefined && shadow.agentId === scope.agentId && shadow.status !== "deleted" && agent.status !== "deleted";
+    });
+  }
+
   async reconcile(job: AgentLifecycleJob, reloadChannel: (id: string) => Promise<void>, drainShadow: (scope: AgentScope) => Promise<void>,
     purgeShadow?: (scope: AgentScope) => Promise<void>): Promise<void> {
     try {
