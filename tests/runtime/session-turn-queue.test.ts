@@ -581,6 +581,37 @@ describe("SessionQueue", () => {
     ]);
   });
 
+  test("messages queued during a turn go together into the next one however far apart they arrived", async () => {
+    const session = createSession();
+    const firstA = enqueueUserMessage(session.id, { channelMessageKey: "backlog-a-1", senderUserId: "user-a", text: "A1", receivedAt: Date.now() });
+    const queued: string[] = [];
+    const batches: string[][] = [];
+    let queue!: SessionQueue;
+    queue = new SessionQueue({
+      db: database.db,
+      config: createSessionQueueConfig({ coalesce_idle_ms: 10, coalesce_max_wait_ms: 30 }),
+      executeTurn: async (input) => {
+        batches.push(input.messageRows.map((message) => message.id));
+        if (input.messageRows[0]?.id !== firstA.message.id) return;
+        // While A1 runs, user A sends two messages well apart, then user B writes.
+        for (const [key, sender] of [["backlog-a-2", "user-a"], ["backlog-a-3", "user-a"], ["backlog-b-1", "user-b"]] as const) {
+          queued.push(enqueueUserMessage(session.id, { channelMessageKey: key, senderUserId: sender, text: key, receivedAt: Date.now() }).message.id);
+          queue.schedule(session.id);
+          await sleep(60);
+        }
+      },
+    });
+
+    queue.schedule(session.id);
+    await queue.waitForIdle();
+
+    expect(batches).toEqual([
+      [firstA.message.id],
+      [queued[0]!, queued[1]!],
+      [queued[2]!],
+    ]);
+  });
+
   test("old head row does not wait another full max coalesce window", async () => {
     const session = createSession();
     const oldReceivedAt = Date.now() - 1000;

@@ -42,6 +42,16 @@ export interface SessionQueueOptions {
   readonly executeTurn: (input: SessionTurnExecutionInput, signal: AbortSignal) => Promise<void>;
 }
 
+interface BatchOptions {
+  readonly enforceIdleGap: boolean;
+  readonly waitForIdle: boolean;
+  /**
+   * The rows queued while the previous turn ran. They all waited, so the time between
+   * them does not separate them: the max-wait window applies only to an idle session.
+   */
+  readonly backlog?: boolean;
+}
+
 export class SessionQueue {
   private readonly _inboxStore: SessionInboxStore;
   private readonly _turnStore: SessionTurnStore;
@@ -176,6 +186,7 @@ export class SessionQueue {
       await sessionDispatcherFor(this._options.db).dispatch({ kind: "user_messages", sessionId }, () => this._executeNextBatch(sessionId, {
         enforceIdleGap: isInitialWorkerPass,
         waitForIdle: isInitialWorkerPass && pendingRows.length === 1,
+        backlog: !isInitialWorkerPass,
       }));
       isInitialWorkerPass = false;
     }
@@ -183,7 +194,7 @@ export class SessionQueue {
 
   private async _executeNextBatch(
     sessionId: string,
-    options: { readonly enforceIdleGap: boolean; readonly waitForIdle: boolean },
+    options: BatchOptions,
   ): Promise<void> {
     const inboxRows = await this._selectBatch(sessionId, options);
     if (inboxRows.length === 0) {
@@ -275,7 +286,7 @@ export class SessionQueue {
 
   private async _selectBatch(
     sessionId: string,
-    options: { readonly enforceIdleGap: boolean; readonly waitForIdle: boolean },
+    options: BatchOptions,
   ): Promise<SessionInboxRow[]> {
     const firstRows = this._inboxStore.listPendingForSession(sessionId);
     const firstRow = firstRows[0];
@@ -296,7 +307,7 @@ export class SessionQueue {
         if (nextRow.sender_identity_id !== senderIdentityId) {
           break;
         }
-        if (nextRow.received_at > maxWaitDeadline) {
+        if (!options.backlog && nextRow.received_at > maxWaitDeadline) {
           break;
         }
         if (
