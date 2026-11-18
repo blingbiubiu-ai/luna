@@ -7,7 +7,7 @@ import { ChannelDirectoryStore } from "@/channels/directory-store";
 import type { ChannelIdentity } from "@/channels/types";
 import { IdentityDirectory } from "./identity-directory";
 import { scopeFeishuIdentity } from "./feishu-identity-scopes";
-import { followShadowBotName } from "./shadow-name";
+import { followShadowBotAvatar, followShadowBotName } from "./shadow-name";
 
 /** Only verified adapter self-identities can update the current Shadow's external bot link. */
 export function recordShadowBotIdentity(db: DrizzleDB, channelConfigId: string, identity: ChannelIdentity): string {
@@ -21,6 +21,7 @@ export function recordShadowBotIdentity(db: DrizzleDB, channelConfigId: string, 
     const persisted = new ChannelDirectoryStore(storeDb).upsertIdentity({channel: {id: channel.id, type: channel.type}, identity: scoped});
     new IdentityDirectory(storeDb).bindBotIdentityToUser(persisted.id, shadow.replyUserId);
     followShadowBotName(tx as unknown as DrizzleDB, shadow.replyUserId, identity.displayName);
+    followShadowBotAvatar(tx as unknown as DrizzleDB, shadow.replyUserId, identity.avatarUrl);
     return shadow.replyUserId;
   });
 }

@@ -49,11 +49,9 @@ test("the primary container is the running one; image freshness compares with th
   expect(imageCurrent(row("w", true), [{ workerId: "w", supported: true }])).toBeUndefined();
 });
 
-test("neighbouring Shadows get different avatar hue families", async () => {
-  const { SHADOW_PALETTES } = await import("../src/components/shadow-card");
-  const avatar = (paletteIndex: number) => card({ state: "cold" }, { paletteIndex });
-  expect(avatar(0)).toContain(SHADOW_PALETTES[0][0]);
-  expect(avatar(1)).toContain(SHADOW_PALETTES[1][0]);
-  expect(avatar(1)).not.toContain(SHADOW_PALETTES[0][0]);
-  expect(new Set(SHADOW_PALETTES.map(palette => palette[0])).size).toBe(SHADOW_PALETTES.length);
+test("the card shows the Shadow user's avatar, and its initial without one", () => {
+  expect(card({ state: "cold" }, { avatarUrl: "https://avatar.example/bot.png" })).toContain('src="https://avatar.example/bot.png"');
+  const plain = card({ state: "cold" });
+  expect(plain).not.toContain("<img");
+  expect(plain).toContain("桑");
 });

@@ -83,6 +83,18 @@ test("a bot-bound Shadow follows its bot's name until the owner names it, and ag
   expect(user(shadow().replyUserId)).toMatchObject({ displayName: "Monkey Queen", profileSource: "channel" });
 });
 
+test("a bot-bound Shadow's user shows its bot's avatar, even after the owner names it", () => {
+  const bot = (avatarUrl?: string) => recordShadowBotIdentity(db(), "feishu-main", { externalId: "ou_bot", kind: "bot", displayName: "Monkey King", ...(avatarUrl ? { avatarUrl } : {}) });
+  bot("https://avatar.example/one.png");
+  expect(user(shadow().replyUserId).avatarUrl).toBe("https://avatar.example/one.png");
+  new AgentStore(db()).renameShadow("fixture-owner", { agentId, shadowId }, { name: "齐天大圣" });
+  bot("https://avatar.example/two.png");
+  expect(user(shadow().replyUserId).avatarUrl).toBe("https://avatar.example/two.png");
+  // A profile without an avatar, or with a non-web one, keeps the last avatar.
+  bot(); bot("javascript:alert(1)");
+  expect(user(shadow().replyUserId).avatarUrl).toBe("https://avatar.example/two.png");
+});
+
 test("a Shadow without a bot cannot follow one", () => {
   const agents = new AgentStore(db());
   const plain = agents.createShadow("fixture-owner", agentId, { name: "无机器人" }, "no-bot");

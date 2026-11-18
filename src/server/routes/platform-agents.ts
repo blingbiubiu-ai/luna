@@ -12,6 +12,7 @@ import { Hono, type Context } from "hono";
 import { z } from "zod";
 import type { DrizzleDB } from "@/data";
 import { AgentError, AgentStore } from "@/agents/agent-store";
+import { loadDashboardUserRows } from "@/dashboard-api/user-display";
 import { ShadowWorkerRoutingStore } from "@/agents/shadow-worker-routing-store";
 import { ShadowModelSelectionStore } from "@/agents/shadow-model-selection-store";
 import { AuthorizationRuleStore } from "../policy/authorization-rule-store";
@@ -109,8 +110,9 @@ export function createPlatformAgentRoutes(db: DrizzleDB, registry?:PluginRegistr
     })
     .get("/:agentId/shadows", c => {
       const routing = new ShadowWorkerRoutingStore(db);
+      const shadowUsers = new Map(loadDashboardUserRows(db, c.req.param("agentId")).map(user => [user.id, user]));
       return c.json({shadows: store.listShadows(actor(c), c.req.param("agentId")).map(shadow => ({
-        ...shadow, workerRouting: routing.get({agentId: shadow.agentId, shadowId: shadow.id}),
+        ...shadow, avatarUrl: shadowUsers.get(shadow.replyUserId)?.avatarUrl ?? null, workerRouting: routing.get({agentId: shadow.agentId, shadowId: shadow.id}),
         modelSelection: new ShadowModelSelectionStore(db).view({agentId:shadow.agentId,shadowId:shadow.id}),
       }))});
     })

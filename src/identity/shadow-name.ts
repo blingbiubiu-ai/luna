@@ -22,3 +22,15 @@ export function followShadowBotName(db: Pick<DrizzleDB, "select" | "update">, re
   db.update(agentShadows).set({ name, updatedAt: now }).where(eq(agentShadows.id, shadow.id)).run();
   db.update(users).set({ displayName: name, profileSource: "channel", updatedAt: new Date(now).toISOString() }).where(eq(users.id, replyUserId)).run();
 }
+
+/**
+ * A bot-bound Shadow's user shows its bot's avatar. The owner cannot set a Shadow avatar, so
+ * unlike the name it always follows the bot. Called with the bot's own verified profile.
+ */
+export function followShadowBotAvatar(db: Pick<DrizzleDB, "select" | "update">, replyUserId: string, avatarUrl: string | null | undefined): void {
+  const url = avatarUrl?.trim();
+  if (!url || !/^https?:\/\//.test(url) || url.length > 2048) return;
+  const user = db.select().from(users).where(eq(users.id, replyUserId)).get();
+  if (user?.kind !== "shadow" || user.avatarUrl === url) return;
+  db.update(users).set({ avatarUrl: url, updatedAt: new Date().toISOString() }).where(eq(users.id, replyUserId)).run();
+}

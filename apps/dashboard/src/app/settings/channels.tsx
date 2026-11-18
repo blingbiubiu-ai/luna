@@ -29,6 +29,7 @@ interface ChannelShadow {
   id: string;
   name: string;
   status: string;
+  avatarUrl?: string | null;
   workerRouting?: { mode: "automatic" | "bound"; workerId: string | null };
   modelSelection?: {mode:"inherit"|"fixed";revisionId:string|null;name:string|null;model:string|null;agentType:string|null;available?:boolean};
 }
@@ -263,7 +264,7 @@ function AgentShadows({ agent }: { agent: DashboardAgentChoice }) {
     } };
   }
 
-  function card(shadow: ChannelShadow, compact: boolean, index: number) {
+  function card(shadow: ChannelShadow, compact: boolean) {
     const isBody = shadow.id === agent.defaultShadowId;
     const bot = channelsByShadow.get(shadow.id);
     const { env, row } = environmentOf(shadow);
@@ -298,7 +299,7 @@ function AgentShadows({ agent }: { agent: DashboardAgentChoice }) {
         </>}
       </DropdownMenuContent>
     </DropdownMenu>;
-    return <ShadowCard key={shadow.id} id={shadow.id} paletteIndex={index} name={shadow.name} isBody={isBody} subtitle={subtitle}
+    return <ShadowCard key={shadow.id} id={shadow.id} avatarUrl={shadow.avatarUrl} name={shadow.name} isBody={isBody} subtitle={subtitle}
       statusTag={!agentActive ? "Agent 已停用" : shadow.status !== "active" ? "已停用" : undefined}
       environment={env} coldHint={consoles.coldHint} compact={compact} selected={compact && selectedShadow === shadow.id}
       root={<ShadowRootSwitch agentId={agent.id} shadowId={shadow.id} disabled={!active}
@@ -331,7 +332,7 @@ function AgentShadows({ agent }: { agent: DashboardAgentChoice }) {
             </Button>
           </div>
           {alerts}
-          {cards.map((shadow, index) => card(shadow, true, index))}
+          {cards.map(shadow => card(shadow, true))}
         </aside>}
         <Workspace agentId={agent.id} consoles={consoles.consoles} active={consoles.active} onActivate={consoles.setActive} onClose={consoles.close}
           listOpen={listOpen} onOpenList={() => setListOpen(true)}
@@ -351,7 +352,7 @@ function AgentShadows({ agent }: { agent: DashboardAgentChoice }) {
         </header>
         {alerts}
         {query.isLoading || shadows.isLoading ? <p>正在加载…</p> : query.data && shadows.data && <div className="space-y-3">
-          {cards.map((shadow, index) => card(shadow, false, index))}
+          {cards.map(shadow => card(shadow, false))}
           {digitalShadows.length === 0 && <p className="rounded-xl border border-dashed p-6 text-center text-sm text-muted-foreground">尚未添加分身。</p>}
         </div>}
       </main>}

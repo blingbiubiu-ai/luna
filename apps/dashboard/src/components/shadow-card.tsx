@@ -1,4 +1,4 @@
-import Avatar from "boring-avatars";
+import { IdentityAvatar } from "@/components/identity-link";
 import type { ReactNode } from "react";
 import { Button } from "@/components/ui/button";
 import { consoleLabels, type ConsoleKind } from "@/lib/containers";
@@ -18,31 +18,16 @@ export interface ShadowEnvironment {
   elsewhere?: { workerId: string; running: boolean }[];
 }
 
-/**
- * One hue family per Shadow, assigned by list position so neighbouring Shadows never look alike
- * (the default palette, picked by ID hash, often gave two Shadows the same colours).
- */
-export const SHADOW_PALETTES = [
-  ["#1d4ed8", "#3b82f6", "#93c5fd", "#1e3a8a", "#dbeafe"],
-  ["#c2410c", "#f97316", "#fdba74", "#7c2d12", "#ffedd5"],
-  ["#047857", "#10b981", "#6ee7b7", "#064e3b", "#d1fae5"],
-  ["#7e22ce", "#a855f7", "#d8b4fe", "#4c1d95", "#f3e8ff"],
-  ["#be123c", "#f43f5e", "#fda4af", "#881337", "#ffe4e6"],
-  ["#0e7490", "#06b6d4", "#67e8f9", "#164e63", "#cffafe"],
-  ["#a16207", "#eab308", "#fde047", "#713f12", "#fef9c3"],
-  ["#4338ca", "#6366f1", "#a5b4fc", "#312e81", "#e0e7ff"],
-] as const;
-
 const order: ConsoleKind[] = ["terminal", "vnc", "root"];
 
 /**
  * One Shadow: who it is (name, bot binding) and its runtime environment (state, root switch,
  * facts, console buttons). `compact` is the narrow column shown beside open consoles.
  */
-export function ShadowCard({ id, paletteIndex = 0, name, isBody, subtitle, statusTag, environment, coldHint, root, menu, footer, compact, selected, onOpen, openBlocked }: {
+export function ShadowCard({ id, avatarUrl, name, isBody, subtitle, statusTag, environment, coldHint, root, menu, footer, compact, selected, onOpen, openBlocked }: {
   id: string;
-  /** Position in the Shadow list; picks the avatar's hue family. */
-  paletteIndex?: number;
+  /** The Shadow user's avatar (its bot's, once a bot is bound). */
+  avatarUrl?: string | null;
   name: string;
   isBody: boolean;
   subtitle: string;
@@ -73,9 +58,10 @@ export function ShadowCard({ id, paletteIndex = 0, name, isBody, subtitle, statu
     <article aria-label={name} className={cn("rounded-[14px] border bg-card transition-colors hover:border-foreground/15",
       selected && "border-foreground/25 shadow-[0_0_0_2px_rgba(48,48,43,0.08)]")}>
       <div className={cn("flex items-center gap-3", compact ? "px-3 pt-2.5 pb-2" : "px-4 pt-3.5 pb-3")}>
-        <span className="flex shrink-0 overflow-hidden rounded-[10px] ring-1 ring-black/5" aria-hidden="true">
-          <Avatar name={id} variant="marble" size={compact ? 28 : 36} square colors={[...SHADOW_PALETTES[paletteIndex % SHADOW_PALETTES.length]!]} />
-        </span>
+        <IdentityAvatar className={cn("shrink-0", compact ? "size-7" : "size-9")} size={compact ? "sm" : "default"} identity={{
+          id, channel: { type: "user", id: "" }, externalId: id, identityKind: "shadow", displayName: name,
+          status: "active", avatarUrl: avatarUrl ?? null, providerIds: {},
+        }} />
         <div className="min-w-0 flex-1">
           <div className="flex min-w-0 items-center gap-2">
             <h2 className="truncate text-[15px] font-semibold">{name}</h2>
