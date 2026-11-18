@@ -12,7 +12,7 @@ outside the public repository.
 | --- | --- | --- |
 | Service | Dashboard, APIs, authorization, business data and embedded Runtime | Bun, Service bundle and Dashboard assets |
 | Worker | Local execution configuration, Docker and outbound Service connection | Bun, Worker bundle and Runner image |
-| Executor/Runner | Containerized execution | Included in the Runner image |
+| Executor/Runner | Containerized execution | Executor and `luna` CLI ship inside the Worker bundle; system tools come from the Runner image |
 
 Service can run without Docker or a colocated Worker. Each Worker initializes
 its own environment and binds to Service separately. Multiple Workers may use
@@ -294,6 +294,13 @@ sudo systemctl restart luna-worker.service
 sudo -u luna env HOME=/var/lib/luna LUNA_HOME=/var/lib/luna \
   /usr/local/bin/bun /opt/luna/dist/luna-service.js runtime mode resume --home /var/lib/luna
 ```
+
+The Worker bundle embeds the Executor and the in-container `luna` CLI. At start
+it installs them under `<Worker home>/runner-runtime/<version>` and every
+container mounts that directory read-only at `/opt/luna-runtime`. Updating the
+Worker therefore updates them without a new image: an idle container whose
+Executor is older restarts at its next Job, keeping its system disk. Rebuild
+the Runner image only for system software and container scripts.
 
 Restore any Agent Worker admission settings paused for the update. To switch a
 Worker image, drain and stop it, back up its data, resolve the new digest with

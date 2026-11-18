@@ -131,6 +131,7 @@ export class EnvironmentManager {
 
   /** A mount update may replace only an idle container, never a live execution. */
   private async ensureMounts(environment: EnvironmentRecord, contextId: string): Promise<string> {
+    await this.updateExecutor(environment);
     try { return await this.driver.ensure(environment, contextId); }
     catch (error) {
       if (!(error instanceof ExecutionError) || !["project_mount_update_required", "context_mount_update_required", "container_configuration_update_required"].includes(error.code)) throw error;
@@ -145,6 +146,19 @@ export class EnvironmentManager {
     // and persistent instance/volumes make a crash between remove and ensure recoverable.
     await this.driver.remove(environment);
     return this.driver.ensure(environment, contextId);
+  }
+
+  /**
+   * Restart an idle container whose Executor is older than this Worker's, so the work about
+   * to start runs on the new one. The container and its system layer stay. A busy container
+   * (other work, an open console) keeps its Executor until it is idle at a later admission.
+   */
+  private async updateExecutor(environment: EnvironmentRecord): Promise<void> {
+    if (!await this.driver.executorOutdated(environment)) return;
+    if (this.store.active(environment.id).some(item => item.state !== "preparing") || this.activeStreams(environment.id) > 0) return;
+    const health = await this.executor(environment.id).call<ExecutorHealth>("GET", "/v1/health");
+    if (health.instanceId !== environment.instanceId || health.activeJobs) return;
+    await this.driver.stop(environment);
   }
 
   async cancelPreparation(requestId: string): Promise<{ state: string; handle?: EnvironmentHandle; controlCredential?: PreparedEnvironment["controlCredential"] }> {

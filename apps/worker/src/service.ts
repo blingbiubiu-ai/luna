@@ -5,6 +5,7 @@ import { TokenAuthority, closeExecutionServer } from "@luna/execution-transport"
 import type { WorkerConfig } from "./config";
 import { EnvironmentStore } from "./environment-store";
 import { DockerEnvironmentDriver } from "./docker-driver";
+import { embeddedRunnerRuntime, installRunnerRuntime } from "./runner-runtime";
 import { EnvironmentManager } from "./environment-manager";
 import { workerServer, executorCallbackServer } from "./server";
 import { nosuidStartupWarning } from "./root-host";
@@ -16,7 +17,11 @@ export async function runWorker(config: WorkerConfig): Promise<void> {
   const callbackPort = config.serviceUrl && process.platform === "linux" ? (config.callbackPort ?? config.port + 100) : undefined;
   if (callbackPort && (callbackPort > 65535 || callbackPort === config.port)) throw new Error("Invalid Worker callback port");
   if (config.serviceUrl) config = { ...config, runtimeEndpoint: `http://host.docker.internal:${callbackPort ?? config.port}` };
-  const driver = new DockerEnvironmentDriver(db, config); await driver.preflight();
+  // Containers run the Executor and `luna` CLI built with this Worker, not the image's copies.
+  const files = await embeddedRunnerRuntime();
+  const runtime = files ? installRunnerRuntime(config.dataRoot, files) : undefined;
+  if (!runtime) console.error(JSON.stringify({ level: "warn", msg: "Worker built without its runner runtime; containers use the image's Executor" }));
+  const driver = new DockerEnvironmentDriver(db, config, runtime); await driver.preflight();
   // Not fatal: Shadows without root run normally; root ones show "root 未生效" until fixed.
   const nosuid = nosuidStartupWarning(config.dataRoot);
   if (nosuid) console.error(JSON.stringify({ level: "warn", msg: nosuid }));

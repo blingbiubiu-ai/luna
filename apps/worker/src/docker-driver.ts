@@ -13,6 +13,7 @@ import type { EnvironmentRecord } from "./environment-store";
 import { WorkerContextStore, type WorkerContext } from "./context-store";
 import { ProjectMounts } from "./project-mounts";
 import { rootHostCheck, type RootHostCheck } from "./root-host";
+import { currentRunnerRuntime, RUNNER_RUNTIME_MOUNT, type RunnerRuntime } from "./runner-runtime";
 
 const execute = promisify(execFile);
 interface Deployment { port: number; controlToken: string; maintenanceToken: string; }
@@ -23,11 +24,18 @@ export class DockerEnvironmentDriver {
   readonly contexts: WorkerContextStore;
   private readonly layouts: WorkerShadowLayouts;
   private hostCpus?: number;
-  constructor(private readonly db: SqlDatabase, readonly config: WorkerConfig) {
+  /**
+   * The Executor and `luna` CLI shipped with this Worker. Without it (a Worker run from source,
+   * or tests) containers run the copies baked into the image.
+   */
+  private readonly runtime: RunnerRuntime | undefined;
+  constructor(private readonly db: SqlDatabase, readonly config: WorkerConfig, runtime?: RunnerRuntime) {
+    this.runtime = runtime;
     this.contexts = new WorkerContextStore(db);
     mkdirSync(config.dataRoot,{recursive:true});
     this.layouts = new WorkerShadowLayouts(db,config.dataRoot);
     db.exec("CREATE TABLE IF NOT EXISTS worker_deployments (environment_id TEXT PRIMARY KEY,port INTEGER UNIQUE NOT NULL,body TEXT NOT NULL)");
+    db.exec("CREATE TABLE IF NOT EXISTS worker_executor_versions (environment_id TEXT PRIMARY KEY,version TEXT NOT NULL)");
   }
   /** Worker resolves a context inside its immutable Shadow layout; caller paths only assert equality. */
   async prepareContext(scope:ResourceScope,contextId:string,scopeKey:string,projectId?:string,requestedCwd?:string):Promise<WorkerContext> {
@@ -113,7 +121,11 @@ export class DockerEnvironmentDriver {
     // HOME/project contents. Containers must already carry the scoped identity labels.
     // Resource limits are excluded: updateLimits applies them to the running container,
     // so the writable system layer survives limit changes.
-    const command = ["--entrypoint", "bun", this.config.imageDigest, "/app/agent-runner/dist/executor.js"];
+    // The mounted runtime root is stable, so a new Worker version changes no launch argument:
+    // the container restarts onto it instead of being replaced.
+    if (this.runtime) args.push("--mount", `type=bind,src=${this.runtime.root},dst=${RUNNER_RUNTIME_MOUNT},readonly`);
+    const command = ["--entrypoint", "bun", this.config.imageDigest,
+      this.runtime ? `${RUNNER_RUNTIME_MOUNT}/current/executor.js` : "/app/agent-runner/dist/executor.js"];
     const configuration = contentHash({ args, command, executorConfig });
     const mountsMatch = prior && mounts.every(({ source, destination, readonly }) =>
       prior.Mounts.some(mount => mount.Type === "bind" && mount.Destination === destination &&
@@ -121,7 +133,7 @@ export class DockerEnvironmentDriver {
     if (prior && mountsMatch && prior.Config.Labels["luna.configuration"] === configuration) {
       const resourceMounts = new WorkerShadowMounts(this.db, this.config.dataRoot);
       if (prior.State.Running) await this.switchResourcesInside(prior.Id, resourceMounts.pendingSwitch(plan));
-      else { resourceMounts.activate(plan); await this.docker(["container", "start", prior.Id]); }
+      else { resourceMounts.activate(plan); await this.docker(["container", "start", prior.Id]); this.startedExecutor(environment); }
       return prior.Id;
     }
     // EnvironmentManager fences replacement of running containers until idle.
@@ -132,7 +144,9 @@ export class DockerEnvironmentDriver {
     writePrivateJson(configFile, executorConfig);
     await this.docker(["volume", "create", "--label", `luna.worker=${this.config.workerId}`, volume]);
     args.push(...await this.limitArgs(environment.spec.resources), "--label", `luna.configuration=${configuration}`, ...command);
-    return (await this.docker(args)).trim();
+    const id = (await this.docker(args)).trim();
+    this.startedExecutor(environment);
+    return id;
   }
   /** Apply changed limits in place; a missing container takes them at creation. */
   async updateLimits(environment: EnvironmentRecord, resources: EnvironmentRecord["spec"]["resources"]): Promise<void> {
@@ -145,10 +159,28 @@ export class DockerEnvironmentDriver {
   private async limitArgs(resources: EnvironmentRecord["spec"]["resources"]): Promise<string[]> {
     return ["--memory", resources.memory, "--cpus", String(effectiveCpus(resources.cpus, await this.dockerHostCpus())), "--pids-limit", String(resources.pidsLimit)];
   }
+  /** Record which runtime version the container's Executor started from. */
+  private startedExecutor(environment: EnvironmentRecord): void {
+    const version = this.runtime && currentRunnerRuntime(this.runtime.root);
+    if (version) this.db.prepare("INSERT INTO worker_executor_versions VALUES (?,?) ON CONFLICT(environment_id) DO UPDATE SET version=excluded.version").run(environment.id, version);
+  }
+  /** A running container whose Executor is older than the one this Worker ships: a restart updates it. */
+  async executorOutdated(environment: EnvironmentRecord): Promise<boolean> {
+    if (!this.runtime) return false;
+    const row = this.db.prepare("SELECT version FROM worker_executor_versions WHERE environment_id=?").get(environment.id) as { version: string } | undefined;
+    if (row?.version === this.runtime.version) return false;
+    return (await this.inspect(environment))?.State.Running === true;
+  }
+  /** Stop the container and keep it, with its writable system layer, for the next start. */
+  async stop(environment: EnvironmentRecord): Promise<void> {
+    const inspection = await this.inspect(environment);
+    if (inspection?.State.Running) await this.docker(["container", "stop", "--time", "20", inspection.Id]);
+  }
   async remove(environment: EnvironmentRecord): Promise<void> {
     const inspection = await this.inspect(environment);
     if (inspection) await this.docker(["container", "rm", "--force", inspection.Id]);
     this.db.prepare("DELETE FROM worker_deployments WHERE environment_id=?").run(environment.id);
+    this.db.prepare("DELETE FROM worker_executor_versions WHERE environment_id=?").run(environment.id);
     rmSync(this.executorDirectory(environment), { recursive: true, force: true });
   }
   /** Atomically repoint $HOME/.luna-resources from inside a running container (see pendingSwitch). */

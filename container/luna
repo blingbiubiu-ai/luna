@@ -1,2 +1,4 @@
 #!/usr/bin/env bash
+# The CLI shipped with the Worker (mounted read-only) is current; the baked copy serves older Workers.
+if [ -f /opt/luna-runtime/current/luna-client.js ]; then exec bun /opt/luna-runtime/current/luna-client.js "$@"; fi
 exec bun /app/luna-cli/cli.js "$@"

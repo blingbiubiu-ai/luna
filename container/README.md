@@ -7,6 +7,11 @@ The public container files build the shared runtime and general-purpose runner:
 make -C container test VARIANT=general
 ```
 
+The image carries system software, provider CLIs and container scripts. The
+Executor and `luna` CLI baked into it serve only Workers older than the runner
+runtime mount; current Workers mount their own copies at `/opt/luna-runtime`,
+so changing Luna code does not need a new image.
+
 Machine-specific images live under `container/local/`, which is ignored by Git.
 The optional Android variant uses this local layout:
 
