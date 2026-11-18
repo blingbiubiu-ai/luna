@@ -14,6 +14,7 @@ import {setLunaHome} from "../../src/shared";
 import {SessionStore} from "../../src/sessions/session-store";
 import {MessageStore} from "../../src/sessions/message-store";
 import {ContextPackStore} from "../../src/context";
+import {taskCommandPresentation} from "../../src/dashboard-api/sessions";
 import {RunnerContextStore} from "../../src/runners/runner-context-store";
 import {runnerMessageEnvelopeFromRow} from "../../src/runners/message-envelope";
 import {RunnerOperationService} from "../../src/runners/operation-service";
@@ -445,4 +446,15 @@ test("topic creation restores the automatic five-message window and explicit sup
   store.append({sessionId: f.session.id, channelMessageKey: "om_late", role: "user", senderUserId: "user", channel: f.inbound.channel, content: [{type: "text", text: "Later"}]});
   expect(await f.service.execute(f.claims, "session.create_thread", "window-topic", payload)).toEqual(receipt);
   expect(packs.listPacksForOwner("session", receipt.targetSessionId!)).toHaveLength(1);
+});
+
+test("the Dashboard shows the record of a Task command as that Task's command, not as a user message",async()=>{
+  const f=fixture();
+  const created=await f.service.execute(f.claims,"task.create","dashboard-line",{title:"Line task",summary:"Look into playback",facts:[],sendStatusCard:false});
+  const taskId=created.taskIds[0]!;
+  const record=f.db.select().from(schema.messages).all().find(row=>(row.rawPayloadJson as {origin?:string}|null)?.origin==="runner_operation")!;
+  const taskRows=f.db.select().from(schema.tasks).all();
+  const sourceContextItems=new ContextPackStore(f.db).listTaskSourceItems();
+  expect(taskCommandPresentation(record,{taskRows,sourceContextItems})).toEqual({kind:"task_command",action:"create",task:{id:taskId,title:"Line task"}});
+  expect(taskCommandPresentation(f.anchor as never,{taskRows,sourceContextItems})).toBeUndefined();
 });

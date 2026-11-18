@@ -437,6 +437,9 @@ function MessageTimelineItem({
   const fallbackKind = messageIdentityFallbackKind(message);
   const senderIdentity = messageDisplayIdentity(message);
   const timelineEntryId = messageTimelineEntryId(message);
+  if (message.presentation?.kind === "task_command") {
+    return <TaskCommandLine message={message} presentation={message.presentation} />;
+  }
 
   return (
     <article
@@ -848,6 +851,45 @@ function TaskFinalAnswerCard({
       </div>
     </ChatRichCard>
   );
+}
+
+/**
+ * Main creating or updating a Task leaves a record that is never sent to the channel. It is
+ * shown as one muted line, not as a message from the person who asked.
+ */
+function TaskCommandLine({
+  message,
+  presentation,
+}: {
+  readonly message: DashboardSessionMessage;
+  readonly presentation: Extract<NonNullable<DashboardSessionMessage["presentation"]>, { kind: "task_command" }>;
+}) {
+  const base = useAgentBasePath();
+  const task = presentation.task;
+  const label = presentation.action === "create" ? "创建任务" : "更新任务";
+  const title = task?.title || firstLine(messageText(message));
+  return (
+    <div
+      className="flex min-w-0 items-center gap-2 px-1 py-1 text-xs text-muted-foreground"
+      data-testid={`session-task-command-${message.id}`}
+      title={messageText(message)}
+    >
+      <span className="h-px w-4 shrink-0 bg-border" aria-hidden />
+      <span className="shrink-0">{label}：</span>
+      {task && task.status !== "deleted" ? (
+        <a className="min-w-0 truncate hover:text-foreground hover:underline" href={`${base}/tasks/${encodeURIComponent(task.id)}`}>
+          {title}
+        </a>
+      ) : (
+        <span className="min-w-0 truncate">{title}</span>
+      )}
+      <span className="shrink-0 text-[11px]">{formatTime(message.created_at)}</span>
+    </div>
+  );
+}
+
+function firstLine(text: string): string {
+  return text.split("\n").find((line) => line.trim())?.trim() ?? "";
 }
 
 function statusCardContent(message: DashboardSessionMessage): {
