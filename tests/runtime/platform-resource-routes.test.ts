@@ -115,8 +115,10 @@ test("Main reads every Task of its own session and nothing else; a Task Runner r
  const main=app("owner",{sessionId:first,runnerKind:"main"});
  for(const id of [taskA,taskC])expect((await main.request(`/tasks/${id}`)).status).toBe(200);
  expect((await main.request(`/tasks/${taskB}`)).status).toBe(403);
- const listed=await (await main.request(`/tasks?agentId=${scope.agentId}`)).json() as {id:string}[];
- expect(listed.map(row=>row.id).sort()).toEqual([taskA,taskC].sort());
+ // The older CLI in runner images asks by Agent; Main still gets only its session's short list.
+ const listed=await (await main.request(`/tasks?agentId=${scope.agentId}`)).json() as Record<string,unknown>[];
+ expect(listed.map(row=>row.taskId).sort()).toEqual([taskA,taskC].sort());
+ expect(Object.keys(listed[0]!).sort()).toEqual(["status","taskId","taskType","title","updatedAt"]);
  const taskRunner=app("owner",{sessionId:first,taskId:taskA,runnerKind:"task"});
  expect((await taskRunner.request(`/tasks/${taskA}`)).status).toBe(200);
  expect((await taskRunner.request(`/tasks/${taskC}`)).status).toBe(403);
