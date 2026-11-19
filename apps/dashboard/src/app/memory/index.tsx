@@ -166,6 +166,8 @@ function MemoryWorkspace({ agentId, agentName, defaultShadowId }: { agentId: str
 
   const selected = editorMode === "new" ? undefined : memories.find(item => item.id === selectedId);
   const history = useAgentMemoryHistory(agentId, selected?.id, selected?.revision);
+  // Where the entry was last written in a conversation; history is newest first.
+  const latestSource = history.data?.find(entry => entry.snapshot.source)?.snapshot.source;
 
   // Auto-select the first visible entry when list changes and current selection is absent.
   useEffect(() => {
@@ -1031,7 +1033,12 @@ function MemoryWorkspace({ agentId, agentName, defaultShadowId }: { agentId: str
                   <div className={`${cardClass} space-y-1 p-3.5`}>
                     <div className="text-xs text-muted-foreground">来源上下文</div>
                     <div className="truncate text-xs font-medium">
-                      {selected.originSessionId && (
+                      {latestSource ? (
+                        <a className="underline hover:text-primary" title="打开会话并定位到最近一次写入时的消息"
+                          href={`${base}/sessions/${encodeURIComponent(latestSource.sessionId)}?entry=${encodeURIComponent(latestSource.entryId)}`}>
+                          会话 {latestSource.sessionId.slice(0, 8)} · {day(latestSource.at)} 原文
+                        </a>
+                      ) : selected.originSessionId && (
                         <a className="underline hover:text-primary" href={`${base}/sessions/${encodeURIComponent(selected.originSessionId)}`}>
                           会话 {selected.originSessionId.slice(0, 8)}
                         </a>
@@ -1067,6 +1074,12 @@ function MemoryWorkspace({ agentId, agentName, defaultShadowId }: { agentId: str
                             <span className="text-muted-foreground">
                               · {STATUS_LABEL[entry.snapshot.status]} · {day(entry.createdAt)}
                             </span>
+                            {entry.snapshot.source ? (
+                              <a className="text-primary hover:underline" data-testid="memory-version-source"
+                                href={`${base}/sessions/${encodeURIComponent(entry.snapshot.source.sessionId)}?entry=${encodeURIComponent(entry.snapshot.source.entryId)}`}>
+                                原文
+                              </a>
+                            ) : null}
                             {entry.revision === selected.revision ? (
                               <span className="ml-auto text-xs text-muted-foreground">当前版本</span>
                             ) : (
