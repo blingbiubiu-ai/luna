@@ -15,7 +15,8 @@ import {
 import { getKernel } from "./routes/kernel";
 
 const SESSION_COOKIE = "luna_dashboard_session";
-const SESSION_TTL_SECONDS = 60 * 60 * 12;
+/** A Dashboard sign-in lasts 30 days from its last renewal; one in use is renewed (see `renewSession`). */
+const SESSION_TTL_SECONDS = 60 * 60 * 24 * 30;
 /** The local-token sign-in has no person behind it, so its name is a placeholder a linked chat identity may replace. */
 export const LOCAL_ACCOUNT_NAME = "Local dashboard user";
 const LOCAL_ACCOUNT = {
@@ -132,6 +133,15 @@ export class DashboardAuthService {
     };
   }
 
+  /** Reissues a valid session past half its lifetime, so a Dashboard in use stays signed in and an idle one expires. */
+  renewSession(c: Context): void {
+    const token = getCookie(c, SESSION_COOKIE);
+    const claims = token ? this._verifySession(token) : null;
+    const now = Math.floor(Date.now() / 1000);
+    if (claims === null || claims.exp - now > SESSION_TTL_SECONDS / 2) return;
+    this.setSessionCookie(c, this._signSession({...claims, exp: now + SESSION_TTL_SECONDS}));
+  }
+
   setSessionCookie(c: Context, sessionToken: string): void {
     setCookie(c, SESSION_COOKIE, sessionToken, {
       httpOnly: true,
@@ -225,6 +235,7 @@ export function createDashboardAuthMiddleware(
         }
         session = withStoredProfile(session, account);
       }
+      auth.renewSession(c);
       c.set("lunaRequestAuthKind", "dashboard-cookie" satisfies LunaRequestAuthKind);
       c.set("dashboardAuthSession", session);
       await next();
