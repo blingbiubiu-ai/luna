@@ -98,6 +98,8 @@ export function extractTextContent(
 }
 
 function extractToolUse(content: ToolUseMessageContent): string {
+  // A Runtime tool start carries the provider's own title and no input to render from.
+  if (content.displayTitle) return content.displayTitle;
   if (content.name === "Task") {
     const toolUse = content as ToolUseMessageContent;
     const parts = [`<Spawn Subtask> ${toolUse.input.subagent_type}`];
@@ -119,7 +121,7 @@ function extractToolUse(content: ToolUseMessageContent): string {
     if (toolUse.input.description) {
       parts.push(toolUse.input.description);
     }
-    parts.push("<Bash> " + toolUse.input.command);
+    parts.push(toolUse.input.command ? "<Bash> " + toolUse.input.command : "<Bash>");
     return parts.join("\n\n");
   } else if (content.name === "Glob") {
     const toolUse = content as GlobToolUseMessageContent;

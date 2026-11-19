@@ -20,6 +20,14 @@ describe("runner progress step", () => {
     ).toBe("Locate skill definition\n<Bash> find skills -type f");
   });
 
+  test("a Runtime tool start shows its provider title, not an empty input", async () => {
+    const { RunnerOutputState } = await import("../../src/runners/runner-output");
+    const [event] = new RunnerOutputState("s").accept("tool_start", { id: "item_1", name: "Bash", title: "执行命令 · ls -la" });
+    expect(runnerProgressStepFromAssistant(event as never)).toBe("执行命令 · ls -la");
+    const [untitled] = new RunnerOutputState("s").accept("tool_start", { id: "item_2", name: "Bash" });
+    expect(runnerProgressStepFromAssistant(untitled as never)).not.toContain("undefined");
+  });
+
   test("normalizes blank lines and horizontal whitespace", () => {
     expect(
       normalizeRunnerProgressStep("  Read context \r\n\r\n  <Read File>   AGENTS.md  "),
