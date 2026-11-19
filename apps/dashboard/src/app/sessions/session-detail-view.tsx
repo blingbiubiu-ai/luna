@@ -27,7 +27,13 @@ export function SessionDetailView({
 
   composer,
   actions,
+  focusEntryId,
+  focusMissing = false,
 }: {
+  /** A timeline entry to open the session at, such as where a memory was written. */
+  focusEntryId?: string | undefined;
+  /** The entry to open at is not in this session any more. */
+  focusMissing?: boolean;
   composer?: ReactNode;
   actions?: ReactNode;
   sessionId: string;
@@ -55,6 +61,7 @@ export function SessionDetailView({
   const followLatest = useRef(true);
   const previousFirstRow = useRef<{ element: HTMLElement; offset: number } | null>(null);
   const hasTimelineRows = !error && !showNotFound && !loading && timelineItems.length > 0;
+  const focusedEntry = useRef<string | null>(null);
 
   useLayoutEffect(() => {
     const viewport = viewportRef.current;
@@ -86,6 +93,19 @@ export function SessionDetailView({
       lastScrollTop.current = viewport.scrollTop;
     }
     previousFirstRow.current = { element: first, offset: first.offsetTop };
+  });
+
+  // Runs after the scroll-to-latest above, so the linked message wins once it is on the page.
+  useLayoutEffect(() => {
+    const viewport = viewportRef.current;
+    if (!focusEntryId || focusedEntry.current === focusEntryId || !viewport) return;
+    const target = viewport.querySelector<HTMLElement>(`[data-entry-id="${CSS.escape(focusEntryId)}"]`);
+    if (!target) return;
+    focusedEntry.current = focusEntryId;
+    followLatest.current = false;
+    target.dataset.focused = "true";
+    target.scrollIntoView({ block: "center" });
+    lastScrollTop.current = viewport.scrollTop;
   });
 
   return (
@@ -179,6 +199,11 @@ export function SessionDetailView({
                 <Button variant="ghost" size="sm" disabled={history.loading} onClick={history.load}>
                   {history.loading ? t("Loading history…") : history.failed ? t("Retry loading history") : t("Load older messages")}
                 </Button>
+              </div>
+            ) : null}
+            {focusMissing ? (
+              <div role="status" className="rounded-md border border-dashed p-3 text-xs text-muted-foreground">
+                要定位的那条消息已不在这个会话里，可能已被删除。
               </div>
             ) : null}
             {timelineItems.length === 0 ? (
@@ -440,8 +465,9 @@ function MessageTimelineItem({
 
   return (
     <article
-      className="group/message grid grid-cols-[auto_minmax(0,1fr)] gap-3 px-1 py-2"
+      className="group/message grid grid-cols-[auto_minmax(0,1fr)] gap-3 rounded-md px-1 py-2 data-[focused=true]:bg-primary/5 data-[focused=true]:ring-2 data-[focused=true]:ring-primary/40"
       data-message-role={message.role}
+      data-entry-id={timelineEntryId}
       data-nested={nested ? "true" : undefined}
       data-testid={`session-message-${message.id}`}
     >

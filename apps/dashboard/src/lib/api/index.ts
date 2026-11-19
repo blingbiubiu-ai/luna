@@ -108,6 +108,7 @@ export type {
   DashboardMemoryFilter,
   DashboardMemoryOriginKind,
   DashboardMemoryRevision,
+  DashboardMemorySource,
   DashboardMemoryStatus,
   DashboardMemoryType,
   DashboardTaskArtifact,

@@ -2,20 +2,37 @@ import { useAgentBasePath } from "@/lib/agent-route";
 import { DeleteRecordButton } from "@/components/delete-record-button";
 import { SessionComposer } from "./session-composer";
 import { createFileRoute } from "@tanstack/react-router";
+import { useEffect, useRef } from "react";
 
 import {
   useSessionTimeline,
   useSession,
+  type DashboardSessionTimelineItem,
 } from "@/lib/api";
 
 import { SessionDetailView } from "./session-detail-view";
 
 export const Route = createFileRoute("/$agentId/sessions/$sessionId")({
+  /** `entry` opens the session at one timeline entry, such as where a memory was written. */
+  validateSearch: (search: Record<string, unknown>): { entry?: string } =>
+    typeof search.entry === "string" && search.entry ? { entry: search.entry } : {},
   component: SessionDetailPage,
 });
 
+/** Older pages loaded at most while looking for a linked entry. */
+const FOCUS_PAGE_LIMIT = 50;
+
+function timelineEntryIds(item: DashboardSessionTimelineItem): string[] {
+  switch (item.type) {
+    case "turn": return item.messages.flatMap((message) => message.entryId ? [message.entryId] : []);
+    case "message": return item.message.entryId ? [item.message.entryId] : [];
+    case "event": return [item.event.entryId];
+  }
+}
+
 function SessionDetailPage() {
   const { agentId, sessionId } = Route.useParams();
+  const { entry: focusEntryId } = Route.useSearch();
   const base = useAgentBasePath();
   const {
     data: session,
@@ -33,6 +50,17 @@ function SessionDetailPage() {
     isFetchNextPageError,
     isLoading: timelineLoading,
   } = useSessionTimeline(sessionId, agentId);
+  const items = timeline?.pages.slice().reverse().flatMap((page) => page.items);
+  const focusLoaded = focusEntryId !== undefined && (items ?? []).some((item) => timelineEntryIds(item).includes(focusEntryId));
+  const focusPages = useRef(0);
+  // Page back through older history until the linked entry is on the page.
+  useEffect(() => {
+    if (!focusEntryId || focusLoaded || timeline === undefined || !hasNextPage || isFetching || isFetchNextPageError) return;
+    if (focusPages.current >= FOCUS_PAGE_LIMIT) return;
+    focusPages.current += 1;
+    void fetchNextPage({ cancelRefetch: false });
+  }, [focusEntryId, focusLoaded, timeline, hasNextPage, isFetching, isFetchNextPageError, fetchNextPage]);
+  const focusMissing = focusEntryId !== undefined && timeline !== undefined && !focusLoaded && !hasNextPage && !isFetching;
   const showNotFound =
     !sessionsLoading &&
     !sessionsIsError &&
@@ -45,7 +73,9 @@ function SessionDetailPage() {
       composer={<SessionComposer key={sessionId} agentId={agentId} sessionId={sessionId} disabled={!session || session.status !== "active" || sessionsIsError} />}
       sessionId={sessionId}
       session={session}
-      timeline={timeline?.pages.slice().reverse().flatMap((page) => page.items)}
+      timeline={items}
+      focusEntryId={focusEntryId}
+      focusMissing={focusMissing}
       history={{
         hasOlder: hasNextPage,
         loading: isFetchingNextPage,

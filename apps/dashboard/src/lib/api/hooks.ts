@@ -1673,7 +1673,19 @@ export interface DashboardMemoryRevision {
   changedByUserId: string | null;
   changedByShadowId: string | null;
   createdAt: number;
-  snapshot: DashboardMemoryFields & { status: DashboardMemoryStatus; trusted: boolean };
+  snapshot: DashboardMemoryFields & {
+    status: DashboardMemoryStatus;
+    trusted: boolean;
+    /** Where in a conversation this version was written; absent for maintenance, Dashboard edits and older versions. */
+    source?: DashboardMemorySource;
+  };
+}
+
+export interface DashboardMemorySource {
+  sessionId: string;
+  entryId: string;
+  messageId: string;
+  at: number;
 }
 
 export interface DashboardMemoryFilter {

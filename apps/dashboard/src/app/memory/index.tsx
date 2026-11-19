@@ -8,6 +8,7 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { useAgentBasePath, useRouteAgent } from "@/lib/agent-route";
 import { useAgentMemories, useAgentMemoryHistory } from "@/lib/api";
+import { MemorySourceLine } from "@/components/memory-source-line";
 import { ApiFetchError } from "@/lib/api/client";
 import type {
   DashboardMemory,
@@ -15,7 +16,7 @@ import type {
   DashboardMemoryFields,
   DashboardMemoryFilter,
   DashboardMemoryStatus,
-  DashboardMemoryType,
+  DashboardMemoryType
 } from "@/lib/api";
 
 export const Route = createFileRoute("/$agentId/memory/")({ component: MemoryPage });
@@ -1085,6 +1086,7 @@ function MemoryWorkspace({ agentId, agentName, defaultShadowId }: { agentId: str
                             )}
                           </summary>
                           <div className="space-y-1.5 border-t border-border px-4 pt-2.5 pb-4 text-xs">
+                            {entry.snapshot.source ? <MemorySourceLine agentId={agentId} source={entry.snapshot.source} /> : null}
                             <p className="font-medium">{entry.snapshot.title}</p>
                             <p className="text-muted-foreground">{entry.snapshot.description}</p>
                             <pre className="m-0 mt-2 whitespace-pre-wrap break-words rounded-xl bg-muted p-3 font-mono text-xs">
