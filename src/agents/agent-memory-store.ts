@@ -2,8 +2,8 @@ import {randomUUID} from "node:crypto";
 import {and, asc, desc, eq, inArray, like, lte, notInArray, or, sql, type SQL} from "drizzle-orm";
 import type {DrizzleDB} from "@/data";
 import {
-  agentMemories, agentMemoryRevisions, MEMORY_TYPES,
-  type MemoryChangeKind, type MemoryOriginKind, type MemoryStatus, type MemoryType,
+  agentMemories, agentMemoryRevisions, messages, MEMORY_TYPES, sessionTimelineEntries,
+  type MemoryChangeKind, type MemorySource, type MemoryOriginKind, type MemoryStatus, type MemoryType,
 } from "@/data/schema";
 import {config} from "@/shared";
 import {AgentError} from "./agent-store";
@@ -254,7 +254,7 @@ export class AgentMemoryStore {
       };
       tx.insert(agentMemories).values(row).run();
       indexTerms(tx, row);
-      record(tx, row, writer.kind, writer.userId, writer.shadowId, now);
+      record(tx, row, writer.kind, writer.userId, writer.shadowId, now, conversationAnchor(tx, writer.sessionId));
       return row;
     });
   }
@@ -448,7 +448,7 @@ export class AgentMemoryStore {
       // Deleted entries are never searched; their terms come back if a revision restores them.
       if (!SEARCHABLE.includes(row.status)) deleteTerms(tx, row.id);
       else if (!SEARCHABLE.includes(current.status) || row.title !== current.title || row.description !== current.description || row.body !== current.body) indexTerms(tx, row);
-      record(tx, row, writer.kind, writer.userId, writer.shadowId, now);
+      record(tx, row, writer.kind, writer.userId, writer.shadowId, now, conversationAnchor(tx, writer.sessionId));
       return row;
     });
   }
@@ -549,11 +549,43 @@ function deleteTerms(tx: Pick<DrizzleDB, "run">, id: string): void {
   tx.run(sql`DELETE FROM agent_memory_terms WHERE agent_memory_terms MATCH ${`memory_id:"${id}"`}`);
 }
 
-function record(tx: Pick<DrizzleDB, "insert">, row: MemoryRecord, kind: MemoryChangeKind, userId: string | null, shadowId: string | null, now: number): void {
+/**
+ * The conversation's latest timeline entry when a change is made, so a reader can page back to what
+ * led to it. Service-queued instructions (a reflection or consolidation turn) are not the conversation.
+ */
+function conversationAnchor(tx: Pick<DrizzleDB, "select">, sessionId: string | null | undefined): MemorySource | undefined {
+  if (!sessionId) return undefined;
+  const row = tx.select({entryId: sessionTimelineEntries.id, messageId: sessionTimelineEntries.messageId, at: sessionTimelineEntries.createdAt})
+    .from(sessionTimelineEntries).innerJoin(messages, eq(messages.id, sessionTimelineEntries.messageId))
+    .where(and(eq(sessionTimelineEntries.sessionId, sessionId),
+      sql`coalesce(json_extract(${messages.rawPayloadJson}, '$.origin'), '') <> 'session_trigger'`))
+    .orderBy(desc(sessionTimelineEntries.createdAt), desc(sessionTimelineEntries.id)).limit(1).get();
+  return row ? {sessionId, ...row} : undefined;
+}
+
+/**
+ * Where each change of an entry was made, newest first; changes made outside a conversation have none.
+ * `nextEntryId` is the entry that followed the anchor, the cursor for reading up to and including it.
+ */
+export function memorySources(db: Pick<DrizzleDB, "select">, id: string): ({revision: number; nextEntryId: string | null} & MemorySource)[] {
+  return db.select({revision: agentMemoryRevisions.revision, snapshot: agentMemoryRevisions.snapshot}).from(agentMemoryRevisions)
+    .where(eq(agentMemoryRevisions.memoryId, id)).orderBy(desc(agentMemoryRevisions.revision)).all()
+    .flatMap(row => {
+      const source = row.snapshot.source;
+      if (!source) return [];
+      const next = db.select({id: sessionTimelineEntries.id}).from(sessionTimelineEntries).where(and(eq(sessionTimelineEntries.sessionId, source.sessionId),
+        sql`(${sessionTimelineEntries.createdAt}, ${sessionTimelineEntries.id}) > (${source.at}, ${source.entryId})`))
+        .orderBy(asc(sessionTimelineEntries.createdAt), asc(sessionTimelineEntries.id)).limit(1).get();
+      return [{revision: row.revision, ...source, nextEntryId: next?.id ?? null}];
+    });
+}
+
+function record(tx: Pick<DrizzleDB, "insert">, row: MemoryRecord, kind: MemoryChangeKind, userId: string | null, shadowId: string | null, now: number,
+  source?: MemorySource): void {
   const {type, title, description, body, subjectUserId, visibility, status, supersededBy, trusted, core, expiresAt, occurredAt} = row;
   tx.insert(agentMemoryRevisions).values({
     memoryId: row.id, revision: row.revision,
-    snapshot: {type, title, description, body, subjectUserId, visibility, status, supersededBy, trusted, core, expiresAt, occurredAt},
+    snapshot: {type, title, description, body, subjectUserId, visibility, status, supersededBy, trusted, core, expiresAt, occurredAt, ...(source ? {source} : {})},
     changeKind: kind, changedByUserId: userId, changedByShadowId: shadowId, createdAt: now,
   }).run();
 }

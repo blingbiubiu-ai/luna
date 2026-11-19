@@ -206,3 +206,22 @@ test("a Runner records an episode with the invocation's participants and reads t
     { type: "episode", title: "所有者的事", description: "d", body: "b" }, { participants: [fixtureOwnerUserId("fixture-owner")] });
   expect((await f.call("GET", "/timeline")).body.episodes).toHaveLength(2);
 });
+
+test("each change records where in the conversation it was made, and get shows how to read back to it", async () => {
+  const f = fixture();
+  const say = (key: string, text: string, rawPayload?: unknown) => new MessageStore(f.db).appendOnce({ sessionId: f.session.id, channelMessageKey: key, role: "user", senderUserId: "user",
+    content: [{ type: "text", text }], channel: { id: "test", type: "feishu" }, ...(rawPayload ? { rawPayload } : {}) }).row;
+  const entryOf = (messageId: string) => f.db.select().from(schema.sessionTimelineEntries).all().find(row => row.messageId === messageId)!;
+  const first = f.db.select().from(schema.sessionTimelineEntries).all().at(-1)!;
+  const added = (await f.call("POST", "", project)).body.memory;
+  const later = say("external-2", "冻结推迟到 11-25");
+  // A Service-queued instruction is not part of the conversation and is never the anchor.
+  say("trigger-1", "Memory reflection.", { origin: "session_trigger" });
+  expect((await f.call("PUT", `/${added.id}`, { description: "11-25 前冻结发布", expectedRevision: 1 })).status).toBe(200);
+  const { sources } = (await f.call("GET", `/${added.id}`)).body.memory;
+  expect(sources.map((s: any) => [s.revision, s.entryId])).toEqual([[2, entryOf(later.id).id], [1, first.id]]);
+  expect(sources[1]).toMatchObject({ sessionId: f.session.id, messageId: first.messageId, at: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T/) });
+  // Reading up to and including the anchor: the cursor is the entry that came after it.
+  expect(sources[1].read).toBe(`luna session read_session_timeline --session-id ${f.session.id} --before-entry-id ${entryOf(later.id).id} --limit 20`);
+  expect(sources[0].read).toContain("--before-entry-id");
+});

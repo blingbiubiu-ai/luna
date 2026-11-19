@@ -77,6 +77,15 @@ export interface MemorySnapshot {
   expiresAt: number | null;
   /** Absent in revisions written before episodes existed. */
   occurredAt?: number | null;
+  /** Where in the conversation this change was made: its latest timeline entry at the time. Absent for maintenance and older revisions. */
+  source?: MemorySource;
+}
+
+export interface MemorySource {
+  sessionId: string;
+  entryId: string;
+  messageId: string;
+  at: number;
 }
 
 /** State of an entry after each change; the latest row equals the current entry. */

@@ -6,7 +6,7 @@ import {MEMORY_TYPES, users} from "@/data/schema";
 import {AgentError} from "@/agents/agent-store";
 import {memoryAccess} from "@/agents/agent-memory-access";
 import {memoryOriginOfTrigger} from "@/agents/agent-memory-maintenance";
-import {AgentMemoryStore, MemoryConflictError, MemoryDuplicateError, memorySummary, type MemoryRecord, MEMORY_BODY_LIMIT} from "@/agents/agent-memory-store";
+import {AgentMemoryStore, MemoryConflictError, MemoryDuplicateError, memorySummary, type MemoryRecord, MEMORY_BODY_LIMIT, memorySources} from "@/agents/agent-memory-store";
 import {InvocationService} from "@/runners/invocation-service";
 import type {LunaAccessTokenClaims} from "../auth/access-token-service";
 import {GatewayError} from "../gateway-error";
@@ -74,7 +74,13 @@ export function createRunnerMemoryRoutes(options: {db?: DrizzleDB} = {}) {
         {limit: query.limit, archived: query.archived === "true", ...(query.type ? {type: query.type} : {}), ...(query.subject ? {subjectUserId: query.subject} : {})});
       return c.json({memories: summaries(rows)});
     })
-    .get("/memory/:id", c => c.json({memory: detail(new AgentMemoryStore(db()).use(access(c.get("lunaAccessTokenClaims")).viewer, c.req.param("id")))}))
+    .get("/memory/:id", c => {
+      const row = new AgentMemoryStore(db()).use(access(c.get("lunaAccessTokenClaims")).viewer, c.req.param("id"));
+      // Where each change was made, so the Runner can read the conversation around it.
+      const sources = memorySources(db(), row.id).map(({nextEntryId, ...source}) => ({...source, at: new Date(source.at).toISOString(),
+        read: `luna session read_session_timeline --session-id ${source.sessionId}${nextEntryId ? ` --before-entry-id ${nextEntryId}` : ""} --limit 20`}));
+      return c.json({memory: {...detail(row), sources}});
+    })
     .post("/memory", async c => {
       const {viewer, writer} = access(c.get("lunaAccessTokenClaims"));
       const author = writer();
