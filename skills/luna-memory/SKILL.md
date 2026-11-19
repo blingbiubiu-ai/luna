@@ -31,6 +31,9 @@ description: Write Agent long-term memory with `luna memory add/update/delete`: 
     one entry per chat and update it as the role changes. Only the Agent owner
     or a member trusted to write memory can set it, and only from a Main
     conversation in that chat, not from Work.
+    In a direct chat, what is about the person goes in their `person` entry,
+    which follows them into every chat; only what this direct chat is for,
+    such as "send my daily report here every morning", is a `chat` entry.
   - `feedback`: a way of working the user corrected or confirmed.
   - `project`: the state, decisions or schedule of ongoing work, such as "the
     diagnostics launch moved to 2026-12-05; VQoS ships first".
