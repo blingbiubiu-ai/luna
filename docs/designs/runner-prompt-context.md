@@ -210,8 +210,10 @@ src/prompts/
 
 | 部分 | 变化时 |
 |---|---|
-| 指令内容（规则、soul、session） | 只重写文件，provider 会话保留。Claude 下一轮读到新文件；Codex 下一轮追加一条替换指令 |
-| `scope`、`resources`、`workerId` | 维持现有行为，重建会话。这三项是否也可以不重建，本方案不处理 |
+| 指令内容（规则、soul）和资源包（prompts、skills、工具） | 只重写文件，provider 会话保留。Claude 下一轮读到新文件；Codex 下一轮追加一条替换指令；skill 正文用到时才读，所以改动下一次使用就生效 |
+| `scope`（含 placement generation）、`workerId` | 重建会话：换了 Worker 或 placement，HOME 里没有原来的 provider 会话 |
+
+资源包原先也在指纹里，导致每次发布改了内置 skill 或 prompt，所有会话都重开一次（HostA 11-19 实际发生）。已移出。已知代价：Codex 只在会话开始时列出 skill 清单，恢复的会话看不到新增的 skill，直到下一次因别的原因开新会话。
 
 改名或改 persona 之后：
 
