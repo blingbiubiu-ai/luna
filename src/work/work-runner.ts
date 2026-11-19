@@ -2,7 +2,7 @@ import { memoryInjection } from "@/agents/agent-memory-injection";
 import { addressingFacts, compact, dataBlock, joinBlocks, messageItem, turnClock, type PeopleResolver } from "@/runners/turn-envelope";
 import { shadowPeople } from "@/runners/shadow-people";
 import type {AgentExecutionSnapshot} from "@/agent-config";
-import { prepareRunnerFiles } from "@/runners/prepare-runner-files";
+import { contextFileSurface, prepareRunnerDirectory, syncAgentCompatibility, turnAttempt } from "@/runners/session-runner-turn";
 import { RuntimeDetachedError } from "@/runners/runtime-detach";
 import { InvocationStore } from "@/runners/invocation-store";
 import { randomUUID } from "node:crypto";
@@ -23,8 +23,7 @@ import {
   type SessionRunnerAttemptRow,
 } from "@/sessions/session-runner-attempt-store";
 import { SessionTurnStore } from "@/sessions/session-turn-store";
-import { RunnerContextStore } from "@/runners/runner-context-store";
-import { writeRunnerContextFile } from "@/runners/runner-context-file";
+import { RunnerContextStore, type ResolvedRunnerContext } from "@/runners/runner-context-store";
 import { buildLunaServiceRunnerEnv } from "@/runners/luna-service-env";
 import { invokeSessionAgent } from "@/runners/session-agent-invocation";
 import {
@@ -139,29 +138,9 @@ export class WorkRunner {
 
     const inbound = buildInboundFromMessageRow(session, latestMessageRow);
 
-    const invocationId = new InvocationStore(this._options.db).findActive({ runnerKind: "work", originId: input.turn.id, sessionId: session.id })?.id ?? randomUUID();
-    const snapshot =
-      this._options.runAgent === undefined &&
-      this._options.createRunner === undefined &&
-      this._options.runnerType !== "mock" &&
-      this._options.runnerType !== "dummy"
-        ? getKernel().resolveAgentExecutionSnapshot({agentId:session.agent_id,shadowId:session.shadow_id}, invocationId)
-        : undefined;
-    const currentRunnerType = snapshot?.agentType ?? this._options.runnerType;
-    const resolvedRunnerContext = this._options.runAgent === undefined
-      ? this._runnerContexts.resolveForSession(
-        session.id,
-        currentRunnerType,
-      )
-      : undefined;
-    const compatibleRunnerContext = resolvedRunnerContext !== undefined && snapshot !== undefined
-      ? this._runnerContexts.syncAgentCompatibility(resolvedRunnerContext.id, {
-        providerFingerprint: snapshot.providerFingerprint,
-        modelFingerprint: snapshot.modelFingerprint,
-        resumeOnModelChange: snapshot.resumeOnModelChange,
-      }).runnerContext
-      : resolvedRunnerContext;
-    let runnerContext = compatibleRunnerContext;
+    const { invocationId, snapshot, runnerType: currentRunnerType, runnerContext: resolvedRunnerContext } =
+      this._resolveExecution(session, input.turn.id, this._options.runAgent === undefined);
+    let runnerContext = resolvedRunnerContext;
 
 
     const fallback = workSessionInboundFallback(session);
@@ -273,36 +252,12 @@ export class WorkRunner {
         if (runnerContext === undefined) {
           throw new Error("Work runner context was not resolved.");
         }
-        const attemptContextId=runnerContext.id;
-        attempt = this._attemptStore.listForTurn(input.turn.id).find(row => row.status === "running" && row.runnerContextId === attemptContextId) ?? this._attemptStore.createRunning({
-          sessionId: session.id,
-          turnId: input.turn.id,
-          runnerContextId: runnerContext.id,
-          runnerType: currentRunnerType,
-          runnerSessionId: runnerContext.runner_session_id,
-          attemptKind: "primary",
-          inputPrompt: prompt,
-        });
-        const runner = this._options.createRunner?.() ??
-          createAgentRunnerForConfig(
-            snapshot!,
-            getKernel().runtimeAgentTransport,
-          );
-        workInvocations(this._options.db).set(invocationId, {
-          runnerContextId: runnerContext.id, sessionId: session.id,
-          turnId: input.turn.id, ...(signal ? { signal } : {}),
-        });
-        const serviceEnv = this._workRunnerServiceEnv(
-          invocationId,
-          runnerContext.id,
-          latestMessageRow,
-          session,
-          snapshot,
-        );
-        const instructions=await prepareRunnerFiles(runnerContext,buildWorkRunnerContextFile(session,inbound),signal,invocationId);
-        runnerContext=this._runnerContexts.syncInstructionFingerprint(runnerContext.id,instructions.instructionFingerprint).runnerContext;
-        // After the fingerprint sync: a new provider session must be told standing memory.
+        attempt = turnAttempt(this._attemptStore, { sessionId: session.id, turnId: input.turn.id, runnerContext, runnerType: currentRunnerType, inputPrompt: prompt });
         const memoryActor = this._requestedByUserIdForWorkRunner(latestMessageRow, session);
+        const launch = await this._launch({ session, invocationId, originId: input.turn.id, runnerContext, snapshot,
+          requestedByUserId: memoryActor, inbound, signal });
+        runnerContext = launch.runnerContext;
+        // After the fingerprint sync: a new provider session must be told standing memory.
         const memory = memoryActor === undefined ? undefined : memoryInjection(this._options.db,
           {agentId: session.agent_id, shadowId: session.shadow_id, actorUserId: memoryActor, sessionId: session.id, taskId: null, runnerContextId: runnerContext.id},
           turnMessages.map(message => message.text).join("\n"));
@@ -310,16 +265,13 @@ export class WorkRunner {
         if (turnPrompt !== prompt) this._attemptStore.updateInputPrompt(attempt.id, turnPrompt);
         let pendingAssistantStep: string | undefined;
         const invocation = await invokeSessionAgent({
-          runner,
+          runner: launch.runner,
           runnerContext,
           runnerContextStore: this._runnerContexts,
           runnerKind: "work",
           messageId: `work-${session.id}-${input.turn.id}`,
           prompt: turnPrompt,
-          env: {
-            ...(snapshot?.env ?? {}),
-            ...(serviceEnv ?? {}),
-          },
+          env: launch.env,
           ...(signal !== undefined ? { signal } : {}),
           onAssistantEvent: async (event) => {
             if (pendingAssistantStep !== undefined) {
@@ -429,27 +381,16 @@ export class WorkRunner {
    */
   async executeMaintenanceTurn(session: SessionRow, command: {id: string; actorUserId: string; instruction: string}, signal?: AbortSignal): Promise<void> {
     const db = this._options.db;
-    const invocationId = new InvocationStore(db).findActive({ runnerKind: "work", originId: command.id, sessionId: session.id })?.id ?? randomUUID();
-    const snapshot = this._options.createRunner === undefined && this._options.runnerType !== "mock" && this._options.runnerType !== "dummy"
-      ? getKernel().resolveAgentExecutionSnapshot({agentId: session.agent_id, shadowId: session.shadow_id}, invocationId)
-      : undefined;
-    const runnerType = snapshot?.agentType ?? this._options.runnerType;
-    let runnerContext = this._runnerContexts.resolveForSession(session.id, runnerType);
-    if (snapshot !== undefined) runnerContext = this._runnerContexts.syncAgentCompatibility(runnerContext.id, {
-      providerFingerprint: snapshot.providerFingerprint, modelFingerprint: snapshot.modelFingerprint, resumeOnModelChange: snapshot.resumeOnModelChange,
-    }).runnerContext;
+    const resolved = this._resolveExecution(session, command.id, true);
+    const { invocationId, snapshot, runnerType } = resolved;
+    let runnerContext = resolved.runnerContext!;
     const latest = this._messageStore.listMessagesBefore({ sessionId: session.id, beforeCreatedAt: Date.now() + 1 }).at(-1);
     if (runnerContext.runner_session_id === null || latest === undefined) return;
-    const attempt = this._attemptStore.createRunning({
-      sessionId: session.id, turnId: command.id, runnerContextId: runnerContext.id, runnerType,
-      runnerSessionId: runnerContext.runner_session_id, attemptKind: "primary", inputPrompt: command.instruction,
-    });
-    workInvocations(db).set(invocationId, { runnerContextId: runnerContext.id, sessionId: session.id, turnId: command.id, ...(signal ? { signal } : {}) });
+    const attempt = turnAttempt(this._attemptStore, { sessionId: session.id, turnId: command.id, runnerContext, runnerType, inputPrompt: command.instruction });
     try {
-      const runner = this._options.createRunner?.() ?? createAgentRunnerForConfig(snapshot!, getKernel().runtimeAgentTransport);
-      const serviceEnv = this._serviceEnv(invocationId, runnerContext.id, command.actorUserId, session, snapshot);
-      const instructions = await prepareRunnerFiles(runnerContext, buildWorkRunnerContextFile(session, buildInboundFromMessageRow(session, latest)), signal, invocationId);
-      runnerContext = this._runnerContexts.syncInstructionFingerprint(runnerContext.id, instructions.instructionFingerprint).runnerContext;
+      const launch = await this._launch({ session, invocationId, originId: command.id, runnerContext, snapshot,
+        requestedByUserId: command.actorUserId, inbound: buildInboundFromMessageRow(session, latest), signal });
+      runnerContext = launch.runnerContext;
       if (runnerContext.runner_session_id === null) {
         // Changed instructions reset the provider context, and the conversation went with it.
         const invocations = new InvocationStore(db);
@@ -462,9 +403,9 @@ export class WorkRunner {
       const prompt = joinBlocks([command.instruction, dataBlock("memory", { text: memory.text ?? "" }), dataBlock("now", { json: turnClock() })]);
       if (prompt !== command.instruction) this._attemptStore.updateInputPrompt(attempt.id, prompt);
       const invocation = await invokeSessionAgent({
-        runner, runnerContext, runnerContextStore: this._runnerContexts, runnerKind: "work",
+        runner: launch.runner, runnerContext, runnerContextStore: this._runnerContexts, runnerKind: "work",
         messageId: `work-${session.id}-${command.id}`, prompt,
-        env: { ...(snapshot?.env ?? {}), ...(serviceEnv ?? {}) },
+        env: launch.env,
         ...(signal !== undefined ? { signal } : {}),
       });
       memory.commit();
@@ -485,14 +426,37 @@ export class WorkRunner {
     }
   }
 
-  private _workRunnerServiceEnv(
-    invocationId: string,
-    runnerContextId: string,
-    messageRow: MessageRow,
-    session: SessionRow,
-    agentConfig?:AgentExecutionSnapshot,
-  ): Record<string, string> | undefined {
-    return this._serviceEnv(invocationId, runnerContextId, this._requestedByUserIdForWorkRunner(messageRow, session), session, agentConfig);
+  /**
+   * The Agent configuration, Runner type and session Runner context for a turn, and the
+   * invocation it resumes or starts. `withContext` false: a test agent that needs no context.
+   */
+  private _resolveExecution(session: SessionRow, originId: string, withContext: boolean) {
+    const invocationId = new InvocationStore(this._options.db).findActive({ runnerKind: "work", originId, sessionId: session.id })?.id ?? randomUUID();
+    const snapshot = withContext && this._options.createRunner === undefined && this._options.runnerType !== "mock" && this._options.runnerType !== "dummy"
+      ? getKernel().resolveAgentExecutionSnapshot({ agentId: session.agent_id, shadowId: session.shadow_id }, invocationId)
+      : undefined;
+    const runnerType = snapshot?.agentType ?? this._options.runnerType;
+    const runnerContext = withContext
+      ? syncAgentCompatibility(this._runnerContexts, this._runnerContexts.resolveForSession(session.id, runnerType), snapshot)
+      : undefined;
+    return { invocationId, snapshot, runnerType, runnerContext };
+  }
+
+  /** Register the invocation, build the agent and its environment, and have the Worker prepare the directory. */
+  private async _launch(input: {
+    readonly session: SessionRow; readonly invocationId: string; readonly originId: string;
+    readonly runnerContext: ResolvedRunnerContext; readonly snapshot: AgentExecutionSnapshot | undefined;
+    readonly requestedByUserId: string | undefined; readonly inbound: NormalizedInboundMessage; readonly signal: AbortSignal | undefined;
+  }): Promise<{ readonly runner: AgentRunner; readonly env: Record<string, string>; readonly runnerContext: ResolvedRunnerContext }> {
+    const { session, invocationId, snapshot, signal } = input;
+    workInvocations(this._options.db).set(invocationId, {
+      runnerContextId: input.runnerContext.id, sessionId: session.id, turnId: input.originId, ...(signal ? { signal } : {}),
+    });
+    const runner = this._options.createRunner?.() ?? createAgentRunnerForConfig(snapshot!, getKernel().runtimeAgentTransport);
+    const serviceEnv = this._serviceEnv(invocationId, input.runnerContext.id, input.requestedByUserId, session, snapshot);
+    const prepared = await prepareRunnerDirectory({ store: this._runnerContexts, runnerContext: input.runnerContext,
+      contextFile: buildWorkRunnerContextFile(session, input.inbound), invocationId, signal });
+    return { runner, env: { ...(snapshot?.env ?? {}), ...(serviceEnv ?? {}) }, runnerContext: prepared.runnerContext };
   }
 
   private _serviceEnv(
@@ -739,20 +703,12 @@ function buildWorkRunnerContextFile(
       workSession: {
         id: session.id,
         channel: inbound.channel,
-        surface: sanitizedSurface(inbound.surface),
+        surface: contextFileSurface(inbound.surface),
         ...(inbound.thread !== undefined ? { thread: inbound.thread } : {}),
         delivery: { replyTarget: "session_thread" },
       },
     },
   } as const;
-}
-
-function sanitizedSurface(
-  surface: NormalizedInboundMessage["surface"],
-): NormalizedInboundMessage["surface"] {
-  const { rawProfile: _rawProfile, ...rest } =
-    surface as NormalizedInboundMessage["surface"] & { readonly rawProfile?: unknown };
-  return rest;
 }
 
 function activationFollowupAddressing(

@@ -2,7 +2,7 @@ import { memoryInjection } from "@/agents/agent-memory-injection";
 import {RunnerContextStore as ExecutionContextStore} from "@/runners/runner-context-store";
 import {TaskScopeResolver} from "@/agents/task-scope";
 import type {AgentScope} from "@/agents/agent-store";
-import { prepareRunnerFiles } from "@/runners/prepare-runner-files";
+import { contextFileSurface, prepareRunnerDirectory, syncAgentCompatibility, turnAttempt } from "@/runners/session-runner-turn";
 import { finalizeRunnerReply } from "@/messaging/runner-answer";
 import { RuntimeDetachedError } from "@/runners/runtime-detach";
 import { InvocationStore } from "@/runners/invocation-store";
@@ -17,7 +17,6 @@ import {
   requiresExplicitRequesterIdentity,
 } from "@/identity/requested-identity";
 import { buildLunaServiceRunnerEnv } from "@/runners/luna-service-env";
-import { writeRunnerContextFile } from "@/runners/runner-context-file";
 import {
   invokeSessionAgent,
   type SessionAgentInvocationResult,
@@ -115,28 +114,16 @@ export class MainRunner {
       input={...input,runnerContext:compatibleContext};
       if(input.invocationId) mainInvocations(this._options.serviceAuthDb).set(input.invocationId,input);
     }
-    if (execution !== undefined) {
-      compatibleContext = this._options.runnerContextStore?.syncAgentCompatibility(
-        input.runnerContext.id,
-        {
-          providerFingerprint: execution.snapshot.providerFingerprint,
-          modelFingerprint: execution.snapshot.modelFingerprint,
-          resumeOnModelChange: execution.snapshot.resumeOnModelChange,
-        },
-      ).runnerContext ?? input.runnerContext;
-    }
+    compatibleContext = syncAgentCompatibility(this._options.runnerContextStore, input.runnerContext, execution?.snapshot);
     const serviceEnv = buildMainRunnerServiceEnv({...input,runnerContext:compatibleContext},this._options,scope.agentId,execution?.snapshot);
     const invocationStore = this._options.serviceAuthDb ? new InvocationStore(this._options.serviceAuthDb) : undefined;
     const invocation = input.invocationId ? invocationStore?.find(input.invocationId) : undefined;
     let runnerContext = compatibleContext;
     if (!invocation?.activeJobId) {
-      const instructions = await prepareRunnerFiles(compatibleContext, buildMainRunnerContextFile(input.input), input.signal, input.invocationId);
-      const synced = this._options.runnerContextStore?.syncInstructionFingerprint(
-        compatibleContext.id,
-        instructions.instructionFingerprint,
-      );
-      runnerContext = synced?.runnerContext ?? compatibleContext;
-      if (invocationStore && invocation && synced?.runnerSessionInvalidated && input.input.type === "user_messages") {
+      const prepared = await prepareRunnerDirectory({ store: this._options.runnerContextStore, runnerContext: compatibleContext,
+        contextFile: buildMainRunnerContextFile(input.input), invocationId: input.invocationId, signal: input.signal });
+      runnerContext = prepared.runnerContext;
+      if (invocationStore && invocation && prepared.runnerSessionInvalidated && input.input.type === "user_messages") {
         invocationStore.finish(invocation.id);
         throw new MainRunnerFreshLaunchReplayRequiredError();
       }
@@ -150,10 +137,10 @@ export class MainRunner {
       ...(memory?.text ? { memory: memory.text } : {}),
       ...(this._options.serviceAuthDb ? { people: shadowPeople(this._options.serviceAuthDb, scope) } : {}),
     });
-    const primaryAttempt = this._createAttempt(input, {
-      attemptKind: "primary",
-      inputPrompt: prompt,
-    });
+    const primaryAttempt = this._options.attemptStore && input.turnId !== undefined
+      ? turnAttempt(this._options.attemptStore, { sessionId: sessionIdFromInput(input.input), turnId: input.turnId,
+        runnerContext: input.runnerContext, runnerType: this._options.runner?.type ?? "container", inputPrompt: prompt })
+      : undefined;
     let primaryOutput: SessionAgentInvocationResult;
     try {
       primaryOutput = await invokeSessionAgent({
@@ -211,33 +198,6 @@ export class MainRunner {
     this._markAttemptParsed(primaryAttempt, { rawOutput: primaryOutput.text, parsedActionJson: completion,
       ...(primaryOutput.runnerSessionId ? { runnerSessionId: primaryOutput.runnerSessionId } : {}) });
     return completion;
-  }
-
-  private _createAttempt(
-    input: MainRunnerRunInput,
-    attempt: {
-      readonly attemptKind: "primary" | "repair";
-      readonly inputPrompt: string;
-      readonly repairSourceAttemptId?: string;
-    },
-  ): SessionRunnerAttemptRow | undefined {
-    if (this._options.attemptStore === undefined || input.turnId === undefined) {
-      return undefined;
-    }
-    const running = this._options.attemptStore.listForTurn(input.turnId).find(row => row.status === "running" && row.runnerContextId === input.runnerContext.id);
-    if (running) return running;
-    return this._options.attemptStore.createRunning({
-      sessionId: sessionIdFromInput(input.input),
-      turnId: input.turnId,
-      runnerContextId: input.runnerContext.id,
-      runnerType: this._options.runner?.type ?? "container",
-      runnerSessionId: input.runnerContext.runner_session_id,
-      attemptKind: attempt.attemptKind,
-      inputPrompt: attempt.inputPrompt,
-      ...(attempt.repairSourceAttemptId !== undefined
-        ? { repairSourceAttemptId: attempt.repairSourceAttemptId }
-        : {}),
-    });
   }
 
   private _markAttemptParsed(
@@ -355,7 +315,7 @@ function buildMainRunnerContextFile(input: MainRunnerInput) {
           id: sessionId,
           kind: "ordinary",
           channel: input.latestMessage.channel,
-          surface: sanitizedMainSurface(input.latestMessage.surface),
+          surface: contextFileSurface(input.latestMessage.surface),
           ...(input.latestMessage.thread !== undefined
             ? { thread: input.latestMessage.thread }
             : {}),
@@ -374,14 +334,6 @@ function buildMainRunnerContextFile(input: MainRunnerInput) {
       },
     },
   } as const;
-}
-
-function sanitizedMainSurface(
-  surface: Extract<MainRunnerInput, { readonly type: "user_messages" }>["latestMessage"]["surface"],
-) {
-  const { rawProfile: _rawProfile, ...rest } =
-    surface as typeof surface & { readonly rawProfile?: unknown };
-  return rest;
 }
 
 export interface MainRunnerPromptOptions {
