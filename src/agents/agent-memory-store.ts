@@ -542,23 +542,18 @@ export class MemoryTypeFactsError extends AgentError {
   constructor(code: string, readonly hint: string) { super(code, 400); }
 }
 
-const ABSOLUTE_DATE = /(?:19|20)\d{2}\s*(?:[-/.年]\s*\d{1,2}(?:\s*[-/.月]\s*\d{1,2})?|年)/;
 const LOCATOR = /https?:\/\/\S+|(?:^|[\s(（：:])[~/][\w.@-]+\/[\w./@-]+|《[^》]+》|\b[\w-]+\.(?:md|pdf|docx?|xlsx?|pptx?|csv|json|ya?ml)\b/i;
 
 /**
- * What a type promises a reader: a reference says where something is found, a project says when.
+ * What a type promises a reader: a reference says where something is found.
  * Checked on add and update, never when an earlier revision is restored.
  */
-function requireTypeFacts<T extends Pick<MemoryFields, "type" | "title" | "description" | "body" | "expiresAt">>(fields: T): T {
+function requireTypeFacts<T extends Pick<MemoryFields, "type" | "title" | "description" | "body">>(fields: T): T {
   const text = `${fields.title}\n${fields.description}\n${fields.body}`;
   if (fields.type === "reference" && !LOCATOR.test(text)) throw new MemoryTypeFactsError("memory_reference_location_missing",
     "A reference entry says where something is found. Put its link, path or document name (in 《》) in the description or body. "
     + "If no such location exists, the fact itself is what you are saving: choose its type with --type "
     + "(project for the state, decisions or schedule of ongoing work, feedback for a confirmed way of working, procedure for reusable steps).");
-  if (fields.type === "project" && fields.expiresAt === null && !ABSOLUTE_DATE.test(text)) throw new MemoryTypeFactsError("memory_project_date_missing",
-    "A project entry records ongoing work and must say when: write an absolute date (YYYY-MM-DD) for the decision, milestone or deadline, "
-    + "or give --expires YYYY-MM-DD for when it stops mattering. If it is not about ongoing work, choose its type with --type "
-    + "(reference for where something is found, feedback for a confirmed way of working, procedure for reusable steps).");
   return fields;
 }
 

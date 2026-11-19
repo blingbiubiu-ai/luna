@@ -469,7 +469,7 @@ test("episodes fade by age unless read since; the unused rule does not apply to 
   expect(store.forget(0, now + 1000, 90 * DAY)).toBe(0);
 });
 
-test("a reference must say where it is found and a project when; each refusal says what is missing", () => {
+test("a reference must say where it is found and a project needs no date; the refusal says what is missing", () => {
   const expectRefused = (action: () => unknown, code: string, hint: string) => {
     try { action(); throw new Error("not refused"); }
     catch (error) { expect((error as {code?: string}).code).toBe(code); expect((error as {hint?: string}).hint).toContain(hint); }
@@ -478,10 +478,7 @@ test("a reference must say where it is found and a project when; each refusal sa
     "memory_reference_location_missing", "link, path or document name");
   for (const body of ["https://docs.example/guide", "见《Nimbus 诊断手册》", "配置在 ~/conf/nimbus.yaml", "看 report.md"])
     expect(store.add(owner(), {type: "reference", title: `手册 ${body}`, description: "诊断手册在哪", body}).type).toBe("reference");
-  expectRefused(() => store.add(owner(), {type: "project", title: "上线计划", description: "先上 VQoS", body: "下周上线"}),
-    "memory_project_date_missing", "absolute date");
-  expect(store.add(owner(), {type: "project", title: "上线计划 A", description: "先上 VQoS", body: "2026年12月5日上线"}).type).toBe("project");
-  expect(store.add(owner(), {type: "project", title: "上线计划 B", description: "先上 VQoS", body: "下周上线", expiresAt: Date.now() + 86_400_000}).type).toBe("project");
+  expect(store.add(owner(), {type: "project", title: "迁移", description: "正在把 Nimbus 迁到新集群", body: "先迁只读流量"}).type).toBe("project");
   // Switching type is checked against the new type.
   const steps = store.add(owner(), {type: "procedure", title: "排查步骤", description: "VQoS 拿不到数据怎么查", body: "先看 auth status"});
   expectRefused(() => store.update(owner(), everything(), steps.id, {expectedRevision: 1, type: "reference"}), "memory_reference_location_missing", "--type");

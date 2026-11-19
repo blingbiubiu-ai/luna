@@ -15,7 +15,7 @@ const usage = [
   "Types (one question each):",
   "  person     who someone is and how to work with them (--subject USER_ID)",
   "  feedback   a way of working the user corrected or confirmed",
-  "  project    state, decisions or schedule of ongoing work; must carry an absolute date or --expires",
+  "  project    state, decisions or schedule of ongoing work",
   "  procedure  reusable steps, e.g. how to troubleshoot something",
   "  reference  where something is found: a link, path or 《document name》; must contain one",
   "  persona    who this Shadow is (Agent owner only); episode is written by memory reflection",

@@ -73,10 +73,10 @@ test("a Runner adds, finds, reads, updates and deletes memory inside its invocat
 
 test("a refused type tells the Runner what to add, not just that the type is wrong", async () => {
   const f = await fixture();
-  const refused = await f.call("POST", "", { ...project, description: "冻结发布", body: "不合并功能分支" });
+  const refused = await f.call("POST", "", { ...project, type: "reference", description: "冻结发布", body: "不合并功能分支" });
   expect(refused.status).toBe(400);
-  expect(refused.body.error).toBe("memory_project_date_missing");
-  expect(refused.body.message).toContain("absolute date");
+  expect(refused.body.error).toBe("memory_reference_location_missing");
+  expect(refused.body.message).toContain("link, path or document name");
 });
 
 test("trust follows the invocation actor: untrusted by default, trusted with a memory.write rule", async () => {
