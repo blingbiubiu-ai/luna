@@ -58,7 +58,9 @@ export class MemoryDuplicateError extends AgentError {
   constructor(readonly candidates: readonly MemoryRecord[]) { super("memory_duplicate", 409); }
 }
 
-const LIMITS = {title: 120, description: 200, body: 8 * 1024} as const;
+/** Largest entry body, in bytes. */
+export const MEMORY_BODY_LIMIT = 8 * 1024;
+const LIMITS = {title: 120, description: 200, body: MEMORY_BODY_LIMIT} as const;
 /** Types that change how the Agent works; only trusted writers may create or produce them. */
 const BEHAVIOR_TYPES: readonly MemoryType[] = ["feedback", "procedure"];
 /** Index order: what must not be missed comes first. */

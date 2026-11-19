@@ -115,6 +115,10 @@ test("invalid input is rejected before it reaches storage", async () => {
   expect((await f.call("POST", "", { ...project, type: "secret" })).status).toBe(400);
   expect((await f.call("PUT", "/missing", { body: "x" })).status).toBe(400);
   expect((await f.call("GET", "/search?q=")).status).toBe(400);
+  // An oversized body says what to do, so the Runner trims or splits it instead of retrying as is.
+  const long = await f.call("POST", "", { ...project, body: "x".repeat(8 * 1024 + 1) });
+  expect(long.status).toBe(400);
+  expect(long.body).toMatchObject({ error: "invalid_memory_body", message: expect.stringContaining("split a separate question into its own entry") });
 });
 
 test("list is capped and reports how many entries were left out", async () => {

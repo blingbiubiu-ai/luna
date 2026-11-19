@@ -384,3 +384,24 @@ test("participants leave out the Agent's own reply identity", async () => {
   say(bot, 59 * MIN, "assistant");
   expect(memoryParticipants(db.db, {actorUserId: "user:alice", sessionId: "session", taskId: null})).toEqual(["user:alice"]);
 });
+
+test("reflection rechecks the entries this conversation wrote or was shown, and is told to evolve them", () => {
+  const store = new AgentMemoryStore(db.db);
+  const written = store.add({...writer("reflection"), sessionId: "session"}, {type: "project", title: "ccli hook 因 frida 拿不到不可用", description: "frida 预编译包下载不到", body: "b"});
+  const shown = store.add({...writer(), sessionId: "elsewhere"}, {type: "reference", title: "VQoS 只认 sso_session.json", description: "auth status 不代表可用", body: "b"});
+  const unrelated = store.add({...writer(), sessionId: "elsewhere"}, {type: "reference", title: "别的会话的条目", description: "从没在这里出现过", body: "b"});
+  const context = new RunnerContextStore(db.db).resolveForSession("session", "codex");
+  db.db.insert(schema.memoryInjectedEntries).values({runnerContextId: context.id, memoryId: shown.id}).run();
+  ask("user:alice", 40 * MIN);
+  const text = String(command(schedule()[0]!).payload.content);
+  expect(text).toContain(`- [${written.id}] (project, revision 1) ccli hook 因 frida 拿不到不可用: frida 预编译包下载不到`);
+  expect(text).toContain(`- [${shown.id}] (reference, revision 1) VQoS 只认 sso_session.json`);
+  expect(text).not.toContain(unrelated.id);
+  expect(text).toContain("update that entry instead of adding another");
+  expect(text).toContain("Put the current conclusion first");
+});
+
+test("a conversation that wrote and was shown nothing gets no entry list", () => {
+  ask("user:alice", 40 * MIN);
+  expect(String(command(schedule()[0]!).payload.content)).not.toContain("Entries this conversation wrote or was shown");
+});

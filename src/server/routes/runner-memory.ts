@@ -6,7 +6,7 @@ import {MEMORY_TYPES, users} from "@/data/schema";
 import {AgentError} from "@/agents/agent-store";
 import {memoryAccess} from "@/agents/agent-memory-access";
 import {memoryOriginOfTrigger} from "@/agents/agent-memory-maintenance";
-import {AgentMemoryStore, MemoryConflictError, MemoryDuplicateError, memorySummary, type MemoryRecord} from "@/agents/agent-memory-store";
+import {AgentMemoryStore, MemoryConflictError, MemoryDuplicateError, memorySummary, type MemoryRecord, MEMORY_BODY_LIMIT} from "@/agents/agent-memory-store";
 import {InvocationService} from "@/runners/invocation-service";
 import type {LunaAccessTokenClaims} from "../auth/access-token-service";
 import {GatewayError} from "../gateway-error";
@@ -49,7 +49,8 @@ export function createRunnerMemoryRoutes(options: {db?: DrizzleDB} = {}) {
       if (error instanceof MemoryConflictError) return c.json({error: error.code, currentRevision: error.currentRevision}, 409);
       if (error instanceof MemoryDuplicateError) return c.json({error: error.code, candidates: summaries(error.candidates),
         message: "An existing entry already says this. Update a candidate with `luna memory update`, or repeat with --force if this is a different fact."}, 409);
-      if (error instanceof AgentError) return c.json({error: error.code}, error.status);
+      if (error instanceof AgentError) return c.json({error: error.code, ...(error.code === "invalid_memory_body"
+        ? {message: `The body must be non-empty and at most ${MEMORY_BODY_LIMIT} bytes. Keep the current conclusion and drop what no longer matters, or split a separate question into its own entry.`} : {})}, error.status);
       if (error instanceof GatewayError) return c.json({error: error.code, message: error.message}, error.status as 400);
       if (error instanceof z.ZodError) return c.json({error: "invalid_request", details: error.issues}, 400);
       throw error;

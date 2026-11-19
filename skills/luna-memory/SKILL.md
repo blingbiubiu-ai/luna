@@ -13,6 +13,13 @@ description: Write Agent long-term memory with `luna memory add/update/delete`: 
   Luna rejects an entry that repeats an existing one (`memory_duplicate`) and
   lists the candidates: update one of them, or add `--force` only when it is a
   different fact.
+- An entry answers one question and grows with what is learned about it. When
+  something belongs to the question of an existing entry, update that entry,
+  and change its title and description too when the answer changed. Put the
+  current conclusion first in the body and rewrite it; do not leave a
+  conclusion that no longer holds with a dated note under it. A procedure is a
+  document to follow: change the steps themselves. When unsure whether it is
+  the same question, add a new entry.
 - Types: `person` (requires `--subject <Luna user id>`), `feedback`, `project`
   (write absolute dates), `procedure`, `reference`. One fact per entry. Entries
   are found by their title and description, so write the description as one

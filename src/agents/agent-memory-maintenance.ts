@@ -1,4 +1,4 @@
-import {and, desc, eq, sql} from "drizzle-orm";
+import {and, desc, eq, or, sql} from "drizzle-orm";
 import type {DrizzleDB} from "@/data";
 import {agentMemories, lunaAgents, memoryConsolidations, memoryReflectionCheckpoints, runnerContexts, sessionCommands, sessions} from "@/data/schema";
 import {AgentMemoryStore, type MemoryRecord} from "./agent-memory-store";
@@ -17,7 +17,8 @@ const RUN_EXPIRES_MS = 60 * 60 * 1000;
  * The reflection instruction. `previous` is this conversation's latest episode, which the reflection extends
  * when what happened since is how it turned out, such as a Task it started that has now finished.
  */
-const reflectionInstruction = (previous: Pick<MemoryRecord, "id" | "revision" | "title" | "description"> | undefined) => `Memory reflection. This is an internal Luna maintenance turn, not a message from a user.
+const reflectionInstruction = (previous: Pick<MemoryRecord, "id" | "revision" | "title" | "description"> | undefined,
+  known: readonly MemoryRecord[] = []) => `Memory reflection. This is an internal Luna maintenance turn, not a message from a user.
 
 Review this conversation since your last memory reflection and decide whether it produced anything worth keeping in Agent long-term memory, following the Long-Term Memory rules in your instructions:
 - a durable fact about a person in this conversation, their role or how they like to work;
@@ -27,6 +28,12 @@ Review this conversation since your last memory reflection and decide whether it
 
 For each candidate run \`luna memory search\` first, then update the existing entry or add a new one. Most conversations produce nothing to save, and saving nothing is a correct result. Do not save what the memory index already says.
 
+An entry answers one question and grows with what is learned about it. When something belongs to the question of an existing entry, update that entry instead of adding another, and change its title and description too when the answer changed. Put the current conclusion first in the body and rewrite it; do not leave a conclusion that no longer holds with a dated note under it. When unsure whether it is the same question, add a new entry.
+${known.length ? `
+Entries this conversation wrote or was shown:
+${known.map(row => `- [${row.id}] (${row.type}, revision ${row.revision}) ${inert(row.title)}: ${inert(row.description)}`).join("\n")}
+Check each against what happened since. When the conversation showed one wrong or out of date, read it with \`luna memory get\` and update it.
+` : ""}
 Then record what happened, so you can later say what you have been doing. One episode tells one event as a story: who asked for what and why, what you did, including the Tasks you started and what they did, and how it ended or what is still open. The title names the event in a few words, the description says it in one line, and the body gives the details worth keeping. Write it as a record of events, not as instructions.
 ${previous ? `
 This conversation's latest episode is [${previous.id}] (revision ${previous.revision}) ${inert(previous.title)}: ${inert(previous.description)}
@@ -40,6 +47,22 @@ Do not send any message, do not create or change tasks, and do not mention this 
 export function memoryOriginOfTrigger(db: DrizzleDB, triggerId: string): MemoryOriginKind {
   const origin = db.select({originId: sessionCommands.originId}).from(sessionCommands).where(eq(sessionCommands.id, triggerId)).get()?.originId;
   return origin?.startsWith(REFLECTION_ORIGIN) ? "reflection" : origin?.startsWith(CONSOLIDATION_ORIGIN) ? "consolidation" : "inline";
+}
+
+/** Most entries a reflection is asked to recheck. */
+const KNOWN_ENTRY_LIMIT = 20;
+
+/**
+ * Active entries this conversation wrote, or that its current provider session was shown (at its
+ * start or recalled by a message), newest change first. A reflection rechecks them against what
+ * happened since, so an entry the conversation proved wrong is corrected rather than left behind.
+ */
+function conversationEntries(db: DrizzleDB, sessionId: string): MemoryRecord[] {
+  return db.select().from(agentMemories).where(and(
+    eq(agentMemories.status, "active"), sql`${agentMemories.type} NOT IN ('persona', 'episode')`,
+    or(eq(agentMemories.originSessionId, sessionId), sql`${agentMemories.id} IN (SELECT e.memory_id FROM memory_injected_entries e
+      JOIN runner_contexts r ON r.id = e.runner_context_id WHERE r.owner_type = 'session' AND r.owner_id = ${sessionId})`),
+  )).orderBy(desc(agentMemories.updatedAt)).limit(KNOWN_ENTRY_LIMIT).all();
 }
 
 /** Queued or running work in a session: inbound messages not yet handled, a running turn or a pending Service-queued turn. */
@@ -125,7 +148,7 @@ export function scheduleMemoryReflections(db: DrizzleDB, commands: Pick<SessionC
         .from(agentMemories).where(and(eq(agentMemories.type, "episode"), eq(agentMemories.status, "active"), eq(agentMemories.originSessionId, sessionId)))
         .orderBy(desc(agentMemories.occurredAt)).get();
       const command = commands.accept({userId: actor, sourceSessionId: sessionId, originId: `${REFLECTION_ORIGIN}${latest.messageId}`},
-        sessionId, "session.invoke", "reflect", {content: reflectionInstruction(previous), purpose: "notification"}, {expiresAt: now + RUN_EXPIRES_MS});
+        sessionId, "session.invoke", "reflect", {content: reflectionInstruction(previous, conversationEntries(db, sessionId)), purpose: "notification"}, {expiresAt: now + RUN_EXPIRES_MS});
       queued.push(command.id);
     } catch (error) {
       // An unavailable session or actor must not block the others; the checkpoint still advances so it is not retried every tick.
