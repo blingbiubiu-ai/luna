@@ -11,6 +11,10 @@ const ProgressCardStyle = z.enum(["card", "native"]);
  * groups or fields added later; the defaults are today's behaviour.
  */
 export const AgentSettings = z.object({
+  /** Incoming messages: the reaction a channel adds while a message addressed to the Agent waits for its reply. */
+  inbound: z.object({
+    processingReaction: z.boolean().default(true),
+  }).strict().default({ processingReaction: true }),
   /** Work sessions: the progress card Runtime keeps while a turn runs. */
   work: z.object({
     progressCard: z.object({

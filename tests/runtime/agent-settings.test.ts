@@ -20,13 +20,13 @@ afterEach(() => { connection.close(); rmSync(home, { recursive: true, force: tru
 
 test("an Agent without settings gets today's behaviour as defaults", () => {
   expect(new AgentSettingsStore(connection.db).get(agentId)).toEqual(DEFAULT_AGENT_SETTINGS);
-  expect(DEFAULT_AGENT_SETTINGS).toEqual({ work: { progressCard: { show: true, style: "card" } }, main: { taskProgressCard: { send: true, style: "native" } } });
+  expect(DEFAULT_AGENT_SETTINGS).toEqual({ inbound: { processingReaction: true }, work: { progressCard: { show: true, style: "card" } }, main: { taskProgressCard: { send: true, style: "native" } } });
 });
 
 test("the owner saves settings; omitted groups keep their defaults and bad values are refused", () => {
   const store = new AgentSettingsStore(connection.db);
   expect(store.save("owner", agentId, { work: { progressCard: { show: false } } })).toEqual({
-    work: { progressCard: { show: false, style: "card" } }, main: { taskProgressCard: { send: true, style: "native" } } });
+    inbound: { processingReaction: true }, work: { progressCard: { show: false, style: "card" } }, main: { taskProgressCard: { send: true, style: "native" } } });
   expect(store.get(agentId).work.progressCard.show).toBe(false);
   expect(() => store.save("owner", agentId, { work: { progressCard: { style: "fancy" } } })).toThrow();
   expect(() => store.save("owner", agentId, { unknown: true })).toThrow();

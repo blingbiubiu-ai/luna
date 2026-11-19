@@ -484,6 +484,24 @@ describe("Luna group chat activation", () => {
     expect(textContent).not.toBe("@Luna 和 @Luna 在吗");
   });
 
+  test("an Agent that turns off the received reaction still answers, without the reaction", async () => {
+    const agent = database.db.select().from(lunaSchema.lunaAgents).get()!;
+    database.db.insert(lunaSchema.agentSettings).values({ agentId: agent.id, settings: { inbound: { processingReaction: false } },
+      updatedByAccountId: agent.ownerAccountId, updatedAt: 1 }).run();
+    const channel = new RecordingProcessingChannel("feishu-main");
+    const runner = new DynamicMainRunner(() => replyNormal());
+    const router = new SessionInboundRouter({
+      db: database.db, channel, runnerType: "mock", mainRunner: runner.asMainRunner(), sessionConfig: fastSessionConfig,
+    });
+    await router.routeDirectInboundForTest(groupInbound({
+      id: "m_no_reaction", text: "@Luna 帮我看下", addressing: { addressedToBot: true, reason: "mention" },
+    }));
+    await router.waitForIdle();
+    expect(runner.calls).toHaveLength(1);
+    expect(channel.beginProcessingCalls).toEqual([]);
+    expect(channel.outbound).toHaveLength(1);
+  });
+
   test("addressed group message enqueues and runs", async () => {
     const channel = new RecordingProcessingChannel("feishu-main");
     const runner = new DynamicMainRunner(() => replyNormal());

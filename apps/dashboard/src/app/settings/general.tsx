@@ -11,6 +11,7 @@ export const Route = createFileRoute("/$agentId/settings/general/")({ component:
 
 export type ProgressCardStyle = "card" | "native";
 export interface AgentSettings {
+  inbound: { processingReaction: boolean };
   work: { progressCard: { show: boolean; style: ProgressCardStyle } };
   main: { taskProgressCard: { send: boolean; style: ProgressCardStyle } };
 }
@@ -49,6 +50,16 @@ export function AgentSettingsForm({ settings, saving, error, saved, onSave }: {
   const update = (next: AgentSettings) => { setValue(next); setTouched(true); };
   const work = value.work.progressCard, main = value.main.taskProgressCard;
   return <div className="space-y-4">
+    <section className="space-y-4 rounded-lg border p-4" aria-labelledby="inbound-title">
+      <div>
+        <h2 id="inbound-title" className="font-medium">收到消息</h2>
+        <p className="text-sm text-muted-foreground">在聊天里 @ 或私聊分身时的即时反馈。</p>
+      </div>
+      <Row label="收到消息时添加表情回应" hint="分身开始处理前给这条消息加一个表情，回复后自动移除。">
+        <Switch aria-label="收到消息时添加表情回应" checked={value.inbound.processingReaction} disabled={saving}
+          onCheckedChange={processingReaction => update({ ...value, inbound: { processingReaction } })} />
+      </Row>
+    </section>
     <section className="space-y-4 rounded-lg border p-4" aria-labelledby="work-progress-title">
       <div>
         <h2 id="work-progress-title" className="font-medium">Work 会话进度卡</h2>

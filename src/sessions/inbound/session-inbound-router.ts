@@ -67,6 +67,7 @@ import {
   resolveInboundSenderUserId,
 } from "./inbound-message-persistence";
 import { BotBindingStore } from "@/agents/bot-binding-store";
+import { AgentSettingsStore } from "@/agents/agent-settings-store";
 import type { ReplyChannel } from "@/channels/outbound";
 
 const logger = createLogger("session-inbound-router");
@@ -286,7 +287,8 @@ export class SessionInboundRouter {
       });
       if (
         (enqueueResult.created || enqueueResult.requeued) &&
-        baseAddressing.addressedToBot
+        baseAddressing.addressedToBot &&
+        new AgentSettingsStore(this._db).get(session.agent_id).inbound.processingReaction
       ) {
         await this._channel.beginProcessing?.(addressedMessage);
       }
