@@ -9,8 +9,8 @@ export type {
 export * from "./data/schema";
 export * from "../extensions/channels/fake/fake-feishu-channel";
 export * from "./messaging/gateway/luna-message-ingress";
-export * from "./work/types";
-export * from "./work/session-inbound-router";
+export * from "./channels/outbound";
+export * from "./sessions/inbound/session-inbound-router";
 export {
   getAgentRuntimeStatus,
   resolveAgentRuntimeOptions,

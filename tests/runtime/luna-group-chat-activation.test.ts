@@ -40,7 +40,7 @@ import type { SessionConfig } from "../../src/shared";
 import { setLunaHome } from "../../src/shared";
 import { TaskRunSupervisor } from "../../src/tasks/task-run-supervisor";
 import { ArtifactStore } from "../../src/timeline/artifact-store";
-import { normalizedInboundFromDirectCallForTest } from "../../src/work/direct-call-inbound-adapter";
+import { normalizedInboundFromDirectCallForTest } from "./support/direct-call-inbound-adapter";
 import { SessionInboundRouter as BaseSessionInboundRouter } from "./support/main-command-harness";
 import { fixtureSessionOwnership } from "../helpers/platform-fixtures";
 

@@ -7,7 +7,7 @@ import {
   taskRunNotifications,
   taskRuns,
 } from "@/data/schema";
-import type { WorkReplyChannel } from "@/work/types";
+import type { ReplyChannel } from "@/channels/outbound";
 
 import {
   TaskRunNotificationStore,
@@ -21,7 +21,7 @@ export interface TaskRunNotificationRecoveryOptions {
   readonly db: DrizzleDB;
   readonly channelForNotification: (
     notification: TaskRunNotification,
-  ) => WorkReplyChannel | undefined;
+  ) => ReplyChannel | undefined;
 }
 
 /**

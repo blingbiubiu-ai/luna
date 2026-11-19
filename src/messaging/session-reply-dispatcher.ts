@@ -3,7 +3,7 @@ import type { DrizzleDB } from "@/data";
 import { AgentError } from "@/agents/agent-store";
 import { messages, sessionTimelineEntries, sessionChannelDeliveries, sessionReplyDispatches, users } from "@/data/schema";
 import type { NormalizedInboundMessage } from "@/channels";
-import type { DeliveryTarget, OutboundChannelOperation, WorkReplyChannel } from "@/work/types";
+import type { DeliveryTarget, OutboundChannelOperation, ReplyChannel } from "@/channels/outbound";
 import { SessionStore } from "@/sessions/session-store";
 import { bindSessionBot } from "@/channels/session-bot";
 import { renderLocalUserMentions } from "./reply-text";
@@ -13,7 +13,7 @@ const active = new WeakMap<DrizzleDB, Map<string, Promise<OutboundChannelOperati
 
 /** One logical reply, independently durable deliveries to all bound channel surfaces. */
 export class SessionReplyDispatcher {
-  constructor(private readonly db: DrizzleDB, private readonly channelFor: (id: string) => WorkReplyChannel | undefined) {}
+  constructor(private readonly db: DrizzleDB, private readonly channelFor: (id: string) => ReplyChannel | undefined) {}
 
   prepare(sessionId: string): void {
     const store = new SessionStore(this.db);
@@ -25,7 +25,7 @@ export class SessionReplyDispatcher {
 
   }
 
-  channel(id: string): WorkReplyChannel | undefined {
+  channel(id: string): ReplyChannel | undefined {
     const adapter = this.channelFor(id);
     if (!adapter) return undefined;
     return new Proxy(adapter, { get: (target, property) => {

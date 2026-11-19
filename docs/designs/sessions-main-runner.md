@@ -283,10 +283,9 @@ Status card updates should not require the model to run again. Task Run state tr
 - `src/main-runner/activation-context.ts`
 - `src/main-runner/context-builder.ts`
 - `src/main-runner/thread-handoff.ts`
-- `src/main-runner/workspace-instructions.ts`
 - `src/sessions/session-runner-attempt-store.ts`
 - `src/sessions/session-timeline-event-store.ts`
-- `src/work/group-join-backfill.ts`
+- `src/sessions/inbound/group-join-backfill.ts`
 - `src/runners/container-agent-runner.ts`
 - `src/runners/session-agent-invocation.ts`
 - `src/prompts/main-runner/instructions.md`

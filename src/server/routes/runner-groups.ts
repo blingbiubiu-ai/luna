@@ -4,7 +4,7 @@ import { eq, inArray, and, isNull } from "drizzle-orm";
 import { z } from "zod";
 import type { DrizzleDB } from "@/data";
 import { agentShadows, channelSurfaces, messages, sessions, shadowBotBindings } from "@/data/schema";
-import type { WorkReplyChannel } from "@/work/types";
+import type { ReplyChannel } from "@/channels/outbound";
 import type { LunaAccessTokenClaims } from "../auth/access-token-service";
 import { GatewayError } from "../gateway-error";
 import { getKernel } from "./kernel";
@@ -44,7 +44,7 @@ function observedUserGroups(db: DrizzleDB, agentId: string, channels: Set<string
   return new Set(rows.map(row => JSON.stringify([row.channelId, row.chatId])));
 }
 
-export function createRunnerGroupRoutes(options: { db?: DrizzleDB; channelFor?: (id: string) => WorkReplyChannel | undefined } = {}) {
+export function createRunnerGroupRoutes(options: { db?: DrizzleDB; channelFor?: (id: string) => ReplyChannel | undefined } = {}) {
   const db = () => options.db ?? getKernel().database.db;
   const channelFor = options.channelFor ?? ((id: string) => getKernel().replyChannel(id));
   const scope = (claims: LunaAccessTokenClaims | undefined) => runnerDirectoryScope(db(), channelFor, claims);

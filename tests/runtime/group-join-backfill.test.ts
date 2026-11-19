@@ -12,10 +12,10 @@ import { DataConnection } from "../../src/data";
 import * as schema from "../../src/data/schema";
 import { channelMessageMarkers, messages, sessionInbox, sessions } from "../../src/data/schema";
 import { SessionTimelineReader } from "../../src/sessions/session-timeline-reader";
-import { GroupJoinBackfillService, normalizeFeishuHistoryMessage } from "../../src/work/group-join-backfill";
+import { GroupJoinBackfillService, normalizeFeishuHistoryMessage } from "../../src/sessions/inbound/group-join-backfill";
 import {
   appendBackfillMessage,
-} from "../../src/work/group-join-backfill-persistence";
+} from "../../src/sessions/inbound/group-join-backfill-persistence";
 
 let fixture: { home: string; previousHome: string; connection: DataConnection<typeof schema> } | undefined;
 const owner = "backfill-owner";

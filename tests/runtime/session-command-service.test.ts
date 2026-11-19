@@ -21,7 +21,7 @@ import { resolveMessageTarget } from "../../src/messaging/delivery-target";
 import { fixtureSessionOwnership } from "../helpers/platform-fixtures";
 import { ChannelDirectoryStore } from "../../src/channels/directory-store";
 import { feishuIdentityMetadata } from "../../src/identity/feishu-identity-scopes";
-import type { WorkReplyChannel } from "../../src/work/types";
+import type { ReplyChannel } from "../../src/channels/outbound";
 let home: string, connection: DataConnection<typeof schema>, source: string, target: string;
 const actor = () => ({ userId: "u", sourceSessionId: source, originId: "turn" });
 beforeEach(() => {
@@ -262,7 +262,7 @@ test("first Feishu contact persists recipient, binds receipt, reuses session for
     const id = resolveMessageTarget(connection.db, targetAddress, source, true);
     expect(resolveMessageTarget(connection.db, targetAddress, source, true)).toBe(id);
     const deliveries: unknown[] = [];
-    const adapter: WorkReplyChannel = { send: async () => { throw new Error("Must not synthesize reply"); }, sendTo: async (target, op) => {
+    const adapter: ReplyChannel = { send: async () => { throw new Error("Must not synthesize reply"); }, sendTo: async (target, op) => {
         deliveries.push(target);
         // A reply can arrive before the HTTP send response; it must resolve the same session.
         const inbound = { id: "reply", channel: { id: "test", type: "feishu" }, surface: { externalId: "oc_created", kind: "p2p" as const }, sender: identity, text: "hello", mentions: [], addressing: { addressedToBot: true, reason: "p2p" as const } };

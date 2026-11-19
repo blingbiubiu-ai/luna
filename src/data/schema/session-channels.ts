@@ -1,6 +1,6 @@
 import { integer, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
 import type { NormalizedInboundMessage } from "@/channels";
-import type { OutboundChannelOperation } from "@/work/types";
+import type { OutboundChannelOperation } from "@/channels/outbound";
 export const sessionChannelBindings = sqliteTable("session_channel_bindings", {
   id: text("id").primaryKey(), sessionId: text("session_id").notNull(),
   channelType: text("channel_type").notNull(), channelId: text("channel_id").notNull(),

@@ -12,7 +12,7 @@ import { SessionCommandService, registerSessionCommands } from "../../src/messag
 import { finalizeRunnerReply } from "../../src/messaging/runner-answer";
 import { ArtifactRegistry } from "../../src/artifacts/artifact-registry";
 import { fixtureOwnerUserId, fixtureSessionOwnership } from "../helpers/platform-fixtures";
-import type { OutboundChannelOperation } from "../../src/work/types";
+import type { OutboundChannelOperation } from "../../src/channels/outbound";
 
 let previousHome: string, home: string, db: DataConnection<typeof schema>, sessionId: string;
 beforeEach(() => {

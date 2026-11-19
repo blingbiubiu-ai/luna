@@ -1,5 +1,5 @@
 import type { NormalizedInboundMessage } from "@/channels";
-import type { OutboundChannelOperation, WorkReplyChannel } from "@/work/types";
+import type { OutboundChannelOperation, ReplyChannel } from "@/channels/outbound";
 import type { TaskSubscription, TaskView } from "@/tasks/types";
 
 export interface TaskStatusCardStepEvent {
@@ -62,7 +62,7 @@ export function buildTaskStatusCardSteps(input: {
  */
 export class TaskStatusCardUpdater {
   constructor(
-    private readonly _channel: WorkReplyChannel,
+    private readonly _channel: ReplyChannel,
     private readonly _inbound: NormalizedInboundMessage,
   ) {}
 
@@ -241,7 +241,7 @@ function _timelineRunMetadata(data: unknown): {
   };
 }
 
-export function nativeProgressEntries(events: readonly TaskStatusCardStepEvent[]): import("@/work/types").NativeProgressEntry[] {
+export function nativeProgressEntries(events: readonly TaskStatusCardStepEvent[]): import("@/channels/outbound").NativeProgressEntry[] {
   return events.flatMap(event => {
     const data = event.data as {publicProgress?: boolean; toolName?: string; toolCallId?: string; toolTitle?: string; toolPhase?: "start" | "result"} | undefined;
     const id = (event as {id?: string}).id;

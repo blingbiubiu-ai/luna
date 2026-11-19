@@ -7,7 +7,7 @@ import {
   type ChannelConfig,
   type ChannelRuntimeDeps,
 } from "../../src/channels";
-import type { OutboundChannelOperation } from "../../src/work/types";
+import type { OutboundChannelOperation } from "../../src/channels/outbound";
 
 class TestAdapter implements ChannelAdapter {
   readonly id: string;

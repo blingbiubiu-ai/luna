@@ -57,7 +57,7 @@ import {
 } from "../../src";
 import { AccessTokenService } from "../../src/server/auth/access-token-service";
 import { AccountStore } from "../../src/identity/account-store";
-import { normalizedInboundFromDirectCallForTest } from "../../src/work/direct-call-inbound-adapter";
+import { normalizedInboundFromDirectCallForTest } from "./support/direct-call-inbound-adapter";
 import { createDeterministicMainRunner } from "./test-main-runner";
 
 // The kernel singleton opens the current Luna home on first import; keep it off the developer's real ~/.luna.

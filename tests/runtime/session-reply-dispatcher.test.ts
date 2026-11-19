@@ -11,10 +11,10 @@ import { DashboardChannel } from "@/channels/dashboard/dashboard-channel";
 import { FakeFeishuChannel } from "../../extensions/channels/fake/fake-feishu-channel";
 import { fixtureSessionOwnership } from "../helpers/platform-fixtures";
 import type { NormalizedInboundMessage } from "@/channels";
-import type { WorkReplyChannel } from "@/work/types";
+import type { ReplyChannel } from "@/channels/outbound";
 
 let previousHome: string, home: string, db: DataConnection<typeof schema>, store: SessionStore, sessionId: string;
-let channels: Map<string, WorkReplyChannel>, dispatcher: SessionReplyDispatcher;
+let channels: Map<string, ReplyChannel>, dispatcher: SessionReplyDispatcher;
 let native: FakeFeishuChannel, peer: FakeFeishuChannel, dashboardCalls: number;
 let inbound: NormalizedInboundMessage;
 
@@ -36,7 +36,7 @@ beforeEach(() => {
     dashboardCalls++;
     return send(input, op);
   };
-  channels = new Map<string, WorkReplyChannel>([["native", native], ["luna-dashboard", dashboard], ["peer", peer]]);
+  channels = new Map<string, ReplyChannel>([["native", native], ["luna-dashboard", dashboard], ["peer", peer]]);
   dispatcher = new SessionReplyDispatcher(db.db, id => channels.get(id));
   inbound = {
     id: "native-message", channel: {type: "feishu", id: "native"}, surface: {externalId: "native-chat", kind: "group"},

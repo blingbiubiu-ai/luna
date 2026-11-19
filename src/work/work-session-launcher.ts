@@ -12,7 +12,7 @@ import {
   appendInputFromNormalizedInbound,
   artifactizeInboundMessageResources,
   resolveInboundSenderUserId,
-} from "./inbound-message-persistence";
+} from "@/sessions/inbound/inbound-message-persistence";
 
 const logger = createLogger("work-session-launcher");
 

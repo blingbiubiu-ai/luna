@@ -1,13 +1,13 @@
 import type { NormalizedInboundMessage } from "@/channels";
-import type { WorkReplyChannel } from "@/work/types";
+import type { ReplyChannel } from "@/channels/outbound";
 
-const completions = new WeakMap<WorkReplyChannel, Map<string, Promise<void>>>();
+const completions = new WeakMap<ReplyChannel, Map<string, Promise<void>>>();
 const completedLimit = 1024;
 
 /** Reply delivery and turn finalization share cleanup, including in-flight work.
  * Failed cleanup remains retryable; adapters must tolerate replay after restart.
  */
-export function completeProcessingOnce(channel: WorkReplyChannel, inbound: NormalizedInboundMessage): Promise<void> {
+export function completeProcessingOnce(channel: ReplyChannel, inbound: NormalizedInboundMessage): Promise<void> {
   if (!channel.completeProcessing) return Promise.resolve();
   let entries = completions.get(channel);
   if (!entries) { entries = new Map(); completions.set(channel, entries); }
@@ -29,8 +29,8 @@ export function completeProcessingOnce(channel: WorkReplyChannel, inbound: Norma
 }
 
 // Completion order is per adapter so releasing an adapter releases its history.
-const histories = new WeakMap<WorkReplyChannel, string[]>();
-function history(channel: WorkReplyChannel): string[] {
+const histories = new WeakMap<ReplyChannel, string[]>();
+function history(channel: ReplyChannel): string[] {
   let entries = histories.get(channel);
   if (!entries) { entries = []; histories.set(channel, entries); }
   return entries;

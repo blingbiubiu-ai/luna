@@ -15,7 +15,7 @@ import {
   requestedIdentityFromInbound,
 } from "@/identity/requested-identity";
 import { TimelineStore } from "@/timeline/timeline-store";
-import type { RouteDecision, WorkReplyChannel } from "@/work/types";
+import type { RouteDecision, ReplyChannel } from "@/channels/outbound";
 import { uuid } from "@/shared";
 
 import { TaskResolver } from "./task-resolver";
@@ -31,7 +31,7 @@ import type {
  */
 export interface TaskEngineOptions {
   readonly db: DrizzleDB;
-  readonly channel: WorkReplyChannel;
+  readonly channel: ReplyChannel;
 }
 
 /**

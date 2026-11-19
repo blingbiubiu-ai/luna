@@ -18,7 +18,7 @@ import { AccessTokenService } from "../../src/server/auth/access-token-service";
 import { HonoServer } from "../../src/server";
 import { config, reloadConfig, setLunaHome, type SessionConfig } from "../../src/shared";
 import type { InboundChannelMessage } from "../../src/sessions/types";
-import { normalizedInboundFromDirectCallForTest } from "../../src/work/direct-call-inbound-adapter";
+import { normalizedInboundFromDirectCallForTest } from "./support/direct-call-inbound-adapter";
 
 const TEST_ACCESS_TOKEN_SECRET = "luna-context-pack-service-secret";
 

@@ -50,7 +50,7 @@ import { TaskReportService } from "../../src/tasks/task-report-service";
 import { taskReportForRun } from "../../src/tasks/task-report-store";
 import { TaskRunSupervisor } from "../../src/tasks/task-run-supervisor";
 import { TaskSubscriptionStore } from "../../src/tasks/task-subscription-store";
-import { SessionTurnProcessor } from "../../src/work/session-inbound-router";
+import { SessionTurnProcessor } from "../../src/sessions/inbound/session-inbound-router";
 import { WorkRunner } from "../../src/work/work-runner";
 import { WorkerConfig } from "@luna/worker/config";
 import { DockerEnvironmentDriver } from "@luna/worker/docker-driver";

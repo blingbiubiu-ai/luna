@@ -13,7 +13,7 @@ import { LunaMessageIngress } from "./main-command-harness";
 import { HonoServer } from "../../../src/server/server";
 import type { InboundChannelMessage } from "../../../src/sessions/types";
 import { config, setLunaHome, type SessionConfig } from "../../../src/shared";
-import { normalizedInboundFromDirectCallForTest } from "../../../src/work/direct-call-inbound-adapter";
+import { normalizedInboundFromDirectCallForTest } from "./direct-call-inbound-adapter";
 import { createDeterministicMainRunner } from "../test-main-runner";
 
 const sessionConfig = {

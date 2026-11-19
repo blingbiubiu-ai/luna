@@ -55,7 +55,7 @@ import { LunaMessageIngress as BaseLunaMessageIngress } from "./support/main-com
 import { ArtifactStore } from "../../src/timeline/artifact-store";
 import type { SessionConfig } from "../../src/shared";
 import { setLunaHome } from "../../src/shared";
-import { normalizedInboundFromDirectCallForTest } from "../../src/work/direct-call-inbound-adapter";
+import { normalizedInboundFromDirectCallForTest } from "./support/direct-call-inbound-adapter";
 import { SessionInboundRouter as BaseSessionInboundRouter } from "./support/main-command-harness";
 
 let testHome: string;

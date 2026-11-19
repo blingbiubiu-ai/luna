@@ -23,7 +23,7 @@ import { runnerMessageEnvelopeFromRow } from "../../src/runners/message-envelope
 import { createRunnerMessageRoutes } from "../../src/server/routes/runner-messages";
 import type { LunaAccessTokenClaims } from "../../src/server/auth/access-token-service";
 import type { NormalizedInboundMessage } from "../../src/channels";
-import type { WorkReplyChannel } from "../../src/work/types";
+import type { ReplyChannel } from "../../src/channels/outbound";
 import { fixtureSessionOwnership, fixtureUser } from "../helpers/platform-fixtures";
 import { feishuIdentityMetadata } from "../../src/identity/feishu-identity-scopes";
 
@@ -31,7 +31,7 @@ let home: string;
 let connection: DataConnection<typeof schema>;
 afterEach(() => { connection?.close(); if (home) rmSync(home, { recursive: true, force: true }); });
 
-function fixture(withActiveJob = true, runnerKind: "main" | "work" = "main", botLookup?: WorkReplyChannel["listGroupBots"]) {
+function fixture(withActiveJob = true, runnerKind: "main" | "work" = "main", botLookup?: ReplyChannel["listGroupBots"]) {
   home = mkdtempSync(join(tmpdir(), "luna-message-api-")); setLunaHome(home);
   connection = new DataConnection(schema); const db = connection.db;
   const scope = fixtureSessionOwnership(db, "feishu", "test");

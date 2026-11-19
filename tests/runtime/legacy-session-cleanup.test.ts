@@ -136,7 +136,7 @@ describe("legacy session runtime cleanup", () => {
 
   test("session inbound router source has no direct-call inbound route compatibility", () => {
     const source = readFileSync(
-      join(import.meta.dir, "../../src/work/session-inbound-router.ts"),
+      join(import.meta.dir, "../../src/sessions/inbound/session-inbound-router.ts"),
       "utf-8",
     );
 

@@ -23,7 +23,7 @@ import { MessageStore } from "@/sessions/message-store";
 import { normalizedInboundFromMessageRow } from "@/runners/message-envelope";
 import { sessionDispatcherFor, SessionDispatcher } from "@/sessions/session-dispatcher";
 import { GatewayError } from "@/server/gateway-error";
-import type { WorkReplyChannel } from "@/work/types";
+import type { ReplyChannel } from "@/channels/outbound";
 import type { NormalizedInboundMessage } from "@/channels";
 import { scanArtifactRefs } from "@luna/service-client/artifact-ref";
 /** Memory is maintained at most this often; the worker itself ticks every 250 ms. */
@@ -51,7 +51,7 @@ export interface CommandPayload {
 }
 export interface CommandRuntimeOptions {
     db: DrizzleDB;
-    channelFor: (id: string) => WorkReplyChannel | undefined;
+    channelFor: (id: string) => ReplyChannel | undefined;
     executeTrigger?: (command: SessionCommand, signal: AbortSignal) => Promise<void>;
     /** Forgetting, reflection and consolidation of Agent memory; unset leaves memory unmaintained. */
     memory?: MemoryMaintenanceSettings;
@@ -437,7 +437,7 @@ export class SessionCommandService {
 }
 const runtimes = new WeakMap<DrizzleDB, SessionCommandService>();
 export function registerSessionCommands(db: DrizzleDB, service: SessionCommandService) { runtimes.set(db, service); }
-export function sessionCommandsFor(db: DrizzleDB, channelFor: (id: string) => WorkReplyChannel | undefined): SessionCommandService {
+export function sessionCommandsFor(db: DrizzleDB, channelFor: (id: string) => ReplyChannel | undefined): SessionCommandService {
     let service = runtimes.get(db);
     if (!service) {
         service = new SessionCommandService({ db, channelFor });

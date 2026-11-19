@@ -58,8 +58,8 @@ import {
 import {
   createAgentRunnerForConfig,
 } from "@/kernel/agents";
-import type { WorkReplyChannel } from "@/work/types";
-import { SessionInboundRouter } from "@/work/session-inbound-router";
+import type { ReplyChannel } from "@/channels/outbound";
+import { SessionInboundRouter } from "@/sessions/inbound/session-inbound-router";
 import {
   registerPluginOperations,
 } from "@/operations/operation-registry";
@@ -137,7 +137,7 @@ class Kernel {
     return channel;
   }
 
-  replyChannel(id: string): WorkReplyChannel | undefined {
+  replyChannel(id: string): ReplyChannel | undefined {
     return new SessionReplyDispatcher(this._database.db, key => this._lunaChannels.get(key)).channel(id);
   }
 
@@ -206,7 +206,7 @@ class Kernel {
     return new RunnerOperationService(this._database.db, this._taskRunSupervisor, this._createTaskRunNotificationService());
   }
 
-  createSessionInboundRouter(channel: WorkReplyChannel): SessionInboundRouter {
+  createSessionInboundRouter(channel: ReplyChannel): SessionInboundRouter {
     return new SessionInboundRouter({
       db: this._database.db,
       channel,
@@ -604,7 +604,7 @@ class Kernel {
 
   private _channelForTaskRunNotification(
     notification: TaskRunNotification,
-  ): WorkReplyChannel | undefined {
+  ): ReplyChannel | undefined {
     return this.replyChannel(notification.channelId);
   }
 

@@ -10,16 +10,16 @@ import { createLogger, type Logger } from "@/shared";
 import {
   computeFeishuAddressing,
   createFeishuNormalizer,
-} from "../../extensions/channels/feishu/messaging/feishu-normalizer";
-import { extractFeishuInteractiveMarkdown } from "../../extensions/channels/feishu/messaging/interactive-card-content";
+} from "../../../extensions/channels/feishu/messaging/feishu-normalizer";
+import { extractFeishuInteractiveMarkdown } from "../../../extensions/channels/feishu/messaging/interactive-card-content";
 import {
   resolveFeishuSenderIdentity,
   resolveFeishuSurface,
-} from "../../extensions/channels/feishu/messaging/feishu-identity-resolver";
+} from "../../../extensions/channels/feishu/messaging/feishu-identity-resolver";
 import type {
   FeishuHistoryMessageMentionRecord,
   FeishuHistoryMessageRecord,
-} from "../../extensions/channels/feishu/messaging/types";
+} from "../../../extensions/channels/feishu/messaging/types";
 
 import { appendBackfillMessage } from "./group-join-backfill-persistence";
 

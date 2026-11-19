@@ -24,7 +24,7 @@ import {
 } from "@/messaging/notifications/task-status-card-updater";
 import type { TaskResultForMainRunner } from "@/main-runner/types";
 import { nativeProgressEntries } from "@/messaging/notifications/feishu-task-updater";
-import type { WorkReplyChannel } from "@/work/types";
+import type { ReplyChannel } from "@/channels/outbound";
 
 import {
   TaskRunNotificationStore,
@@ -36,7 +36,7 @@ export interface TaskRunNotificationServiceOptions {
   readonly db: DrizzleDB;
   readonly channelForNotification: (
     notification: TaskRunNotification,
-  ) => WorkReplyChannel | undefined;
+  ) => ReplyChannel | undefined;
 }
 
 export interface OnTaskRunCreatedInput {

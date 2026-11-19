@@ -8,11 +8,11 @@ import { ChannelDirectoryStore } from "@/channels/directory-store";
 import { recipientSearchText, recordGroupBotIdentities, resolveGroupBotBindings } from "@/messaging/runner-bot-directory";
 import { GatewayError } from "../gateway-error";
 import type { LunaAccessTokenClaims } from "../auth/access-token-service";
-import type { WorkReplyChannel } from "@/work/types";
+import type { ReplyChannel } from "@/channels/outbound";
 import { getKernel } from "./kernel";
 
 /** Minimal recipient directory for active Main invocations, independent of dashboard APIs. */
-export function createRunnerUserRoutes(options: { db?: DrizzleDB; channelFor?: (id: string) => WorkReplyChannel | undefined } = {}) {
+export function createRunnerUserRoutes(options: { db?: DrizzleDB; channelFor?: (id: string) => ReplyChannel | undefined } = {}) {
   const db = () => options.db ?? getKernel().database.db;
   const channelFor = options.channelFor ?? ((id: string) => getKernel().replyChannel(id));
   const scope = (claims: LunaAccessTokenClaims | undefined) => runnerDirectoryScope(db(), channelFor, claims).channels;

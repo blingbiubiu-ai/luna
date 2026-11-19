@@ -50,8 +50,7 @@ import {
 } from "@/shared";
 import { eq, and } from "drizzle-orm";
 import type { StatusCardOutput } from "./status-card-schema";
-import type { WorkReplyChannel } from "./types";
-import { ensureWorkRunnerWorkspaceInstructions } from "./workspace-instructions";
+import type { ReplyChannel } from "@/channels/outbound";
 
 const logger = createLogger("work-runner");
 
@@ -66,7 +65,7 @@ export interface WorkAgentRunInput {
 export interface WorkRunnerOptions {
   readonly db: DrizzleDB;
   readonly runnerType: string;
-  readonly channelForMessage: (channelId: string) => WorkReplyChannel | undefined;
+  readonly channelForMessage: (channelId: string) => ReplyChannel | undefined;
   readonly runAgent?: (input: WorkAgentRunInput) => Promise<string>;
   readonly createRunner?: () => AgentRunner;
 }
@@ -548,7 +547,7 @@ export class WorkRunner {
   }
 
   private async _sendStatusCard(
-    channel: WorkReplyChannel,
+    channel: ReplyChannel,
     inbound: NormalizedInboundMessage,
     card: StatusCardOutput,
     messageRow: MessageRow,

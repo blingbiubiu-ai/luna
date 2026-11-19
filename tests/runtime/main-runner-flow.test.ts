@@ -60,8 +60,8 @@ import {
 import { artifactizeRunnerOutputLocalFileReferences } from "../../src/artifacts/runner-output-artifactizer";
 import { FakeFeishuChannel as BaseFakeFeishuChannel } from "../../extensions/channels/fake/fake-feishu-channel";
 import { LunaMessageIngress as BaseLunaMessageIngress } from "../../src/messaging/gateway/luna-message-ingress";
-import { normalizedInboundFromDirectCallForTest } from "../../src/work/direct-call-inbound-adapter";
-import { SessionTurnProcessor } from "../../src/work/session-inbound-router";
+import { normalizedInboundFromDirectCallForTest } from "./support/direct-call-inbound-adapter";
+import { SessionTurnProcessor } from "../../src/sessions/inbound/session-inbound-router";
 import { TaskEngine } from "../../src/tasks/task-engine";
 import { ArtifactStore } from "../../src/timeline/artifact-store";
 import { RunnerContextStore } from "../../src/runners/runner-context-store";

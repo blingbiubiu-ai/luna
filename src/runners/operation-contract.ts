@@ -26,6 +26,6 @@ export interface OperationContext {
 export interface StatusCardDelivery {
   notificationId: string;
   previousMessageId: string | null;
-  operation: Omit<import("@/work/types").OutboundChannelOperation, "id" | "channelId">;
+  operation: Omit<import("@/channels/outbound").OutboundChannelOperation, "id" | "channelId">;
 }
 export interface OperationResult { cancelled?: boolean; cardDelivery?: StatusCardDelivery; statusMessageId?: string; notificationId?: string; taskId?: string; sourceMessageId?: string; runId?: string; taskSessionId?: string; targetSessionId?: string; }

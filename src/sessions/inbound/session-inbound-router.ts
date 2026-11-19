@@ -40,7 +40,6 @@ import {
   MainRunnerFreshLaunchReplayRequiredError,
   renderMainRunnerPrompt,
 } from "@/main-runner/main-runner";
-import { ensureMainRunnerWorkspaceInstructions } from "@/main-runner/workspace-instructions";
 import type {
   ActivationContextMessage,
   MainRunnerCompletion,
@@ -59,7 +58,7 @@ import { getKernel } from "@/server/routes/kernel";
 import { config, createLogger, type SessionConfig } from "@/shared";
 
 import { decideGroupActivationFollowup } from "./group-activation-followup";
-import { WorkRunner } from "./work-runner";
+import { WorkRunner } from "@/work/work-runner";
 import { decideInboundAddressing } from "./group-addressing";
 import {
   appendInputFromNormalizedInbound,
@@ -68,7 +67,7 @@ import {
   resolveInboundSenderUserId,
 } from "./inbound-message-persistence";
 import { BotBindingStore } from "@/agents/bot-binding-store";
-import type { WorkReplyChannel } from "./types";
+import type { ReplyChannel } from "@/channels/outbound";
 
 const logger = createLogger("session-inbound-router");
 
@@ -81,7 +80,7 @@ const explicitActivationReasons = new Set<
  */
 export interface SessionInboundRouterOptions {
   readonly db: DrizzleDB;
-  readonly channel: WorkReplyChannel;
+  readonly channel: ReplyChannel;
   readonly runnerType: string;
   readonly mainRunner?: MainRunner;
   readonly taskRunSupervisor?: Pick<TaskRunSupervisor, "waitForIdle">;
@@ -95,7 +94,7 @@ export interface SessionTurnProcessorOptions {
   readonly runnerType: string;
   readonly channelForMessage: (
     message: NormalizedInboundMessage,
-  ) => WorkReplyChannel | undefined;
+  ) => ReplyChannel | undefined;
   readonly mainRunner?: MainRunner;
   readonly taskRunSupervisor?: Pick<TaskRunSupervisor, "waitForIdle">;
   readonly sessionConfig?: SessionConfig;
@@ -108,7 +107,7 @@ export interface SessionTurnProcessorOptions {
 export class SessionInboundRouter {
   private readonly _prepareSession: ((sessionId: string) => void) | undefined;
   private readonly _db: DrizzleDB;
-  private readonly _channel: WorkReplyChannel;
+  private readonly _channel: ReplyChannel;
   private readonly _sessionConfig: SessionConfig;
   private readonly _sessionResolver: SessionResolver;
   private readonly _messageStore: MessageStore;
@@ -556,7 +555,7 @@ export class SessionTurnProcessor {
   }
 
   private async _completeProcessing(
-    channel: WorkReplyChannel,
+    channel: ReplyChannel,
     inbounds: readonly NormalizedInboundMessage[],
   ): Promise<void> {
     if (channel.completeProcessing === undefined) {

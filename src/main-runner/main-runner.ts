@@ -38,7 +38,6 @@ import { and, eq } from "drizzle-orm";
 import type { ActivationContextMessage, MainRunnerCompletion, MainRunnerContextPack, MainRunnerInput } from "./types";
 import { addressingFacts, compact, dataBlock, joinBlocks, messageItem, turnClock, zonedIso, type PeopleResolver } from "@/runners/turn-envelope";
 import { shadowPeople } from "@/runners/shadow-people";
-import { ensureMainRunnerWorkspaceInstructions } from "./workspace-instructions";
 import { runnerArtifactAllowlistFromInput } from "./artifact-allowlist";
 
 /**

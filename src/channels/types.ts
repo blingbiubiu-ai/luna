@@ -4,7 +4,7 @@ import type {
   MessageContentKind,
   MessagePresentationKind,
 } from "../sessions/types";
-import type { WorkReplyChannel } from "../work/types";
+import type { ReplyChannel } from "./outbound";
 import type { DrizzleDB } from "@/data";
 
 // Channel identities are provider-neutral actors visible to Luna runtime.
@@ -141,7 +141,7 @@ export interface RegisteredChannelRuntimeStatus
 }
 
 // Adapters isolate provider SDK lifecycle from Luna's provider-neutral runtime.
-export interface ChannelAdapter extends WorkReplyChannel {
+export interface ChannelAdapter extends ReplyChannel {
   readonly id: string;
   readonly type: string;
   start(): Promise<void>;

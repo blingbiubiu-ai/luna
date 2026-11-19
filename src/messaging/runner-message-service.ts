@@ -4,9 +4,9 @@ import { sessionCommandsFor } from "./session-command-service";
 import type { DrizzleDB } from "@/data";
 import type { LunaAccessTokenClaims } from "@/server/auth/access-token-service";
 import { GatewayError } from "@/server/gateway-error";
-import type { WorkReplyChannel } from "@/work/types";
+import type { ReplyChannel } from "@/channels/outbound";
 export class RunnerMessageService {
-    constructor(private readonly db: DrizzleDB, private readonly channelFor: (id: string) => WorkReplyChannel | undefined) { }
+    constructor(private readonly db: DrizzleDB, private readonly channelFor: (id: string) => ReplyChannel | undefined) { }
     actor(claims: LunaAccessTokenClaims | undefined) {
         if (claims?.source !== "runner" || claims.role !== "runner" || !["main", "work"].includes(claims.runnerKind ?? ""))
             throw new GatewayError("runner_required", "A Main or Work Runner token is required", 403);

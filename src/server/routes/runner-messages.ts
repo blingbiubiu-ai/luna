@@ -9,7 +9,7 @@ import { resolveMessageTarget } from "@/messaging/delivery-target";
 import { Hono } from "hono";
 import { z } from "zod";
 import type { DrizzleDB } from "@/data";
-import type { WorkReplyChannel } from "@/work/types";
+import type { ReplyChannel } from "@/channels/outbound";
 import type { LunaAccessTokenClaims } from "../auth/access-token-service";
 import { GatewayError } from "../gateway-error";
 import { RunnerMessageService } from "@/messaging/runner-message-service";
@@ -29,7 +29,7 @@ const bodySchema = z.object({
 }).strict().refine(body => Boolean(body.content) !== Boolean(body.reply), "Choose content or reply");
 export function createRunnerMessageRoutes(options: {
     db?: DrizzleDB;
-    channelFor?: (id: string) => WorkReplyChannel | undefined;
+    channelFor?: (id: string) => ReplyChannel | undefined;
 } = {}) {
     const service = () => new RunnerMessageService(options.db ?? getKernel().database.db, options.channelFor ?? ((id) => getKernel().replyChannel(id)));
     return new Hono<{

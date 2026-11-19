@@ -8,7 +8,7 @@ import * as lunaSchema from "../../src/data/schema";
 import { SessionStore } from "../../src/sessions/session-store";
 import { fixtureSessionOwnership } from "../helpers/platform-fixtures";
 import { config, setLunaHome } from "../../src/shared";
-import { SessionTurnProcessor } from "../../src/work/session-inbound-router";
+import { SessionTurnProcessor } from "../../src/sessions/inbound/session-inbound-router";
 import { WorkRunner } from "../../src/work/work-runner";
 import { FakeFeishuChannel } from "../../extensions/channels/fake/fake-feishu-channel";
 

@@ -3,7 +3,7 @@ import type { NormalizedInboundMessage } from "@/channels";
 import type { DrizzleDB } from "@/data";
 import { MessageStore } from "@/sessions/message-store";
 import type { TaskSubscription } from "@/tasks/types";
-import type { OutboundChannelOperation } from "@/work/types";
+import type { OutboundChannelOperation } from "@/channels/outbound";
 
 export function persistTaskStatusCardMessage(input: {
   readonly db: DrizzleDB;

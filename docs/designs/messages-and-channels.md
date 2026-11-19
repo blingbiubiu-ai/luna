@@ -152,8 +152,8 @@ Non-goals:
 - `src/shared/messaging/types/contents.ts`
 - `src/sessions/message-store.ts`
 - `src/sessions/session-timeline-store.ts`
-- `src/work/group-join-backfill.ts`
-- `src/work/group-join-backfill-persistence.ts`
+- `src/sessions/inbound/group-join-backfill.ts`
+- `src/sessions/inbound/group-join-backfill-persistence.ts`
 - `extensions/channels/feishu/messaging/feishu-normalizer.ts`
 - `extensions/channels/feishu/messaging/interactive-card-content.ts`
 - `extensions/channels/feishu/messaging/message-channel.ts`

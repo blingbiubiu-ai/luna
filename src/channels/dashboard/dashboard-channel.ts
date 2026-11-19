@@ -8,7 +8,7 @@ import type { DashboardAccount } from "@/server/auth";
 import { ChannelDirectoryStore } from "@/channels/directory-store";
 import { GatewayError } from "@/server/gateway-error";
 import { SessionStore } from "@/sessions/session-store";
-import type { OutboundChannelOperation } from "@/work/types";
+import type { OutboundChannelOperation } from "@/channels/outbound";
 
 export const DASHBOARD_CHANNEL_ID = "luna-dashboard";
 type Operation = Omit<OutboundChannelOperation, "id" | "channelId">;

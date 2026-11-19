@@ -16,7 +16,7 @@ import type { InboundChannelMessage } from "../../src/sessions/types";
 import { fixtureSessionOwnership } from "../helpers/platform-fixtures";
 import { AccountLinkService } from "../../src/identity/account-link";
 import { config, setLunaHome } from "../../src/shared";
-import { normalizedInboundFromDirectCallForTest } from "../../src/work/direct-call-inbound-adapter";
+import { normalizedInboundFromDirectCallForTest } from "./support/direct-call-inbound-adapter";
 
 describe("inbound auth command", () => {
   let home: string, previousHome: string;

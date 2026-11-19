@@ -14,7 +14,7 @@ import type { DrizzleDB } from "@/data";
 
 import { MainRunner } from "@/main-runner/main-runner";
 import { config, type SessionConfig } from "@/shared";
-import { SessionTurnProcessor, SessionInboundRouter } from "@/work/session-inbound-router";
+import { SessionTurnProcessor, SessionInboundRouter } from "@/sessions/inbound/session-inbound-router";
 import { WorkRunner } from "@/work/work-runner";
 import { InboundCommandRouter } from "./inbound-command-router";
 

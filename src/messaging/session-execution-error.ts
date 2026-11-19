@@ -1,5 +1,5 @@
 import type { DrizzleDB } from "@/data";
-import type { WorkReplyChannel } from "@/work/types";
+import type { ReplyChannel } from "@/channels/outbound";
 import { runnerAnswers } from "./runner-answer";
 import { sessionCommandsFor } from "./session-command-service";
 
@@ -44,7 +44,7 @@ function failureText(error: unknown): string {
 /** A failed turn stays failed; its diagnostic is a normal durable session reply. */
 export function reportSessionExecutionError(db: DrizzleDB, input: {
   sessionId: string; turnId: string; actorUserId: string; error: unknown;
-  channelFor: (id: string) => WorkReplyChannel | undefined;
+  channelFor: (id: string) => ReplyChannel | undefined;
 }): void {
   // Accepted replies own delivery even when the provider outcome is ambiguous.
   if (runnerAnswers(db, input.sessionId, input.turnId).length) return;

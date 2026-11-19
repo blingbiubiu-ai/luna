@@ -4,7 +4,7 @@ import type { ChannelIdentity, ChannelRef } from "@/channels/types";
 import type { DrizzleDB } from "@/data";
 import { agentShadows, channelConfigs, channelIdentities, channelUserBindings, shadowBotBindings } from "@/data/schema";
 import { IdentityDirectory } from "@/identity/identity-directory";
-import type { WorkReplyChannel } from "@/work/types";
+import type { ReplyChannel } from "@/channels/outbound";
 
 export function recipientSearchText(value: string): string {
   return value.normalize("NFC").replace(/\p{Cf}/gu, "").trim().toLocaleLowerCase();
@@ -19,7 +19,7 @@ export async function resolveGroupBotBindings(
   groupId: string,
   roster: readonly ChannelIdentity[],
   matches: readonly ChannelIdentity[],
-  channelFor: (id: string) => WorkReplyChannel | undefined,
+  channelFor: (id: string) => ReplyChannel | undefined,
 ) {
   const configured = db.select({
     channelId: channelConfigs.id, appId: channelConfigs.appId, bot: channelConfigs.botIdentity,

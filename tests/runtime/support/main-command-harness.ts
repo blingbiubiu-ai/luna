@@ -4,8 +4,8 @@ import { IdentityDirectory } from "../../../src/identity/identity-directory";
 import { randomUUID } from "node:crypto";
 import { eq } from "drizzle-orm";
 import { LunaMessageIngress as Ingress, type LunaMessageIngressOptions } from "../../../src/messaging/gateway/luna-message-ingress";
-import { SessionInboundRouter as Router, type SessionInboundRouterOptions } from "../../../src/work/session-inbound-router";
-export { SessionTurnProcessor } from "../../../src/work/session-inbound-router";
+import { SessionInboundRouter as Router, type SessionInboundRouterOptions } from "../../../src/sessions/inbound/session-inbound-router";
+export { SessionTurnProcessor } from "../../../src/sessions/inbound/session-inbound-router";
 import type { MainRunner, MainRunnerRunInput } from "../../../src/main-runner/main-runner";
 import type { MainRunnerCompletion } from "../../../src/main-runner/types";
 import type { DrizzleDB } from "../../../src/data";
@@ -15,13 +15,13 @@ import { TaskRunSupervisor } from "../../../src/tasks/task-run-supervisor";
 import { SessionStateStore } from "../../../src/main-runner/session-state-store";
 import { sessionCommandsFor } from "../../../src/messaging/session-command-service";
 import { mainMessageOrigin } from "../../../src/runners/main-invocation-registry";
-import type { WorkReplyChannel } from "../../../src/work/types";
+import type { ReplyChannel } from "../../../src/channels/outbound";
 import type { ChannelAdapter } from "../../../src/channels";
 import type { OperationRequest, OperationContext } from "../../../src/runners/operation-contract";
 import type { TestMainPlan } from "./main-command-plan";
 
 type TestOptions = {runTask?: (input: {taskId: string; reason: string; pendingInputs: readonly {text: string}[]}) => void | Promise<void>};
-const runtimes = new WeakMap<DrizzleDB,{channels: Map<string, WorkReplyChannel>; supervisor: TaskRunSupervisor}>();
+const runtimes = new WeakMap<DrizzleDB,{channels: Map<string, ReplyChannel>; supervisor: TaskRunSupervisor}>();
 function runtime(db: DrizzleDB, supervisor?: unknown) {
  let value=runtimes.get(db);
  if(!value){value={channels:new Map(),supervisor: new TaskRunSupervisor({db,runnerType:"mock"})};runtimes.set(db,value);}

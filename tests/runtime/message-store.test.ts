@@ -19,7 +19,7 @@ import { MessageStore } from "../../src/sessions/message-store";
 import { SessionStore } from "../../src/sessions/session-store";
 import { SessionTimelineReader } from "../../src/sessions/session-timeline-reader";
 import { SessionTimelineStore } from "../../src/sessions/session-timeline-store";
-import { appendBackfillMessage } from "../../src/work/group-join-backfill-persistence";
+import { appendBackfillMessage } from "../../src/sessions/inbound/group-join-backfill-persistence";
 
 let homes: string[] = [];
 

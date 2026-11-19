@@ -8,7 +8,7 @@ import {setLunaHome} from "../../src/shared";
 import {NativeTaskProgress, type CotRequest} from "../../extensions/channels/feishu/messaging/native-task-progress";
 import {nativeProgressEntries} from "../../src/messaging/notifications/feishu-task-updater";
 import type {NormalizedInboundMessage} from "../../src/channels";
-import type {OutboundChannelOperation} from "../../src/work/types";
+import type {OutboundChannelOperation} from "../../src/channels/outbound";
 let home: string;
 let connection: DataConnection<typeof schema>;
 let calls: CotRequest[];

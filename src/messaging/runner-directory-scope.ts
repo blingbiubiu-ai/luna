@@ -5,9 +5,9 @@ import { SessionStore } from "@/sessions/session-store";
 import { RunnerMessageService } from "./runner-message-service";
 import { GatewayError } from "@/server/gateway-error";
 import type { LunaAccessTokenClaims } from "@/server/auth/access-token-service";
-import type { WorkReplyChannel } from "@/work/types";
+import type { ReplyChannel } from "@/channels/outbound";
 
-export function runnerDirectoryScope(db: DrizzleDB, channelFor: (id: string) => WorkReplyChannel | undefined, claims: LunaAccessTokenClaims | undefined) {
+export function runnerDirectoryScope(db: DrizzleDB, channelFor: (id: string) => ReplyChannel | undefined, claims: LunaAccessTokenClaims | undefined) {
   const actor = new RunnerMessageService(db, channelFor).actor(claims);
   const user = db.select().from(users).where(eq(users.id, actor.userId)).get();
   if (!user || user.status !== "active") throw new GatewayError("actor_inactive", "Actor is inactive", 403);

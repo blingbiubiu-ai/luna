@@ -2,10 +2,6 @@ import type { ReplyDocument } from "@luna/runner-protocol/reply";
 import type { ChannelIdentity, NormalizedInboundMessage } from "@/channels";
 
 /**
- * Represents Work Context Kind values used by work context routing.
- */
-export type WorkContextKind = "ephemeral" | "persistent_task";
-/**
  * Represents Workflow Type values used by work context routing.
  */
 export type WorkflowType =
@@ -14,34 +10,6 @@ export type WorkflowType =
   | "task"
   | "approval"
   | "handoff";
-/**
- * Represents Work Context Workflow values used by work context routing.
- */
-export type WorkContextWorkflow = WorkflowType;
-/**
- * Allowed status values for work context routing.
- */
-export type WorkContextStatus = "running" | "completed";
-
-/**
- * Input contract for context routing create ephemeral work context operations in work.
- */
-export interface CreateEphemeralWorkContextInput {
-  readonly sessionId: string;
-  readonly workflow: WorkContextWorkflow;
-  readonly runnerContextId?: string;
-}
-
-/**
- * Input contract for context routing create persistent task work context operations in work.
- */
-export interface CreatePersistentTaskWorkContextInput {
-  readonly sessionId: string;
-  readonly taskId: string;
-  readonly workflow: WorkContextWorkflow;
-  readonly runnerContextId?: string;
-}
-
 /**
  * Describes the Task Candidate contract used by work context routing.
  */
@@ -178,7 +146,7 @@ export interface GroupInvitationResult {
   readonly notExistedMemberIds: readonly string[];
   readonly pendingApprovalMemberIds: readonly string[];
 }
-export interface WorkReplyChannel {
+export interface ReplyChannel {
   /** Adapter self identity, available before delivery; normalized at ingress. */
   getSessionSurface?(sessionId: string): import("@/channels").ChannelSurface;
   getBotIdentity?(): ChannelIdentity | undefined;

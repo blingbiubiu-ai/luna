@@ -28,7 +28,7 @@ import {
   type NotificationAttempt,
 } from "@/messaging/notifications/notification-attempt-store";
 import { RunnerContextStore } from "@/runners/runner-context-store";
-import type { WorkReplyChannel } from "@/work/types";
+import type { ReplyChannel } from "@/channels/outbound";
 import { createLogger, uuid } from "@/shared";
 
 import { MainRunnerContextBuilder } from "./context-builder";
@@ -49,7 +49,7 @@ export interface TaskResultEventPublisherOptions {
   readonly mainRunner: Pick<MainRunner, "run">;
   readonly channelForSubscription: (
     subscription: TaskSubscription,
-  ) => WorkReplyChannel | undefined;
+  ) => ReplyChannel | undefined;
   readonly taskRunNotifications?: Pick<
     TaskRunNotificationService,
     "onRunCompleted" | "onRunFailed"
@@ -67,7 +67,7 @@ export class TaskResultEventPublisher {
   private readonly _mainRunner: Pick<MainRunner, "run">;
   private readonly _channelForSubscription: (
     subscription: TaskSubscription,
-  ) => WorkReplyChannel | undefined;
+  ) => ReplyChannel | undefined;
   private readonly _taskRunNotifications:
     | Pick<TaskRunNotificationService, "onRunCompleted" | "onRunFailed">
     | undefined;

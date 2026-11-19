@@ -21,8 +21,8 @@ import { SessionQueue } from "../../src/sessions/session-queue";
 import { config, setLunaHome, type SessionConfig } from "../../src/shared";
 import { WorkSessionLauncher } from "../../src/work/work-session-launcher";
 import { WorkRunner } from "../../src/work/work-runner";
-import { SessionTurnProcessor, SessionInboundRouter } from "../../src/work/session-inbound-router";
-import type { OutboundChannelOperation } from "../../src/work/types";
+import { SessionTurnProcessor, SessionInboundRouter } from "../../src/sessions/inbound/session-inbound-router";
+import type { OutboundChannelOperation } from "../../src/channels/outbound";
 import { FakeFeishuChannel } from "../../extensions/channels/fake/fake-feishu-channel";
 import { InboundCommandRouter } from "../../src/messaging/gateway/inbound-command-router";
 
