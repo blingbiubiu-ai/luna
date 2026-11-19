@@ -15,7 +15,7 @@ import {getKernel} from "./kernel";
 const type = z.enum(MEMORY_TYPES);
 const fields = {
   type, title: z.string(), description: z.string(), body: z.string(),
-  subjectUserId: z.string().min(1).max(128).nullable().optional(),
+  subjectId: z.string().min(1).max(128).nullable().optional(),
   visibility: z.enum(["agent", "shadow"]).optional(),
   core: z.boolean().optional(),
   expiresAt: z.number().int().positive().nullable().optional(),
@@ -72,7 +72,7 @@ export function createRunnerMemoryRoutes(options: {db?: DrizzleDB} = {}) {
       const query = z.object({q: z.string().max(200), type: type.optional(), subject: z.string().optional(), archived: z.enum(["true", "false"]).optional(),
         limit: z.coerce.number().int().min(1).max(50).default(10)}).parse(c.req.query());
       const rows = new AgentMemoryStore(db()).search(access(c.get("lunaAccessTokenClaims")).viewer, query.q,
-        {limit: query.limit, archived: query.archived === "true", ...(query.type ? {type: query.type} : {}), ...(query.subject ? {subjectUserId: query.subject} : {})});
+        {limit: query.limit, archived: query.archived === "true", ...(query.type ? {type: query.type} : {}), ...(query.subject ? {subjectId: query.subject} : {})});
       return c.json({memories: summaries(rows)});
     })
     .get("/memory/:id", c => {

@@ -7,7 +7,7 @@ import {lunaAgents} from "./luna-agents";
  * `episode` is episodic memory: something that happened, at `occurredAt`, with `participants`. Episodes form the
  * timeline; they are never core, never recalled by a message and fade by age.
  */
-export const MEMORY_TYPES = ["persona", "person", "feedback", "project", "procedure", "reference", "episode"] as const;
+export const MEMORY_TYPES = ["persona", "person", "chat", "feedback", "project", "procedure", "reference", "episode"] as const;
 export const MEMORY_ORIGIN_KINDS = ["inline", "reflection", "consolidation", "owner", "migration"] as const;
 export type MemoryType = typeof MEMORY_TYPES[number];
 /** A change is made by one of the writers above, or by Service forgetting an entry. */
@@ -25,7 +25,8 @@ export const agentMemories = sqliteTable("agent_memories", {
   title: text("title").notNull(),
   description: text("description").notNull(),
   body: text("body").notNull(),
-  subjectUserId: text("subject_user_id"),
+  /** Who or where the entry is about: a Luna user id for `person`, the provider chat id for `chat`; null for other types. */
+  subjectId: text("subject_id"),
   visibility: text("visibility", {enum: ["agent", "shadow"]}).notNull(),
   originKind: text("origin_kind", {enum: MEMORY_ORIGIN_KINDS}).notNull(),
   originShadowId: text("origin_shadow_id"),
@@ -56,11 +57,12 @@ export const agentMemories = sqliteTable("agent_memories", {
 }, t => [
   index("agent_memories_agent_status_idx").on(t.agentId, t.status, t.updatedAt),
   uniqueIndex("agent_memories_change_seq_idx").on(t.changeSeq),
-  check("agent_memories_person_subject", sql`(${t.type}='person') = (${t.subjectUserId} IS NOT NULL)`),
+  check("agent_memories_subject", sql`(${t.type} IN ('person','chat')) = (${t.subjectId} IS NOT NULL)`),
   check("agent_memories_shadow_origin", sql`${t.visibility}='agent' OR ${t.originShadowId} IS NOT NULL`),
-  check("agent_memories_core_type", sql`${t.core}=0 OR ${t.type} NOT IN ('person','persona','episode')`),
+  check("agent_memories_core_type", sql`${t.core}=0 OR ${t.type} NOT IN ('person','chat','persona','episode')`),
   check("agent_memories_episode_time", sql`(${t.type}='episode') = (${t.occurredAt} IS NOT NULL)`),
   check("agent_memories_persona_private", sql`${t.type}<>'persona' OR ${t.visibility}='shadow'`),
+  check("agent_memories_chat_private", sql`${t.type}<>'chat' OR ${t.visibility}='shadow'`),
 ]);
 
 export interface MemorySnapshot {
@@ -68,7 +70,7 @@ export interface MemorySnapshot {
   title: string;
   description: string;
   body: string;
-  subjectUserId: string | null;
+  subjectId: string | null;
   visibility: "agent" | "shadow";
   status: MemoryStatus;
   supersededBy: string | null;

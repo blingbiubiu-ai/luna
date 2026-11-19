@@ -50,7 +50,7 @@ export function memoryInjection(db: DrizzleDB, invocation: MemoryInvocation, mes
     // People who joined after the conversation started: what is known about them was written earlier, so no change reports it.
     const newcomers = store.standing(viewer).filter(row => row.type === "person" && !seen.has(row.id) && !visibleIds.has(row.id));
     // Persona reaches the Runner through its instruction files, which it rereads every turn.
-    const updated = [...changed.filter(row => row.type !== "persona" && (row.core || row.type === "person" || seen.has(row.id))), ...newcomers];
+    const updated = [...changed.filter(row => row.type !== "persona" && (row.core || row.type === "person" || row.type === "chat" || seen.has(row.id))), ...newcomers];
     // An entry it was shown is gone when it was removed or forgotten, or when it is no longer visible here (e.g. made Shadow-private).
     const everywhere = store.changes({agentId: invocation.agentId, all: true}, cursor.injectedThrough, runnerContextId);
     const gone = [...everywhere.changed, ...everywhere.removed].filter(row => seen.has(row.id) && !visibleIds.has(row.id));

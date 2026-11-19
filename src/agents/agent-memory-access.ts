@@ -1,6 +1,6 @@
 import {and, eq, isNull, notInArray} from "drizzle-orm";
 import type {DrizzleDB} from "@/data";
-import {messages, tasks, users} from "@/data/schema";
+import {messages, sessions, tasks, users} from "@/data/schema";
 import {AuthorizationRuleStore} from "@/server/policy/authorization-rule-store";
 import {ruleMatchesOperation} from "@/server/policy/operation-policy";
 import {AgentError, AgentStore} from "./agent-store";
@@ -35,6 +35,13 @@ export function memoryParticipants(db: DrizzleDB, invocation: Pick<MemoryInvocat
   return [...participants];
 }
 
+/** Provider chat of a Main conversation; Work, Task-only and Dashboard conversations have none, so `chat` entries stay out of them. */
+export function memoryChat(db: DrizzleDB, sessionId: string | null): string | null {
+  if (!sessionId) return null;
+  const row = db.select({kind: sessions.kind, chatId: sessions.group_id}).from(sessions).where(eq(sessions.id, sessionId)).get();
+  return row?.kind === "main" ? row.chatId : null;
+}
+
 /**
  * Memory scope of a Runner invocation. The actor is trusted when it owns the
  * Agent or holds an allow rule for `memory.write`; an explicit deny blocks the
@@ -45,15 +52,16 @@ export function memoryAccess(db: DrizzleDB, invocation: MemoryInvocation, kind: 
   const rule = (effect: "allow" | "deny", operation: string) => grants.some(grant => grant.effect === effect && ruleMatchesOperation(grant, operation));
   if (rule("deny", "memory.read")) throw new AgentError("memory_access_denied", 403);
   const owner = new AgentStore(db).isOwnerUser(invocation.agentId, invocation.actorUserId);
+  const chatId = memoryChat(db, invocation.sessionId);
   return {
     // Consolidation is queued by Service for the owner and has to see everything it tidies.
     viewer: kind === "consolidation" && owner ? {agentId: invocation.agentId, all: true}
-      : {agentId: invocation.agentId, shadowId: invocation.shadowId, participants: memoryParticipants(db, invocation), actorUserId: invocation.actorUserId, owner},
+      : {agentId: invocation.agentId, shadowId: invocation.shadowId, participants: memoryParticipants(db, invocation), actorUserId: invocation.actorUserId, owner, chatId},
     writer: () => {
       if (rule("deny", "memory.write")) throw new AgentError("memory_access_denied", 403);
       return {
         agentId: invocation.agentId, kind, trusted: owner || rule("allow", "memory.write"),
-        userId: invocation.actorUserId, shadowId: invocation.shadowId, sessionId: invocation.sessionId, taskId: invocation.taskId,
+        userId: invocation.actorUserId, shadowId: invocation.shadowId, sessionId: invocation.sessionId, taskId: invocation.taskId, chatId,
         contextId: invocation.runnerContextId, owner,
       };
     },

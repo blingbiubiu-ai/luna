@@ -55,6 +55,18 @@ test("the owner sees every entry with its origin, corrects a poisoned one, and r
   expect(added).toMatchObject({status: 201, body: {memory: {originKind: "owner", trusted: true, originShadowId: null}}});
 });
 
+test("the owner sees which chat a chat entry belongs to and can edit it there, but cannot create one", async () => {
+  const call = dashboard("alice");
+  const now = new Date().toISOString();
+  db.db.insert(schema.channelSurfaces).values({id: "surface", channelType: "feishu", channelId: "feishu-default", externalId: "oc_oncall",
+    surfaceKind: "group", displayName: "Oncall 群", firstSeenAt: now, lastSeenAt: now, createdAt: now, updatedAt: now}).run();
+  const role = new AgentMemoryStore(db.db).add({agentId: a.agentId, kind: "inline", trusted: true, userId: "user:alice", shadowId: a.shadowId, chatId: "oc_oncall"},
+    {type: "chat", title: "oncall 职责", description: "我是这个群的 oncall 负责人", body: "排查并解决"});
+  expect((await call("GET", "")).body.memories).toMatchObject([{id: role.id, type: "chat", subjectId: "oc_oncall", subjectName: "Oncall 群"}]);
+  expect((await call("PUT", `/${role.id}`, {expectedRevision: 1, body: "工作日响应"})).body.memory).toMatchObject({body: "工作日响应", subjectId: "oc_oncall"});
+  expect(await call("POST", "", {type: "chat", title: "t", description: "d", body: "b"})).toMatchObject({status: 400, body: {code: "memory_chat_unavailable"}});
+});
+
 test("only the Agent owner can use the memory surface, and input is validated", async () => {
   const entry = new AgentMemoryStore(db.db).add({agentId: a.agentId, kind: "owner", trusted: true, userId: "user:alice", shadowId: null}, note as any);
   const bob = dashboard("bob");

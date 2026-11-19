@@ -33,6 +33,7 @@ type PersonaScope = "active" | "deleted";
 const TYPE_META: Record<DashboardMemoryType, { label: string; dot: string; short: string; desc: string }> = {
   persona: { label: "人格", dot: "#8b9085", short: "身份语气与原则", desc: "分身身份、语气与行事原则" },
   person: { label: "人物", dot: "#5b8a72", short: "职责与沟通偏好", desc: "协作对象的职责、偏好与沟通习惯" },
+  chat: { label: "群聊", dot: "#4f8a8b", short: "群内身份与职责", desc: "分身在某个群或私聊里的身份与职责，只在该群的对话里注入；由群里的对话写入" },
   feedback: { label: "做法", dot: "#b07d4f", short: "确认的工作方式", desc: "被纠正或确认的工作方式" },
   project: { label: "项目", dot: "#5c7c99", short: "背景决策与排期", desc: "进行中的工作背景、决策与排期" },
   procedure: { label: "经验", dot: "#7d6b91", short: "可复用操作方法", desc: "可复用的排查步骤与操作方法" },
@@ -41,8 +42,8 @@ const TYPE_META: Record<DashboardMemoryType, { label: string; dot: string; short
 };
 
 const NON_PERSONA_TYPES: readonly DashboardMemoryType[] = ["person", "feedback", "project", "procedure", "reference"];
-/** Episodes are written by reflection, not by hand, so they are a filter but not a type to create. */
-const FILTER_TYPES: readonly DashboardMemoryType[] = [...NON_PERSONA_TYPES, "episode"];
+/** Episodes are written by reflection and chat entries from the chat they are about, so both are filters but not types to create here. */
+const FILTER_TYPES: readonly DashboardMemoryType[] = [...NON_PERSONA_TYPES, "chat", "episode"];
 const ORIGIN_LABEL: Record<DashboardMemoryChangeKind, string> = {
   inline: "对话写入",
   reflection: "事后反思",
@@ -52,14 +53,14 @@ const ORIGIN_LABEL: Record<DashboardMemoryChangeKind, string> = {
   forgetting: "自动遗忘",
 };
 const STATUS_LABEL: Record<DashboardMemoryStatus, string> = { active: "有效", deleted: "已删除", archived: "已遗忘" };
-const EMPTY_MEMORY: DashboardMemoryFields = { type: "project", title: "", description: "", body: "", subjectUserId: null, core: false, expiresAt: null };
-const EMPTY_PERSONA: DashboardMemoryFields = { type: "persona", title: "", description: "", body: "", subjectUserId: null, core: false, expiresAt: null };
+const EMPTY_MEMORY: DashboardMemoryFields = { type: "project", title: "", description: "", body: "", subjectId: null, core: false, expiresAt: null };
+const EMPTY_PERSONA: DashboardMemoryFields = { type: "persona", title: "", description: "", body: "", subjectId: null, core: false, expiresAt: null };
 const PAGE_SIZE = 50;
 
 const day = (time: number) => new Date(time).toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" });
 const dateInput = (time: number | null) => time === null ? "" : new Date(time).toISOString().slice(0, 10);
-const fieldsOf = ({ type, title, description, body, subjectUserId, core, expiresAt }: DashboardMemoryFields): DashboardMemoryFields => ({
-  type, title, description, body, subjectUserId, core, expiresAt,
+const fieldsOf = ({ type, title, description, body, subjectId, core, expiresAt }: DashboardMemoryFields): DashboardMemoryFields => ({
+  type, title, description, body, subjectId, core, expiresAt,
 });
 const byteSizeLabel = (text: string) => {
   const bytes = new TextEncoder().encode(text).length;
@@ -82,8 +83,9 @@ const ERROR_TEXT: Record<string, string> = {
   invalid_memory_title: "标题不能为空，且不超过 120 字。",
   invalid_memory_description: "一行描述不能为空，且不超过 200 字。",
   invalid_memory_body: "正文不能为空，且不超过 8 KB。",
-  invalid_memory_subject: "人物记忆需要填写关联用户 ID，其他类型不能填写。",
-  invalid_memory_core: "人物和人格记忆不能设为核心。",
+  invalid_memory_subject: "人物记忆需要填写关联用户 ID，群聊记忆的关联群不能修改，其他类型不能填写。",
+  invalid_memory_core: "人物、群聊和人格记忆不能设为核心。",
+  memory_chat_unavailable: "群聊记忆只能在它所属的群或私聊里由对话写入，这里不能新建或改成群聊记忆。",
   invalid_memory_persona: "人格记忆需要选择所属分身，且不能设置有效期。",
   invalid_memory_expiry: "有效期无效。",
   memory_revision_not_found: "要恢复的版本不存在。",
@@ -627,6 +629,9 @@ function MemoryWorkspace({ agentId, agentName, defaultShadowId }: { agentId: str
             {(editorMode === "new" || (editorMode === "edit" && selected)) ? (() => {
               const isPersona = form.type === "persona";
               const isPerson = form.type === "person";
+              const isChat = form.type === "chat";
+              // A chat entry can be turned into another type here, but nothing becomes one outside its chat.
+              const typeChoices = selected?.type === "chat" ? [...NON_PERSONA_TYPES, "chat" as const] : NON_PERSONA_TYPES;
               return (
                 <div className="space-y-6">
                   <div className="flex items-center justify-between gap-4 border-b border-border pb-4">
@@ -652,7 +657,7 @@ function MemoryWorkspace({ agentId, agentName, defaultShadowId }: { agentId: str
                         <span className="text-xs text-muted-foreground">{TYPE_META[form.type].desc}</span>
                       </div>
                       <div className="grid grid-cols-2 gap-2 sm:grid-cols-5">
-                        {NON_PERSONA_TYPES.map(t => {
+                        {typeChoices.map(t => {
                           const meta = TYPE_META[t];
                           const active = form.type === t;
                           return (
@@ -662,7 +667,7 @@ function MemoryWorkspace({ agentId, agentName, defaultShadowId }: { agentId: str
                               disabled={pending}
                               onClick={() => editDraft({
                                 type: t,
-                                ...(t === "person" ? { core: false } : { subjectUserId: null }),
+                                ...(t === "person" ? { core: false } : t === "chat" ? { core: false, subjectId: selected?.subjectId ?? null } : { subjectId: null }),
                               })}
                               className={`min-w-0 cursor-pointer rounded-xl border px-3 py-2.5 text-left transition-colors ${
                                 active ? "border-primary bg-accent" : "border-border bg-card hover:bg-accent/60"
@@ -703,16 +708,25 @@ function MemoryWorkspace({ agentId, agentName, defaultShadowId }: { agentId: str
                   {isPerson && (
                     <label className="grid gap-1.5 text-xs">
                       <span className="font-medium">
-                        关联用户 ID{selected?.subjectUserName ? `（${selected.subjectUserName}）` : ""}{" "}
+                        关联用户 ID{selected?.subjectName ? `（${selected.subjectName}）` : ""}{" "}
                         <span className="font-normal text-muted-foreground">（仅当该用户参与会话时可见）</span>
                       </span>
                       <Input
-                        value={form.subjectUserId ?? ""}
+                        value={form.subjectId ?? ""}
                         disabled={pending}
                         placeholder="例如：user_..."
                         className="h-9 font-mono text-xs"
-                        onChange={event => editDraft({ subjectUserId: event.target.value.trim() || null })}
+                        onChange={event => editDraft({ subjectId: event.target.value.trim() || null })}
                       />
+                    </label>
+                  )}
+
+                  {isChat && (
+                    <label className="grid gap-1.5 text-xs">
+                      <span className="font-medium">
+                        关联群聊 <span className="font-normal text-muted-foreground">（只在这个群的对话里注入，不能改到其他群）</span>
+                      </span>
+                      <Input value={selected?.subjectName ? `${selected.subjectName}（${form.subjectId ?? ""}）` : form.subjectId ?? ""} disabled className="h-9 font-mono text-xs" />
                     </label>
                   )}
 
@@ -777,14 +791,14 @@ function MemoryWorkspace({ agentId, agentName, defaultShadowId }: { agentId: str
                           type="checkbox"
                           aria-label="核心记忆"
                           checked={form.core}
-                          disabled={pending || isPerson}
+                          disabled={pending || isPerson || isChat}
                           className="mt-0.5 accent-primary"
                           onChange={event => editDraft({ core: event.target.checked })}
                         />
                         <span className="space-y-0.5">
                           <span className="block font-medium text-foreground">设为常驻核心记忆（Core）</span>
                           <span className="block text-muted-foreground">
-                            每次会话开始时都会告知分身，且不会因长期未读取而遗忘{isPerson ? "（人物记忆不可设为核心）" : ""}
+                            每次会话开始时都会告知分身，且不会因长期未读取而遗忘{isPerson ? "（人物记忆不可设为核心）" : isChat ? "（群聊记忆已在该群每次会话开始时告知，不可设为核心）" : ""}
                           </span>
                         </span>
                       </label>
@@ -909,9 +923,9 @@ function MemoryWorkspace({ agentId, agentName, defaultShadowId }: { agentId: str
                               ? "分身间共享"
                               : "仅作者在场可见"}
                       </Badge>
-                      {selected.type === "person" && (selected.subjectUserName || selected.subjectUserId) && (
+                      {(selected.type === "person" || selected.type === "chat") && (selected.subjectName || selected.subjectId) && (
                         <Badge variant="outline" className="px-2.5 py-0.5 text-xs text-muted-foreground">
-                          关联人物：{selected.subjectUserName ?? selected.subjectUserId}
+                          {selected.type === "chat" ? "关联群聊" : "关联人物"}：{selected.subjectName ?? selected.subjectId}
                         </Badge>
                       )}
                     </div>

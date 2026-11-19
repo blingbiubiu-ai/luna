@@ -3,7 +3,7 @@ import { bodyWithDefinedValues, hasFlag, parseDurationSeconds, readOption } from
 import { callUnifiedService, servicePathWithQuery } from "@luna/cli-support/service-client";
 
 const usage = [
-  "luna memory list [--type persona|person|feedback|project|procedure|reference|episode] [--limit N]",
+  "luna memory list [--type persona|person|chat|feedback|project|procedure|reference|episode] [--limit N]",
   "luna memory search <keywords> [--type T] [--subject USER_ID] [--archived]   # --archived searches forgotten entries",
   "luna memory timeline [--since 7d|YYYY-MM-DD] [--until YYYY-MM-DD] [--shadow SHADOW_ID] [--with USER_ID] [--limit N] [--archived]   # what happened, newest first",
   "luna memory get <id>",
@@ -14,6 +14,7 @@ const usage = [
   "",
   "Types (one question each):",
   "  person     who someone is and how to work with them (--subject USER_ID)",
+  "  chat       who you are and what you do in this group or direct chat, e.g. its on-call owner; bound to the current chat, told in every conversation there",
   "  feedback   a way of working the user corrected or confirmed",
   "  project    state, decisions or schedule of ongoing work",
   "  procedure  reusable steps, e.g. how to troubleshoot something",
@@ -52,7 +53,7 @@ export async function runMemoryCli(argv: readonly string[], env: Env, readStdin:
       if (value !== undefined && value !== "true" && value !== "false") throw new Error("--core must be true or false");
       return value === undefined ? undefined : value === "true";
     };
-    /** `none` clears the subject, so a misfiled `person` entry can become another type. */
+    /** `none` clears the subject, so a misfiled `person` entry can become another type. A `chat` entry takes the current chat. */
     const subject = () => {
       const value = option("--subject");
       return value === "none" ? null : value;
@@ -62,7 +63,7 @@ export async function runMemoryCli(argv: readonly string[], env: Env, readStdin:
       return bodyWithDefinedValues({
         expiresAt: expires(), core: core(),
         type: option("--type"), title: option("--title"), description: option("--description"),
-        subjectUserId: subject(), visibility: option("--visibility"),
+        subjectId: subject(), visibility: option("--visibility"),
         body: hasFlag(argv, "--stdin") ? await readStdin() : option("--body"),
       });
     };

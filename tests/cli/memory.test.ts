@@ -30,14 +30,14 @@ test("memory CLI maps commands to Runner memory routes and rejects invalid input
       {method: "GET", path: `/api/runner/memory/search?q=${encodeURIComponent("周报 格式").replace(/%20/g, "+")}&subject=u1&archived=true`, body: undefined},
       {method: "GET", path: `/api/runner/memory/timeline?since=${Date.parse("2026-11-01T00:00:00Z")}&until=${Date.parse("2026-11-07T23:59:59Z")}&shadow=s1&with=u1&limit=5&archived=true`, body: undefined},
       {method: "GET", path: "/api/runner/memory/m%201", body: undefined},
-      {method: "POST", path: "/api/runner/memory", body: {type: "person", title: "张三", description: "只要结论", subjectUserId: "u1", visibility: "shadow", body: "不要过程\n", force: true}},
+      {method: "POST", path: "/api/runner/memory", body: {type: "person", title: "张三", description: "只要结论", subjectId: "u1", visibility: "shadow", body: "不要过程\n", force: true}},
       {method: "POST", path: "/api/runner/memory", body: {type: "project", title: "t", description: "d", body: "b", expiresAt: Date.parse("2026-11-20T23:59:59Z"), core: true}},
       {method: "PUT", path: "/api/runner/memory/m1", body: {expiresAt: null, core: false, expectedRevision: 2}},
       {method: "POST", path: "/api/runner/memory/m1/restore", body: {expectedRevision: 4}},
       {method: "PUT", path: "/api/runner/memory/m1", body: {body: "v2", expectedRevision: 2}},
       {method: "DELETE", path: "/api/runner/memory/m1?expectedRevision=3&supersededBy=m2", body: undefined},
       {method: "GET", path: `/api/runner/memory/search?q=${encodeURIComponent("周报 格式").replace(/%20/g, "+")}&type=feedback&archived=true`, body: undefined},
-      {method: "PUT", path: "/api/runner/memory/m1", body: {type: "project", subjectUserId: null, expectedRevision: 2}},
+      {method: "PUT", path: "/api/runner/memory/m1", body: {type: "project", subjectId: null, expectedRevision: 2}},
     ]);
     for (const args of [
       ["search"], ["search", "--type", "feedback"], ["get"], ["update", "m1", "--body", "x"], ["update", "m1", "--expected-revision", "0"],

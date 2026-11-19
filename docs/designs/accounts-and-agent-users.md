@@ -123,7 +123,7 @@ checked where the row is written:
 | `session_commands.actor_user_id`, `session_schedules.actor_user_id`, `timeline_events.actor_user_id` | session |
 | `tasks.creator_user_id`, `task_participants.user_id`, `task_report_commands.actor_user_id` | task |
 | `runner_invocations.actor_user_id`, `access_tokens.user_id` where `agent_id` is set | `agent_id` |
-| `agent_memories.origin_user_id`, `subject_user_id`, `participants_json` | `agent_id` |
+| `agent_memories.origin_user_id`, `subject_id` of `person` entries, `participants_json` | `agent_id` |
 | `agent_memory_revisions.changed_by_user_id` | memory |
 | `group_memberships.user_id` | group |
 | `channel_auth_tokens.user_id` | channel (the sender's user; `#auth` and `#link` tokens) |

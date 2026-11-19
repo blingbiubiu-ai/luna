@@ -62,11 +62,11 @@ CREATE TABLE agent_lifecycle_jobs (
 CREATE TABLE "agent_memories" (
  id TEXT PRIMARY KEY NOT NULL,
  agent_id TEXT NOT NULL REFERENCES luna_agents(id),
- type TEXT NOT NULL CHECK(type IN ('persona','person','feedback','project','procedure','reference','episode')),
+ type TEXT NOT NULL CHECK(type IN ('persona','person','chat','feedback','project','procedure','reference','episode')),
  title TEXT NOT NULL,
  description TEXT NOT NULL,
  body TEXT NOT NULL,
- subject_user_id TEXT,
+ subject_id TEXT,
  visibility TEXT NOT NULL CHECK(visibility IN ('agent','shadow')),
  origin_kind TEXT NOT NULL CHECK(origin_kind IN ('inline','reflection','consolidation','owner','migration')),
  origin_shadow_id TEXT,
@@ -86,10 +86,11 @@ CREATE TABLE "agent_memories" (
  updated_at INTEGER NOT NULL,
  occurred_at INTEGER,
  participants_json TEXT NOT NULL DEFAULT '[]',
- CONSTRAINT agent_memories_person_subject CHECK ((type='person') = (subject_user_id IS NOT NULL)),
+ CONSTRAINT agent_memories_subject CHECK ((type IN ('person','chat')) = (subject_id IS NOT NULL)),
  CONSTRAINT agent_memories_shadow_origin CHECK (visibility='agent' OR origin_shadow_id IS NOT NULL),
- CONSTRAINT agent_memories_core_type CHECK (core=0 OR type NOT IN ('person','persona','episode')),
+ CONSTRAINT agent_memories_core_type CHECK (core=0 OR type NOT IN ('person','chat','persona','episode')),
  CONSTRAINT agent_memories_persona_private CHECK (type<>'persona' OR visibility='shadow'),
+ CONSTRAINT agent_memories_chat_private CHECK (type<>'chat' OR visibility='shadow'),
  CONSTRAINT agent_memories_episode_time CHECK ((type='episode') = (occurred_at IS NOT NULL))
 );
 --> statement-breakpoint
@@ -1488,11 +1489,11 @@ WHEN (NEW.actor_user_id IS NOT NULL AND NEW.actor_user_id <> '' AND NOT EXISTS(S
 BEGIN SELECT RAISE(ABORT,'user_agent_mismatch'); END;
 --> statement-breakpoint
 CREATE TRIGGER agent_memories_user_agent_insert BEFORE INSERT ON agent_memories
-WHEN (NEW.subject_user_id IS NOT NULL AND NEW.subject_user_id <> '' AND NOT EXISTS(SELECT 1 FROM users WHERE id=NEW.subject_user_id AND agent_id=NEW.agent_id)) OR (NEW.origin_user_id IS NOT NULL AND NEW.origin_user_id <> '' AND NOT EXISTS(SELECT 1 FROM users WHERE id=NEW.origin_user_id AND agent_id=NEW.agent_id))
+WHEN (NEW.type='person' AND NEW.subject_id IS NOT NULL AND NEW.subject_id <> '' AND NOT EXISTS(SELECT 1 FROM users WHERE id=NEW.subject_id AND agent_id=NEW.agent_id)) OR (NEW.origin_user_id IS NOT NULL AND NEW.origin_user_id <> '' AND NOT EXISTS(SELECT 1 FROM users WHERE id=NEW.origin_user_id AND agent_id=NEW.agent_id))
 BEGIN SELECT RAISE(ABORT,'user_agent_mismatch'); END;
 --> statement-breakpoint
-CREATE TRIGGER agent_memories_user_agent_update BEFORE UPDATE OF agent_id,subject_user_id,origin_user_id ON agent_memories
-WHEN (NEW.subject_user_id IS NOT NULL AND NEW.subject_user_id <> '' AND NOT EXISTS(SELECT 1 FROM users WHERE id=NEW.subject_user_id AND agent_id=NEW.agent_id)) OR (NEW.origin_user_id IS NOT NULL AND NEW.origin_user_id <> '' AND NOT EXISTS(SELECT 1 FROM users WHERE id=NEW.origin_user_id AND agent_id=NEW.agent_id))
+CREATE TRIGGER agent_memories_user_agent_update BEFORE UPDATE OF agent_id,type,subject_id,origin_user_id ON agent_memories
+WHEN (NEW.type='person' AND NEW.subject_id IS NOT NULL AND NEW.subject_id <> '' AND NOT EXISTS(SELECT 1 FROM users WHERE id=NEW.subject_id AND agent_id=NEW.agent_id)) OR (NEW.origin_user_id IS NOT NULL AND NEW.origin_user_id <> '' AND NOT EXISTS(SELECT 1 FROM users WHERE id=NEW.origin_user_id AND agent_id=NEW.agent_id))
 BEGIN SELECT RAISE(ABORT,'user_agent_mismatch'); END;
 --> statement-breakpoint
 CREATE TRIGGER access_tokens_user_agent_insert BEFORE INSERT ON access_tokens

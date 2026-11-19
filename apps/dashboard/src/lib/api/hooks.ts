@@ -1632,7 +1632,7 @@ export function useSkill(slug: string | null) {
 
 // --- Agent memory ---
 
-export type DashboardMemoryType = "persona" | "person" | "feedback" | "project" | "procedure" | "reference" | "episode";
+export type DashboardMemoryType = "persona" | "person" | "chat" | "feedback" | "project" | "procedure" | "reference" | "episode";
 export type DashboardMemoryOriginKind = "inline" | "reflection" | "consolidation" | "owner" | "migration";
 export type DashboardMemoryChangeKind = DashboardMemoryOriginKind | "forgetting";
 export type DashboardMemoryStatus = "active" | "deleted" | "archived";
@@ -1642,7 +1642,7 @@ export interface DashboardMemoryFields {
   title: string;
   description: string;
   body: string;
-  subjectUserId: string | null;
+  subjectId: string | null;
   core: boolean;
   expiresAt: number | null;
 }
@@ -1657,7 +1657,7 @@ export interface DashboardMemory extends DashboardMemoryFields {
   originTaskId: string | null;
   originUserId: string | null;
   originUserName: string | null;
-  subjectUserName: string | null;
+  subjectName: string | null;
   trusted: boolean;
   revision: number;
   status: DashboardMemoryStatus;

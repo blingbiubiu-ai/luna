@@ -10,14 +10,16 @@ import {AgentError} from "./agent-store";
 
 export type MemoryRecord = typeof agentMemories.$inferSelect;
 export type MemoryVisibility = "agent" | "shadow";
-export type MemorySummary = Pick<MemoryRecord, "id" | "type" | "title" | "description" | "subjectUserId" | "visibility" | "originKind" | "originUserId" | "trusted" | "revision" | "status" | "core" | "expiresAt" | "occurredAt" | "updatedAt">;
+export type MemorySummary = Pick<MemoryRecord, "id" | "type" | "title" | "description" | "subjectId" | "visibility" | "originKind" | "originUserId" | "trusted" | "revision" | "status" | "core" | "expiresAt" | "occurredAt" | "updatedAt">;
 
 /** Who is reading. `all` is the Agent owner or Service-launched consolidation. */
 export type MemoryViewer =
   | {agentId: string; all: true}
   | {agentId: string; all?: false; shadowId: string; participants: readonly string[];
     /** Who asked for this turn, and whether that is the Agent owner. Episodes are shown to the owner, and to others only when they took part. */
-    actorUserId?: string | undefined; owner?: boolean | undefined};
+    actorUserId?: string | undefined; owner?: boolean | undefined;
+    /** Provider chat of the conversation; `chat` entries are seen only there. Null outside a Main conversation in a chat. */
+    chatId?: string | null | undefined};
 
 /** Who is writing. Callers derive this from an invocation or an authorized owner, never from request input. */
 export interface MemoryWriter {
@@ -28,6 +30,8 @@ export interface MemoryWriter {
   shadowId: string | null;
   sessionId?: string | null;
   taskId?: string | null;
+  /** Provider chat of the conversation writing; a `chat` entry is always about it. */
+  chatId?: string | null;
   /** Runner context that makes the change, when a Runner writes. */
   contextId?: string | null;
   /** The change is made for the Agent owner; required to touch persona entries. */
@@ -40,7 +44,7 @@ interface MemoryFields {
   title: string;
   description: string;
   body: string;
-  subjectUserId: string | null;
+  subjectId: string | null;
   visibility: MemoryVisibility;
   core: boolean;
   expiresAt: number | null;
@@ -62,9 +66,11 @@ export class MemoryDuplicateError extends AgentError {
 export const MEMORY_BODY_LIMIT = 8 * 1024;
 const LIMITS = {title: 120, description: 200, body: MEMORY_BODY_LIMIT} as const;
 /** Types that change how the Agent works; only trusted writers may create or produce them. */
-const BEHAVIOR_TYPES: readonly MemoryType[] = ["feedback", "procedure"];
+const BEHAVIOR_TYPES: readonly MemoryType[] = ["feedback", "procedure", "chat"];
+/** Types about one subject: a person, or the chat a conversation happens in. */
+const SUBJECT_TYPES: readonly MemoryType[] = ["person", "chat"];
 /** Index order: what must not be missed comes first. */
-const TYPE_PRIORITY: Record<MemoryType, number> = {persona: -1, person: 0, feedback: 1, procedure: 1, project: 2, reference: 3, episode: 4};
+const TYPE_PRIORITY: Record<MemoryType, number> = {persona: -1, chat: 0, person: 0, feedback: 1, procedure: 1, project: 2, reference: 3, episode: 4};
 /** Share of title and description terms two entries have in common above which they count as the same fact. */
 const DUPLICATE_SIMILARITY = 0.6;
 const PERSON_STANDING_LIMIT = 20;
@@ -110,12 +116,12 @@ export class AgentMemoryStore {
     return {entries, omitted: rows.length - entries.length};
   }
 
-  /** What every conversation is told at its start: the Shadow's persona, core entries, then entries about the people present. */
+  /** What every conversation is told at its start: the Shadow's persona, core entries, the chat it happens in, then entries about the people present. */
   standing(viewer: MemoryViewer): MemoryRecord[] {
     const rows = this.db.select().from(agentMemories)
-      .where(and(this.visible(viewer), or(eq(agentMemories.core, true), inArray(agentMemories.type, ["person", "persona"]))))
+      .where(and(this.visible(viewer), or(eq(agentMemories.core, true), inArray(agentMemories.type, ["person", "chat", "persona"]))))
       .orderBy(desc(agentMemories.updatedAt), agentMemories.id).all();
-    return [...rows.filter(row => row.type === "persona").reverse(), ...rows.filter(row => row.core),
+    return [...rows.filter(row => row.type === "persona").reverse(), ...rows.filter(row => row.core), ...rows.filter(row => row.type === "chat"),
       ...rows.filter(row => row.type === "person").slice(0, PERSON_STANDING_LIMIT)];
   }
 
@@ -134,11 +140,11 @@ export class AgentMemoryStore {
   }
 
   /** Explicit search over title, description and body; `archived` searches forgotten entries instead of active ones. */
-  search(viewer: MemoryViewer, query: string, options: Optional<{type: MemoryType; subjectUserId: string; limit: number; archived: boolean}> = {}): MemoryRecord[] {
+  search(viewer: MemoryViewer, query: string, options: Optional<{type: MemoryType; subjectId: string; limit: number; archived: boolean}> = {}): MemoryRecord[] {
     if (!memoryTerms(query).length) throw new AgentError("memory_query_required", 400);
     return this.match(viewer, query, "title description body", options.archived ? ["archived"] : ["active"], and(
       options.type ? eq(agentMemories.type, options.type) : undefined,
-      options.subjectUserId ? eq(agentMemories.subjectUserId, options.subjectUserId) : undefined,
+      options.subjectId ? eq(agentMemories.subjectId, options.subjectId) : undefined,
     )).slice(0, options.limit ?? 10);
   }
 
@@ -161,16 +167,16 @@ export class AgentMemoryStore {
    * all terms the two have in common; `overlap` is the share of the shorter
    * one's terms found in the other, which also catches a short entry restated
    * inside a longer one. By default only the same type is compared; with
-   * `anyType` every type is, except that `person` entries are only ever
-   * compared with entries about the same person and `persona` entries with
-   * other persona entries.
+   * `anyType` every type is, except that `person` and `chat` entries are only
+   * ever compared with entries of their type about the same subject and
+   * `persona` entries with other persona entries.
    */
-  similar(viewer: MemoryViewer, entry: Pick<MemoryRecord, "type" | "title" | "description" | "subjectUserId"> & {id?: string},
+  similar(viewer: MemoryViewer, entry: Pick<MemoryRecord, "type" | "title" | "description" | "subjectId"> & {id?: string},
     options: {limit?: number; anyType?: boolean} = {}): {row: MemoryRecord; similarity: number; overlap: number}[] {
     const terms = summaryTerms(entry);
     return this.match(viewer, `${entry.title} ${entry.description}`, "title description", ["active"], and(
-      entry.type === "person" ? and(eq(agentMemories.type, "person"), eq(agentMemories.subjectUserId, entry.subjectUserId ?? ""))
-        : options.anyType && entry.type !== "persona" ? sql`${agentMemories.type} NOT IN ('person', 'persona', 'episode')` : eq(agentMemories.type, entry.type),
+      SUBJECT_TYPES.includes(entry.type) ? and(eq(agentMemories.type, entry.type), eq(agentMemories.subjectId, entry.subjectId ?? ""))
+        : options.anyType && entry.type !== "persona" ? sql`${agentMemories.type} NOT IN ('person', 'chat', 'persona', 'episode')` : eq(agentMemories.type, entry.type),
       entry.id ? sql`${agentMemories.id} <> ${entry.id}` : undefined,
     )).map(row => {
       const other = summaryTerms(row);
@@ -234,7 +240,7 @@ export class AgentMemoryStore {
     const now = Date.now();
     const fields = this.validate(writer, {
       type: input.type, title: input.title, description: input.description, body: input.body,
-      subjectUserId: input.subjectUserId ?? null, visibility: input.visibility ?? (input.type === "persona" ? "shadow" : "agent"), core: input.core ?? false, expiresAt: input.expiresAt ?? null,
+      subjectId: subjectFor(writer, input.type, input.subjectId), visibility: input.visibility ?? (input.type === "persona" || input.type === "chat" ? "shadow" : "agent"), core: input.core ?? false, expiresAt: input.expiresAt ?? null,
       occurredAt: input.occurredAt ?? (input.type === "episode" ? now : null),
     }, writer.shadowId);
     requireTypeFacts(fields);
@@ -277,8 +283,8 @@ export class AgentMemoryStore {
       title: input.title ?? current.title,
       description: input.description ?? current.description,
       body: input.body ?? current.body,
-      subjectUserId: input.subjectUserId === undefined ? current.subjectUserId : input.subjectUserId,
-      visibility: input.visibility ?? current.visibility,
+      subjectId: subjectFor(writer, input.type ?? current.type, input.subjectId, current),
+      visibility: input.visibility ?? (input.type === "chat" && current.type !== "chat" ? "shadow" : current.visibility),
       core: input.core ?? current.core,
       expiresAt: input.expiresAt === undefined ? current.expiresAt : input.expiresAt,
       occurredAt: input.occurredAt !== undefined ? input.occurredAt
@@ -414,7 +420,7 @@ export class AgentMemoryStore {
     return this.change(writer, {agentId: writer.agentId, all: true}, id, expectedRevision, current => ({
       ...this.validate(writer, {
         type: snapshot.type, title: snapshot.title, description: snapshot.description, body: snapshot.body,
-        subjectUserId: snapshot.subjectUserId, visibility: snapshot.visibility, core: snapshot.core, expiresAt, occurredAt: snapshot.occurredAt ?? null,
+        subjectId: snapshot.subjectId, visibility: snapshot.visibility, core: snapshot.core, expiresAt, occurredAt: snapshot.occurredAt ?? null,
       }, current.originShadowId),
       status: snapshot.status, supersededBy: snapshot.supersededBy,
     }), true);
@@ -438,7 +444,7 @@ export class AgentMemoryStore {
       // from the archive, must not hand a member's claim to every conversation. (Untrusted writers cannot touch
       // trusted entries, so trust is never lost here.)
       const rewritten = row.type !== current.type || row.title !== current.title || row.description !== current.description
-        || row.body !== current.body || row.subjectUserId !== current.subjectUserId;
+        || row.body !== current.body || row.subjectId !== current.subjectId;
       row.trusted = current.trusted || (writer.trusted && writer.kind !== "consolidation" && (confirms || rewritten || (row.core && !current.core)));
       // A change is a use: whatever is active after it starts a fresh forgetting clock.
       if (row.status === "active") row.lastUsedAt = now;
@@ -503,7 +509,8 @@ export class AgentMemoryStore {
     return and(...scope,
       or(eq(agentMemories.visibility, "agent"), eq(agentMemories.originShadowId, viewer.shadowId)),
       or(sql`${agentMemories.type} <> 'person'`,
-        viewer.participants.length ? inArray(agentMemories.subjectUserId, [...viewer.participants]) : sql`0`),
+        viewer.participants.length ? inArray(agentMemories.subjectId, [...viewer.participants]) : sql`0`),
+      or(sql`${agentMemories.type} <> 'chat'`, viewer.chatId ? eq(agentMemories.subjectId, viewer.chatId) : sql`0`),
       // The Agent owner sees every episode; anyone else only those they took part in, whoever wrote them down.
       or(sql`${agentMemories.type} <> 'episode'`, viewer.owner ? sql`1`
         : viewer.actorUserId ? sql`EXISTS (SELECT 1 FROM json_each(${agentMemories.participants}) WHERE value = ${viewer.actorUserId})` : sql`0`),
@@ -520,8 +527,9 @@ export class AgentMemoryStore {
     if (!description || description.length > LIMITS.description) throw new AgentError("invalid_memory_description", 400);
     if (!body || Buffer.byteLength(body) > LIMITS.body) throw new AgentError("invalid_memory_body", 400);
     if (input.visibility !== "agent" && !(input.visibility === "shadow" && originShadowId)) throw new AgentError("invalid_memory_visibility", 400);
-    if ((input.type === "person") !== Boolean(input.subjectUserId)) throw new AgentError("invalid_memory_subject", 400);
-    if (input.core && (input.type === "person" || input.type === "persona" || input.type === "episode")) throw new AgentError("invalid_memory_core", 400);
+    if (SUBJECT_TYPES.includes(input.type) !== Boolean(input.subjectId)) throw new AgentError("invalid_memory_subject", 400);
+    if (input.core && (SUBJECT_TYPES.includes(input.type) || input.type === "persona" || input.type === "episode")) throw new AgentError("invalid_memory_core", 400);
+    if (input.type === "chat" && input.visibility !== "shadow") throw new AgentError("invalid_memory_visibility", 400);
     if ((input.type === "episode") !== (input.occurredAt !== null) || (input.occurredAt !== null && !(Number.isSafeInteger(input.occurredAt) && input.occurredAt > 0))) throw new AgentError("invalid_memory_occurred_at", 400);
     if (input.type === "persona") {
       // Identity outlives the conversation that set it, so only the Agent owner may have it written.
@@ -531,9 +539,9 @@ export class AgentMemoryStore {
     if (input.expiresAt !== null && !(Number.isSafeInteger(input.expiresAt) && input.expiresAt > 0)) throw new AgentError("invalid_memory_expiry", 400);
     if (!writer.trusted) {
       if (BEHAVIOR_TYPES.includes(input.type) || input.core) throw new AgentError("memory_write_forbidden", 403);
-      if (input.type === "person" && input.subjectUserId !== writer.userId) throw new AgentError("memory_write_forbidden", 403);
+      if (input.type === "person" && input.subjectId !== writer.userId) throw new AgentError("memory_write_forbidden", 403);
     }
-    return {type: input.type, title, description, body, subjectUserId: input.subjectUserId || null, visibility: input.visibility, core: input.core, expiresAt: input.expiresAt, occurredAt: input.occurredAt};
+    return {type: input.type, title, description, body, subjectId: input.subjectId || null, visibility: input.visibility, core: input.core, expiresAt: input.expiresAt, occurredAt: input.occurredAt};
   }
 }
 
@@ -555,6 +563,20 @@ function requireTypeFacts<T extends Pick<MemoryFields, "type" | "title" | "descr
     + "If no such location exists, the fact itself is what you are saving: choose its type with --type "
     + "(project for the state, decisions or schedule of ongoing work, feedback for a confirmed way of working, procedure for reusable steps).");
   return fields;
+}
+
+/**
+ * The subject a write leaves on an entry. A `chat` entry is about the chat the writing conversation happens in,
+ * never one named by the request, and keeps its chat when edited; other types take the request's subject.
+ */
+function subjectFor(writer: MemoryWriter, type: MemoryType, requested: string | null | undefined, current?: MemoryRecord): string | null {
+  if (type !== "chat") return requested !== undefined ? requested : current && current.type !== "chat" ? current.subjectId : null;
+  if (requested !== undefined && requested !== (current?.type === "chat" ? current.subjectId : null)) throw new AgentError("invalid_memory_subject", 400);
+  if (current?.type === "chat") return current.subjectId;
+  if (!writer.chatId) throw new MemoryTypeFactsError("memory_chat_unavailable",
+    "A chat entry is about the group or direct chat this conversation happens in, and this conversation has none (a Work, Task or Dashboard conversation). "
+    + "Save it from the chat it is about, or choose another type with --type.");
+  return writer.chatId;
 }
 
 const corePool = (row: Pick<MemoryRecord, "visibility" | "originShadowId">) => row.visibility === "shadow" ? row.originShadowId : null;
@@ -603,15 +625,15 @@ export function memorySources(db: Pick<DrizzleDB, "select">, id: string): ({revi
 
 function record(tx: Pick<DrizzleDB, "insert">, row: MemoryRecord, kind: MemoryChangeKind, userId: string | null, shadowId: string | null, now: number,
   source?: MemorySource): void {
-  const {type, title, description, body, subjectUserId, visibility, status, supersededBy, trusted, core, expiresAt, occurredAt} = row;
+  const {type, title, description, body, subjectId, visibility, status, supersededBy, trusted, core, expiresAt, occurredAt} = row;
   tx.insert(agentMemoryRevisions).values({
     memoryId: row.id, revision: row.revision,
-    snapshot: {type, title, description, body, subjectUserId, visibility, status, supersededBy, trusted, core, expiresAt, occurredAt, ...(source ? {source} : {})},
+    snapshot: {type, title, description, body, subjectId, visibility, status, supersededBy, trusted, core, expiresAt, occurredAt, ...(source ? {source} : {})},
     changeKind: kind, changedByUserId: userId, changedByShadowId: shadowId, createdAt: now,
   }).run();
 }
 
 export function memorySummary(row: MemoryRecord): MemorySummary {
-  const {id, type, title, description, subjectUserId, visibility, originKind, originUserId, trusted, revision, status, core, expiresAt, occurredAt, updatedAt} = row;
-  return {id, type, title, description, subjectUserId, visibility, originKind, originUserId, trusted, revision, status, core, expiresAt, occurredAt, updatedAt};
+  const {id, type, title, description, subjectId, visibility, originKind, originUserId, trusted, revision, status, core, expiresAt, occurredAt, updatedAt} = row;
+  return {id, type, title, description, subjectId, visibility, originKind, originUserId, trusted, revision, status, core, expiresAt, occurredAt, updatedAt};
 }

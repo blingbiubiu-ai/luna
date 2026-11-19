@@ -182,7 +182,7 @@ function mergeUser(db: Db, agentId: string, sourceId: string, targetId: string, 
   db.run(sql`UPDATE OR IGNORE task_participants SET user_id = ${targetId} WHERE user_id = ${sourceId}`);
   db.run(sql`DELETE FROM task_participants WHERE user_id = ${sourceId}`);
   db.run(sql`UPDATE session_schedules SET actor_user_id = ${targetId} WHERE actor_user_id = ${sourceId}`);
-  db.run(sql`UPDATE agent_memories SET subject_user_id = ${targetId} WHERE subject_user_id = ${sourceId} AND agent_id = ${agentId}`);
+  db.run(sql`UPDATE agent_memories SET subject_id = ${targetId} WHERE type = 'person' AND subject_id = ${sourceId} AND agent_id = ${agentId}`);
   db.run(sql`UPDATE agent_memories SET origin_user_id = ${targetId} WHERE origin_user_id = ${sourceId} AND agent_id = ${agentId}`);
   db.run(sql`UPDATE agent_memories SET participants_json = (
       SELECT json_group_array(DISTINCT CASE WHEN value = ${sourceId} THEN ${targetId} ELSE value END) FROM json_each(agent_memories.participants_json))

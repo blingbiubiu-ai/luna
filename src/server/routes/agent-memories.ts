@@ -3,7 +3,7 @@ import {HTTPException} from "hono/http-exception";
 import {inArray} from "drizzle-orm";
 import {z} from "zod";
 import type {DrizzleDB} from "@/data";
-import {agentShadows, MEMORY_ORIGIN_KINDS, MEMORY_STATUSES, MEMORY_TYPES, users} from "@/data/schema";
+import {agentShadows, channelSurfaces, MEMORY_ORIGIN_KINDS, MEMORY_STATUSES, MEMORY_TYPES, users} from "@/data/schema";
 import {config} from "@/shared";
 import {AgentError, AgentStore} from "@/agents/agent-store";
 import {AgentMemoryStore, MemoryConflictError, type MemoryRecord, type MemoryViewer, type MemoryWriter, MemoryTypeFactsError} from "@/agents/agent-memory-store";
@@ -11,7 +11,7 @@ import {isGuardResponse, requireDashboardOnly} from "../auth/guards";
 
 const fields = {
   type: z.enum(MEMORY_TYPES), title: z.string(), description: z.string(), body: z.string(),
-  subjectUserId: z.string().min(1).max(128).nullable().optional(),
+  subjectId: z.string().min(1).max(128).nullable().optional(),
   core: z.boolean().optional(),
   expiresAt: z.number().int().positive().nullable().optional(),
 };
@@ -43,14 +43,17 @@ export function createAgentMemoryRoutes(db: DrizzleDB) {
   };
   /** Adds the names the audit view shows instead of raw ids. */
   const named = (rows: readonly MemoryRecord[]) => {
-    const userIds = [...new Set(rows.flatMap(row => [row.originUserId, row.subjectUserId]).filter((id): id is string => id !== null))];
+    const userIds = [...new Set(rows.flatMap(row => [row.originUserId, row.type === "person" ? row.subjectId : null]).filter((id): id is string => id !== null))];
+    const chatIds = [...new Set(rows.flatMap(row => row.type === "chat" && row.subjectId ? [row.subjectId] : []))];
     const shadowIds = [...new Set(rows.flatMap(row => row.originShadowId ? [row.originShadowId] : []))];
     const userNames = new Map(userIds.length ? db.select({id: users.id, name: users.displayName}).from(users).where(inArray(users.id, userIds)).all().map(row => [row.id, row.name]) : []);
+    const chatNames = new Map(chatIds.length ? db.select({id: channelSurfaces.externalId, name: channelSurfaces.displayName}).from(channelSurfaces)
+      .where(inArray(channelSurfaces.externalId, chatIds)).all().flatMap(row => row.name ? [[row.id, row.name] as const] : []) : []);
     const shadowNames = new Map(shadowIds.length ? db.select({id: agentShadows.id, name: agentShadows.name}).from(agentShadows).where(inArray(agentShadows.id, shadowIds)).all().map(row => [row.id, row.name]) : []);
     return rows.map(row => ({
       ...row,
       originUserName: row.originUserId ? userNames.get(row.originUserId) ?? null : null,
-      subjectUserName: row.subjectUserId ? userNames.get(row.subjectUserId) ?? null : null,
+      subjectName: !row.subjectId ? null : (row.type === "chat" ? chatNames : userNames).get(row.subjectId) ?? null,
       originShadowName: row.originShadowId ? shadowNames.get(row.originShadowId) ?? null : null,
     }));
   };

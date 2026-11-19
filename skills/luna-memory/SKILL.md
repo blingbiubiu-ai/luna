@@ -1,6 +1,6 @@
 ---
 name: luna-memory
-description: Write Agent long-term memory with `luna memory add/update/delete`: choose the entry type (person, feedback, project, procedure, reference, persona), make a rule core or Shadow-only, set an expiry, or change who this Shadow is (persona). Use before saving, correcting or forgetting a memory.
+description: Write Agent long-term memory with `luna memory add/update/delete`: choose the entry type (person, chat, feedback, project, procedure, reference, persona), make a rule core or Shadow-only, set an expiry, or change who this Shadow is (persona). Use before saving, correcting or forgetting a memory.
 ---
 
 # Writing Agent memory
@@ -23,6 +23,14 @@ description: Write Agent long-term memory with `luna memory add/update/delete`: 
 - Types. Pick the one whose question the entry answers:
   - `person` (requires `--subject <Luna user id>`): who someone is, their role
     and how they like to work.
+  - `chat`: who you are and what you do in the group or direct chat this
+    conversation happens in, such as "I am this group's on-call owner: when
+    someone reports a problem, investigate and fix it". It is bound to the
+    current chat by itself (no `--subject`), is told in full at the start of
+    every conversation there, topic threads included, and nowhere else. Keep
+    one entry per chat and update it as the role changes. Only the Agent owner
+    or a member trusted to write memory can set it, and only from a Main
+    conversation in that chat, not from Work.
   - `feedback`: a way of working the user corrected or confirmed.
   - `project`: the state, decisions or schedule of ongoing work, such as "the
     diagnostics launch moved to 2026-12-05; VQoS ships first".
@@ -54,7 +62,8 @@ description: Write Agent long-term memory with `luna memory add/update/delete`: 
   preference tied to one kind of work (how to format a report, which tool to
   use for a task) is not core, even when the user says "always" or "in every
   conversation": save it as a normal entry and it is recalled when that work
-  comes up. Core entries are limited (`memory_core_full`).
+  comes up. Core entries are limited (`memory_core_full`). A role or rule that
+  holds only in one group is a `chat` entry, not core.
 - A rule about how you, this Shadow, should behave, as opposed to all Shadows
   of the Agent, takes `--visibility shadow`; with `--core true` it then counts
   against this Shadow's own allowance.

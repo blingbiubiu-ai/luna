@@ -281,7 +281,7 @@ test("consolidation shows a duplicate filed under another type and restated insi
   const long = store.add(writer(), {type: "project", title: "发布冻结后的接口负责人王芳", description: "用户说明2026-12-05发布冻结后，接口问题找接口负责人王芳。", body: "b"});
   const short = store.add(writer(), {type: "reference", title: "接口问题联系王芳", description: "接口问题找王芳 她是接口负责人", body: "名单见《接口负责人表》"});
   const unrelated = store.add(writer(), {type: "feedback", title: "周报格式", description: "周报不要用表格", body: "b"});
-  const person = store.add(writer(), {type: "person", title: "王芳", description: "接口负责人王芳 接口问题找她", body: "b", subjectUserId: "wangfang"});
+  const person = store.add(writer(), {type: "person", title: "王芳", description: "接口负责人王芳 接口问题找她", body: "b", subjectId: "wangfang"});
   const text = String(command(consolidate()[0]!).payload.content);
   expect(text).toContain(`1. [${long.id}] (project`);
   expect(text.split("\n")[text.split("\n").findIndex(line => line.startsWith("1. [")) + 1]).toContain(`- similar: [${short.id}] (reference`);

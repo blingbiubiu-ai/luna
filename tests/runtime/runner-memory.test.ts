@@ -79,12 +79,23 @@ test("a refused type tells the Runner what to add, not just that the type is wro
   expect(refused.body.message).toContain("link, path or document name");
 });
 
+test("a chat entry is bound by Service to the chat the Runner is in, and only for a trusted actor", async () => {
+  const f = fixture();
+  const role = { type: "chat", title: "oncall 职责", description: "我是这个群的 oncall 负责人", body: "用户反馈问题时排查并解决" };
+  expect(await f.call("POST", "", role)).toMatchObject({ status: 403, body: { error: "memory_write_forbidden" } });
+  f.grant("allow", "memory.write");
+  expect(await f.call("POST", "", { ...role, subjectId: "oc_other" })).toMatchObject({ status: 400, body: { error: "invalid_memory_subject" } });
+  const added = await f.call("POST", "", role);
+  expect(added).toMatchObject({ status: 201, body: { memory: { type: "chat", subjectId: "chat", visibility: "shadow", trusted: true } } });
+  expect((await f.call("GET", "")).body.memories.map((m: any) => m.id)).toEqual([added.body.memory.id]);
+});
+
 test("trust follows the invocation actor: untrusted by default, trusted with a memory.write rule", async () => {
   const f = fixture();
   const feedback = { ...project, type: "feedback" };
   expect(await f.call("POST", "", feedback)).toMatchObject({ status: 403, body: { error: "memory_write_forbidden" } });
-  expect((await f.call("POST", "", { type: "person", title: "别人", description: "d", body: "b", subjectUserId: "someone-else" })).status).toBe(403);
-  expect((await f.call("POST", "", { type: "person", title: "自己", description: "d", body: "b", subjectUserId: "user" })).status).toBe(201);
+  expect((await f.call("POST", "", { type: "person", title: "别人", description: "d", body: "b", subjectId: "someone-else" })).status).toBe(403);
+  expect((await f.call("POST", "", { type: "person", title: "自己", description: "d", body: "b", subjectId: "user" })).status).toBe(201);
   f.grant("allow", "memory.write");
   expect((await f.call("POST", "", feedback)).body.memory).toMatchObject({ type: "feedback", trusted: true });
 });
@@ -94,8 +105,8 @@ test("person entries about people outside the session and other Shadows' private
   const store = new AgentMemoryStore(f.db);
   const owner = { agentId: f.session.agent_id, kind: "owner" as const, trusted: true, userId: fixtureOwnerUserId("fixture-owner"), shadowId: null };
   fixtureUser(f.db, f.session.agent_id, "zhangsan");
-  const absent = store.add(owner, { type: "person", title: "张三", description: "d", body: "b", subjectUserId: "zhangsan" });
-  const present = store.add(owner, { type: "person", title: "User", description: "d", body: "b", subjectUserId: "user" });
+  const absent = store.add(owner, { type: "person", title: "张三", description: "d", body: "b", subjectId: "zhangsan" });
+  const present = store.add(owner, { type: "person", title: "User", description: "d", body: "b", subjectId: "user" });
   const elsewhere = store.add({ ...owner, shadowId: "other-shadow" }, { ...project, visibility: "shadow" } as any);
   expect((await f.call("GET", "")).body.memories.map((m: any) => m.id)).toEqual([present.id]);
   expect((await f.call("GET", `/${absent.id}`)).status).toBe(404);

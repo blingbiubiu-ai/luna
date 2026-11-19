@@ -8,6 +8,8 @@ import {config, setLunaHome} from "@/shared";
 import {AgentStore} from "@/agents/agent-store";
 import {AgentMemoryStore, type MemoryWriter} from "@/agents/agent-memory-store";
 import {memoryInjection} from "@/agents/agent-memory-injection";
+import {memoryChat} from "@/agents/agent-memory-access";
+import {eq} from "drizzle-orm";
 import {shadowSoul} from "@/agents/shadow-soul";
 import {RunnerContextStore} from "@/runners/runner-context-store";
 import {AuthorizationRuleStore} from "@/server/policy/authorization-rule-store";
@@ -40,8 +42,8 @@ test("a conversation starts with core entries and entries about the people prese
   expect(inject("你好").text).toBeUndefined();
   const core = store.add(elsewhere(), rule);
   store.add(elsewhere(), weekly); store.add(elsewhere(), freeze);
-  const me = store.add(elsewhere(), {type: "person", title: "Alice", description: "只要结论", body: "b", subjectUserId: "user:alice"});
-  store.add(elsewhere(), {type: "person", title: "张三", description: "d", body: "b", subjectUserId: "zhangsan"});
+  const me = store.add(elsewhere(), {type: "person", title: "Alice", description: "只要结论", body: "b", subjectId: "user:alice"});
+  store.add(elsewhere(), {type: "person", title: "张三", description: "d", body: "b", subjectId: "zhangsan"});
   const first = turn("你好")!;
   expect(first).toContain("## Agent memory: always in effect");
   expect(first).toContain(`- [${core.id}] (feedback) 回复语言: 对外回复一律用中文 (from alice, `);
@@ -51,6 +53,27 @@ test("a conversation starts with core entries and entries about the people prese
   expect(first).not.toContain("发布冻结");
   expect(first).not.toContain("possibly relevant");
   expect(turn("你好")).toBeUndefined();
+});
+
+test("a chat entry is told in every Main conversation of its chat, thread or not, and in no Work conversation", () => {
+  const setSession = (id: string, values: Partial<typeof schema.sessions.$inferInsert>) => db.db.update(schema.sessions).set(values).where(eq(schema.sessions.id, id)).run();
+  setSession("session", {group_id: "oc_oncall"});
+  expect(memoryChat(db.db, "session")).toBe("oc_oncall");
+  const writer: MemoryWriter = {...elsewhere(), shadowId: scope.shadowId, chatId: "oc_oncall"};
+  const role = store.add(writer, {type: "chat", title: "oncall 职责", description: "我是这个群的 oncall 负责人", body: "用户反馈问题时排查并解决"});
+  const first = turn("你好")!;
+  expect(first).toContain("## Agent memory: always in effect");
+  expect(first).toContain(`- [${role.id}] (chat) oncall 职责: 我是这个群的 oncall 负责人`);
+  // Changed from another conversation of the chat, e.g. a topic thread, it reaches this one on its next turn.
+  store.update(writer, all, role.id, {expectedRevision: 1, description: "我是这个群的 oncall 负责人，工作日响应"});
+  expect(turn("在吗")).toContain(`[${role.id}] (chat) oncall 职责: 我是这个群的 oncall 负责人，工作日响应`);
+  // Another chat, a Work conversation in the same chat, or no chat at all never see it.
+  for (const [group, kind] of [["oc_other", "main"], ["oc_oncall", "work"], [null, "main"]] as const) {
+    setSession("session", {group_id: group, kind});
+    expect(memoryChat(db.db, "session")).toBe(kind === "main" ? group : null);
+    db.db.delete(schema.memoryInjectionCursors).run();
+    expect(turn("你好", `provider-${group}-${kind}`) ?? "").not.toContain("oncall");
+  }
 });
 
 test("each turn recalls what the message brings to mind, once per conversation and within the limit", () => {
@@ -78,7 +101,7 @@ test("later turns report changes made elsewhere only for entries this conversati
   store.update(elsewhere(), all, shown.id, {expectedRevision: 1, description: "周报改用表格"});
   store.remove(elsewhere(), all, core.id, 1);
   const added = store.add(elsewhere(), {...rule, title: "新规则", description: "线上操作先确认"});
-  const person = store.add(elsewhere(), {type: "person", title: "Alice", description: "只要结论", body: "b", subjectUserId: "user:alice"});
+  const person = store.add(elsewhere(), {type: "person", title: "Alice", description: "只要结论", body: "b", subjectId: "user:alice"});
   const delta = turn("继续")!;
   expect(delta).toContain("## Agent memory updates");
   expect(delta).toContain("周报改用表格");
@@ -140,7 +163,7 @@ test("persona is never told through memory: the Shadow's instruction files carry
 test("a conversation is told about people who join it later, and that an entry it was shown is no longer visible", () => {
   const shared = store.add(elsewhere(), weekly);
   turn("帮我按周报格式写周报");
-  const bob = store.add(elsewhere(), {type: "person", title: "Bob", description: "喜欢先看结论", body: "b", subjectUserId: "bob"});
+  const bob = store.add(elsewhere(), {type: "person", title: "Bob", description: "喜欢先看结论", body: "b", subjectId: "bob"});
   expect(turn("继续")).toBeUndefined();
   // bob speaks in the session: what was known about him before is told now.
   new MessageStore(db.db).appendOnce({sessionId: "session", channelMessageKey: "bob-1", role: "user", senderUserId: "bob",

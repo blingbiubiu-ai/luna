@@ -45,8 +45,9 @@ One entry holds one fact.
 | --- | --- |
 | `persona` | One Shadow's identity and principles; see below |
 | `person` | Role, preferences and communication habits of someone the Agent works with |
+| `chat` | Who the Shadow is and what it does in one group or direct chat, such as being its on-call owner |
 | `feedback` | A corrected or confirmed way of working |
-| `project` | Ongoing work, decisions and constraints, with absolute dates |
+| `project` | Ongoing work, decisions and constraints |
 | `procedure` | Reusable know-how |
 | `reference` | Pointers to external resources |
 | `episode` | Something that happened: when, with whom, what was done and how it ended; see below |
@@ -56,8 +57,9 @@ Not stored: conversation transcripts (messages), task results and files
 state that only matters to the current task.
 
 Each entry has `title` (120 chars), `description` (200 chars, one line; entries
-are recalled by title and description), `body` (8 KB), `subject_user_id`
-(required for `person`), `visibility` (`agent` or `shadow`), origin (Shadow,
+are recalled by title and description), `body` (8 KB), `subject_id`
+(required for `person`, where it is a Luna user id, and for `chat`, where it is
+the provider chat id; empty for other types), `visibility` (`agent` or `shadow`), origin (Shadow,
 session, task, user and `inline` / `reflection` / `consolidation` / `owner` /
 `migration`), a `trusted` flag, `core`, an optional `expires_at`,
 `last_used_at`, a per-entry `revision`, and `status`:
@@ -131,8 +133,8 @@ been doing lately".
 ### Core entries
 
 A core entry is told to every conversation at its start and is never forgotten
-for lack of use. Only trusted writers may mark an entry core and `person`
-entries cannot be core. Core is for rules that must hold whatever the
+for lack of use. Only trusted writers may mark an entry core and `person` and
+`chat` entries cannot be core. Core is for rules that must hold whatever the
 conversation is about and that the topic would not bring to mind; a preference
 tied to one kind of work stays a normal entry and is recalled when that work
 comes up.
@@ -150,11 +152,15 @@ Service applies these rules to every Runner read, search, recall and injection:
 
 1. The entry belongs to the invocation's Agent.
 2. `visibility=shadow` entries are visible only to their origin Shadow.
-3. `person` entries are visible only when `subject_user_id` participates in the
+3. `person` entries are visible only when `subject_id` participates in the
    current session. Participants are the invocation actor plus the users who
    have sent messages in the session; a Task also includes its creator and the
    participants of its primary session.
-4. Untrusted entries are visible only when their author (`origin_user_id`)
+4. `chat` entries are always Shadow-private and visible only in Main sessions
+   whose `group_id` is their `subject_id`: the chat's main conversation and
+   every topic thread in it. Work and Dashboard sessions see none, so a role
+   set for one group never steers work elsewhere.
+5. Untrusted entries are visible only when their author (`origin_user_id`)
    participates in the current session. What an untrusted writer said can
    help that writer's own conversations but never reaches, and so never
    steers, anyone else's. It becomes an ordinary shared entry only when a
@@ -175,6 +181,7 @@ reads memory and writes untrusted entries; a deny rule for `memory.read` or
 | --- | --- |
 | `persona` | The Agent owner only |
 | `feedback`, `procedure`, any core entry | Trusted writers only |
+| `chat` | Trusted writers only, from a Main session in that chat; the chat is taken from the session, never from the request, and an entry never moves to another chat |
 | `person` | Anyone, but an untrusted writer may only describe themselves |
 | `project`, `reference` | Anyone; results carry who said it and when |
 
@@ -195,7 +202,7 @@ Deletes are soft and an entry cannot supersede itself. A forgotten entry is
 restored before it is edited (`memory_not_active`).
 
 **Duplicates.** A Runner `add` is compared with the active entries of the same
-type (and person) the writer can see. When the title and description share 60%
+type (and person or chat) the writer can see. When the title and description share 60%
 or more of their terms with an existing entry, the add is rejected with
 `memory_duplicate` and the candidates; the Runner updates one of them or repeats
 with `--force`. Owner edits are not checked.
@@ -226,9 +233,9 @@ Service appends memory to the turn prompt of Main, Work and Task Runners:
 
 | When | What |
 | --- | --- |
-| First turn of a provider session | The Shadow's persona entries in full, then core entries and up to 20 `person` entries about the participants |
+| First turn of a provider session | The Shadow's persona entries in full, then core entries, the `chat` entries of this chat and up to 20 `person` entries about the participants |
 | Every turn that carries a message | Up to `memory.recall_limit` (8) active entries whose title or description shares at least two terms with the message, and that this session has not been shown |
-| Later turns | Changes made by other Runner contexts to entries this session was shown, and to persona, core and `person` entries; `person` entries about people who joined since; removals of entries it was shown, including ones no longer visible to it |
+| Later turns | Changes made by other Runner contexts to entries this session was shown, and to persona, core, `chat` and `person` entries; `person` entries about people who joined since; removals of entries it was shown, including ones no longer visible to it |
 
 The message is the user messages of a Main turn, the messages of a Work turn,
 or a Task Run's new input (its title and summary when there is none).
@@ -317,7 +324,7 @@ the last run (up to 100; a backlog continues ten minutes later), each with up to
 four existing entries of any type that resemble it: at least 40% of the shorter
 entry's title and description terms appear in the other. The threshold is loose
 on purpose, because a candidate that is not shown can never be merged. `person`
-entries are only compared with entries about the same person. Memory text in
+and `chat` entries are only compared with entries about the same person or chat. Memory text in
 the instruction is made inert so it never forms an `artifact:` reference.
 The model merges duplicates of equal trust (it never folds an untrusted entry
 into a trusted one or rewrites an untrusted entry), resolves contradictions by

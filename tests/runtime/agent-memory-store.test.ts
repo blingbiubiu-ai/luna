@@ -42,20 +42,54 @@ test("shadow-only entries stay with their origin Shadow", () => {
 });
 
 test("person entries are visible only while their subject participates", () => {
-  const entry = store.add(owner(), {type: "person", title: "张三", description: "只要结论", body: "不要过程", subjectUserId: "zhangsan"});
+  const entry = store.add(owner(), {type: "person", title: "张三", description: "只要结论", body: "不要过程", subjectId: "zhangsan"});
   expect(store.index(viewer(sibling, "zhangsan")).entries.map(row => row.id)).toEqual([entry.id]);
   expect(store.index(viewer(sibling, "lisi")).entries).toEqual([]);
   expect(store.index(viewer(sibling)).entries).toEqual([]);
   expect(store.search(viewer(sibling, "lisi"), "结论")).toEqual([]);
   expect(() => store.get(viewer(sibling, "lisi"), entry.id)).toThrow("memory_not_found");
   expect(() => store.add(owner(), {...note, type: "person"})).toThrow("invalid_memory_subject");
-  expect(() => store.add(owner(), {...note, subjectUserId: "zhangsan"})).toThrow("invalid_memory_subject");
+  expect(() => store.add(owner(), {...note, subjectId: "zhangsan"})).toThrow("invalid_memory_subject");
+});
+
+test("chat entries are about the writing chat, private to their Shadow and seen only in that chat", () => {
+  const inChat = (chatId: string | null, shadowId = a.shadowId): MemoryViewer => ({agentId: a.agentId, shadowId, participants: [], chatId});
+  const role = {type: "chat" as const, title: "oncall 职责", description: "我是这个群的 oncall 负责人", body: "用户反馈问题时排查并解决"};
+  const entry = store.add({...owner(), chatId: "oc_oncall"}, role);
+  expect(entry).toMatchObject({subjectId: "oc_oncall", visibility: "shadow", core: false});
+  expect(store.standing(inChat("oc_oncall")).map(row => row.id)).toEqual([entry.id]);
+  expect(store.recall(inChat("oc_oncall"), "oncall 负责人", {limit: 5}).map(row => row.id)).toEqual([entry.id]);
+  for (const elsewhere of [inChat("oc_other"), inChat(null), inChat("oc_oncall", sibling)]) {
+    expect(store.standing(elsewhere)).toEqual([]);
+    expect(store.search(elsewhere, "oncall")).toEqual([]);
+    expect(() => store.get(elsewhere, entry.id)).toThrow("memory_not_found");
+  }
+  // The chat comes from the conversation, never from the request, and only a trusted writer in a chat can set it.
+  expect(() => store.add({...owner(), chatId: "oc_oncall"}, {...role, subjectId: "oc_other"})).toThrow("invalid_memory_subject");
+  expect(() => store.add(owner(), role)).toThrow("memory_chat_unavailable");
+  expect(() => store.add({...member("lisi"), chatId: "oc_oncall"}, role)).toThrow("memory_write_forbidden");
+  expect(() => store.add({...owner(), chatId: "oc_oncall"}, {...role, core: true})).toThrow("invalid_memory_core");
+  expect(() => store.add({...owner(), chatId: "oc_oncall"}, {...role, visibility: "agent"})).toThrow("invalid_memory_visibility");
+  // One entry per chat: a second about the same chat is a duplicate, the same role in another chat is not.
+  expect(() => store.add({...owner(), chatId: "oc_oncall"}, role, {duplicatesFor: inChat("oc_oncall")})).toThrow(MemoryDuplicateError);
+  expect(store.add({...owner(), chatId: "oc_ops"}, role, {duplicatesFor: inChat("oc_ops")}).subjectId).toBe("oc_ops");
+  // Edited anywhere, even from the Dashboard, it stays in its chat; it cannot be moved to another.
+  const dashboard: MemoryWriter = {agentId: a.agentId, kind: "owner", trusted: true, owner: true, userId: "user:alice", shadowId: null};
+  expect(store.update(dashboard, {agentId: a.agentId, all: true}, entry.id, {expectedRevision: 1, body: "工作日 10-19 点响应"}).subjectId).toBe("oc_oncall");
+  expect(() => store.update(dashboard, {agentId: a.agentId, all: true}, entry.id, {expectedRevision: 2, subjectId: "oc_other"})).toThrow("invalid_memory_subject");
+  // Turning it into another type drops the chat; turning an entry into a chat entry binds the writing chat.
+  const plain = store.update(dashboard, {agentId: a.agentId, all: true}, entry.id, {expectedRevision: 2, type: "feedback"});
+  expect(plain).toMatchObject({type: "feedback", subjectId: null});
+  expect(() => store.update(dashboard, {agentId: a.agentId, all: true}, entry.id, {expectedRevision: 3, type: "chat"})).toThrow("memory_chat_unavailable");
+  expect(store.update({...owner(), chatId: "oc_oncall"}, {agentId: a.agentId, all: true}, entry.id, {expectedRevision: 3, type: "chat"})).toMatchObject({type: "chat", subjectId: "oc_oncall"});
+  // A restored revision brings its chat back.
+  expect(store.revert(dashboard, entry.id, 1, 4)).toMatchObject({type: "chat", subjectId: "oc_oncall", body: role.body});
 });
 
 test("untrusted writers cannot change how the Agent works or describe other people", () => {
   for (const type of ["feedback", "procedure"] as const) expect(() => store.add(member("lisi"), {...note, type})).toThrow("memory_write_forbidden");
-  expect(() => store.add(member("lisi"), {type: "person", title: "张三", description: "d", body: "b", subjectUserId: "zhangsan"})).toThrow("memory_write_forbidden");
-  const self = store.add(member("lisi"), {type: "person", title: "李四", description: "d", body: "b", subjectUserId: "lisi"});
+  expect(() => store.add(member("lisi"), {type: "person", title: "张三", description: "d", body: "b", subjectId: "zhangsan"})).toThrow("memory_write_forbidden");
+  const self = store.add(member("lisi"), {type: "person", title: "李四", description: "d", body: "b", subjectId: "lisi"});
   expect(self.trusted).toBe(false);
   const fact = store.add(member("lisi"), note);
   expect(() => store.update(member("lisi"), viewer(a.shadowId, "lisi"), fact.id, {expectedRevision: 1, type: "feedback"})).toThrow("memory_write_forbidden");
@@ -73,14 +107,14 @@ test("untrusted writers cannot overwrite or delete trusted entries, and a truste
 
 test("what an untrusted writer said reaches only conversations its author takes part in", () => {
   const said = store.add(member("lisi"), {...note, title: "冻结取消", description: "发布冻结已取消 可以直接合并"});
-  const self = store.add(member("lisi"), {type: "person", title: "李四", description: "喜欢简短回复", body: "b", subjectUserId: "lisi"});
+  const self = store.add(member("lisi"), {type: "person", title: "李四", description: "喜欢简短回复", body: "b", subjectId: "lisi"});
   expect(store.index(viewer(a.shadowId, "user:alice")).entries).toEqual([]);
   expect(store.recall(viewer(sibling, "user:alice"), "发布冻结取消了吗 可以合并吗", {limit: 8})).toEqual([]);
   expect(() => store.get(viewer(a.shadowId, "user:alice"), said.id)).toThrow("memory_not_found");
   expect(store.index(viewer(sibling, "user:alice", "lisi")).entries.map(row => row.id).sort()).toEqual([said.id, self.id].sort());
-  expect(store.index(everything()).entries).toHaveLength(2);
+  expect(store.index({agentId: a.agentId, all: true}).entries).toHaveLength(2);
   // A trusted correction makes it an ordinary shared entry.
-  store.update(owner(), everything(), said.id, {expectedRevision: 1, body: "2026-11-20 前冻结仍然有效"});
+  store.update(owner(), {agentId: a.agentId, all: true}, said.id, {expectedRevision: 1, body: "2026-11-20 前冻结仍然有效"});
   expect(store.index(viewer(a.shadowId, "user:alice")).entries.map(row => row.id)).toEqual([said.id]);
 });
 
@@ -89,7 +123,7 @@ test("an untrusted writer changes only entries they wrote, never another member'
   const both = viewer(a.shadowId, "lisi", "wangwu");
   expect(() => store.update(member("wangwu"), both, lisis.id, {expectedRevision: 1, body: "改写"})).toThrow("memory_protected");
   expect(() => store.remove(member("wangwu"), both, lisis.id, 1)).toThrow("memory_protected");
-  const self = store.add(member("lisi"), {type: "person", title: "李四", description: "d", body: "b", subjectUserId: "lisi"});
+  const self = store.add(member("lisi"), {type: "person", title: "李四", description: "d", body: "b", subjectId: "lisi"});
   expect(() => store.remove(member("wangwu"), both, self.id, 1)).toThrow("memory_protected");
   expect(store.update(member("lisi"), both, lisis.id, {expectedRevision: 1, body: "本人修改"}).revision).toBe(2);
   expect(store.remove(member("lisi"), both, self.id, 1).status).toBe("deleted");
@@ -154,7 +188,7 @@ test("index puts person and behavior entries first and reports what the limit le
   const project = store.add(owner(), note);
   const reference = store.add(owner(), {...note, type: "reference", title: "看板", body: "https://board.example/release"});
   const feedback = store.add(owner(), {...note, type: "feedback", title: "周报格式"});
-  const person = store.add(owner(), {type: "person", title: "张三", description: "d", body: "b", subjectUserId: "zhangsan"});
+  const person = store.add(owner(), {type: "person", title: "张三", description: "d", body: "b", subjectId: "zhangsan"});
   const all = store.index(viewer(a.shadowId, "zhangsan"));
   expect(all.entries.map(row => row.id)).toEqual([person.id, feedback.id, project.id, reference.id]);
   expect(store.index(viewer(a.shadowId, "zhangsan"), {limit: 2})).toMatchObject({omitted: 2, entries: [{id: person.id}, {id: feedback.id}]});
@@ -173,7 +207,7 @@ test("changes report what other sessions changed or removed, and skip a Runner c
   const theirs = store.add({...owner(sibling), contextId: "c2"}, {...note, title: "别处新增"});
   const gone = store.add({...owner(sibling), contextId: "c2"}, {...note, title: "被删除"});
   store.remove({...owner(sibling), contextId: "c2"}, viewer(sibling), gone.id, 1);
-  const hidden = store.add({...owner(sibling), contextId: "c2"}, {type: "person", title: "张三", description: "d", body: "b", subjectUserId: "zhangsan"});
+  const hidden = store.add({...owner(sibling), contextId: "c2"}, {type: "person", title: "张三", description: "d", body: "b", subjectId: "zhangsan"});
   const seen = store.changes(viewer(a.shadowId), before, "c1");
   expect(seen.changed.map(row => row.id)).toEqual([theirs.id]);
   expect(seen.removed.map(row => row.id)).toEqual([gone.id]);
@@ -232,8 +266,8 @@ test("core entries need a trusted writer, cannot be person entries and are cappe
   expect(capped.update(owner(), viewer(a.shadowId), plain.id, {expectedRevision: 1, core: true}).core).toBe(true);
   expect(capped.update(owner(), viewer(a.shadowId), second.id, {expectedRevision: 1, body: "改正文不占新名额"}).core).toBe(true);
   expect(() => capped.add(member("lisi"), {...note, core: true})).toThrow("memory_write_forbidden");
-  expect(() => capped.add(owner(), {type: "person", title: "张三", description: "d", body: "b", subjectUserId: "zhangsan", core: true})).toThrow("invalid_memory_core");
-  const person = capped.add(owner(), {type: "person", title: "张三", description: "d", body: "b", subjectUserId: "zhangsan"});
+  expect(() => capped.add(owner(), {type: "person", title: "张三", description: "d", body: "b", subjectId: "zhangsan", core: true})).toThrow("invalid_memory_core");
+  const person = capped.add(owner(), {type: "person", title: "张三", description: "d", body: "b", subjectId: "zhangsan"});
   const standing = capped.standing(viewer(a.shadowId, "zhangsan")).map(row => row.id);
   expect(standing.slice(0, 2).sort()).toEqual([second.id, plain.id].sort());
   expect(standing.slice(2)).toEqual([person.id]);
@@ -293,7 +327,7 @@ test("the owner page filters, searches and pages on the server", () => {
 
 test("changedSince lists what consolidation has not covered, and reindex repairs entries without terms", () => {
   const first = store.add(owner(), note), second = store.add(owner(), {...note, title: "第二条"});
-  store.update({...owner(), kind: "consolidation"}, everything(), first.id, {expectedRevision: 1, body: "tidied"});
+  store.update({...owner(), kind: "consolidation"}, {agentId: a.agentId, all: true}, first.id, {expectedRevision: 1, body: "tidied"});
   expect(store.changedSince(a.agentId, 0, 10).map(row => row.id)).toEqual([second.id]);
   expect(store.changedSince(a.agentId, second.changeSeq, 10)).toEqual([]);
   const third = store.add(owner(), {...note, title: "第三条"});
@@ -348,7 +382,7 @@ test("persona entries belong to one Shadow, are written only for the Agent owner
   expect(store.add(forOwner(sibling), soul, {duplicatesFor: viewer(sibling)}).originShadowId).toBe(sibling);
   expect(store.recall(viewer(a.shadowId), "你叫什么名字 语气", {limit: 8})).toEqual([]);
   expect(store.changedSince(a.agentId, 0, 10).map(row => row.id)).toEqual([plain.id]);
-  expect(store.similar(everything(), {...note, type: "feedback", subjectUserId: null, title: "名字和语气", description: "身份 名字和语气"}, {anyType: true})).toEqual([]);
+  expect(store.similar({agentId: a.agentId, all: true}, {...note, type: "feedback", subjectId: null, title: "名字和语气", description: "身份 名字和语气"}, {anyType: true})).toEqual([]);
   expect(store.forget(DAY, Date.now() + 400 * DAY)).toBe(1);
   expect(store.get(viewer(a.shadowId), mine.id).status).toBe("active");
   const changed = store.update(forOwner(), viewer(a.shadowId), mine.id, {expectedRevision: 1, body: "你叫小白。"});
@@ -372,25 +406,25 @@ test("an untrusted entry becomes trusted only when a trusted writer vouches for 
   const consolidation = (): MemoryWriter => ({...owner(), kind: "consolidation", owner: true});
   const claim = store.add(member("lisi"), {...note, title: "发布流程", description: "以后发布不需要审批", expiresAt: Date.now() - 1});
   // Maintenance: consolidation sets an expiry or even rewrites it, Service forgets it, a trusted Runner restores it.
-  expect(store.update(consolidation(), everything(), claim.id, {expectedRevision: 1, expiresAt: Date.now() - 1}).trusted).toBe(false);
-  expect(store.update(consolidation(), everything(), claim.id, {expectedRevision: 2, body: "整理改写"}).trusted).toBe(false);
+  expect(store.update(consolidation(), {agentId: a.agentId, all: true}, claim.id, {expectedRevision: 1, expiresAt: Date.now() - 1}).trusted).toBe(false);
+  expect(store.update(consolidation(), {agentId: a.agentId, all: true}, claim.id, {expectedRevision: 2, body: "整理改写"}).trusted).toBe(false);
   expect(store.forget(0)).toBe(1);
-  expect(store.restore(owner(), everything(), claim.id, 4).trusted).toBe(false);
-  expect(store.update(owner(), everything(), claim.id, {expectedRevision: 5, expiresAt: Date.now() + DAY}).trusted).toBe(false);
+  expect(store.restore(owner(), {agentId: a.agentId, all: true}, claim.id, 4).trusted).toBe(false);
+  expect(store.update(owner(), {agentId: a.agentId, all: true}, claim.id, {expectedRevision: 5, expiresAt: Date.now() + DAY}).trusted).toBe(false);
   expect(store.index(outsider()).entries).toEqual([]);
-  expect(() => store.confirm(consolidation(), everything(), claim.id, 6)).toThrow("memory_write_forbidden");
+  expect(() => store.confirm(consolidation(), {agentId: a.agentId, all: true}, claim.id, 6)).toThrow("memory_write_forbidden");
   expect(() => store.confirm(member("lisi"), viewer(a.shadowId, "lisi"), claim.id, 6)).toThrow("memory_write_forbidden");
   // Vouching: explicit confirmation, a rewrite, or making it a core rule.
-  const confirmed = store.confirm(owner(), everything(), claim.id, 6);
+  const confirmed = store.confirm(owner(), {agentId: a.agentId, all: true}, claim.id, 6);
   expect(confirmed).toMatchObject({trusted: true, revision: 7, body: "整理改写"});
   expect(store.index(outsider()).entries.map(row => row.id)).toEqual([claim.id]);
-  expect(() => store.confirm(owner(), everything(), claim.id, 7)).toThrow("memory_already_trusted");
+  expect(() => store.confirm(owner(), {agentId: a.agentId, all: true}, claim.id, 7)).toThrow("memory_already_trusted");
   const rewritten = store.add(member("lisi"), {...note, title: "另一条"});
-  expect(store.update(owner(), everything(), rewritten.id, {expectedRevision: 1, description: "所有者改过的描述"}).trusted).toBe(true);
+  expect(store.update(owner(), {agentId: a.agentId, all: true}, rewritten.id, {expectedRevision: 1, description: "所有者改过的描述"}).trusted).toBe(true);
   const promoted = store.add(member("lisi"), {...note, title: "第三条"});
-  expect(store.update(owner(), everything(), promoted.id, {expectedRevision: 1, core: true}).trusted).toBe(true);
+  expect(store.update(owner(), {agentId: a.agentId, all: true}, promoted.id, {expectedRevision: 1, core: true}).trusted).toBe(true);
   // A trusted entry stays trusted whatever maintenance does to it.
-  expect(store.update(consolidation(), everything(), confirmed.id, {expectedRevision: 7, body: "再整理"}).trusted).toBe(true);
+  expect(store.update(consolidation(), {agentId: a.agentId, all: true}, confirmed.id, {expectedRevision: 7, body: "再整理"}).trusted).toBe(true);
   expect(store.page(a.agentId, {trusted: false}).total).toBe(0);
   expect(store.page(a.agentId, {trusted: true}).total).toBe(3);
 });
@@ -429,7 +463,7 @@ test("episodes form a timeline: the owner sees all of it, others only what they 
   expect(store.timeline(asOwner(), {shadowId: sibling}).map(row => row.id)).toEqual([withZhang.id]);
   expect(store.timeline(asOwner(), {withUserId: "lisi"}).map(row => row.id)).toEqual([withLisi.id]);
   expect(store.timeline(asOwner(), {limit: 1}).map(row => row.id)).toEqual([ownerOnly.id]);
-  expect(store.timeline(everything())).toHaveLength(3);
+  expect(store.timeline({agentId: a.agentId, all: true})).toHaveLength(3);
   expect(store.add(owner(), {type: "episode", title: "现在", description: "d", body: "b"}).occurredAt).toBeGreaterThanOrEqual(t0);
 });
 
@@ -443,12 +477,12 @@ test("episodes stay out of the index, recall, duplicate checks, consolidation an
   expect(store.recall(me, "帮我按周报格式写周报", {limit: 8})).toEqual([]);
   expect(store.standing(me)).toEqual([]);
   expect(store.changedSince(a.agentId, 0, 10)).toEqual([]);
-  expect(store.similar(everything(), {type: "feedback", title: "周报格式", description: "周报不要用表格", subjectUserId: null}, {anyType: true})).toEqual([]);
+  expect(store.similar({agentId: a.agentId, all: true}, {type: "feedback", title: "周报格式", description: "周报不要用表格", subjectId: null}, {anyType: true})).toEqual([]);
   expect(() => store.add(owner(), {...entry, core: true})).toThrow("invalid_memory_core");
   expect(() => store.add(owner(), {...note, occurredAt: Date.now()})).toThrow("invalid_memory_occurred_at");
-  expect(() => store.update(owner(), everything(), first.id, {expectedRevision: 1, type: "project"})).toThrow("invalid_memory_type");
+  expect(() => store.update(owner(), {agentId: a.agentId, all: true}, first.id, {expectedRevision: 1, type: "project"})).toThrow("invalid_memory_type");
   const plain = store.add(owner(), note);
-  expect(() => store.update(owner(), everything(), plain.id, {expectedRevision: 1, type: "episode"})).toThrow("invalid_memory_type");
+  expect(() => store.update(owner(), {agentId: a.agentId, all: true}, plain.id, {expectedRevision: 1, type: "episode"})).toThrow("invalid_memory_type");
   expect(store.history(a.agentId, first.id)[0]!.snapshot.occurredAt).toBe(first.occurredAt);
 });
 
@@ -481,5 +515,5 @@ test("a reference must say where it is found and a project needs no date; the re
   expect(store.add(owner(), {type: "project", title: "迁移", description: "正在把 Nimbus 迁到新集群", body: "先迁只读流量"}).type).toBe("project");
   // Switching type is checked against the new type.
   const steps = store.add(owner(), {type: "procedure", title: "排查步骤", description: "VQoS 拿不到数据怎么查", body: "先看 auth status"});
-  expectRefused(() => store.update(owner(), everything(), steps.id, {expectedRevision: 1, type: "reference"}), "memory_reference_location_missing", "--type");
+  expectRefused(() => store.update(owner(), {agentId: a.agentId, all: true}, steps.id, {expectedRevision: 1, type: "reference"}), "memory_reference_location_missing", "--type");
 });
