@@ -3,7 +3,7 @@ import { and, eq } from "drizzle-orm";
 import type { DrizzleDB } from "@/data";
 import { nativeProgressDeliveries } from "@/data/schema";
 import type { NormalizedInboundMessage } from "@/channels";
-import type { OutboundChannelOperation, NativeProgressEntry } from "@/work/types";
+import type { OutboundChannelOperation, NativeProgressEntry } from "@/channels/outbound";
 
 type Operation = Omit<OutboundChannelOperation, "id" | "channelId">;
 export interface CotRequest {

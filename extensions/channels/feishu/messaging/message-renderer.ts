@@ -15,7 +15,7 @@ import {
   type WebSearchToolUseMessageContent,
   type WriteToolUseMessageContent,
 } from "@/shared";
-import type { BatchSummaryCardOperation } from "@/work/types";
+import type { BatchSummaryCardOperation } from "@/channels/outbound";
 
 import type {
   Card,

@@ -1,7 +1,7 @@
 import { feishuIdentityMetadata } from "@/identity/feishu-identity-scopes";
 import type { ChannelAdapter, NormalizedInboundMessage } from "@/channels";
 import { normalizedRootMessageExternalId } from "@/channels";
-import type { OutboundChannelOperation, ReplyMode } from "@/work/types";
+import type { OutboundChannelOperation, ReplyMode } from "@/channels/outbound";
 
 /**
  * Represents Fake Feishu Provider Idempotency Registry values used by test messaging channel.

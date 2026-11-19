@@ -42,8 +42,8 @@ import {
   type MessageChannelEventTypes,
   type UserMessage,
 } from "@/shared";
-import type { DeliveryTarget, OutboundChannelOperation, WorkReplyChannel } from "@/work/types";
-import { GroupJoinBackfillService, type GroupJoinBackfillEvent } from "@/work/group-join-backfill";
+import type { DeliveryTarget, OutboundChannelOperation, ReplyChannel } from "@/channels/outbound";
+import { GroupJoinBackfillService, type GroupJoinBackfillEvent } from "@/sessions/inbound/group-join-backfill";
 
 import {
   type FeishuMentionEventItem,
@@ -369,7 +369,7 @@ export interface FeishuMessageChannelOptions {
 /** Message channel implementation for Feishu (Lark) chat platform. */
 export class FeishuMessageChannel
   extends EventEmitter<MessageChannelEventTypes>
-  implements MessageChannel, ChannelAdapter, WorkReplyChannel
+  implements MessageChannel, ChannelAdapter, ReplyChannel
 {
   readonly type = "feishu";
 
@@ -581,7 +581,7 @@ export class FeishuMessageChannel
     await this._markProcessing(inbound.id);
   }
 
-  async inviteGroupMembers(input: Omit<import("@/work/types").GroupCreationInput, "name"> & { readonly chatId: string }): Promise<import("@/work/types").GroupInvitationResult> {
+  async inviteGroupMembers(input: Omit<import("@/channels/outbound").GroupCreationInput, "name"> & { readonly chatId: string }): Promise<import("@/channels/outbound").GroupInvitationResult> {
     const response = await this._client.im.chatMembers.create({ path: { chat_id: input.chatId }, params: { member_id_type: input.idType, succeed_type: 1 }, data: { id_list: [...input.memberIds] } });
     if (response.code) throw new ProviderDeliveryRejected(`Feishu rejected group invitation (${response.code})`);
     if (!response.data) throw new Error("Feishu invitation receipt is incomplete");
@@ -614,7 +614,7 @@ export class FeishuMessageChannel
     return response.code === 0 && response.data?.is_in_chat === true;
   }
 
-  async createGroup(input: import("@/work/types").GroupCreationInput): Promise<ChannelSurface> {
+  async createGroup(input: import("@/channels/outbound").GroupCreationInput): Promise<ChannelSurface> {
     const response = await this._client.im.chat.create({ params: { user_id_type: input.idType, uuid: input.requestId },
       data: { name: input.name, user_id_list: [...input.memberIds], chat_mode: "group", chat_type: "private", group_message_type: "chat", external: false } });
     if (response.code) throw new ProviderDeliveryRejected(`Feishu rejected group creation (${response.code})`);
