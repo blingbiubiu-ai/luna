@@ -24,7 +24,7 @@ afterEach(() => { db.close(); rmSync(home, {recursive: true, force: true}); });
 const owner = (shadowId = a.shadowId): MemoryWriter => ({agentId: a.agentId, kind: "inline", trusted: true, userId: "user:alice", shadowId});
 const member = (userId: string, shadowId = a.shadowId): MemoryWriter => ({agentId: a.agentId, kind: "inline", trusted: false, userId, shadowId});
 const viewer = (shadowId: string, ...participants: string[]): MemoryViewer => ({agentId: a.agentId, shadowId, participants});
-const note = {type: "project" as const, title: "发布冻结", description: "11-20 前冻结发布", body: "11-20 前不合并功能分支"};
+const note = {type: "project" as const, title: "发布冻结", description: "2026-11-20 前冻结发布", body: "2026-11-20 前不合并功能分支"};
 
 test("entries are shared across Shadows of one Agent and isolated between Agents", () => {
   const entry = store.add(owner(), note);
@@ -80,7 +80,7 @@ test("what an untrusted writer said reaches only conversations its author takes 
   expect(store.index(viewer(sibling, "user:alice", "lisi")).entries.map(row => row.id).sort()).toEqual([said.id, self.id].sort());
   expect(store.index(everything()).entries).toHaveLength(2);
   // A trusted correction makes it an ordinary shared entry.
-  store.update(owner(), everything(), said.id, {expectedRevision: 1, body: "冻结仍然有效"});
+  store.update(owner(), everything(), said.id, {expectedRevision: 1, body: "2026-11-20 前冻结仍然有效"});
   expect(store.index(viewer(a.shadowId, "user:alice")).entries.map(row => row.id)).toEqual([said.id]);
 });
 
@@ -141,9 +141,9 @@ test("deleted entries, merged away or not, leave the index but keep history, and
 });
 
 test("search ranks title over description over body and matches short Chinese words", () => {
-  const body = store.add(owner(), {...note, title: "其他", description: "无关", body: "这里提到周报"});
+  const body = store.add(owner(), {...note, title: "其他", description: "无关", body: "2026-11-20 这里提到周报"});
   const title = store.add(owner(), {type: "feedback", title: "周报格式", description: "不要用表格", body: "用列表"});
-  const description = store.add(owner(), {...note, title: "汇报", description: "周报每周五发", body: "发给负责人"});
+  const description = store.add(owner(), {...note, title: "汇报", description: "周报每周五发", body: "2026-11-20 起发给负责人"});
   expect(store.search(viewer(a.shadowId), "周报").map(row => row.id)).toEqual([title.id, description.id, body.id]);
   expect(store.search(viewer(a.shadowId), "周报", {type: "feedback"}).map(row => row.id)).toEqual([title.id]);
   expect(store.search(viewer(a.shadowId), "100%_")).toEqual([]);
@@ -152,7 +152,7 @@ test("search ranks title over description over body and matches short Chinese wo
 
 test("index puts person and behavior entries first and reports what the limit left out", () => {
   const project = store.add(owner(), note);
-  const reference = store.add(owner(), {...note, type: "reference", title: "看板"});
+  const reference = store.add(owner(), {...note, type: "reference", title: "看板", body: "https://board.example/release"});
   const feedback = store.add(owner(), {...note, type: "feedback", title: "周报格式"});
   const person = store.add(owner(), {type: "person", title: "张三", description: "d", body: "b", subjectUserId: "zhangsan"});
   const all = store.index(viewer(a.shadowId, "zhangsan"));
@@ -194,7 +194,7 @@ test("terms are words for spaced scripts and two-character pieces for Chinese", 
 test("recall finds entries from a whole Chinese sentence and ignores weak, excluded or archived matches", () => {
   const weekly = store.add(owner(), {type: "feedback", title: "周报格式", description: "周报不要用表格", body: "用列表"});
   const freeze = store.add(owner(), note);
-  store.add(owner(), {...note, title: "看板", description: "项目看板地址", body: "正文里才提到周报格式"});
+  store.add(owner(), {...note, title: "看板", description: "项目看板地址", body: "正文里才提到周报格式（2026-11-20）"});
   expect(store.recall(viewer(a.shadowId), "帮我按周报格式写一下这周的周报", {limit: 8}).map(row => row.id)).toEqual([weekly.id]);
   expect(store.recall(viewer(a.shadowId), "发布什么时候冻结发布", {limit: 8}).map(row => row.id)).toEqual([freeze.id]);
   expect(store.recall(viewer(a.shadowId), "今天天气怎么样", {limit: 8})).toEqual([]);
@@ -467,4 +467,22 @@ test("episodes fade by age unless read since; the unused rule does not apply to 
   expect(store.timeline(me, {archived: true}).map(row => row.id)).toEqual([old.id]);
   expect(store.restore(owner(), me, old.id, 2).status).toBe("active");
   expect(store.forget(0, now + 1000, 90 * DAY)).toBe(0);
+});
+
+test("a reference must say where it is found and a project when; each refusal says what is missing", () => {
+  const expectRefused = (action: () => unknown, code: string, hint: string) => {
+    try { action(); throw new Error("not refused"); }
+    catch (error) { expect((error as {code?: string}).code).toBe(code); expect((error as {hint?: string}).hint).toContain(hint); }
+  };
+  expectRefused(() => store.add(owner(), {type: "reference", title: "诊断手册", description: "诊断手册在哪", body: "问运维"}),
+    "memory_reference_location_missing", "link, path or document name");
+  for (const body of ["https://docs.example/guide", "见《Nimbus 诊断手册》", "配置在 ~/conf/nimbus.yaml", "看 report.md"])
+    expect(store.add(owner(), {type: "reference", title: `手册 ${body}`, description: "诊断手册在哪", body}).type).toBe("reference");
+  expectRefused(() => store.add(owner(), {type: "project", title: "上线计划", description: "先上 VQoS", body: "下周上线"}),
+    "memory_project_date_missing", "absolute date");
+  expect(store.add(owner(), {type: "project", title: "上线计划 A", description: "先上 VQoS", body: "2026年12月5日上线"}).type).toBe("project");
+  expect(store.add(owner(), {type: "project", title: "上线计划 B", description: "先上 VQoS", body: "下周上线", expiresAt: Date.now() + 86_400_000}).type).toBe("project");
+  // Switching type is checked against the new type.
+  const steps = store.add(owner(), {type: "procedure", title: "排查步骤", description: "VQoS 拿不到数据怎么查", body: "先看 auth status"});
+  expectRefused(() => store.update(owner(), everything(), steps.id, {expectedRevision: 1, type: "reference"}), "memory_reference_location_missing", "--type");
 });

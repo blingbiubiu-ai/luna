@@ -6,7 +6,7 @@ import type {DrizzleDB} from "@/data";
 import {agentShadows, MEMORY_ORIGIN_KINDS, MEMORY_STATUSES, MEMORY_TYPES, users} from "@/data/schema";
 import {config} from "@/shared";
 import {AgentError, AgentStore} from "@/agents/agent-store";
-import {AgentMemoryStore, MemoryConflictError, type MemoryRecord, type MemoryViewer, type MemoryWriter} from "@/agents/agent-memory-store";
+import {AgentMemoryStore, MemoryConflictError, type MemoryRecord, type MemoryViewer, type MemoryWriter, MemoryTypeFactsError} from "@/agents/agent-memory-store";
 import {isGuardResponse, requireDashboardOnly} from "../auth/guards";
 
 const fields = {
@@ -60,6 +60,7 @@ export function createAgentMemoryRoutes(db: DrizzleDB) {
     const auth = requireDashboardOnly(c); if (isGuardResponse(auth)) return auth; await next();
   }).onError((error, c) => {
     if (error instanceof MemoryConflictError) return c.json({status: "error", code: error.code, currentRevision: error.currentRevision}, 409);
+    if (error instanceof MemoryTypeFactsError) return c.json({status: "error", code: error.code, message: error.hint}, 400);
     if (error instanceof AgentError) return c.json({status: "error", code: error.code}, error.status);
     if (error instanceof z.ZodError || error instanceof SyntaxError) return c.json({status: "error", code: "invalid_request"}, 400);
     if (error instanceof HTTPException) return error.getResponse();

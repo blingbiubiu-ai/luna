@@ -46,7 +46,7 @@ test("Agent memory and Shadow persona entries never enter a snapshot",()=>{
  const scope={agentId:a.agentId,shadowId:other.id};
  const initial=builder.capture(a.ownerUserId,a);
  new AgentMemoryStore(connection.db).add({agentId:a.agentId,kind:"owner",trusted:true,userId:a.ownerUserId,shadowId:null},
-  {type:"project",title:"remember",description:"shared",body:"shared-memory"});
+  {type:"feedback",title:"remember",description:"shared",body:"shared-memory"});
  new AgentMemoryStore(connection.db).add({agentId:a.agentId,kind:"owner",trusted:true,owner:true,userId:a.ownerUserId,shadowId:other.id},
   {type:"persona",title:"SOUL",description:"identity",body:"other-soul"});
  const first=builder.capture(a.ownerUserId,a),second=builder.capture(a.ownerUserId,scope);

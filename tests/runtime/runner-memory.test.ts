@@ -52,23 +52,31 @@ function fixture() {
   const grant = (effect: "allow" | "deny", target: string) => new AuthorizationRuleStore(db, {kind: "agent", agentId: session.agent_id}).addGrant({subjectType: "user", subjectId: "user", target, effect});
   return { db, call, grant, session, controller, useClaims: (next: LunaAccessTokenClaims | undefined) => { current = next; }, claims };
 }
-const project = { type: "project", title: "发布冻结", description: "11-20 前冻结发布", body: "不合并功能分支" };
+const project = { type: "project", title: "发布冻结", description: "2026-11-20 前冻结发布", body: "2026-11-20 前不合并功能分支" };
 
 test("a Runner adds, finds, reads, updates and deletes memory inside its invocation scope", async () => {
   const f = fixture();
   const added = await f.call("POST", "", project);
   expect(added.status).toBe(201);
-  expect(added.body.memory).toMatchObject({ title: "发布冻结", revision: 1, trusted: false, originUserId: "user", originUserName: "User", body: "不合并功能分支" });
+  expect(added.body.memory).toMatchObject({ title: "发布冻结", revision: 1, trusted: false, originUserId: "user", originUserName: "User", body: "2026-11-20 前不合并功能分支" });
   const id = added.body.memory.id;
   expect(new AgentMemoryStore(f.db).page(f.session.agent_id, {limit: 200}).entries[0]).toMatchObject({ originKind: "inline", originShadowId: f.session.shadow_id, originSessionId: f.session.id });
-  expect((await f.call("GET", "")).body).toMatchObject({ omitted: 0, memories: [{ id, description: "11-20 前冻结发布" }] });
+  expect((await f.call("GET", "")).body).toMatchObject({ omitted: 0, memories: [{ id, description: "2026-11-20 前冻结发布" }] });
   expect((await f.call("GET", "")).body.memories[0].body).toBeUndefined();
   expect((await f.call("GET", `/search?q=${encodeURIComponent("冻结")}`)).body.memories.map((m: any) => m.id)).toEqual([id]);
-  expect((await f.call("GET", `/${id}`)).body.memory.body).toBe("不合并功能分支");
+  expect((await f.call("GET", `/${id}`)).body.memory.body).toBe("2026-11-20 前不合并功能分支");
   expect((await f.call("PUT", `/${id}`, { expectedRevision: 1, body: "v2" })).body.memory).toMatchObject({ body: "v2", revision: 2 });
   expect(await f.call("PUT", `/${id}`, { expectedRevision: 1, body: "stale" })).toMatchObject({ status: 409, body: { error: "memory_revision_conflict", currentRevision: 2 } });
   expect((await f.call("DELETE", `/${id}?expectedRevision=2`)).body.memory).toMatchObject({ status: "deleted" });
   expect((await f.call("GET", `/${id}`)).status).toBe(404);
+});
+
+test("a refused type tells the Runner what to add, not just that the type is wrong", async () => {
+  const f = await fixture();
+  const refused = await f.call("POST", "", { ...project, description: "冻结发布", body: "不合并功能分支" });
+  expect(refused.status).toBe(400);
+  expect(refused.body.error).toBe("memory_project_date_missing");
+  expect(refused.body.message).toContain("absolute date");
 });
 
 test("trust follows the invocation actor: untrusted by default, trusted with a memory.write rule", async () => {
@@ -165,7 +173,7 @@ test("a forgotten entry is found only by an archived search and comes back with 
   expect((await f.call("GET", "")).body.memories).toEqual([]);
   expect((await f.call("GET", `/search?q=${q}`)).body.memories).toEqual([]);
   expect((await f.call("GET", `/search?q=${q}&archived=true`)).body.memories).toMatchObject([{ id: added.id, status: "archived", revision: 2 }]);
-  expect((await f.call("GET", `/${added.id}`)).body.memory).toMatchObject({ status: "archived", body: "不合并功能分支" });
+  expect((await f.call("GET", `/${added.id}`)).body.memory).toMatchObject({ status: "archived", body: "2026-11-20 前不合并功能分支" });
   expect((await f.call("POST", `/${added.id}/restore`, { expectedRevision: 1 })).status).toBe(409);
   expect((await f.call("POST", `/${added.id}/restore`, { expectedRevision: 2 })).body.memory).toMatchObject({ status: "active", expiresAt: null, revision: 3 });
   expect((await f.call("POST", `/${added.id}/restore`, { expectedRevision: 3 })).status).toBe(409);

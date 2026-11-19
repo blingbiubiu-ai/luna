@@ -20,10 +20,25 @@ description: Write Agent long-term memory with `luna memory add/update/delete`: 
   conclusion that no longer holds with a dated note under it. A procedure is a
   document to follow: change the steps themselves. When unsure whether it is
   the same question, add a new entry.
-- Types: `person` (requires `--subject <Luna user id>`), `feedback`, `project`
-  (write absolute dates), `procedure`, `reference`. One fact per entry. Entries
-  are found by their title and description, so write the description as one
-  line using the words someone would use when the fact matters.
+- Types. Pick the one whose question the entry answers:
+  - `person` (requires `--subject <Luna user id>`): who someone is, their role
+    and how they like to work.
+  - `feedback`: a way of working the user corrected or confirmed.
+  - `project`: the state, decisions or schedule of ongoing work, such as "the
+    diagnostics launch moved to 2026-12-05; VQoS ships first". It must carry
+    an absolute date, or `--expires YYYY-MM-DD` for when it stops mattering.
+  - `procedure`: reusable steps, such as how to troubleshoot a failure.
+  - `reference`: where something is found, such as "the diagnostics guide is
+    at https://..." or "feedback is tracked on the 《GHome 反馈看板》". It must
+    contain the link, path or document name.
+  When an entry is mostly a link or location it is `reference`; when it is
+  mostly a state, decision or date it is `project`. "The requirements doc is
+  at X" is a reference; "the requirements doc settles launch on 2026-12-05" is
+  a project. Luna refuses a reference without a location and a project without
+  a date, and says what is missing: add it, or choose the type the fact really
+  has. One fact per entry. Entries are found by their title and description,
+  so write the description as one line using the words someone would use when
+  the fact matters.
 - Give an entry that stops mattering on a known date `--expires YYYY-MM-DD`.
 - `persona` entries are who you, this Shadow, are: name, voice and standing
   principles. Other Shadows never see them. Only the Agent owner decides them:

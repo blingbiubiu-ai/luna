@@ -237,6 +237,7 @@ export class AgentMemoryStore {
       subjectUserId: input.subjectUserId ?? null, visibility: input.visibility ?? (input.type === "persona" ? "shadow" : "agent"), core: input.core ?? false, expiresAt: input.expiresAt ?? null,
       occurredAt: input.occurredAt ?? (input.type === "episode" ? now : null),
     }, writer.shadowId);
+    requireTypeFacts(fields);
     return this.db.transaction(tx => {
       const store = new AgentMemoryStore(tx, this.limits);
       if (options.duplicatesFor && !options.force && fields.type !== "persona" && fields.type !== "episode") {
@@ -271,7 +272,7 @@ export class AgentMemoryStore {
       if (current.status !== "active") throw new AgentError("memory_not_active", 409);
       // Persona and episode entries are different kinds of thing; neither is made from, or turned into, an ordinary entry.
       if (input.type !== undefined && input.type !== current.type && [input.type, current.type].some(type => type === "persona" || type === "episode")) throw new AgentError("invalid_memory_type", 400);
-      return this.validate(writer, {
+      return requireTypeFacts(this.validate(writer, {
       type: input.type ?? current.type,
       title: input.title ?? current.title,
       description: input.description ?? current.description,
@@ -282,7 +283,7 @@ export class AgentMemoryStore {
       expiresAt: input.expiresAt === undefined ? current.expiresAt : input.expiresAt,
       occurredAt: input.occurredAt !== undefined ? input.occurredAt
         : current.type === "episode" && writer.kind === "reflection" ? Date.now() : current.occurredAt,
-    }, current.originShadowId) as Partial<MemoryRecord>;
+    }, current.originShadowId)) as Partial<MemoryRecord>;
     }, false, false, current => current.type === "episode" && options.participants?.length
       ? {participants: [...new Set([...current.participants, ...options.participants])]} : {});
   }
@@ -534,6 +535,31 @@ export class AgentMemoryStore {
     }
     return {type: input.type, title, description, body, subjectUserId: input.subjectUserId || null, visibility: input.visibility, core: input.core, expiresAt: input.expiresAt, occurredAt: input.occurredAt};
   }
+}
+
+/** A write refused because its type needs something the entry lacks; `hint` says what to add, or which type it is instead. */
+export class MemoryTypeFactsError extends AgentError {
+  constructor(code: string, readonly hint: string) { super(code, 400); }
+}
+
+const ABSOLUTE_DATE = /(?:19|20)\d{2}\s*(?:[-/.年]\s*\d{1,2}(?:\s*[-/.月]\s*\d{1,2})?|年)/;
+const LOCATOR = /https?:\/\/\S+|(?:^|[\s(（：:])[~/][\w.@-]+\/[\w./@-]+|《[^》]+》|\b[\w-]+\.(?:md|pdf|docx?|xlsx?|pptx?|csv|json|ya?ml)\b/i;
+
+/**
+ * What a type promises a reader: a reference says where something is found, a project says when.
+ * Checked on add and update, never when an earlier revision is restored.
+ */
+function requireTypeFacts<T extends Pick<MemoryFields, "type" | "title" | "description" | "body" | "expiresAt">>(fields: T): T {
+  const text = `${fields.title}\n${fields.description}\n${fields.body}`;
+  if (fields.type === "reference" && !LOCATOR.test(text)) throw new MemoryTypeFactsError("memory_reference_location_missing",
+    "A reference entry says where something is found. Put its link, path or document name (in 《》) in the description or body. "
+    + "If no such location exists, the fact itself is what you are saving: choose its type with --type "
+    + "(project for the state, decisions or schedule of ongoing work, feedback for a confirmed way of working, procedure for reusable steps).");
+  if (fields.type === "project" && fields.expiresAt === null && !ABSOLUTE_DATE.test(text)) throw new MemoryTypeFactsError("memory_project_date_missing",
+    "A project entry records ongoing work and must say when: write an absolute date (YYYY-MM-DD) for the decision, milestone or deadline, "
+    + "or give --expires YYYY-MM-DD for when it stops mattering. If it is not about ongoing work, choose its type with --type "
+    + "(reference for where something is found, feedback for a confirmed way of working, procedure for reusable steps).");
+  return fields;
 }
 
 const corePool = (row: Pick<MemoryRecord, "visibility" | "originShadowId">) => row.visibility === "shadow" ? row.originShadowId : null;

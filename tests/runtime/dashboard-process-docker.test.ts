@@ -223,7 +223,7 @@ emit({status:'success',result:'LUNA_NOTHING_TO_SEND'});
     new ActiveAgentConfigService(db, cipher).activate(foreignAgent.id, foreignProfile.latestRevision.id, ownerId);
     const savedMemory = await fetch(`${dashboard}/api/agents/${scope.agentId}/memories`, {
       method: "POST", headers: {cookie, "content-type": "application/json"},
-      body: JSON.stringify({type: "project", title: "Fixture memory", description: "Shared memory for the Dashboard fixture.", body: "Agent memory lives in Service."}),
+      body: JSON.stringify({type: "feedback", title: "Fixture memory", description: "Shared memory for the Dashboard fixture.", body: "Agent memory lives in Service."}),
     });
     expect(savedMemory.status).toBe(201);
     const homes = new Map<string, string>();

@@ -187,6 +187,7 @@ For each numbered entry:
 - Never fold what an untrusted entry says into a trusted one, and do not rewrite an untrusted entry: untrusted entries are one member's unconfirmed claim and only the Agent owner confirms them. An untrusted entry that adds nothing to a trusted one may be retired in favour of it; otherwise leave both.
 - Contradicts a similar entry: a trusted entry wins over an untrusted one; between equals the newer wins. Retire the loser the same way.
 - A \`project\` entry that states when it stops mattering but has no expiry: set it with \`luna memory update <id> --expected-revision N --expires YYYY-MM-DD\`. Luna forgets expired entries by itself.
+- An entry filed under the wrong type: a \`reference\` that holds no link, path or document name but states a decision or a way of working, or a \`project\` that is only a pointer to a document. Change it with \`luna memory update <id> --expected-revision N --type TYPE\`, adding the date or location the new type needs.
 - An entry of origin \`migration\` that holds several facts: add one correctly typed entry per fact, then delete the original.
 - Otherwise leave it alone.
 

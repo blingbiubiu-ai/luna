@@ -151,7 +151,7 @@ test("a session with queued or running work waits for the next pass", () => {
 const DAY = 24 * 60 * MIN;
 const consolidate = (now = NOW) => scheduleMemoryConsolidations(db.db, commands, DAY, now);
 const writer = (kind: MemoryWriter["kind"] = "inline"): MemoryWriter => ({agentId: scope.agentId, kind, trusted: true, userId: "user:alice", shadowId: scope.shadowId});
-const note = {type: "project" as const, title: "发布冻结", description: "11-20 前冻结发布", body: "不合并功能分支"};
+const note = {type: "project" as const, title: "发布冻结", description: "2026-11-20 前冻结发布", body: "2026-11-20 前不合并功能分支"};
 /** Marks every queued turn as ended with `status`. */
 const finish = (status = "completed") => db.db.update(schema.sessionCommands).set({status}).run();
 
@@ -279,7 +279,7 @@ test("a maintenance pass forgets first, so expired entries are neither reflected
 test("consolidation shows a duplicate filed under another type and restated inside a longer entry", () => {
   const store = new AgentMemoryStore(db.db);
   const long = store.add(writer(), {type: "project", title: "发布冻结后的接口负责人王芳", description: "用户说明2026-12-05发布冻结后，接口问题找接口负责人王芳。", body: "b"});
-  const short = store.add(writer(), {type: "reference", title: "接口问题联系王芳", description: "接口问题找王芳 她是接口负责人", body: "b"});
+  const short = store.add(writer(), {type: "reference", title: "接口问题联系王芳", description: "接口问题找王芳 她是接口负责人", body: "名单见《接口负责人表》"});
   const unrelated = store.add(writer(), {type: "feedback", title: "周报格式", description: "周报不要用表格", body: "b"});
   const person = store.add(writer(), {type: "person", title: "王芳", description: "接口负责人王芳 接口问题找她", body: "b", subjectUserId: "wangfang"});
   const text = String(command(consolidate()[0]!).payload.content);
@@ -387,9 +387,9 @@ test("participants leave out the Agent's own reply identity", async () => {
 
 test("reflection rechecks the entries this conversation wrote or was shown, and is told to evolve them", () => {
   const store = new AgentMemoryStore(db.db);
-  const written = store.add({...writer("reflection"), sessionId: "session"}, {type: "project", title: "ccli hook 因 frida 拿不到不可用", description: "frida 预编译包下载不到", body: "b"});
+  const written = store.add({...writer("reflection"), sessionId: "session"}, {type: "project", title: "ccli hook 因 frida 拿不到不可用", description: "frida 预编译包下载不到", body: "2026-11-18 起不可用"});
   const shown = store.add({...writer(), sessionId: "elsewhere"}, {type: "reference", title: "VQoS 只认 sso_session.json", description: "auth status 不代表可用", body: "b"});
-  const unrelated = store.add({...writer(), sessionId: "elsewhere"}, {type: "reference", title: "别的会话的条目", description: "从没在这里出现过", body: "b"});
+  const unrelated = store.add({...writer(), sessionId: "elsewhere"}, {type: "reference", title: "别的会话的条目", description: "从没在这里出现过", body: "https://elsewhere.example"});
   const context = new RunnerContextStore(db.db).resolveForSession("session", "codex");
   db.db.insert(schema.memoryInjectedEntries).values({runnerContextId: context.id, memoryId: shown.id}).run();
   ask("user:alice", 40 * MIN);

@@ -11,6 +11,14 @@ const usage = [
   "luna memory update <id> --expected-revision N [--type T] [--title TITLE] [--description DESC] [--subject USER_ID|none] [--visibility agent|shadow] [--expires YYYY-MM-DD|none] [--core true|false] [--body TEXT | --stdin]",
   "luna memory restore <id> --expected-revision N   # bring a forgotten entry back",
   "luna memory delete <id> --expected-revision N [--superseded-by ID]",
+  "",
+  "Types (one question each):",
+  "  person     who someone is and how to work with them (--subject USER_ID)",
+  "  feedback   a way of working the user corrected or confirmed",
+  "  project    state, decisions or schedule of ongoing work; must carry an absolute date or --expires",
+  "  procedure  reusable steps, e.g. how to troubleshoot something",
+  "  reference  where something is found: a link, path or 《document name》; must contain one",
+  "  persona    who this Shadow is (Agent owner only); episode is written by memory reflection",
 ].join("\n");
 const SEARCH_VALUE_OPTIONS = new Set(["--type", "--subject", "--limit"]);
 

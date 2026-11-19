@@ -29,7 +29,7 @@ function dashboard(userId: string) {
     return {status: response.status, body: await response.json() as any};
   };
 }
-const note = {type: "project", title: "发布冻结", description: "11-20 前冻结发布", body: "不合并功能分支"};
+const note = {type: "project", title: "发布冻结", description: "2026-11-20 前冻结发布", body: "2026-11-20 前不合并功能分支"};
 
 test("the owner sees every entry with its origin, corrects a poisoned one, and restores an earlier revision", async () => {
   const call = dashboard("alice");

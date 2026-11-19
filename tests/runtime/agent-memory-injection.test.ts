@@ -32,7 +32,7 @@ const all = {get agentId() { return scope.agentId; }, all: true as const};
 const inject = (message?: string) => memoryInjection(db.db, {...scope, actorUserId: "user:alice", sessionId: "session", taskId: null, runnerContextId: contextId}, message);
 const rule = {type: "feedback" as const, title: "回复语言", description: "对外回复一律用中文", body: "中文", core: true};
 const weekly = {type: "feedback" as const, title: "周报格式", description: "周报不要用表格", body: "用列表"};
-const freeze = {type: "project" as const, title: "发布冻结", description: "11-20 前冻结发布", body: "不合并功能分支"};
+const freeze = {type: "project" as const, title: "发布冻结", description: "2026-11-20 前冻结发布", body: "2026-11-20 前不合并功能分支"};
 /** One completed turn: the provider reports its session id, then the turn is committed. */
 const turn = (message?: string, sessionId = "provider-1") => { const injection = inject(message); contexts.persistRunnerSessionId(contextId, sessionId); injection.commit(); return injection.text; };
 
@@ -72,7 +72,7 @@ test("later turns report changes made elsewhere only for entries this conversati
   const core = store.add(elsewhere(), rule), shown = store.add(elsewhere(), weekly), unseen = store.add(elsewhere(), freeze);
   turn("帮我按周报格式写周报");
   store.update(elsewhere(), all, unseen.id, {expectedRevision: 1, description: "改到 11-25 冻结"});
-  store.add(elsewhere(), {type: "reference", title: "看板", description: "项目看板地址", body: "b"});
+  store.add(elsewhere(), {type: "reference", title: "看板", description: "项目看板地址", body: "https://board.example/project"});
   store.add(here(), {...freeze, title: "本会话写的", core: true, type: "feedback"});
   expect(turn("继续")).toBeUndefined();
   store.update(elsewhere(), all, shown.id, {expectedRevision: 1, description: "周报改用表格"});

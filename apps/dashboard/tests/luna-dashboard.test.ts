@@ -3109,7 +3109,7 @@ describe("luna dashboard api", () => {
   test("Agent memory lists entries with their origin for the owner", async () => {
     new AgentMemoryStore(connection.db).add(
       { agentId: fixtureAgentId, kind: "owner", trusted: true, userId: fixtureOwnerUserId(fixtureOwnerId), shadowId: null },
-      { type: "project", title: "Fixture memory", description: "Fixture description", body: "Fixture body" },
+      { type: "feedback", title: "Fixture memory", description: "Fixture description", body: "Fixture body" },
     );
     const memory = await getJson<{ memories: Array<Record<string, unknown>> }>(
       `/api/agents/${fixtureAgentId}/memories`,

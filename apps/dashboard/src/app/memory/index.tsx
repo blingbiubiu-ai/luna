@@ -88,6 +88,8 @@ const ERROR_TEXT: Record<string, string> = {
   invalid_memory_expiry: "有效期无效。",
   memory_revision_not_found: "要恢复的版本不存在。",
   memory_not_found: "这条记忆不存在或已不可见。",
+  memory_reference_location_missing: "资料记忆要写明在哪里找到：在描述或正文里填链接、路径或《文档名》。如果没有这样的位置，说明要记的是内容本身，请改成项目、做法或经验。",
+  memory_project_date_missing: "项目记忆要写明时间：在内容里写上决策、里程碑或截止的绝对日期（YYYY-MM-DD），或设置有效期。如果不是进行中的工作，请改成资料、做法或经验。",
 };
 const errorText = (error: Error) => (error instanceof ApiFetchError && error.code && ERROR_TEXT[error.code]) || error.message;
 

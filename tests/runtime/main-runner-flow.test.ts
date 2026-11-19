@@ -1256,7 +1256,7 @@ test("Main Runner accepts sentinel completion and injects runtime context", asyn
   const runnerContext = new RunnerContextStore(database.db).resolveForSession("session-1", "fake");
   new AgentMemoryStore(database.db).add(
     {agentId: runnerContext.agent_id, kind: "owner", trusted: true, userId: null, shadowId: null},
-    {type: "project", title: "发布冻结", description: "11-20 前冻结发布", body: "memory body is fetched on demand", core: true},
+    {type: "project", title: "发布冻结", description: "2026-11-20 前冻结发布", body: "memory body is fetched on demand", core: true},
   );
   const pack = new ContextPackStore(database.db).createPack({ownerType: "session", ownerId: "session-1", kind: "session_launch", selectionStrategy: "manual"});
   const baseMessage = fakeNormalizedInbound({
@@ -1374,7 +1374,7 @@ test("Main Runner accepts sentinel completion and injects runtime context", asyn
   expect(prompt).toContain("uid");
   expect(prompt).toContain("<messages>\n");
   expect(prompt).toContain("<memory>\n## Agent memory: always in effect");
-  expect(prompt).toContain("(project) 发布冻结: 11-20 前冻结发布");
+  expect(prompt).toContain("(project) 发布冻结: 2026-11-20 前冻结发布");
   expect(prompt).not.toContain("memory body is fetched on demand");
   expect(prompt).not.toContain("Allowed Action Contract");
   expect(prompt).toContain("<history>\n");
