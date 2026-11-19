@@ -15,6 +15,7 @@ import type {
   DashboardMemoryChangeKind,
   DashboardMemoryFields,
   DashboardMemoryFilter,
+  DashboardMemoryRevision,
   DashboardMemoryStatus,
   DashboardMemoryType
 } from "@/lib/api";
@@ -62,6 +63,22 @@ const dateInput = (time: number | null) => time === null ? "" : new Date(time).t
 const fieldsOf = ({ type, title, description, body, subjectId, core, expiresAt }: DashboardMemoryFields): DashboardMemoryFields => ({
   type, title, description, body, subjectId, core, expiresAt,
 });
+/** What a version changed against the one before it, in a few words; the first version created the entry. */
+function changeSummary(current: DashboardMemoryRevision["snapshot"], previous: DashboardMemoryRevision["snapshot"] | undefined): string {
+  if (!previous) return "创建";
+  const parts: string[] = [];
+  if (previous.status !== current.status)
+    parts.push(current.status === "deleted" ? "删除" : current.status === "archived" ? "遗忘" : previous.status === "archived" ? "从遗忘中恢复" : "恢复");
+  if (previous.type !== current.type) parts.push(`类型 ${TYPE_META[previous.type].label} → ${TYPE_META[current.type].label}`);
+  const text = ([["title", "标题"], ["description", "描述"], ["body", "正文"]] as const).filter(([key]) => previous[key] !== current[key]).map(([, label]) => label);
+  if (text.length) parts.push(`改了${text.join("、")}`);
+  if (previous.subjectId !== current.subjectId) parts.push("改了关联对象");
+  if (previous.visibility !== current.visibility) parts.push(current.visibility === "shadow" ? "改为分身私有" : "改为分身间共享");
+  if (previous.core !== current.core) parts.push(current.core ? "设为核心" : "取消核心");
+  if (previous.expiresAt !== current.expiresAt) parts.push(current.expiresAt === null ? "取消有效期" : `有效期至 ${dateInput(current.expiresAt)}`);
+  if (!previous.trusted && current.trusted) parts.push("确认受信");
+  return parts.length ? parts.join("；") : "内容未变";
+}
 const byteSizeLabel = (text: string) => {
   const bytes = new TextEncoder().encode(text).length;
   return bytes < 1024 ? `${bytes} B / 8 KB` : `${(bytes / 1024).toFixed(1)} KB / 8 KB`;
@@ -88,6 +105,7 @@ const ERROR_TEXT: Record<string, string> = {
   memory_chat_unavailable: "群聊记忆只能在它所属的群或私聊里由对话写入，这里不能新建或改成群聊记忆。",
   invalid_memory_persona: "人格记忆需要选择所属分身，且不能设置有效期。",
   invalid_memory_expiry: "有效期无效。",
+  invalid_memory_reason: "修改说明不超过 200 字。",
   memory_revision_not_found: "要恢复的版本不存在。",
   memory_not_found: "这条记忆不存在或已不可见。",
   memory_reference_location_missing: "资料记忆要写明在哪里找到：在描述或正文里填链接、路径或《文档名》。如果没有这样的位置，说明要记的是内容本身，请改成项目、做法或经验。",
@@ -129,6 +147,7 @@ function MemoryWorkspace({ agentId, agentName, defaultShadowId }: { agentId: str
   const [selectedId, setSelectedId] = useState<string>();
   const [editorMode, setEditorMode] = useState<"new" | "edit" | null>(null);
   const [draft, setDraft] = useState<DashboardMemoryFields>();
+  const [editReason, setEditReason] = useState("");
   const [newPersonaShadow, setNewPersonaShadow] = useState("");
 
   const isMem = surface === "memories";
@@ -190,7 +209,7 @@ function MemoryWorkspace({ agentId, agentName, defaultShadowId }: { agentId: str
     save.reset(); remove.reset(); revert.reset(); restore.reset(); confirm.reset();
   };
   const closeEditor = () => {
-    setEditorMode(null); setDraft(undefined); clearMutations();
+    setEditorMode(null); setDraft(undefined); setEditReason(""); clearMutations();
   };
   const openCreate = () => {
     clearMutations();
@@ -208,6 +227,7 @@ function MemoryWorkspace({ agentId, agentName, defaultShadowId }: { agentId: str
     setPreviewPrompt(false);
     setSelectedId(entry.id);
     setDraft(fieldsOf(entry));
+    setEditReason("");
     setEditorMode("edit");
   };
   const selectEntry = (id: string) => {
@@ -816,6 +836,23 @@ function MemoryWorkspace({ agentId, agentName, defaultShadowId }: { agentId: str
                     </div>
                   )}
 
+                  {selected && (
+                    <label className="grid gap-1.5 text-xs">
+                      <span className="font-medium">
+                        修改说明 <span className="font-normal text-muted-foreground">（选填，一句话说明为什么改，会显示在修改历史里）</span>
+                      </span>
+                      <Input
+                        aria-label="修改说明"
+                        value={editReason}
+                        maxLength={200}
+                        disabled={pending}
+                        placeholder="例如：发布时间改到 12 月 5 日"
+                        className="h-9 text-xs"
+                        onChange={event => setEditReason(event.target.value)}
+                      />
+                    </label>
+                  )}
+
                   <div className="flex flex-wrap justify-end gap-2 pt-1">
                     <Button type="button" variant="outline" size="sm" className="h-9 px-4 text-xs" disabled={pending} onClick={closeEditor}>
                       放弃修改
@@ -827,13 +864,14 @@ function MemoryWorkspace({ agentId, agentName, defaultShadowId }: { agentId: str
                       disabled={pending || (isPersona && !selected && !newPersonaShadow)}
                       onClick={() => save.mutate(
                         selected
-                          ? { ...form, id: selected.id, expectedRevision: selected.revision }
+                          ? { ...form, id: selected.id, expectedRevision: selected.revision, reason: editReason }
                           : { ...form, ...(isPersona ? { shadowId: newPersonaShadow } : {}) },
                         {
                           onSuccess: memory => {
                             setSelectedId(memory.id);
                             setEditorMode(null);
                             setDraft(undefined);
+                            setEditReason("");
                           },
                         },
                       )}
@@ -1078,7 +1116,7 @@ function MemoryWorkspace({ agentId, agentName, defaultShadowId }: { agentId: str
                   </h3>
                   {history.error && <p role="alert" className="text-xs text-destructive">{errorText(history.error)}</p>}
                   <ol className="space-y-2">
-                    {(history.data ?? []).map(entry => (
+                    {(history.data ?? []).map((entry, index, versions) => (
                       <li key={entry.revision} className={cardClass}>
                         <details>
                           <summary className="flex cursor-pointer list-none flex-wrap items-center gap-2 px-4 py-2.5 text-xs">
@@ -1112,6 +1150,10 @@ function MemoryWorkspace({ agentId, agentName, defaultShadowId }: { agentId: str
                                 回退到此版本
                               </Button>
                             )}
+                            <span className="basis-full text-foreground" data-testid="memory-version-change">
+                              {changeSummary(entry.snapshot, versions[index + 1]?.snapshot)}
+                              {entry.snapshot.reason ? <span className="text-muted-foreground"> —— {entry.snapshot.reason}</span> : null}
+                            </span>
                           </summary>
                           <div className="space-y-1.5 border-t border-border px-4 pt-2.5 pb-4 text-xs">
                             {entry.snapshot.source ? <MemorySourceLine agentId={agentId} source={entry.snapshot.source} /> : null}

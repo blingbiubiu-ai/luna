@@ -12,7 +12,7 @@ when an entry you were shown changes. Each line is
   search: `luna memory search <keywords>`.
 - Entries nobody uses for a long time, and entries past their expiry, are
   forgotten. `luna memory search <keywords> --archived` finds them and
-  `luna memory restore <id> --expected-revision N` brings one back.
+  `luna memory restore <id> --expected-revision N --reason WHY` brings one back.
 - Memory also keeps a timeline of what happened: `episode` entries, written in
   each conversation's memory reflection once it has gone quiet, including the
   Tasks it started and how they ended, across all Shadows of the Agent. When someone asks what you have been doing, what
@@ -25,7 +25,7 @@ when an entry you were shown changes. Each line is
 - Save a memory when the user asks you to remember something, corrects how you
   work, or states a fact that will matter in later conversations. Search first
   and update the existing entry with
-  `luna memory update <id> --expected-revision N` instead of adding a duplicate.
+  `luna memory update <id> --expected-revision N --reason WHY` instead of adding a duplicate.
   Add with `luna memory add --type TYPE --title TITLE --description DESC --stdin`.
   Luna rejects an entry that repeats an existing one (`memory_duplicate`) and
   lists the candidates: update one of them, or add `--force` only when it is a

@@ -71,7 +71,12 @@ session, task, user and `inline` / `reflection` / `consolidation` / `owner` /
 | `deleted` | Removed by a writer; `superseded_by` names the entry that replaced it when a merge retired it |
 
 Every change appends the resulting state to `agent_memory_revisions` and takes
-the next `change_seq`, which orders changes without relying on clocks.
+the next `change_seq`, which orders changes without relying on clocks. The
+snapshot keeps the writer's one-line `reason` for the change (at most 200
+characters). A Runner must give one to update, delete or restore
+(`memory_reason_required`); adding needs none. The owner may give one on the
+Dashboard; a revert without one records which revision it went back to, and
+forgetting records whether the entry expired, went unused or aged out.
 
 ### Persona entries
 
@@ -275,9 +280,9 @@ luna memory search <keywords> [--type T] [--subject USER_ID] [--archived]
 luna memory timeline [--since 7d|YYYY-MM-DD] [--until YYYY-MM-DD] [--shadow SHADOW_ID] [--with USER_ID] [--limit N] [--archived]
 luna memory get <id>
 luna memory add --type T --title TITLE --description DESC [--subject USER_ID] [--visibility agent|shadow] [--expires YYYY-MM-DD] [--core true] [--force] (--body TEXT | --stdin)
-luna memory update <id> --expected-revision N [--title ...] [--description ...] [--type ...] [--subject USER_ID|none] [--visibility ...] [--expires YYYY-MM-DD|none] [--core true|false] [--body TEXT | --stdin]
-luna memory restore <id> --expected-revision N
-luna memory delete <id> --expected-revision N [--superseded-by ID]
+luna memory update <id> --expected-revision N --reason WHY [--title ...] [--description ...] [--type ...] [--subject USER_ID|none] [--visibility ...] [--expires YYYY-MM-DD|none] [--core true|false] [--body TEXT | --stdin]
+luna memory restore <id> --expected-revision N --reason WHY
+luna memory delete <id> --expected-revision N --reason WHY [--superseded-by ID]
 ```
 
 Runner routes live under `/api/runner/memory`. The owner surface is
@@ -341,7 +346,9 @@ and a run that did not complete is handed the same changes again.
 The memory page lists entries one server-filtered page at a time, with filters
 for type, origin kind, origin Shadow, status and tier, and shows core usage. An
 entry shows its body, origin, last use, a link to the originating session or
-task, and its revision history. The owner can edit, mark core, set an expiry,
+task, and its revision history, where each version says what it changed
+against the one before (fields, type, status, core, expiry, trust) and the
+writer's reason. The owner can edit, mark core, set an expiry,
 delete, revert to a revision or restore a forgotten entry. A "waiting for
 confirmation" filter lists untrusted entries; confirming one shares it.
 

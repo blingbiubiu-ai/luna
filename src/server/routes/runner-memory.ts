@@ -6,7 +6,7 @@ import {MEMORY_TYPES, users} from "@/data/schema";
 import {AgentError} from "@/agents/agent-store";
 import {memoryAccess} from "@/agents/agent-memory-access";
 import {memoryOriginOfTrigger} from "@/agents/agent-memory-maintenance";
-import {AgentMemoryStore, MemoryConflictError, MemoryDuplicateError, MemoryTypeFactsError, memorySummary, type MemoryRecord, MEMORY_BODY_LIMIT, memorySources} from "@/agents/agent-memory-store";
+import {AgentMemoryStore, MemoryConflictError, MemoryDuplicateError, MemoryTypeFactsError, memorySummary, type MemoryRecord, MEMORY_BODY_LIMIT, MEMORY_REASON_LIMIT, memorySources} from "@/agents/agent-memory-store";
 import {InvocationService} from "@/runners/invocation-service";
 import type {LunaAccessTokenClaims} from "../auth/access-token-service";
 import {GatewayError} from "../gateway-error";
@@ -21,10 +21,17 @@ const fields = {
   expiresAt: z.number().int().positive().nullable().optional(),
   occurredAt: z.number().int().positive().nullable().optional(),
 };
+const reasonField = z.string().max(1000).optional();
 const time = z.coerce.number().int().positive();
 const addBody = z.object({...fields, force: z.boolean().optional()}).strict();
-const updateBody = z.object(fields).partial().extend({expectedRevision: z.number().int().positive()}).strict();
+const updateBody = z.object(fields).partial().extend({expectedRevision: z.number().int().positive(), reason: reasonField}).strict();
 const revision = z.coerce.number().int().positive();
+/** A Runner says why it changes an entry, so the owner can follow its history; adding needs none, the entry is its own reason. */
+const requireReason = (reason: string | undefined) => {
+  if (!reason?.trim()) throw new GatewayError("memory_reason_required",
+    `Say in one line why you make this change with --reason "...", e.g. "the user moved the launch to 2026-12-05" or "duplicate of <id>, merged into it" (at most ${MEMORY_REASON_LIMIT} characters).`, 400);
+  return reason;
+};
 
 /** Agent memory for the active invocation. Scope and write authority come from the Runner token only. */
 export function createRunnerMemoryRoutes(options: {db?: DrizzleDB} = {}) {
@@ -93,21 +100,21 @@ export function createRunnerMemoryRoutes(options: {db?: DrizzleDB} = {}) {
     .put("/memory/:id", async c => {
       const {viewer, writer} = access(c.get("lunaAccessTokenClaims"));
       const author = writer();
-      const input = updateBody.parse(await c.req.json().catch(() => null));
+      const {reason, ...input} = updateBody.parse(await c.req.json().catch(() => null));
       // Whoever took part in this conversation also took part in an episode it extends.
-      return c.json({memory: detail(new AgentMemoryStore(db()).update(author, viewer, c.req.param("id"), input, {participants: viewer.all ? [] : viewer.participants}))});
+      return c.json({memory: detail(new AgentMemoryStore(db()).update({...author, reason: requireReason(reason)}, viewer, c.req.param("id"), input, {participants: viewer.all ? [] : viewer.participants}))});
     })
     .post("/memory/:id/restore", async c => {
       const {viewer, writer} = access(c.get("lunaAccessTokenClaims"));
       const author = writer();
-      const input = z.object({expectedRevision: z.number().int().positive()}).strict().parse(await c.req.json().catch(() => null));
-      return c.json({memory: detail(new AgentMemoryStore(db()).restore(author, viewer, c.req.param("id"), input.expectedRevision))});
+      const input = z.object({expectedRevision: z.number().int().positive(), reason: reasonField}).strict().parse(await c.req.json().catch(() => null));
+      return c.json({memory: detail(new AgentMemoryStore(db()).restore({...author, reason: requireReason(input.reason)}, viewer, c.req.param("id"), input.expectedRevision))});
     })
     .delete("/memory/:id", c => {
       const {viewer, writer} = access(c.get("lunaAccessTokenClaims"));
       const author = writer();
-      const query = z.object({expectedRevision: revision, supersededBy: z.string().min(1).optional()}).parse(c.req.query());
-      const row = new AgentMemoryStore(db()).remove(author, viewer, c.req.param("id"), query.expectedRevision, query.supersededBy);
+      const query = z.object({expectedRevision: revision, supersededBy: z.string().min(1).optional(), reason: reasonField}).parse(c.req.query());
+      const row = new AgentMemoryStore(db()).remove({...author, reason: requireReason(query.reason)}, viewer, c.req.param("id"), query.expectedRevision, query.supersededBy);
       return c.json({memory: {id: row.id, status: row.status, revision: row.revision}});
     });
 }

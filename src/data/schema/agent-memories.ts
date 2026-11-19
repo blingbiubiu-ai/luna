@@ -81,6 +81,8 @@ export interface MemorySnapshot {
   occurredAt?: number | null;
   /** Where in the conversation this change was made: its latest timeline entry at the time. Absent for maintenance and older revisions. */
   source?: MemorySource;
+  /** One line from the writer on why this change was made. Absent when none was given, and in older revisions. */
+  reason?: string;
 }
 
 export interface MemorySource {

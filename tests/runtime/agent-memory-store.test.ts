@@ -86,6 +86,22 @@ test("chat entries are about the writing chat, private to their Shadow and seen 
   expect(store.revert(dashboard, entry.id, 1, 4)).toMatchObject({type: "chat", subjectId: "oc_oncall", body: role.body});
 });
 
+test("Luna records why it forgot or reverted an entry", () => {
+  const dashboard: MemoryWriter = {agentId: a.agentId, kind: "owner", trusted: true, owner: true, userId: "user:alice", shadowId: null};
+  const entry = store.add(owner(), note);
+  store.update({...owner(), reason: "改说明"}, {agentId: a.agentId, all: true}, entry.id, {expectedRevision: 1, body: "v2"});
+  store.revert(dashboard, entry.id, 1, 2);
+  const expiring = store.add(owner(), {...note, title: "到期", expiresAt: Date.now() - 1});
+  const idle = store.add(owner(), {...note, title: "闲置", description: "另一件事"});
+  db.db.update(schema.agentMemories).set({lastUsedAt: Date.now() - 100 * 86_400_000}).where(eq(schema.agentMemories.id, idle.id)).run();
+  expect(store.forget(90 * 86_400_000)).toBe(2);
+  const reasons = (id: string) => store.history(a.agentId, id).map(row => row.snapshot.reason);
+  expect(reasons(entry.id)).toEqual(["回退到第 1 版", "改说明", undefined]);
+  expect(reasons(expiring.id)[0]).toBe("到期自动遗忘");
+  expect(reasons(idle.id)[0]).toBe("90 天未使用，自动遗忘");
+  expect(() => store.update({...owner(), reason: "长".repeat(201)}, {agentId: a.agentId, all: true}, entry.id, {expectedRevision: 3, body: "v3"})).toThrow("invalid_memory_reason");
+});
+
 test("untrusted writers cannot change how the Agent works or describe other people", () => {
   for (const type of ["feedback", "procedure"] as const) expect(() => store.add(member("lisi"), {...note, type})).toThrow("memory_write_forbidden");
   expect(() => store.add(member("lisi"), {type: "person", title: "张三", description: "d", body: "b", subjectId: "zhangsan"})).toThrow("memory_write_forbidden");

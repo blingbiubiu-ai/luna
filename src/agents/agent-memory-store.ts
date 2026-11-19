@@ -36,6 +36,8 @@ export interface MemoryWriter {
   contextId?: string | null;
   /** The change is made for the Agent owner; required to touch persona entries. */
   owner?: boolean;
+  /** One line on why this change is made, kept with the revision it writes. */
+  reason?: string | null | undefined;
 }
 interface MemoryLimits { core: number; shadowCore: number; persona: number }
 
@@ -261,7 +263,7 @@ export class AgentMemoryStore {
       };
       tx.insert(agentMemories).values(row).run();
       indexTerms(tx, row);
-      record(tx, row, writer.kind, writer.userId, writer.shadowId, now, conversationAnchor(tx, writer.sessionId));
+      record(tx, row, writer.kind, writer.userId, writer.shadowId, now, conversationAnchor(tx, writer.sessionId), reasonOf(writer));
       return row;
     });
   }
@@ -339,7 +341,8 @@ export class AgentMemoryStore {
         const row: MemoryRecord = {...current, status: "archived", updatedContextId: null, revision: current.revision + 1,
           changeSeq: new AgentMemoryStore(tx, this.limits).latestSeq() + 1, updatedAt: now};
         tx.update(agentMemories).set(row).where(eq(agentMemories.id, row.id)).run();
-        record(tx, row, "forgetting", null, null, now);
+        record(tx, row, "forgetting", null, null, now, undefined, current.expiresAt !== null && current.expiresAt <= now ? "到期自动遗忘"
+          : current.type === "episode" ? "经历超过保留期，自动遗忘" : `${Math.round(unusedMs / DAY_MS)} 天未使用，自动遗忘`);
       }
       return due.length;
     });
@@ -417,7 +420,7 @@ export class AgentMemoryStore {
     const snapshot = past.snapshot;
     // Like restore, an active state whose expiry has passed would be forgotten again within a minute.
     const expiresAt = snapshot.status === "active" && snapshot.expiresAt !== null && snapshot.expiresAt <= Date.now() ? null : snapshot.expiresAt;
-    return this.change(writer, {agentId: writer.agentId, all: true}, id, expectedRevision, current => ({
+    return this.change({...writer, reason: writer.reason || `回退到第 ${revision} 版`}, {agentId: writer.agentId, all: true}, id, expectedRevision, current => ({
       ...this.validate(writer, {
         type: snapshot.type, title: snapshot.title, description: snapshot.description, body: snapshot.body,
         subjectId: snapshot.subjectId, visibility: snapshot.visibility, core: snapshot.core, expiresAt, occurredAt: snapshot.occurredAt ?? null,
@@ -429,6 +432,7 @@ export class AgentMemoryStore {
   private change(writer: MemoryWriter, viewer: MemoryViewer, id: string, expectedRevision: number,
     next: (current: MemoryRecord) => Partial<MemoryRecord>, anyStatus = false, confirms = false,
     extra: (current: MemoryRecord) => Partial<MemoryRecord> = () => ({})): MemoryRecord {
+    const reason = reasonOf(writer);
     return this.db.transaction(tx => {
       const store = new AgentMemoryStore(tx, this.limits);
       const current = anyStatus ? store.owned(writer.agentId, id) : store.get(viewer, id);
@@ -455,7 +459,7 @@ export class AgentMemoryStore {
       // Deleted entries are never searched; their terms come back if a revision restores them.
       if (!SEARCHABLE.includes(row.status)) deleteTerms(tx, row.id);
       else if (!SEARCHABLE.includes(current.status) || row.title !== current.title || row.description !== current.description || row.body !== current.body) indexTerms(tx, row);
-      record(tx, row, writer.kind, writer.userId, writer.shadowId, now, conversationAnchor(tx, writer.sessionId));
+      record(tx, row, writer.kind, writer.userId, writer.shadowId, now, conversationAnchor(tx, writer.sessionId), reason);
       return row;
     });
   }
@@ -623,12 +627,23 @@ export function memorySources(db: Pick<DrizzleDB, "select">, id: string): ({revi
     });
 }
 
+/** Longest revision reason, in characters. */
+export const MEMORY_REASON_LIMIT = 200;
+
+/** The writer's reason as one line, or undefined when none was given. */
+function reasonOf(writer: MemoryWriter): string | undefined {
+  const reason = writer.reason?.trim().replace(/\s+/g, " ");
+  if (!reason) return undefined;
+  if (reason.length > MEMORY_REASON_LIMIT) throw new AgentError("invalid_memory_reason", 400);
+  return reason;
+}
+
 function record(tx: Pick<DrizzleDB, "insert">, row: MemoryRecord, kind: MemoryChangeKind, userId: string | null, shadowId: string | null, now: number,
-  source?: MemorySource): void {
+  source?: MemorySource, reason?: string): void {
   const {type, title, description, body, subjectId, visibility, status, supersededBy, trusted, core, expiresAt, occurredAt} = row;
   tx.insert(agentMemoryRevisions).values({
     memoryId: row.id, revision: row.revision,
-    snapshot: {type, title, description, body, subjectId, visibility, status, supersededBy, trusted, core, expiresAt, occurredAt, ...(source ? {source} : {})},
+    snapshot: {type, title, description, body, subjectId, visibility, status, supersededBy, trusted, core, expiresAt, occurredAt, ...(source ? {source} : {}), ...(reason ? {reason} : {})},
     changeKind: kind, changedByUserId: userId, changedByShadowId: shadowId, createdAt: now,
   }).run();
 }

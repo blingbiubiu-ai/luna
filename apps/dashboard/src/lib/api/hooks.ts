@@ -1676,6 +1676,9 @@ export interface DashboardMemoryRevision {
   snapshot: DashboardMemoryFields & {
     status: DashboardMemoryStatus;
     trusted: boolean;
+    visibility: "agent" | "shadow";
+    /** Why the writer made this change, in one line; absent when none was given. */
+    reason?: string;
     /** Where in a conversation this version was written; absent for maintenance, Dashboard edits and older versions. */
     source?: DashboardMemorySource;
   };
@@ -1726,10 +1729,10 @@ export function useAgentMemories(agentId: string, filter: DashboardMemoryFilter)
     placeholderData: previous => previous,
   });
   const save = useMutation({
-    mutationFn: (input: DashboardMemoryFields & { id?: string; expectedRevision?: number; shadowId?: string }) => {
-      // `shadowId` names the Shadow a new persona entry belongs to; it is not part of an update.
-      const { id, expectedRevision, shadowId, ...fields } = input;
-      return id ? send(`/${encodeURIComponent(id)}`, "PUT", { ...fields, expectedRevision }) : send("", "POST", { ...fields, ...(shadowId ? { shadowId } : {}) });
+    mutationFn: (input: DashboardMemoryFields & { id?: string; expectedRevision?: number; shadowId?: string; reason?: string }) => {
+      // `shadowId` names the Shadow a new persona entry belongs to; it is not part of an update. `reason` says why an update is made.
+      const { id, expectedRevision, shadowId, reason, ...fields } = input;
+      return id ? send(`/${encodeURIComponent(id)}`, "PUT", { ...fields, expectedRevision, ...(reason?.trim() ? { reason: reason.trim() } : {}) }) : send("", "POST", { ...fields, ...(shadowId ? { shadowId } : {}) });
     },
     onSettled: refresh,
   });

@@ -45,7 +45,11 @@ function fixture() {
   const app = new Hono<{ Variables: { lunaAccessTokenClaims: LunaAccessTokenClaims | undefined } }>();
   app.use("*", async (c, next) => { c.set("lunaAccessTokenClaims", current); await next(); });
   app.route("/api/runner", createRunnerMemoryRoutes({ db }));
-  const call = async (method: string, path: string, body?: unknown) => {
+  /** Changes carry a reason unless the test leaves it out on purpose (`reason: null`). */
+  const call = async (method: string, path: string, body?: unknown, reason: string | null = "测试") => {
+    const changes = method === "PUT" || method === "DELETE" || path.endsWith("/restore");
+    if (changes && reason !== null && method === "DELETE") path += `${path.includes("?") ? "&" : "?"}reason=${encodeURIComponent(reason)}`;
+    else if (changes && reason !== null && body && typeof body === "object" && !("reason" in body)) body = { ...body, reason };
     const response = await app.request(`/api/runner/memory${path}`, { method, ...(body === undefined ? {} : { headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }) });
     return { status: response.status, body: await response.json() as any };
   };
@@ -69,6 +73,19 @@ test("a Runner adds, finds, reads, updates and deletes memory inside its invocat
   expect(await f.call("PUT", `/${id}`, { expectedRevision: 1, body: "stale" })).toMatchObject({ status: 409, body: { error: "memory_revision_conflict", currentRevision: 2 } });
   expect((await f.call("DELETE", `/${id}?expectedRevision=2`)).body.memory).toMatchObject({ status: "deleted" });
   expect((await f.call("GET", `/${id}`)).status).toBe(404);
+});
+
+test("a Runner says why it changes an entry, and each version keeps its reason", async () => {
+  const f = fixture();
+  const id = (await f.call("POST", "", project)).body.memory.id;
+  const refused = await f.call("PUT", `/${id}`, { expectedRevision: 1, body: "v2" }, null);
+  expect(refused).toMatchObject({ status: 400, body: { error: "memory_reason_required" } });
+  expect(refused.body.message).toContain("--reason");
+  expect((await f.call("DELETE", `/${id}?expectedRevision=1`, undefined, null)).body.error).toBe("memory_reason_required");
+  await f.call("PUT", `/${id}`, { expectedRevision: 1, body: "2026-12-05 前不合并功能分支" }, "  发布推迟到\n 12 月 5 日 ");
+  await f.call("DELETE", `/${id}?expectedRevision=2`, undefined, "发布已完成");
+  expect(new AgentMemoryStore(f.db).history(f.session.agent_id, id).map(row => [row.revision, row.snapshot.reason]))
+    .toEqual([[3, "发布已完成"], [2, "发布推迟到 12 月 5 日"], [1, undefined]]);
 });
 
 test("a refused type tells the Runner what to add, not just that the type is wrong", async () => {

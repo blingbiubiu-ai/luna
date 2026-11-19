@@ -8,7 +8,11 @@ description: Write Agent long-term memory with `luna memory add/update/delete`: 
 - Save a memory when the user asks you to remember something, corrects how you
   work, or states a fact that will matter in later conversations. Search first
   and update the existing entry with
-  `luna memory update <id> --expected-revision N` instead of adding a duplicate.
+  `luna memory update <id> --expected-revision N --reason WHY` instead of adding a duplicate.
+  Every update, delete and restore takes `--reason`: one line on why you
+  change the entry, such as "the user moved the launch to 2026-12-05". The
+  Agent owner reads it in the entry's history; Luna refuses the change without
+  it (`memory_reason_required`).
   Add with `luna memory add --type TYPE --title TITLE --description DESC --stdin`.
   Luna rejects an entry that repeats an existing one (`memory_duplicate`) and
   lists the candidates: update one of them, or add `--force` only when it is a
@@ -71,4 +75,4 @@ description: Write Agent long-term memory with `luna memory add/update/delete`: 
   of the Agent, takes `--visibility shadow`; with `--core true` it then counts
   against this Shadow's own allowance.
 - When the user says an entry is wrong or should be forgotten, update it or run
-  `luna memory delete <id> --expected-revision N`.
+  `luna memory delete <id> --expected-revision N --reason WHY`.

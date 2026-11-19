@@ -24,8 +24,10 @@ const listQuery = z.object({
 /** `shadowId` names the Shadow a new persona entry belongs to. */
 const addBody = z.object({...fields, shadowId: z.string().min(1).max(128).optional()}).strict();
 const revision = z.number().int().positive();
-const updateBody = z.object(fields).partial().extend({expectedRevision: revision}).strict();
-const revertBody = z.object({revision, expectedRevision: revision}).strict();
+/** The owner may say why; a revert without one records which revision it went back to. */
+const reason = z.string().max(1000).optional();
+const updateBody = z.object(fields).partial().extend({expectedRevision: revision, reason}).strict();
+const revertBody = z.object({revision, expectedRevision: revision, reason}).strict();
 
 /** Mounted under /api/agents. The Agent owner reviews, corrects and restores every memory entry. */
 export function createAgentMemoryRoutes(db: DrizzleDB) {
@@ -102,16 +104,17 @@ export function createAgentMemoryRoutes(db: DrizzleDB) {
     })
     .put("/:agentId/memories/:id", async c => {
       const {viewer, writer} = owner(c);
-      return c.json({memory: named([store.update(writer, viewer, c.req.param("id"), updateBody.parse(await c.req.json()))])[0]});
+      const {reason, ...input} = updateBody.parse(await c.req.json());
+      return c.json({memory: named([store.update({...writer, reason}, viewer, c.req.param("id"), input)])[0]});
     })
     .delete("/:agentId/memories/:id", c => {
       const {viewer, writer} = owner(c);
       const expectedRevision = z.coerce.number().int().positive().parse(c.req.query("expectedRevision"));
-      return c.json({memory: named([store.remove(writer, viewer, c.req.param("id"), expectedRevision)])[0]});
+      return c.json({memory: named([store.remove({...writer, reason: reason.parse(c.req.query("reason"))}, viewer, c.req.param("id"), expectedRevision)])[0]});
     })
     .post("/:agentId/memories/:id/revert", async c => {
       const {writer} = owner(c);
       const input = revertBody.parse(await c.req.json());
-      return c.json({memory: named([store.revert(writer, c.req.param("id"), input.revision, input.expectedRevision)])[0]});
+      return c.json({memory: named([store.revert({...writer, reason: input.reason}, c.req.param("id"), input.revision, input.expectedRevision)])[0]});
     });
 }

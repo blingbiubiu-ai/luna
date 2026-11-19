@@ -8,9 +8,10 @@ const usage = [
   "luna memory timeline [--since 7d|YYYY-MM-DD] [--until YYYY-MM-DD] [--shadow SHADOW_ID] [--with USER_ID] [--limit N] [--archived]   # what happened, newest first",
   "luna memory get <id>",
   "luna memory add --type T --title TITLE --description DESC [--subject USER_ID] [--visibility agent|shadow] [--expires YYYY-MM-DD] [--core true] [--force] (--body TEXT | --stdin)",
-  "luna memory update <id> --expected-revision N [--type T] [--title TITLE] [--description DESC] [--subject USER_ID|none] [--visibility agent|shadow] [--expires YYYY-MM-DD|none] [--core true|false] [--body TEXT | --stdin]",
-  "luna memory restore <id> --expected-revision N   # bring a forgotten entry back",
-  "luna memory delete <id> --expected-revision N [--superseded-by ID]",
+  "luna memory update <id> --expected-revision N --reason WHY [--type T] [--title TITLE] [--description DESC] [--subject USER_ID|none] [--visibility agent|shadow] [--expires YYYY-MM-DD|none] [--core true|false] [--body TEXT | --stdin]",
+  "luna memory restore <id> --expected-revision N --reason WHY   # bring a forgotten entry back",
+  "luna memory delete <id> --expected-revision N --reason WHY [--superseded-by ID]",
+  "  --reason is one line on why you change the entry, kept with the version it writes, e.g. \"the user moved the launch to 2026-12-05\"",
   "",
   "Types (one question each):",
   "  person     who someone is and how to work with them (--subject USER_ID)",
@@ -96,9 +97,9 @@ export async function runMemoryCli(argv: readonly string[], env: Env, readStdin:
     }
     if (command === "get") return callUnifiedService(env, {method: "GET", path: id()});
     if (command === "add") return callUnifiedService(env, {method: "POST", path: "/api/runner/memory", body: {...await fields(), ...(hasFlag(argv, "--force") ? {force: true} : {})}});
-    if (command === "restore") return callUnifiedService(env, {method: "POST", path: `${id()}/restore`, body: {expectedRevision: revision()}});
-    if (command === "update") return callUnifiedService(env, {method: "PUT", path: id(), body: {...await fields(), expectedRevision: revision()}});
-    if (command === "delete") return callUnifiedService(env, {method: "DELETE", path: servicePathWithQuery(id(), {expectedRevision: String(revision()), supersededBy: option("--superseded-by")})});
+    if (command === "restore") return callUnifiedService(env, {method: "POST", path: `${id()}/restore`, body: bodyWithDefinedValues({expectedRevision: revision(), reason: option("--reason")})});
+    if (command === "update") return callUnifiedService(env, {method: "PUT", path: id(), body: {...await fields(), ...bodyWithDefinedValues({reason: option("--reason")}), expectedRevision: revision()}});
+    if (command === "delete") return callUnifiedService(env, {method: "DELETE", path: servicePathWithQuery(id(), {expectedRevision: String(revision()), supersededBy: option("--superseded-by"), reason: option("--reason")})});
     throw new Error(usage);
   } catch (error) {
     return {status: "error", code: "invalid_memory_command", message: error instanceof Error ? error.message : String(error)};
