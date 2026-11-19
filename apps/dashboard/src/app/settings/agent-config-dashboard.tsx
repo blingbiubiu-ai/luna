@@ -12,6 +12,7 @@ import type {
   DashboardAgentProfile,
   DashboardAgentType,
   DashboardAgentTypeDescriptor,
+  DashboardExecutionDriver,
 } from "@/lib/api";
 
 export function AgentConfigDashboardView({
@@ -87,7 +88,7 @@ export function AgentConfigDashboardView({
       <div className="flex flex-wrap gap-2 text-xs text-muted-foreground">
         <span className="rounded-md border bg-muted/30 px-3 py-2">{profiles.length}{t("profiles")}</span>
         <span className="rounded-md border bg-muted/30 px-3 py-2">{types.length}{t("agent types")}</span>
-        {active ? <span className="flex items-center gap-2 rounded-md border bg-muted/30 px-3 py-2"><span className="size-1.5 rounded-full bg-emerald-500" />{t("Current Agent:")}<span className="font-medium text-foreground">{active.name}</span> · {active.model}</span> : null}
+        {active ? <span className="flex items-center gap-2 rounded-md border bg-muted/30 px-3 py-2"><span className="size-1.5 rounded-full bg-emerald-500" />{t("Current Agent:")}<span className="font-medium text-foreground">{active.name}</span> · {active.model}{active.executionDriver === "pty" ? " · PTY" : ""}</span> : null}
       </div>
       {!loading && status.status === "setup_required" ? <div className="rounded-lg border border-amber-500/30 bg-amber-500/5 p-4 text-sm"><h2 className="font-medium">{t("Agent setup required")}</h2><p className="mt-1 text-muted-foreground">{t("Create a profile, test its connection, then activate it to start running work.")}</p></div> : null}
       {error || actionError ? <p role="alert" className="rounded-lg border border-destructive/20 bg-destructive/5 p-3 text-sm text-destructive">{String(actionError ?? error)}</p> : null}
@@ -117,7 +118,7 @@ export function AgentConfigDashboardView({
               const testResult = testResults[revision.id] ?? (revision.validatedAt !== null ? { success: validated, message: savedMessage } : undefined);
               return <tr key={profile.id} className="align-top">
                 <td className="min-w-36 p-3"><p className="font-medium">{profile.name}</p><p className="mt-1 text-xs capitalize text-muted-foreground">{profile.agentType}{t("· Revision")}{revision.revisionNumber}</p></td>
-                <td className="min-w-44 max-w-64 p-3"><p className="font-mono text-xs">{revision.model}</p><details className="mt-2 text-xs text-muted-foreground"><summary className="cursor-pointer hover:text-foreground">{t("Connection details")}</summary><dl className="mt-3 space-y-2">{Object.entries(revision.env).map(([key, value]) => <div key={key}><dt className="break-all font-mono">{key}</dt><dd className="break-all">{value}</dd></div>)}{Object.keys(revision.secrets).map((key) => <div key={key}><dt className="break-all font-mono">{key}</dt><dd>{t("Configured (write-only)")}</dd></div>)}<div><dt>{t("Resume on model change")}</dt><dd>{revision.resumeOnModelChange ? t("Enabled") : t("Disabled")}</dd></div></dl></details></td>
+                <td className="min-w-44 max-w-64 p-3"><p className="font-mono text-xs">{revision.model}{(revision.executionDriver ?? "stdio") === "pty" ? <span className="ml-2 rounded border px-1.5 py-0.5 font-sans text-[10px] uppercase text-muted-foreground">PTY</span> : null}</p><details className="mt-2 text-xs text-muted-foreground"><summary className="cursor-pointer hover:text-foreground">{t("Connection details")}</summary><dl className="mt-3 space-y-2"><div><dt>{t("Execution driver")}</dt><dd>{(revision.executionDriver ?? "stdio") === "pty" ? t("Interactive PTY (pty)") : t("Standard pipe (stdio)")}</dd></div>{Object.entries(revision.env).map(([key, value]) => <div key={key}><dt className="break-all font-mono">{key}</dt><dd className="break-all">{value}</dd></div>)}{Object.keys(revision.secrets).map((key) => <div key={key}><dt className="break-all font-mono">{key}</dt><dd>{t("Configured (write-only)")}</dd></div>)}<div><dt>{t("Resume on model change")}</dt><dd>{revision.resumeOnModelChange ? t("Enabled") : t("Disabled")}</dd></div></dl></details></td>
                 <td className="min-w-28 p-3"><span className={`inline-flex rounded-md border px-2 py-0.5 text-xs ${currentRevision ? "border-emerald-500/20 bg-emerald-500/10 text-emerald-600" : "bg-muted/40 text-muted-foreground"}`}>{currentRevision ? t("Active") : t(revision.validationState)}</span>{isActive && !currentRevision ? <p className="mt-2 text-xs text-muted-foreground">{t("Earlier revision active")}</p> : null}<div aria-live="polite" aria-atomic="true" className="mt-2 max-w-64 text-xs">{testing ? <p role="status" className="text-muted-foreground">{t("Testing connection… This may take up to 60 seconds.")}</p> : testResult ? <div role={testResult.success ? "status" : "alert"} className={testResult.success ? "text-emerald-600" : "text-destructive"}><p className="font-medium">{testResult.success ? t("Connection succeeded") : t("Connection failed")}</p>{!testResult.success ? <p className="mt-1 max-h-48 overflow-y-auto whitespace-pre-wrap break-words [overflow-wrap:anywhere]">{t(testResult.message || "The test did not return the expected reply.")}</p> : null}</div> : null}</div></td>
                 <td className="p-3"><div className="flex flex-nowrap items-center justify-end gap-1 whitespace-nowrap"><Button disabled={!!busy || !onCreateRevision} onClick={() => edit(profile)} size="sm" variant="outline"><PencilIcon />{t("Edit")}</Button><Button aria-label={`${t("Test connection")}: ${profile.name}`} title={t("Test connection")} disabled={!!busy} onClick={() => void testConnection(profile)} size="sm" variant="outline">{testing ? <Loader2Icon className="animate-spin" /> : <FlaskConicalIcon />}{testing ? t("Testing…") : t("Test")}</Button><Button title={currentRevision ? t("Already active") : validated ? t("Activate this revision") : t("Test the connection before activation")} disabled={currentRevision || !validated || !!busy} onClick={() => void run(`activate-${profile.id}`, () => onActivate(revision.id))} size="sm" variant="outline"><CheckCircle2Icon />{t("Activate")}</Button><Button aria-label={`${t("Delete")} ${profile.name}`} title={isActive ? t("Active profiles cannot be deleted") : t("Delete profile")} disabled={isActive || !!busy} onClick={() => void run(`delete-${profile.id}`, () => onDelete(profile.id))} size="icon" variant="ghost" className="text-muted-foreground hover:text-destructive"><Trash2Icon /></Button></div></td>
               </tr>;
@@ -158,6 +159,7 @@ function ProfileEditor({
   const [agentType, setAgentType] = useState<DashboardAgentType>(defaultType);
   const [name, setName] = useState(editing?.name ?? "");
   const [model, setModel] = useState(editing?.latestRevision.model ?? "");
+  const [executionDriver, setExecutionDriver] = useState<DashboardExecutionDriver>(editing?.latestRevision.executionDriver ?? "stdio");
   const [resume, setResume] = useState(editing?.latestRevision.resumeOnModelChange ?? true);
   const { CODEX_PROVIDER_MODE: initialConnection, ...initialEnv } = editing?.latestRevision.env ?? {};
   const [gateway, setGateway] = useState(initialConnection === "gateway");
@@ -194,6 +196,7 @@ function ProfileEditor({
       if (Object.values(secretValues).some((value) => value.trim().length === 0)) throw new Error("Enter a value for each new or replacement secret, or cancel that change.");
       const common = {
         model,
+        executionDriver,
         resumeOnModelChange: resume,
         env,
         secrets: Object.fromEntries(
@@ -238,6 +241,11 @@ function ProfileEditor({
         <label className="space-y-1 text-sm">{t("Profile name")}<Input disabled={editing !== null} onChange={(e) => setName(e.target.value)} required value={name} />
         </label>
         <label className="space-y-1 text-sm">{t("Model")}<Input onChange={(e) => setModel(e.target.value)} required value={model} />
+        </label>
+        <label className="space-y-1 text-sm">{t("Execution driver")}<select className="block h-9 w-full rounded-md border bg-background px-3" onChange={(e) => setExecutionDriver(e.target.value as DashboardExecutionDriver)} value={executionDriver}>
+            <option value="stdio">{t("Standard pipe (stdio)")}</option>
+            <option value="pty">{t("Interactive PTY (pty)")}</option>
+          </select>
         </label>
       </div>
       {agentType === "codex" ? (

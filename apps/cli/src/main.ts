@@ -7,7 +7,7 @@ import { runRootCli } from "./commands/root";
 
 import type { CliResult, Env, NormalizedCliInput } from "@luna/cli-support/types";
 import { versionHelpText } from "@luna/cli-support/help";
-import { loadDefaultLunaEnv } from "@luna/cli-support/env";
+import { loadDefaultLunaEnv, resolveTurnLunaEnv } from "@luna/cli-support/env";
 import { hasFlag } from "@luna/cli-support/options";
 import { runSchedulesCli } from "./commands/schedules";
 import { runRunnerOperationsCli } from "./commands/runner-operations";
@@ -158,9 +158,10 @@ function applyGlobalAuthOptions(argv: readonly string[], env: Env): NormalizedCl
       nextArgv.push(value);
     }
   }
+  const effectiveEnv = resolveTurnLunaEnv(env);
   return {
     argv: nextArgv,
-    env: accessToken === undefined ? env : { ...env, LUNA_ACCESS_TOKEN: accessToken },
+    env: accessToken === undefined ? effectiveEnv : { ...effectiveEnv, LUNA_ACCESS_TOKEN: accessToken },
   };
 }
 

@@ -5,6 +5,8 @@ import {ExecutionScope,ResourceSelection} from "./scope.js";
 export const Id = z.string().min(1).max(128).regex(/^[A-Za-z0-9_.-]+$/).refine((id) => id !== "." && id !== "..", "Invalid identifier");
 export const Sequence = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
 export const RunnerKind = z.enum(["main", "work", "task"]);
+export const ExecutionDriverKind = z.enum(["stdio", "pty"]);
+export type ExecutionDriverKind = z.infer<typeof ExecutionDriverKind>;
 export const JobState = z.enum(["queued", "starting", "running", "retry_wait", "cancelling", "succeeded", "failed", "cancelled", "interrupted"]);
 export type JobState = z.infer<typeof JobState>;
 
@@ -27,7 +29,8 @@ export const JobRequest = z.object({
   retryPolicy: RetryPolicy.optional(),
   runnerKind: RunnerKind, sessionId: Id.optional(), taskId: Id.optional(), taskRunId: Id.optional(),
   input: z.object({
-    runnerType: z.enum(["claude", "codex"]), prompt: z.string().max(8 * 1024 * 1024),
+    runnerType: z.enum(["claude", "codex"]), executionDriver: ExecutionDriverKind.optional(),
+    prompt: z.string().max(8 * 1024 * 1024),
     sessionId: z.string().min(1).max(512).optional(), model: z.string().min(1).max(256).optional(),
   }).strict(),
   credentialsRevision: Sequence.min(1), timeoutMs: z.number().int().positive().max(7 * 86400_000),

@@ -114,13 +114,14 @@ export class RuntimeAgentTransport implements AgentAttemptTransport {
         || prepared.resources.digest!==resources.selection.digest)throw new ExecutionError(409,"invocation_preparation_mismatch");
       // Container rootAccess follows the Shadow switch; OS-level privileged requires a trusted requester.
       const root = new ShadowRootAccessStore(this.db).invocationPrivileged(invocation);
+      const executionDriver = invocation.agentConfig?.executionDriver;
       const request = JobRequest.parse({ version: 2, jobId: randomUUID(), invocationId, environmentId: this.client.environmentId,
         ...(root.rootAccess ? { rootAccess: true, ...(root.privileged ? { privileged: true } : {}) } : {}),
         scope:prepared.scope,resources:resources.selection,resourceRevision:resources.selection.digest,
         runnerContextId: options.runnerContextId, scopeKey, runnerKind: invocation.runnerKind,
         ...(projectId ? { projectId } : {}),
         ...(invocation.sessionId ? { sessionId: invocation.sessionId } : {}), ...(invocation.taskId ? { taskId: invocation.taskId } : {}), ...(invocation.taskRunId ? { taskRunId: invocation.taskRunId } : {}),
-        input: { runnerType, prompt: extractTextContent(message), ...(model ? { model } : {}), ...(options.runnerSessionId ? { sessionId: options.runnerSessionId } : {}) },
+        input: { runnerType, ...(executionDriver && executionDriver !== "stdio" ? { executionDriver } : {}), prompt: extractTextContent(message), ...(model ? { model } : {}), ...(options.runnerSessionId ? { sessionId: options.runnerSessionId } : {}) },
         retryPolicy: { maxConsecutiveRetries: config.runner.maxTransientRetries, maxTotalRetries: 10, baseDelayMs: 2000, maxDelayMs: 30000 },
         credentialsRevision: 1, timeoutMs: jobTimeoutMs(this.db, invocation) });
       job = this.store.createJob(this.client.runtimeId, request);

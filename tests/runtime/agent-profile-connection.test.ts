@@ -26,6 +26,22 @@ describe("AgentProfileConnectionTester", () => {
     expect(args[args.indexOf("-w") + 1]).toBe("/luna-runner/agent-profile-test");
     expect(args[args.indexOf("--entrypoint") + 1]).toBe("bun");
     expect(args.slice(-2)).toEqual(["luna-runner:latest", "/app/agent-runner/dist/job-main.js"]);
+
+    const ptyArgs = buildConnectionTestDockerArgs(
+      "test-pty-container",
+      {
+        image: "luna-runner:latest",
+        runnerType: "claude",
+        executionDriver: "pty",
+        model: "claude-sonnet-4-6",
+        prompt: "test",
+        env: {},
+        timeoutMs: 60_000,
+      },
+      "/host/executor/dist",
+    );
+    expect(ptyArgs).toContain("type=bind,src=/host/executor/dist,dst=/opt/luna-runtime/current,readonly");
+    expect(ptyArgs.slice(-2)).toEqual(["luna-runner:latest", "/opt/luna-runtime/current/job-main.js"]);
   });
 
   test("uses a disposable one-shot runner request without business operations", async () => {
@@ -64,9 +80,17 @@ describe("AgentProfileConnectionTester", () => {
     expect(JSON.stringify(captured)).not.toContain("LUNA_ACCESS_TOKEN");
   });
 
-  test("scrubs submitted secrets from failures", async () => {
+  test("scrubs submitted secrets from failures and unwraps runner error envelopes", async () => {
     const tester = new AgentProfileConnectionTester({
-      execute: async () => ({ success: false, output: "bad token secret-value" }),
+      execute: async () => ({
+        success: false,
+        output: [
+          "---LUNA_OUTPUT_START---",
+          JSON.stringify({ status: "error", error: "Provider rejected token secret-value (401)" }),
+          "---LUNA_OUTPUT_END---",
+          "WARNING: platform mismatch",
+        ].join("\n"),
+      }),
     });
     const result = await tester.testSnapshot({
       agentId: "connection-test-agent",
@@ -82,7 +106,8 @@ describe("AgentProfileConnectionTester", () => {
       configFingerprint: "c",
     });
     expect(result.success).toBe(false);
+    expect(result.message).toBe("Provider rejected token [REDACTED] (401)");
     expect(result.message).not.toContain("secret-value");
-    expect(result.message).toContain("[REDACTED]");
+    expect(result.message).not.toContain("LUNA_OUTPUT_START");
   });
 });

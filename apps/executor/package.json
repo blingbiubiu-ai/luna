@@ -27,16 +27,27 @@
     "./executor/retry-store": "./src/executor/retry-store.ts",
     "./executor/server": "./src/executor/server.ts",
     "./executor/files": "./src/executor/files.ts",
-    "./executor/store": "./src/executor/store.ts"
+    "./executor/store": "./src/executor/store.ts",
+    "./executor/pty-driver": "./src/executor/pty-driver.ts",
+    "./pty/pty-main": "./src/pty/pty-main.ts",
+    "./pty/pty-session": "./src/pty/pty-session.ts",
+    "./pty/types": "./src/pty/types.ts",
+    "./pty/claude-pty-adapter": "./src/pty/claude-pty-adapter.ts",
+    "./pty/codex-pty-adapter": "./src/pty/codex-pty-adapter.ts",
+    "./pty/idle-detector": "./src/pty/idle-detector.ts",
+    "./pty/terminal-settle": "./src/pty/terminal-settle.ts",
+    "./pty/viewport": "./src/pty/viewport.ts",
+    "./pty/jsonl-cursor": "./src/pty/jsonl-cursor.ts"
   },
   "scripts": {
-    "build": "bun build src/executor/main.ts --outfile dist/executor.js --target bun && bun build src/executor/job-main.ts --outfile dist/job-main.js --target bun && bun build src/executor/job-process.ts --outfile dist/job-process.js --target bun",
+    "build": "bun build src/executor/main.ts --outfile dist/executor.js --target bun && bun build src/executor/job-main.ts --outfile dist/job-main.js --target bun && bun build src/executor/job-process.ts --outfile dist/job-process.js --target bun && bun build src/pty/pty-main.ts --outfile dist/pty-main.js --target bun",
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {
     "@luna/runner-protocol": "workspace:*",
     "@luna/execution-store": "workspace:*",
     "@luna/execution-transport": "workspace:*",
+    "@xterm/headless": "^6.0.0",
     "zod": "^4.4.3"
   },
   "devDependencies": {

@@ -1,4 +1,9 @@
 export type AgentType = "claude" | "codex";
+export type ExecutionDriver = "stdio" | "pty";
+
+export function isExecutionDriver(value: unknown): value is ExecutionDriver {
+  return value === "stdio" || value === "pty";
+}
 
 export interface AgentEnvironmentField {
   readonly key: string;
@@ -23,6 +28,7 @@ export type SecretUpdate =
 export interface AgentProfileInput {
   readonly agentType: string;
   readonly model: string;
+  readonly executionDriver?: string;
   readonly resumeOnModelChange?: boolean;
   readonly env?: Readonly<Record<string, string>>;
   readonly secrets?: Readonly<Record<string, SecretUpdate>>;
@@ -33,6 +39,7 @@ export interface AgentProfileInput {
 export interface ValidatedAgentProfileInput {
   readonly agentType: AgentType;
   readonly model: string;
+  readonly executionDriver: ExecutionDriver;
   readonly resumeOnModelChange: boolean;
   readonly env: Record<string, string>;
   readonly secrets: Record<string, SecretUpdate>;

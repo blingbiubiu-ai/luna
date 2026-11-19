@@ -101,8 +101,9 @@ function importAll(old: Database, db: DrizzleDB, accountId: string, oldCipher: A
     const selections = old.query("SELECT shadow_id, mode, revision_id FROM shadow_model_selections WHERE agent_id = ?").all(oldAgent.id) as { shadow_id: string; mode: string; revision_id: string | null }[];
     const wanted = new Set([active?.revision_id, ...selections.map(row => row.revision_id)].filter((id): id is string => Boolean(id)));
     let profileCount = 0;
+    const hasExecutionDriver = (old.query("PRAGMA table_info(agent_profile_revisions)").all() as { name: string }[]).some(col => col.name === "execution_driver");
     for (const profile of old.query("SELECT id, agent_id, name, agent_type FROM agent_profiles WHERE agent_id = ? AND deleted_at IS NULL ORDER BY created_at").all(oldAgent.id) as OldProfile[]) {
-      const revisions = (old.query("SELECT id, profile_id, revision_number, model, resume_on_model_change, env_json, validation_state FROM agent_profile_revisions WHERE profile_id = ? ORDER BY revision_number").all(profile.id) as OldRevision[]);
+      const revisions = (old.query(`SELECT id, profile_id, revision_number, model, ${hasExecutionDriver ? "execution_driver," : ""} resume_on_model_change, env_json, validation_state FROM agent_profile_revisions WHERE profile_id = ? ORDER BY revision_number`).all(profile.id) as (OldRevision & { execution_driver?: string })[]);
       const latest = revisions.at(-1);
       const chosen = revisions.filter(revision => wanted.has(revision.id) || revision === latest);
       let newProfileId: string | undefined;
@@ -110,7 +111,7 @@ function importAll(old: Database, db: DrizzleDB, accountId: string, oldCipher: A
         const secrets = Object.fromEntries((old.query("SELECT env_key, ciphertext, nonce, auth_tag, algorithm, key_version, credential_identity FROM agent_profile_secrets WHERE revision_id = ?").all(revision.id) as OldSecret[])
           .map(row => [row.env_key, { set: oldCipher.decrypt({ ciphertext: row.ciphertext, nonce: row.nonce, authTag: row.auth_tag, algorithm: row.algorithm as "aes-256-gcm",
             keyVersion: row.key_version, credentialIdentity: row.credential_identity, profileId: profile.id, revisionId: revision.id, key: row.env_key }) }]));
-        const input = { model: revision.model, resumeOnModelChange: revision.resume_on_model_change === 1,
+        const input = { model: revision.model, ...(revision.execution_driver ? { executionDriver: revision.execution_driver } : {}), resumeOnModelChange: revision.resume_on_model_change === 1,
           env: JSON.parse(revision.env_json) as Record<string, string>, secrets, actorId: accountId };
         let created;
         if (newProfileId === undefined) {

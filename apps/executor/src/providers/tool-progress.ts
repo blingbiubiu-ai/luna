@@ -22,6 +22,6 @@ export function toolTitle(name: string, input: Record<string, unknown> = {}): st
   const subject = toolSubject(input);
   return subject ? `${label} · ${subject}` : label;
 }
-export function toolResultText(failed: boolean): string {
+export function toolResultText(failed: boolean): "工具执行失败" | "工具调用已结束" {
   return failed ? "工具执行失败" : "工具调用已结束";
 }

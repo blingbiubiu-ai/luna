@@ -49,6 +49,7 @@ export function createAgentConfigRoutes(options: AgentConfigRouteOptions) {
           name: status.active.name,
           agentType: status.active.agentType,
           model: status.revision.model,
+          executionDriver: status.revision.executionDriver,
           resumeOnModelChange: status.revision.resumeOnModelChange,
         },
       });
@@ -131,6 +132,7 @@ function publicSnapshot(snapshot: ReturnType<ActiveAgentConfigService["resolveEx
     revisionId: snapshot.revisionId,
     agentType: snapshot.agentType,
     model: snapshot.model,
+    executionDriver: snapshot.executionDriver,
     resumeOnModelChange: snapshot.resumeOnModelChange,
     activationSequence: snapshot.activationSequence,
   };

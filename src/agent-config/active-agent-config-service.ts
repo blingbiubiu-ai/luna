@@ -15,7 +15,7 @@ import {
 } from "@/data/schema";
 import { agentTypeDescriptor, isAgentType } from "./type-registry";
 import type { AgentSecretCipher } from "./secret-cipher";
-import type { AgentType } from "./types";
+import { isExecutionDriver, type AgentType, type ExecutionDriver } from "./types";
 
 export class AgentNotConfiguredError extends Error {
   readonly code = "agent_not_configured";
@@ -33,6 +33,7 @@ export interface AgentExecutionSnapshot {
   readonly activationSequence: number;
   readonly agentType: AgentType;
   readonly model: string;
+  readonly executionDriver: ExecutionDriver;
   readonly resumeOnModelChange: boolean;
   readonly env: Readonly<Record<string, string>>;
   readonly providerFingerprint: string;
@@ -177,6 +178,7 @@ export class ActiveAgentConfigService {
       activationSequence,
       agentType,
       model: revision.model,
+      executionDriver: isExecutionDriver(revision.execution_driver) ? revision.execution_driver : "stdio",
       resumeOnModelChange: revision.resume_on_model_change,
       env: Object.freeze({ ...env }),
       providerFingerprint: hash({ agentType, providerEnv, credentialIdentities }),

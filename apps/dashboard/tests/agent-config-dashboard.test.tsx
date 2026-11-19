@@ -41,6 +41,7 @@ describe("AgentConfigDashboardView", () => {
         id: "revision-1",
         revisionNumber: 1,
         model: "gpt-5",
+        executionDriver: "pty" as const,
         resumeOnModelChange: true,
         env: { OPENAI_BASE_URL: "https://api.example.test/v1" },
         secrets: { OPENAI_API_KEY: { configured: true, updatedAt: 1 } },
@@ -70,6 +71,7 @@ describe("AgentConfigDashboardView", () => {
     expect(html).toContain("Earlier revision active");
     expect(html).toContain("Connection failed");
     expect(html).toContain("Provider rejected credentials (401)");
+    expect(html).toContain("Interactive PTY (pty)");
     expect(html).toContain("Edit");
   });
 });

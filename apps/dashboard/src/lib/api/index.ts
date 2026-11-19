@@ -141,6 +141,7 @@ export type {
   UserIdentityLink,
   UserKind,
   DashboardAgentType,
+  DashboardExecutionDriver,
   DashboardAgentTypeDescriptor,
   DashboardAgentProfile,
   DashboardAgentProfileRevision,

@@ -19,6 +19,7 @@ export interface ExecutorConfig {
   /** The snapshot version is not fixed per Executor: Worker switches $HOME/.luna-resources between Jobs. */
   scope:ExecutionScope;
   instanceId: string; runtimeId: string; workerId: string; dataRoot: string; runnerEntry: string;
+  ptyRunnerEntry?: string;
   runtimeEndpoint: string; capacity: number; runnerLayout?: RunnerLayout; runnerUid?: number; runnerGid?: number;
   /** The container allows sudo (Shadow root switch on a host that permits it); Jobs still need `privileged`. */
   runnerSudo?: boolean;
@@ -35,7 +36,7 @@ export function createExecutor(db: SqlDatabase, authority: TokenAuthority, confi
   for(const job of store.list())requireScope(store.binding(job.jobId).scope);
   db.prepare("INSERT OR IGNORE INTO executor_scope VALUES (1,?)").run(canonicalJson(scope));
   const contexts = new ExecutorContexts(config.dataRoot, config.runnerUid, config.runnerGid, config.runnerLayout);
-  const processes = new ExecutorProcesses(store, contexts, config.runnerEntry, config.capacity, config.runnerSudo === true);
+  const processes = new ExecutorProcesses(store, contexts, config.runnerEntry, config.capacity, config.runnerSudo === true, config.ptyRunnerEntry);
   store.onTerminal = id => contexts.forgetCredentials(id);
   const reporter = new ExecutorEventReporter(store, config.runtimeEndpoint);
   const fileLeases = new Map<string, string>();
@@ -119,6 +120,7 @@ export function createExecutor(db: SqlDatabase, authority: TokenAuthority, confi
       const job = store.request(id); if (!job) throw new ExecutionError(409, "job_not_submitted");
       if (isTerminal(store.snapshot(id).state)) throw new ExecutionError(409, "job_already_terminal");
       contexts.putCredentials(job, body.credentials);
+      processes.notifyCredentials(job.jobId, body.credentials.env);
       if (reporter.ready()) processes.tick();
       json(response, 204); return;
     }

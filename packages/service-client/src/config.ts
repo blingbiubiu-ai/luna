@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, lstatSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
@@ -27,7 +27,8 @@ export function loadKnowledgeConfig(argv: readonly string[], env: Env = process.
   };
 }
 
-function loadLunaConfigEnv(env: Env): Env {
+function loadLunaConfigEnv(rawEnv: Env): Env {
+  const env = overlayTurnLunaEnv(rawEnv);
   const lunaHome = env.LUNA_HOME ?? join(env.HOME ?? homedir(), ".luna");
   const configPath = join(lunaHome, "config.yaml");
   if (!existsSync(configPath)) {
@@ -39,6 +40,26 @@ function loadLunaConfigEnv(env: Env): Env {
     ...configEnv,
     ...env,
   };
+}
+
+function overlayTurnLunaEnv(env: Env): Env {
+  const path = env.LUNA_TURN_ENV_FILE?.trim();
+  if (!path) return env;
+  try {
+    const stat = lstatSync(path);
+    if (!stat.isFile() || stat.isSymbolicLink()) return env;
+    const parsed = JSON.parse(readFileSync(path, "utf8")) as unknown;
+    if (!isRecord(parsed)) return env;
+    const overlay: Record<string, string> = {};
+    for (const [key, value] of Object.entries(parsed)) {
+      if (key.startsWith("LUNA_") && key !== "LUNA_HOME" && key !== "LUNA_TURN_ENV_FILE" && typeof value === "string") {
+        overlay[key] = value;
+      }
+    }
+    return Object.keys(overlay).length > 0 ? { ...env, ...overlay } : env;
+  } catch {
+    return env;
+  }
 }
 
 function resolveServiceUrl(

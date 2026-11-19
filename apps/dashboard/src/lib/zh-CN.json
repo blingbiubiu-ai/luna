@@ -625,5 +625,8 @@
   "Saving authorizes this task until one year after its next run. Renew by saving again before expiry. Paused tasks remain paused.": "保存后，任务授权有效期至下次执行后一年，到期前可重新保存续期。已暂停的任务仍保持暂停。",
   "On days": "执行日期",
   "Select dates": "选择日期",
-  "Select at least one date": "请至少选择一个日期"
+  "Select at least one date": "请至少选择一个日期",
+  "Execution driver": "执行驱动",
+  "Standard pipe (stdio)": "标准管道（stdio）",
+  "Interactive PTY (pty)": "交互式伪终端（pty）"
 }

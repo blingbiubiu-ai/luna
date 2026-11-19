@@ -6,10 +6,11 @@ export const executionReferenceSchema = z.object({
   agentId:z.string().min(1), profileId:z.string().min(1), revisionId:z.string().min(1),
   activationSequence:z.number().int().nonnegative(),
   agentType:z.enum(["claude","codex"]), model:z.string(),
+  executionDriver:z.enum(["stdio","pty"]).default("stdio"),
   providerFingerprint:z.string(),modelFingerprint:z.string(),configFingerprint:z.string(),
 }).strict();
 export type AgentExecutionReference = z.infer<typeof executionReferenceSchema>;
 export function executionReference(snapshot:AgentExecutionSnapshot):AgentExecutionReference {
-  const {agentId,profileId,revisionId,activationSequence,agentType,model,providerFingerprint,modelFingerprint,configFingerprint}=snapshot;
-  return executionReferenceSchema.parse({agentId,profileId,revisionId,activationSequence,agentType,model,providerFingerprint,modelFingerprint,configFingerprint});
+  const {agentId,profileId,revisionId,activationSequence,agentType,model,executionDriver,providerFingerprint,modelFingerprint,configFingerprint}=snapshot;
+  return executionReferenceSchema.parse({agentId,profileId,revisionId,activationSequence,agentType,model,executionDriver,providerFingerprint,modelFingerprint,configFingerprint});
 }

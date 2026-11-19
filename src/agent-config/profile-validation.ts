@@ -1,8 +1,9 @@
 import { agentTypeDescriptor, isAgentType } from "./type-registry";
-import type {
-  AgentProfileInput,
-  SecretUpdate,
-  ValidatedAgentProfileInput,
+import {
+  isExecutionDriver,
+  type AgentProfileInput,
+  type SecretUpdate,
+  type ValidatedAgentProfileInput,
 } from "./types";
 
 const KEY_PATTERN = /^[A-Z][A-Z0-9_]*$/;
@@ -23,6 +24,10 @@ export function validateAgentProfileInput(
   const model = input.model.trim();
   if (model.length === 0) {
     throw new Error("Agent model is required");
+  }
+  const rawDriver = input.executionDriver ?? "stdio";
+  if (!isExecutionDriver(rawDriver)) {
+    throw new Error(`Unsupported execution driver: ${String(rawDriver)}`);
   }
 
   const descriptor = agentTypeDescriptor(input.agentType);
@@ -78,6 +83,7 @@ export function validateAgentProfileInput(
   return {
     agentType: input.agentType,
     model,
+    executionDriver: rawDriver,
     resumeOnModelChange:
       input.resumeOnModelChange ?? descriptor.defaultResumeOnModelChange,
     env,

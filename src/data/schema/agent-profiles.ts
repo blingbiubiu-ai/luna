@@ -30,6 +30,7 @@ export const agentProfileRevisions = sqliteTable(
     profile_id: text("profile_id").notNull(),
     revision_number: integer("revision_number").notNull(),
     model: text("model").notNull(),
+    execution_driver: text("execution_driver").notNull().default("stdio"),
     resume_on_model_change: integer("resume_on_model_change", {
       mode: "boolean",
     }).notNull().default(true),

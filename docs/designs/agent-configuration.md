@@ -12,7 +12,8 @@ Switching Agents clears the open editor and uses a separate query cache.
 
 The supported Agent types are `claude` and `codex`. Their
 descriptors provide known environment fields and allowed custom prefixes. The
-Profile data model remains generic: every revision contains a model, the
+Profile data model remains generic: every revision contains a model, an
+execution driver (`stdio` default or `pty` interactive pseudo-terminal), the
 model-change resume policy, non-sensitive environment values, and write-only
 secret values.
 
@@ -36,7 +37,7 @@ may contain provider-specific behavior and require review before migration.
 ## Persistence And Secrets
 
 `agent_profiles` owns stable names and Agent types. Each edit creates an
-immutable `agent_profile_revisions` row. `active_agent_config` has one pointer per `agent_id` to a validated revision; activation does not rewrite runner contexts
+immutable `agent_profile_revisions` row (including `execution_driver`, defaulting to `stdio`). `active_agent_config` has one pointer per `agent_id` to a validated revision; activation does not rewrite runner contexts
 or scan the database.
 
 Secrets are stored separately in `agent_profile_secrets` with AES-256-GCM.
@@ -53,8 +54,8 @@ to create or resolve secret-bearing revisions.
 
 An Agent owner manages Profiles through the Agent-scoped configuration API. The existing `/settings/agents` client still needs Agent selection. A revision must pass
 the connection test before activation. The test launches a one-shot
-`luna-runner:latest` container with a 60-second timeout and runs the image's
-`job-main.js` directly with the selected Agent type, model, and revision
+`luna-runner:latest` container with a 60-second timeout and runs
+`job-main.js` (mounting the local Executor runtime bundle read-only when testing `executionDriver: "pty"`) with the selected Agent type, execution driver, model, and revision
 environment over stdin. It has no business workspace, runner session,
 or Luna Service credential mounts. Test output is bounded and configured values
 are redacted before persistence or response.

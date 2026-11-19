@@ -44,11 +44,30 @@ describe("agent profile validation", () => {
     ).toEqual({
       agentType: "claude",
       model: "claude-sonnet-4-6",
+      executionDriver: "stdio",
       resumeOnModelChange: true,
       env: { ANTHROPIC_BASE_URL: "https://example.test" },
       secrets: { ANTHROPIC_API_KEY: { set: "secret" } },
       customSensitiveKeys: [],
     });
+  });
+
+  test("validates executionDriver and rejects unsupported values", () => {
+    expect(
+      validateAgentProfileInput({
+        agentType: "codex",
+        model: "gpt-5",
+        executionDriver: "pty",
+      }).executionDriver,
+    ).toBe("pty");
+
+    expect(() =>
+      validateAgentProfileInput({
+        agentType: "codex",
+        model: "gpt-5",
+        executionDriver: "tmux",
+      }),
+    ).toThrow("Unsupported execution driver");
   });
 
   test("accepts Claude API timeout without allowing unrelated prefixes", () => {

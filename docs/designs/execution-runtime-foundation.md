@@ -26,7 +26,7 @@ Stream framing and provider failure types live in `@luna/runner-protocol`.
 Each application declares its workspace dependencies and has independent
 `build` and `typecheck` scripts. `apps/cli/dist/luna-client.js` is copied to root
 `dist/` by the root build for existing deployment and npm packaging. Executor
-builds `executor.js`, `job-main.js` and `job-process.js` under its own `dist/`.
+builds `executor.js`, `job-main.js`, `job-process.js` and `pty-main.js` under its own `dist/`.
 The Worker build embeds these bundles and the CLI client in `luna-worker.js`. At
 start Worker installs them under `<Worker home>/runner-runtime/<version>`, moves
 the `current` link there, and every container mounts that root read-only at
@@ -71,7 +71,7 @@ flowchart LR
  W[Worker process] -->|Outbound authenticated WebSocket / bidirectional RPC| R
  W -->|Docker lifecycle and local Job API| E[Executor in Docker]
  E -->|Local event callback HTTP| W
- E <-->|Subprocess stdio| P[Main / Work / Task Runner]
+ E <-->|Subprocess stdio or warm PTY host| P[Main / Work / Task Runner]
 ```
 
 Service also owns the configured Runtime callback/admin listener (default 8091).
@@ -110,7 +110,7 @@ Worker mounts public commands, Memory, Skills and projects below HOME. User-leve
 
 Worker `projects: [{ projectId, hostPath }]` retains host-side project configuration and project IDs for routing and context affinity. The Executor mounts the Shadow HOME and selected resources. Runner working files live under the context’s `workspace/`. Existing host project files stay in place.
 
-Executor's control credentials and SQLite ledger are root-only. Each Job's Service token is scoped and checked against its durable invocation. Executor injects the token and Service URL into that Runner's environment, which the existing CLI reads directly. A running process keeps its launch-time token. New attempts use the latest supplied credentials.
+Executor's control credentials and SQLite ledger are root-only. Each Job's Service token is scoped and checked against its durable invocation. In `stdio` mode, Executor spawns a one-shot non-interactive Runner subprocess per attempt (`--output-format stream-json --print` for Claude, `codex exec --json` for Codex) and injects the token and Service URL into that Runner's environment; a running process keeps its launch-time token and new attempts use the latest supplied credentials. In `pty` mode (`JobRequest.input.executionDriver: "pty"`), Executor's `PtyContextPool` maintains a context-scoped warm unprivileged `pty-main.js` host running the interactive CLI inside a Bun pseudo-terminal (`Bun.spawn(..., { terminal })`). Dynamic per-turn `LUNA_*` credentials (`LUNA_ACCESS_TOKEN`, `LUNA_INVOCATION_ID`, `LUNA_SERVICE_URL`, and scope headers) are atomically written to a private `0600` file on container `/tmp` (`LUNA_TURN_ENV_FILE`) before submitting each turn, updated in place on credential renewal, and unlinked immediately when the turn settles or cancels; `@luna/cli-support` and `@luna/service-client` overlay `LUNA_TURN_ENV_FILE` on each `luna` CLI call. Both drivers emit the identical `ProviderOutput` event stream (`init`, `stream`, `tool_start`, `tool_result`, `checkpoint`, `stderr`, `error`, `success`), with `pty` deriving structured events and confirmed `finalText` from the provider's on-disk JSONL transcript/rollout gated by `PtyIdleDetector` and `TranscriptTerminalSettle`.
 
 ## Transport and recovery
 

@@ -4,7 +4,7 @@ import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 
 import type { CliResult, Env, UnifiedServiceRequest } from "./types";
-import { readCredentials, resolveAccessToken } from "./env";
+import { readCredentials, resolveAccessToken, resolveTurnLunaEnv } from "./env";
 import { setTimeout as sleep } from "node:timers/promises";
 import { isPlainRecord, readIdentityOption } from "./options";
 import {
@@ -263,9 +263,10 @@ function jsonUnifiedServiceHeaders(env: Env): Headers {
 }
 
 function resolveArtifactRegisterScope(
-  env: Env,
+  rawEnv: Env,
   input: { readonly scopeType?: string; readonly scopeId?: string },
 ): { readonly scopeType: string; readonly scopeId: string } {
+  const env = resolveTurnLunaEnv(rawEnv);
   if (input.scopeType !== undefined && input.scopeId !== undefined) {
     return { scopeType: input.scopeType, scopeId: input.scopeId };
   }
@@ -427,7 +428,8 @@ export function resolveUnifiedServiceUrl(env: Env, path: string): string {
   return `${base}${normalizedPath}`;
 }
 
-export function resolveServiceBaseUrl(env: Env): string {
+export function resolveServiceBaseUrl(rawEnv: Env): string {
+  const env = resolveTurnLunaEnv(rawEnv);
   const configured = env.LUNA_SERVICE_URL?.trim();
   if (configured) {
     return configured.replace(/\/+$/, "");
@@ -443,7 +445,8 @@ export function resolveServiceBaseUrl(env: Env): string {
   return `http://${clientHost}:${port}`;
 }
 
-export function unifiedServiceHeaders(env: Env): Headers {
+export function unifiedServiceHeaders(rawEnv: Env): Headers {
+  const env = resolveTurnLunaEnv(rawEnv);
   const headers = new Headers({ accept: "application/json" });
   const token = resolveAccessToken(env);
   if (token) {

@@ -1788,10 +1788,13 @@ export interface DashboardAgentTypeDescriptor {
   envFields: readonly DashboardAgentEnvironmentField[];
 }
 
+export type DashboardExecutionDriver = "stdio" | "pty";
+
 export interface DashboardAgentProfileRevision {
   id: string;
   revisionNumber: number;
   model: string;
+  executionDriver?: DashboardExecutionDriver;
   resumeOnModelChange: boolean;
   env: Record<string, string>;
   secrets: Record<string, { configured: true; updatedAt: number }>;
@@ -1822,6 +1825,7 @@ export type DashboardAgentConfigStatus =
         name: string;
         agentType: DashboardAgentType;
         model: string;
+        executionDriver?: DashboardExecutionDriver;
         resumeOnModelChange: boolean;
       };
     };
@@ -1830,6 +1834,7 @@ export interface CreateAgentProfileInput {
   name: string;
   agentType: DashboardAgentType;
   model: string;
+  executionDriver?: DashboardExecutionDriver;
   resumeOnModelChange: boolean;
   env: Record<string, string>;
   secrets: Record<string, { set: string }>;

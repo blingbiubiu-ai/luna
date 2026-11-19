@@ -15,7 +15,7 @@ import {
 import { uuid } from "@/shared";
 import { validateAgentProfileInput } from "./profile-validation";
 import { isAgentType } from "./type-registry";
-import type { AgentProfileInput, AgentType, SecretUpdate } from "./types";
+import { isExecutionDriver, type AgentProfileInput, type AgentType, type ExecutionDriver, type SecretUpdate } from "./types";
 import type { AgentSecretCipher, EncryptedSecret } from "./secret-cipher";
 
 type ProfileRow = typeof agentProfiles.$inferSelect;
@@ -33,6 +33,7 @@ export interface AgentProfileRevisionView {
   readonly id: string;
   readonly revisionNumber: number;
   readonly model: string;
+  readonly executionDriver: ExecutionDriver;
   readonly resumeOnModelChange: boolean;
   readonly env: Record<string, string>;
   readonly secrets: Record<string, SecretSummary>;
@@ -201,6 +202,7 @@ export class AgentProfileStore {
       id: revision.id,
       revisionNumber: revision.revision_number,
       model: revision.model,
+      executionDriver: isExecutionDriver(revision.execution_driver) ? revision.execution_driver : "stdio",
       resumeOnModelChange: revision.resume_on_model_change,
       env: parseObject(revision.env_json),
       secrets: Object.fromEntries(
@@ -246,6 +248,7 @@ export class AgentProfileStore {
     const fingerprint = configFingerprint(
       input.agentType,
       input.model,
+      input.executionDriver,
       input.resumeOnModelChange,
       input.env,
       Object.fromEntries(
@@ -260,6 +263,7 @@ export class AgentProfileStore {
       profile_id: profile.id,
       revision_number: revisionNumber,
       model: input.model,
+      execution_driver: input.executionDriver,
       resume_on_model_change: input.resumeOnModelChange,
       env_json: JSON.stringify(sortRecord(input.env)),
       config_fingerprint: fingerprint,
@@ -340,6 +344,7 @@ function toSecretRow(
 function configFingerprint(
   agentType: string,
   model: string,
+  executionDriver: ExecutionDriver,
   resume: boolean,
   env: Record<string, string>,
   secretIdentities: Record<string, string>,
@@ -347,6 +352,7 @@ function configFingerprint(
   return createHash("sha256").update(JSON.stringify({
     agentType,
     model,
+    ...(executionDriver === "stdio" ? {} : { executionDriver }),
     resume,
     env: sortRecord(env),
     secretIdentities: sortRecord(secretIdentities),
