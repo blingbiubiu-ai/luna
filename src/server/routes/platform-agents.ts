@@ -16,6 +16,7 @@ import { loadDashboardUserRows } from "@/dashboard-api/user-display";
 import { ShadowWorkerRoutingStore } from "@/agents/shadow-worker-routing-store";
 import { ShadowModelSelectionStore } from "@/agents/shadow-model-selection-store";
 import { AuthorizationRuleStore } from "../policy/authorization-rule-store";
+import { AgentSettingsStore } from "@/agents/agent-settings-store";
 import { isGuardResponse, requireDashboardOnly } from "../auth/guards";
 
 const statusInput = z.object({status: z.enum(["active", "disabled", "deleted"])}).strict();
@@ -96,6 +97,9 @@ export function createPlatformAgentRoutes(db: DrizzleDB, registry?:PluginRegistr
       const shadow = store.renameShadow(actor(c), {agentId, shadowId}, z.object({name: z.string().trim().max(100)}).strict().parse(await c.req.json()));
       return c.json({shadow});
     })
+    .get("/:agentId/settings", c => c.json({settings: new AgentSettingsStore(db).read(actor(c), c.req.param("agentId"))}))
+    .put("/:agentId/settings", async c =>
+      c.json({settings: new AgentSettingsStore(db).save(actor(c), c.req.param("agentId"), await c.req.json())}))
     .get("/:agentId/shadows/:shadowId/worker-routing", c => c.json({ routing: new ShadowWorkerRoutingStore(db).read(actor(c), c.req.param()) }))
     .get("/:agentId/shadows/:shadowId/model-selection",c=>c.json({selection:new ShadowModelSelectionStore(db).read(actor(c),c.req.param())}))
     .put("/:agentId/shadows/:shadowId/model-selection",async c=>{

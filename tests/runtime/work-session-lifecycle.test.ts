@@ -71,6 +71,54 @@ afterEach(() => {
 });
 
 describe("work session lifecycle", () => {
+  /** One Work turn for `session`, with the Agent's Work progress card set to `progressCard`. */
+  async function workTurnWithCard(progressCard: { show: boolean; style: "card" | "native" }, runAgent: () => Promise<string>) {
+    const { WorkRunner } = await import("../../src/work/work-runner");
+    const channel = new FakeFeishuChannel("feishu-main");
+    const session = new SessionStore(database.db).createWorkSession({
+      channelType: "feishu", channelId: "feishu-main", groupId: "g1", threadId: "t1", rootMessageId: "t1",
+    });
+    const owner = database.db.select().from(lunaSchema.lunaAgents).where(eq(lunaSchema.lunaAgents.id, session.agent_id)).get()!.ownerAccountId;
+    database.db.insert(lunaSchema.agentSettings).values({ agentId: session.agent_id, settings: { work: { progressCard } },
+      updatedByAccountId: owner, updatedAt: 1 }).run();
+    const runner = new WorkRunner({ db: database.db, runnerType: "mock", channelForMessage: () => channel,
+      runAgent: async ({ reportProgress }) => { await reportProgress?.("读取需求"); return runAgent(); } });
+    await runner.executeWorkTurn({
+      turn: { id: "turn-card", sessionId: session.id, status: "running", startedAt: Date.now() } as never,
+      inboxRows: [],
+      messageRows: [{
+        id: "msg-card", sessionId: session.id, channelType: "feishu", channelId: "feishu-main",
+        externalMessageId: "om_card", channelMessageKey: "om_card", senderIdentityId: null,
+        senderUserId: "u1", role: "user", messageKind: "user_message",
+        contentKind: "text", presentationKind: "plain", providerMessageType: "text",
+        contentJson: [{ type: "text", text: "做个功能" }], rawPayloadJson: {},
+        occurredAt: Date.now(), createdAt: Date.now(), session_id: session.id,
+        channel_message_key: "om_card", sender_user_id: "u1", message_kind: "user_message",
+        content_json: [{ type: "text", text: "做个功能" }], raw_payload_json: {}, created_at: Date.now(),
+      }] as never,
+    }, session);
+    return channel.outbound;
+  }
+
+  test("an Agent that hides the Work progress card gets none for a turn that replies", async () => {
+    expect(await workTurnWithCard({ show: false, style: "card" }, async () => "完成")).toEqual([]);
+  });
+
+  test("a hidden Work progress card still reports a failed turn", async () => {
+    const cards = await workTurnWithCard({ show: false, style: "card" }, async () => { throw new Error("boom"); });
+    expect(cards).toHaveLength(1);
+    expect(cards[0]!.statusCard?.status).toBe("blocked");
+  });
+
+  test("the native style sends Feishu native progress with one stable entry per step", async () => {
+    const cards = await workTurnWithCard({ show: true, style: "native" }, async () => "完成");
+    expect(cards.length).toBeGreaterThan(1);
+    expect(cards.every(card => card.statusCardStyle === "native")).toBe(true);
+    expect(cards.at(-1)!.statusCard?.status).toBe("completed");
+    expect(cards.at(-1)!.nativeProgress).toEqual([{ id: "step-0", text: "工作会话执行已开始。" }, { id: "step-1", text: "读取需求" }]);
+    expect(cards[0]!.nativeProgress).toEqual([{ id: "step-0", text: "工作会话执行已开始。" }]);
+  });
+
   test("#work creates session that stays active (no explicit close)", async () => {
     const channel = new FakeFeishuChannel("feishu-main");
     const launcher = new WorkSessionLauncher({

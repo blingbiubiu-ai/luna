@@ -9,7 +9,7 @@ and summaries as your final reply. Supported commands:
 
 - `luna task create`: `title`, `summary`, `facts`; optional `taskType` (`task` or
   `question`, default `task`), `assumptions` (at most five), `sourceMessageIds`,
-  `sessionId` (defaults to current session), `sendStatusCard` (defaults to true), `statusCardStyle` (`card` or `native`, defaults to `native`).
+  `sessionId` (defaults to current session), `sendStatusCard` and `statusCardStyle` (`card` or `native`); leave both out to follow the Agent's settings unless the user asks for something else.
 - `luna task update`: `taskId`, `updateSummary`; optional `updatedTaskTitle`,
   `updatedTaskSummary`, `assumptions`, `sourceMessageIds`. Starts a new run with
   the supplemental facts, replacing the active run if needed.

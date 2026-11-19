@@ -8,7 +8,7 @@ const chinese: Record<string, string> = {
   "Workspace": "工作空间", "Knowledge": "知识库", "Skills": "技能", "Memory": "记忆",
   "Plugins": "插件", "Control": "管理", "Users": "用户", "Groups": "用户组",
   "Tokens": "访问令牌", "Agents": "智能体", "Settings": "设置", "Home": "首页",
-  "Digital Shadows": "数字分身", "Model Configuration": "模型配置", "Containers": "容器",
+  "Digital Shadows": "数字分身", "Model Configuration": "模型配置", "Agent Settings": "Agent 设置", "Containers": "容器",
   "Log out": "退出登录", "Agent management console": "智能体管理控制台",
   "Access": "用户与权限", "Runtime": "运行环境", "New Agent": "新建 Agent",
   "Switch Agent": "切换 Agent", "Platform navigation": "平台导航",

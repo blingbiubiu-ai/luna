@@ -49,7 +49,8 @@ import {
 } from "@/shared";
 import { eq, and } from "drizzle-orm";
 import type { StatusCardOutput } from "./status-card-schema";
-import type { ReplyChannel } from "@/channels/outbound";
+import { AgentSettingsStore } from "@/agents/agent-settings-store";
+import type { NativeProgressEntry, ReplyChannel } from "@/channels/outbound";
 
 const logger = createLogger("work-runner");
 
@@ -200,6 +201,14 @@ export class WorkRunner {
     let statusCard: SentStatusCard | undefined;
     let runnerSessionId = runnerContext?.runner_session_id ?? undefined;
     const progressEvents: TaskStatusCardStepEvent[] = [];
+    // The Agent decides whether its Work progress card shows and in which style; a failed or
+    // cancelled turn is still reported, so it never ends silently.
+    const display = new AgentSettingsStore(this._options.db).get(session.agent_id).work.progressCard;
+    const cardOptions = () => ({
+      ...(statusCard !== undefined ? { targetMessageId: statusCard.providerMessageId } : {}),
+      style: display.style,
+      nativeProgress: progressEvents.map((event, index) => ({ id: `step-${index}`, text: event.summary.slice(0, 800) })),
+    });
     const reportProgress = async (summary: string): Promise<void> => {
       const stepName = normalizeRunnerProgressStep(summary);
       if (stepName === undefined || progressEvents.at(-1)?.summary === stepName) {
@@ -209,6 +218,7 @@ export class WorkRunner {
         type: "runner.step",
         summary: stepName,
       });
+      if (!display.show) return;
       const stepNames = buildTaskStatusCardSteps({ timelineEvents: progressEvents }) ?? [];
       try {
         const sentCard = await this._sendStatusCard(channel, inbound, {
@@ -219,11 +229,7 @@ export class WorkRunner {
             status: index === stepNames.length - 1 ? "active" : "done",
           })),
           summary: "",
-        }, latestMessageRow, session.id, {
-          ...(statusCard !== undefined
-            ? { targetMessageId: statusCard.providerMessageId }
-            : {}),
-        });
+        }, latestMessageRow, session.id, cardOptions());
         if (statusCard === undefined) {
           statusCard = sentCard;
         }
@@ -309,11 +315,7 @@ export class WorkRunner {
           status: "cancelled",
           steps: [],
           summary: "已通过 #steer 取消",
-        }, latestMessageRow, session.id, {
-          ...(statusCard !== undefined
-            ? { targetMessageId: statusCard.providerMessageId }
-            : {}),
-        });
+        }, latestMessageRow, session.id, cardOptions());
         this._attachStatusCardToTurn(input.turn.id, sentCard);
         return;
       }
@@ -323,11 +325,7 @@ export class WorkRunner {
         status: "blocked",
         steps: [],
         summary: `执行出错：${err instanceof Error ? err.message : String(err)}`,
-      }, latestMessageRow, session.id, {
-        ...(statusCard !== undefined
-          ? { targetMessageId: statusCard.providerMessageId }
-          : {}),
-      });
+      }, latestMessageRow, session.id, cardOptions());
       this._attachStatusCardToTurn(input.turn.id, sentCard);
       return;
     } finally {
@@ -340,11 +338,7 @@ export class WorkRunner {
         status: "cancelled",
         steps: runtimeProgressStepNames(progressEvents).map((name) => ({ name, status: "done" })),
         summary: "已通过 #steer 取消",
-      }, latestMessageRow, session.id, {
-        ...(statusCard !== undefined
-          ? { targetMessageId: statusCard.providerMessageId }
-          : {}),
-      });
+      }, latestMessageRow, session.id, cardOptions());
       this._attachStatusCardToTurn(input.turn.id, sentCard);
       return;
     }
@@ -364,12 +358,9 @@ export class WorkRunner {
       });
     }
 
-    // Send final status card
-    const sentCard = await this._sendStatusCard(channel, inbound, card, latestMessageRow, session.id, {
-      ...(statusCard !== undefined
-        ? { targetMessageId: statusCard.providerMessageId }
-        : {}),
-    });
+    // Send final status card; a turn without a reply is reported even when cards are hidden.
+    if (!display.show && card.status === "completed") return;
+    const sentCard = await this._sendStatusCard(channel, inbound, card, latestMessageRow, session.id, cardOptions());
     this._attachStatusCardToTurn(input.turn.id, sentCard);
   }
 
@@ -516,7 +507,7 @@ export class WorkRunner {
     card: StatusCardOutput,
     messageRow: MessageRow,
     sessionId: string,
-    options: { readonly targetMessageId?: string } = {},
+    options: { readonly targetMessageId?: string; readonly style?: "card" | "native"; readonly nativeProgress?: readonly NativeProgressEntry[] } = {},
   ): Promise<SentStatusCard> {
     if (sessionId) new SessionStore(this._options.db).requireReplyUserId(sessionId);
     const steps = card.steps.map((s) => `${s.name}${s.note ? ` — ${s.note}` : ""}`);
@@ -540,6 +531,7 @@ export class WorkRunner {
         content: card.summary,
         statusCardSteps: steps,
         statusCardState: card.status === "in_progress" ? "active" : "terminal",
+        ...(options.style === "native" ? { statusCardStyle: "native" as const, nativeProgress: [...(options.nativeProgress ?? [])] } : {}),
         statusCard: {
           taskId: sessionId || "work-session",
           title: card.title,
@@ -552,7 +544,7 @@ export class WorkRunner {
           : { targetMessageId: createTargetMessageId }
         ),
         idempotencyKey: [
-          "work-card",
+          options.style === "native" ? "work-progress" : "work-card",
           inbound.channel.id,
           messageRow.id,
           card.status,

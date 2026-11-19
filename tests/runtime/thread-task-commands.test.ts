@@ -25,6 +25,7 @@ import {Hono} from "hono";
 import {createRunnerOperationRoutes} from "../../src/server/routes/runner-operations";
 import {runRunnerOperationsCli} from "@luna/cli/commands/runner-operations";
 import type {LunaAccessTokenClaims} from "../../src/server/auth/access-token-service";
+import {AgentSettingsStore} from "../../src/agents/agent-settings-store";
 import type {NormalizedInboundMessage} from "../../src/channels";
 
 let home:string;
@@ -81,6 +82,19 @@ test("explicit thread command references anchor/history once; task binds it and 
   expect(f.db.select().from(schema.taskSubscriptions).all()).toHaveLength(1);
   expect(f.reports).toHaveLength(2);
 });
+test("a task the Runner leaves unstyled follows the Agent's settings; the Runner's own choice wins",async()=>{
+  const f=fixture();
+  const owner=f.db.select().from(schema.lunaAgents).where(eq(schema.lunaAgents.id,f.session.agent_id)).get()!.ownerAccountId;
+  new AgentSettingsStore(f.db).save(owner,f.session.agent_id,{main:{taskProgressCard:{send:false,style:"card"}}});
+  await f.service.execute(f.claims,"task.create","by-agent",{title:"Agent default",summary:"Execute",facts:[]});
+  await f.service.execute(f.claims,"task.create","by-runner",{title:"Runner choice",summary:"Execute",facts:[],sendStatusCard:true,statusCardStyle:"native"});
+  await f.supervisor.waitForIdle();
+  const subscriptions=f.db.select().from(schema.taskSubscriptions).all();
+  const byTitle=(title:string)=>subscriptions.find(row=>f.db.select().from(schema.tasks).where(eq(schema.tasks.id,row.task_id)).get()?.title===title)!;
+  expect([byTitle("Agent default").status_card_style,byTitle("Agent default").notification_level]).toEqual(["card","none"]);
+  expect([byTitle("Runner choice").status_card_style,byTitle("Runner choice").notification_level]).toEqual(["native","major_updates"]);
+});
+
 test("task creation can explicitly disable cards while still reporting to Main",async()=>{
   const f=fixture();
   const result=await f.service.execute(f.claims,"task.create","silent",{title:"No cards",summary:"Execute",facts:[],sendStatusCard:false});

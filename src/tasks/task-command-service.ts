@@ -14,6 +14,7 @@ import type { OperationContext, OperationRequest, OperationResult } from "@/runn
 import { SessionStore } from "@/sessions/session-store";
 import { SessionTimelineStore } from "@/sessions/session-timeline-store";
 import { TaskSubscriptionStore } from "./task-subscription-store";
+import { AgentSettingsStore } from "@/agents/agent-settings-store";
 import type { TaskRunSupervisor } from "./task-run-supervisor";
 
 type TaskRequest = Extract<OperationRequest, {kind: "task.create" | "task.update" | "task.restart" | "task.cancel"}>;
@@ -88,7 +89,12 @@ export class TaskCommandService {
       ...(target.group_id ? {groupId: target.group_id} : {}),
       ...(target.thread_key ? {threadId: target.thread_key} : {}),
       ...(target.root_message_key ? {rootMessageId: target.root_message_key} : {}),
-      ...(request.kind === "task.create" ? {statusCardStyle: request.payload.statusCardStyle ?? "native", notificationLevel: (request.payload.sendStatusCard ?? true) ? "major_updates" as const : "none" as const} : {}),
+      // What the Runner leaves unchosen follows the Agent's settings.
+      ...(request.kind === "task.create" ? (() => {
+        const card = new AgentSettingsStore(db).get(scope.agentId).main.taskProgressCard;
+        return {statusCardStyle: request.payload.statusCardStyle ?? card.style,
+          notificationLevel: (request.payload.sendStatusCard ?? card.send) ? "major_updates" as const : "none" as const};
+      })() : {}),
       visibility: "full"});
     // A message may carry several commands, so the event is keyed by the command; its sources are in data.
     new TimelineStore(db).append({taskId, sessionId,

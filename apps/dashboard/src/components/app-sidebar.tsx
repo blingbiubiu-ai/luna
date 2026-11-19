@@ -2,6 +2,7 @@ import { useTranslation } from "@/lib/i18n";
 import { Link, useMatch, useMatchRoute } from "@tanstack/react-router";
 import Avatar from "boring-avatars";
 import {
+  SlidersHorizontalIcon,
   LayoutDashboardIcon,
   CalendarClockIcon,
   BlocksIcon,
@@ -63,6 +64,7 @@ const navGroups = [
     { title: "Tokens", icon: KeyRoundIcon, to: "/$agentId/settings/tokens" },
   ] },
   { title: "Runtime", items: [
+    { title: "Agent Settings", icon: SlidersHorizontalIcon, to: "/$agentId/settings/general" },
     { title: "Model Configuration", icon: BotIcon, to: "/$agentId/settings/agents" },
     { title: "Workers", icon: BotIcon, to: "/$agentId/settings/workers" },
     { title: "Digital Shadows", icon: BotIcon, to: "/$agentId/settings/channels" },
