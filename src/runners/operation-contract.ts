@@ -4,12 +4,14 @@ import type { NormalizedInboundMessage } from "@/channels";
 const text = z.string().trim().min(1).max(20000);
 const sourceMessageIds = z.array(text).min(1).max(100).optional();
 const assumptions = z.array(text).max(5).optional();
+/** `sendStatusCard` switches the Task's progress card from this run on; `quiet` marks a background check nobody is waiting on. */
+const runOptions = {sendStatusCard: z.boolean().optional(), quiet: z.boolean().optional()};
 export const operationSchemas = {
   "task.create": z.object({title: text, summary: text, facts: z.array(text).max(100), sessionId: text.optional(), sendStatusCard: z.boolean().optional(), statusCardStyle: z.enum(["card", "native"]).optional(), taskType: z.enum(["task", "question"]).default("task"), assumptions, sourceMessageIds}).strict(),
-  "task.update": z.object({taskId: text, updateSummary: text, updatedTaskTitle: text.optional(), updatedTaskSummary: text.optional(), assumptions, sourceMessageIds}).strict(),
+  "task.update": z.object({taskId: text, updateSummary: text, updatedTaskTitle: text.optional(), updatedTaskSummary: text.optional(), assumptions, sourceMessageIds, ...runOptions}).strict(),
   "task.status_card": z.object({taskId: text, resend: z.boolean().default(false), style: z.enum(["card", "native"]).optional()}).strict(),
   "task.cancel": z.object({taskId: text, reason: text.default("用户取消任务"), sourceMessageIds}).strict(),
-  "task.restart": z.object({taskId: text, sourceMessageIds}).strict(),
+  "task.restart": z.object({taskId: text, sourceMessageIds, ...runOptions}).strict(),
   "session.create_thread": z.object({anchorMessageId: text, contextMessageIds: z.array(text).max(100).default([]), title: text.optional()}).strict(),
   "session.clarify": z.object({pendingIntent: z.enum(["task", "question"]), missingFields: z.array(text).min(1), collectedFacts: z.array(text), question: text, reason: text}).strict(),
   "session.release": z.object({reason: text}).strict(),

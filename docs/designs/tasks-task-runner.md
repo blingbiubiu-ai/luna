@@ -107,6 +107,14 @@ The supervisor resolves the active Dashboard Agent Profile when a run begins,
 not when a task was originally queued. Provider/model resume compatibility is
 then checked lazily against the selected task runner context.
 
+One Task run may take as long as its Agent allows: the Agent setting
+`task.runLimitHours` (1 to 168, default 10; Dashboard Agent 设置 → 任务运行时长)
+becomes the Job's `timeoutMs` when the run's Job is created
+(`jobTimeoutMs` in `src/runners/runtime-agent-transport.ts`). Executor stops a
+run that passes it with `execution_timeout`; the run fails, Main is told, and
+the Task can be restarted. A changed setting applies to runs started afterwards.
+Main and Work turns keep the Service-wide `sandbox.containerTimeoutMs`.
+
 Task Jobs use the scope `task:<task-id>:<runner-type>` and carry the task and Task Run IDs in their Job credentials. In isolated mode, Worker provides a container for the scope. In shared mode, Task uses the common Executor. Both modes use the public HOME and a task-specific working directory. Runtime and Executor serialize executions for the same context. Worker retains context data after container reaping.
 
 ## Artifact Output Contract
@@ -240,6 +248,32 @@ Missing information is included in this final command report. Main asks the
 user, receives the answer and starts a new run with `tasks update`. Mid-run
 question/suspend/resume is not implemented.
 
+A report that asks for an answer the Task needs before it can continue is
+submitted with `luna task report --waiting` (`waiting: true` on
+`POST /api/runner/task-reports`). Acceptance sets `tasks.block_reason` to
+`waiting_user` in the report transaction, and the task result delivered to Main
+carries `waitingForInput: true`. The run still settles as `completed`; status
+cards close with “等待答复。” instead of “处理完成。”. The mark is cleared when the
+next run starts, so it always describes the latest report. A retry must repeat
+the same flag; a different flag conflicts like changed text. The mark changes
+presentation and Main's input only: it does not hold the Job, queue the answer
+or restart anything by itself.
+
+### Quiet runs and results without a reply
+
+`luna task update` and `luna task restart` accept `quiet: true` for a background
+check nobody is waiting on. It is stored in the run's input snapshot and does
+not affect the progress card, which `sendStatusCard` controls separately.
+
+A task-result turn normally has to produce an answer message; a turn that ends
+without one fails its delivery and is retried on recovery. Two cases settle
+without a message (`TaskResultEventPublisher._mayEndSilently`): the run was
+quiet, or during that turn Main applied a `task.update`, `task.restart` or
+`task.cancel` for the same Task, so the work continues there. The notification
+attempt is then marked `skipped`, a terminal state recovery does not retry.
+Whether a quiet check found something worth saying is Main's judgment; the
+instructions tell it to reply whenever it did.
+
 
 ## Explicit topic binding and optional status cards
 
@@ -273,8 +307,9 @@ this topic orchestration uses the receiving Main's current session. Without a
 session ID the task stays in the current session;
 task creation never creates a topic. `sendStatusCard` defaults to true.
 The subscription stores `notification_level=none` for disabled cards and
-`major_updates` for enabled cards. Existing subscription preferences remain
-unchanged on update/restart. Existing historical subscriptions retain their
+`major_updates` for enabled cards. `luna task update` and `luna task restart` accept the same
+`sendStatusCard`: when given, it sets the subscription's level from that run
+on; when omitted, the existing preference is kept. Existing historical subscriptions retain their
 prior setting.
 
 Runtime owns the lifecycle of enabled cards in the bound session. Root-session

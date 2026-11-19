@@ -798,7 +798,8 @@ function _updateTaskStatus(
 ): void {
   const now = Date.now();
   db.update(tasks)
-    .set({ status, updated_at: now, last_activity_at: now })
+    // A new run answers whatever the previous report was waiting for.
+    .set({ status, ...(status === "running" ? { block_reason: null } : {}), updated_at: now, last_activity_at: now })
     .where(eq(tasks.id, taskId))
     .run();
 }

@@ -84,7 +84,7 @@ export class TaskCommandService {
       }
     }
     db.insert(taskParticipants).values({id: randomUUID(), task_id: taskId, user_id: creatorUserId, role: "requester", created_at: now}).onConflictDoNothing().run();
-    new TaskSubscriptionStore(db).resolve({taskId, sessionId: target.id,
+    const subscription = new TaskSubscriptionStore(db).resolve({taskId, sessionId: target.id,
       channelType: target.channel_type, channelId: target.channel_id,
       ...(target.group_id ? {groupId: target.group_id} : {}),
       ...(target.thread_key ? {threadId: target.thread_key} : {}),
@@ -96,6 +96,10 @@ export class TaskCommandService {
           notificationLevel: (request.payload.sendStatusCard ?? card.send) ? "major_updates" as const : "none" as const};
       })() : {}),
       visibility: "full"});
+    // An existing subscription keeps its card preference unless this command chooses one.
+    if (request.kind !== "task.create" && request.payload.sendStatusCard !== undefined)
+      db.update(taskSubscriptions).set({notification_level: request.payload.sendStatusCard ? "major_updates" : "none", updated_at: now})
+        .where(eq(taskSubscriptions.id, subscription.id)).run();
     // A message may carry several commands, so the event is keyed by the command; its sources are in data.
     new TimelineStore(db).append({taskId, sessionId,
       type: request.kind === "task.create" ? "task.created" : "message.received",
@@ -119,6 +123,7 @@ export class TaskCommandService {
     }
     const inputSnapshot = {operation: request.kind, operationId, sessionId: result.taskSessionId ?? context.sessionId, messageRowId: result.sourceMessageId,
       messageRowIds: context.sourceMessageIds, inbound: context.inbound,
+      ...(request.kind !== "task.create" && request.payload.quiet ? {quiet: true} : {}),
       requestedByIdentity: requestedIdentityFromInbound(context.inbound) ?? {provider: "local", externalUserId: context.actorUserId, canonicalUserId: context.actorUserId}};
     const source = result.sourceMessageId ? {sourceMessageId: result.sourceMessageId} : {};
     const run = request.kind === "task.create"

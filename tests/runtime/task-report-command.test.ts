@@ -194,3 +194,63 @@ test("Main downloads the managed report while Task Run retains its timeline arti
     if (previous === undefined) delete process.env.LUNA_ACCESS_TOKEN_SECRET; else process.env.LUNA_ACCESS_TOKEN_SECRET = previous;
   }
 });
+
+test("a waiting report marks the Task, tells Main, and the next run clears the mark", async () => {
+  const f = fixture();
+  const published: unknown[] = [];
+  const service = new TaskReportService(f.db, async result => { published.push(result); });
+  const blockReason = () => f.db.select().from(schema.tasks).where(eq(schema.tasks.id, "task")).get()!.block_reason;
+  const receipt = service.submit(f.claims, "final", "Which version should this target?", true);
+  expect(blockReason()).toBe("waiting_user");
+  expect(published[0]).toMatchObject({ status: "completed", waitingForInput: true });
+  expect(service.submit(f.claims, "final", "Which version should this target?", true)).toEqual(receipt);
+  expect(() => service.submit(f.claims, "final", "Which version should this target?")).toThrow("already has");
+  const prompt = renderMainRunnerPrompt({ type: "task_result", sessionId: "session", taskId: "task",
+    context: { sessionId: "session", candidateOpenTasks: [] }, result: published[0] as never });
+  expect(prompt).toMatch(/"waitingForInput":\s*true/);
+
+  f.finishJob();
+  new InvocationStore(f.db).finish("invocation");
+  const settled: unknown[] = [];
+  let seenAtRestart: string | null | undefined;
+  const supervisor = new TaskRunSupervisor({ db: f.db, runnerType: "mock", onTaskResult: async result => { settled.push(result); },
+    executeRun: async input => {
+      seenAtRestart = blockReason();
+      const id = "answer-invocation";
+      f.db.update(schema.accessTokens).set({ metadataJson: { invocationId: id } }).where(eq(schema.accessTokens.id, f.claims.tokenId)).run();
+      const active = { ...f.claims, taskRunId: input.taskRunId, runnerJobId: input.runnerContext!.id };
+      const finish = registerTestRunnerJob(f.db, id, active, {
+        version: 1, kind: "task",
+        input: { taskId: input.taskId, taskRunId: input.taskRunId, runnerContextId: input.runnerContext!.id },
+      }, input.taskRunId);
+      service.submit(active, "final", "Done with the answer");
+      finish();
+      throw Error("process disappeared");
+    } });
+  expect(await supervisor.recoverRunningRuns()).toBe(1);
+  expect(settled[0]).toMatchObject({ status: "completed", waitingForInput: true });
+  expect(blockReason()).toBe("waiting_user");
+
+  supervisor.restartTaskRun({ taskId: "task", updatedTaskSummary: "Original", updateSummary: "Target 1.2", preserveTaskContext: true, inputSnapshot: {} });
+  await supervisor.waitForIdle();
+  expect(seenAtRestart).toBeNull();
+  expect(blockReason()).toBeNull();
+  expect(settled.at(-1)).not.toHaveProperty("waitingForInput");
+});
+
+test("report CLI sends --waiting and rejects it on the wire only when malformed", async () => {
+  const f = fixture();
+  const app = new Hono<{ Variables: { lunaAccessTokenClaims: LunaAccessTokenClaims } }>();
+  app.use("*", async (c, next) => { c.set("lunaAccessTokenClaims", f.claims); await next(); });
+  app.route("/api/runner/task-reports", createTaskReportRoutes(f.service));
+  const server = Bun.serve({ port: 0, fetch: req => app.fetch(req) });
+  const env = { LUNA_SERVICE_URL: `http://127.0.0.1:${server.port}`, LUNA_ACCESS_TOKEN: "test" };
+  try {
+    const result = await runTaskReportCli(["--request-id", "final", "--waiting", "--text", "Confirm the scope"], env);
+    expect(result.status).toBe("ok");
+    expect(f.db.select().from(schema.tasks).where(eq(schema.tasks.id, "task")).get()!.block_reason).toBe("waiting_user");
+    const malformed = await fetch(`${env.LUNA_SERVICE_URL}/api/runner/task-reports`, { method: "POST",
+      headers: { "Content-Type": "application/json", "Idempotency-Key": "other" }, body: JSON.stringify({ content: "x", waiting: "yes" }) });
+    expect(malformed.status).toBe(400);
+  } finally { server.stop(true); }
+});

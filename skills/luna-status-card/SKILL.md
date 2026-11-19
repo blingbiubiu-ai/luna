@@ -18,6 +18,12 @@ acknowledge delivery only after `status: applied`. JSON/stdin form also accepts
 `{"taskId":"...","resend":true}`. Inspect with `luna task status COMMAND_ID`.
 
 
+To turn a Task's card on or off as its work changes, pass `sendStatusCard`
+with `luna task update` or `luna task restart`: `true` shows a card for that
+run and later ones, `false` stops new cards, and leaving it out keeps the
+current choice. Turn it on for long work someone is following and off for
+background checks. It does not decide whether you reply to the result.
+
 Progress display styles: choose `card` for a custom task title and structured status;
 choose `native` for Feishu's collapsible execution bubble and tool count. Native
 bubble headings are controlled by Feishu; the task title appears in the first

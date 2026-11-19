@@ -31,6 +31,21 @@ and notifications do not suppress it. A bare sentinel without an answer fails a
 private turn; unrelated group activations may complete silently. Failed executions,
 empty terminal output and streamed tool commentary never become final replies.
 
+Main stays responsible for the work it dispatches, as a developer is for work
+handed to a coding agent. A Task treats Main as its user and brings questions
+and confirmations to it through its report; `waitingForInput: true` on a task
+result marks a report the Task cannot continue past. Main answers what the
+conversation, memory or supplied material settles and says so in its reply;
+it forwards questions about what the request means, in full, to the person who
+asked for the work; and it takes irreversible changes to shared systems,
+unverifiable results and major technical trade-offs to the Agent owner. Work a
+non-owner requests that would write to outside systems under the owner's
+identity is dispatched only after the owner agrees. These are instruction-file
+rules (`src/prompts/main/routing.md`); Service does not enforce them. A
+task-result turn requires an answer message except for a quiet run or when Main
+already sent the Task on in that turn; see
+[Tasks and Task Runner](tasks-task-runner.md#quiet-runs-and-results-without-a-reply).
+
 ## Session Lifecycle
 
 A session is created or resolved from a channel message, Dashboard message, or thread handoff. A session may bind external conversation surfaces or have no external channel; true messages are stored independently as provider-neutral facts.

@@ -108,6 +108,16 @@ export class NotificationAttemptStore {
     return this.requireById(attemptId);
   }
 
+  /** Terminal without a message: Main handled the result and had nothing to tell anyone. */
+  markSkipped(attemptId: string): NotificationAttempt {
+    this._db
+      .update(notificationAttempts)
+      .set({ status: "skipped", updated_at: Date.now() })
+      .where(eq(notificationAttempts.id, attemptId))
+      .run();
+    return this.requireById(attemptId);
+  }
+
   markFailed(attemptId: string): NotificationAttempt {
     const updatedAt = Date.now();
     this._db

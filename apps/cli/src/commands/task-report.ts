@@ -8,8 +8,9 @@ export async function runTaskReportCli(argv: readonly string[], env: Env): Promi
   const inline = readOption(argv, "--text");
   const stdin = argv.includes("--stdin");
   if (!key || (inline !== undefined) === stdin)
-    return {status: "error", code: "invalid_report", message: "Use luna task report --request-id ID with exactly one of --stdin or --text REPORT"};
+    return {status: "error", code: "invalid_report", message: "Use luna task report --request-id ID [--waiting] with exactly one of --stdin or --text REPORT"};
   const content = inline ?? await Bun.stdin.text();
   if (!content.trim()) return {status: "error", code: "invalid_report", message: "Report must not be empty"};
-  return callUnifiedService(env, {method: "POST", path: "/api/runner/task-reports", idempotencyKey: key, body: {content}});
+  return callUnifiedService(env, {method: "POST", path: "/api/runner/task-reports", idempotencyKey: key,
+    body: {content, ...(argv.includes("--waiting") ? {waiting: true} : {})}});
 }

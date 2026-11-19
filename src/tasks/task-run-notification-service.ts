@@ -30,7 +30,7 @@ import {
   TaskRunNotificationStore,
   type TaskRunNotification,
 } from "./task-run-notification-store";
-import type { TaskSubscription } from "./types";
+import { WAITING_FOR_INPUT, type TaskSubscription } from "./types";
 
 export interface TaskRunNotificationServiceOptions {
   readonly db: DrizzleDB;
@@ -275,10 +275,11 @@ export class TaskRunNotificationService {
   }
 
   async onRunCompleted(input: OnTaskRunCompletedInput): Promise<void> {
+    const waiting = this._requireTask(this._requireRun(input.taskRunId).task_id).block_reason === WAITING_FOR_INPUT;
     await this._updateTerminalCards({
       taskRunId: input.taskRunId,
       status: "completed",
-      content: "处理完成。",
+      content: waiting ? "等待答复。" : "处理完成。",
       ...(input.result !== undefined ? { result: input.result } : {}),
     });
   }

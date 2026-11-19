@@ -49,7 +49,7 @@ import { getKernel } from "@/server/routes/kernel";
 import { runnerArtifactAllowlistFromInput } from "@/main-runner/artifact-allowlist";
 import { ensureTaskRunnerWorkspaceInstructions } from "@/task-runner/workspace-instructions";
 import { TaskSubscriptionStore } from "@/tasks/task-subscription-store";
-import type { TaskSubscription } from "@/tasks/types";
+import { WAITING_FOR_INPUT, type TaskSubscription } from "@/tasks/types";
 import { renderMessageBlocksForRunner } from "@/main-runner/context-builder";
 import type { MessageContentBlock } from "@/sessions/types";
 import { extractTextContent, type UserMessage } from "@/shared";
@@ -1038,6 +1038,9 @@ export function buildTaskResultForMainRunner(
         ? [...scopedArtifactIds]
         : [],
     nextActions: [],
+    ...(status === "completed" && taskRow?.block_reason === WAITING_FOR_INPUT
+      ? { waitingForInput: true }
+      : {}),
   };
 }
 

@@ -2184,3 +2184,59 @@ for (const scenario of [
     expect(calls).toBe(1);
   });
 }
+
+function silentTaskResultCase(taskId: string, inputSnapshot: Record<string, unknown>) {
+  const { sessionId } = seedTaskResultSubscription({ taskId, title: "Check", summary: "Internal report" });
+  const store = new TaskRunStore(database.db);
+  const run = store.createRun({ taskId, reason: "initial", inputSnapshot, runnerType: "mock" });
+  store.markCompleted(run.id, { finalReportArtifactId: `report-${taskId}` });
+  const result = { taskId, taskRunId: run.id, runIndex: run.runIndex, status: "completed" as const,
+    title: "Check", summary: "Internal report", userVisibleReport: "Nothing changed", evidenceSummary: [], artifactIds: [], nextActions: [] };
+  const channel = new FakeFeishuChannel("feishu-main");
+  let calls = 0;
+  let duringMain: () => void = () => {};
+  const publisher = new TaskResultEventPublisher({ db: database.db, runnerType: "mock", channelForSubscription: () => channel,
+    mainRunner: { async run() { calls++; duringMain(); return { status: "completed", followupReleased: false }; } } });
+  const attempts = () => database.db.select().from(lunaSchema.notificationAttempts).all()
+    .filter(row => row.task_id === taskId && row.action === "publish_task_result");
+  return { sessionId, run, result, channel, publisher, attempts, calls: () => calls, onMain: (fn: () => void) => { duringMain = fn; } };
+}
+
+test("a quiet run's result may end without a reply and is not delivered again", async () => {
+  const c = silentTaskResultCase("task-quiet-check", { quiet: true });
+  await c.publisher.publish(c.result);
+  expect(c.channel.outbound).toHaveLength(0);
+  expect(c.attempts()).toMatchObject([{ status: "skipped" }]);
+  await c.publisher.recoverPending();
+  await c.publisher.publish(c.result);
+  expect(c.calls()).toBe(1);
+});
+
+test("a result may end without a reply when Main already sent the Task on in that turn", async () => {
+  const c = silentTaskResultCase("task-answered-by-main", {});
+  const { taskResultMessageOrigin } = await import("../../src/runners/main-invocation-registry");
+  c.onMain(() => {
+    const now = Date.now();
+    database.db.insert(lunaSchema.runnerOperations).values({ id: "op-answer", sessionId: c.sessionId,
+      originId: taskResultMessageOrigin(c.run.id, c.sessionId), requestId: "answer-1",
+      request: { kind: "task.update", payload: { taskId: "task-answered-by-main", updateSummary: "Target 1.2" } } as never,
+      context: {} as never, status: "applied", result: null, createdAt: now, updatedAt: now }).run();
+  });
+  await c.publisher.publish(c.result);
+  expect(c.channel.outbound).toHaveLength(0);
+  expect(c.attempts()).toMatchObject([{ status: "skipped" }]);
+});
+
+test("an ordinary result still needs a reply, and another Task's command does not excuse it", async () => {
+  const c = silentTaskResultCase("task-needs-reply", {});
+  const { taskResultMessageOrigin } = await import("../../src/runners/main-invocation-registry");
+  c.onMain(() => {
+    const now = Date.now();
+    database.db.insert(lunaSchema.runnerOperations).values({ id: "op-other", sessionId: c.sessionId,
+      originId: taskResultMessageOrigin(c.run.id, c.sessionId), requestId: "other-1",
+      request: { kind: "task.update", payload: { taskId: "some-other-task", updateSummary: "Unrelated" } } as never,
+      context: {} as never, status: "applied", result: null, createdAt: now, updatedAt: now }).run();
+  });
+  await expect(c.publisher.publish(c.result)).rejects.toThrow("without submitting the task result");
+  expect(c.attempts()).toMatchObject([{ status: "failed" }]);
+});

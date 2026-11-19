@@ -13,6 +13,7 @@ import type { TaskResultForMainRunner } from "@/main-runner/types";
 import { createLogger } from "@/shared";
 import { InvocationService } from "@/runners/invocation-service";
 import { taskReportForRun } from "./task-report-store";
+import { WAITING_FOR_INPUT } from "./types";
 import { enqueueTaskResult } from "./task-result-outbox";
 
 const logger = createLogger("task-report-service");
@@ -32,18 +33,21 @@ export class TaskReportService {
     return {run, token, claims};
   }
 
-  submit(claims: LunaAccessTokenClaims | undefined, requestId: string, content: string) {
+  /** `waiting` marks a report that asks for an answer the Task needs before it can continue. */
+  submit(claims: LunaAccessTokenClaims | undefined, requestId: string, content: string, waiting = false) {
     const scope = this.active(claims);
     if (!/^[\w.-]{1,128}$/.test(requestId) || !content.trim() || content.length > 100000)
       throw new GatewayError("invalid_report", "A valid request ID and nonempty report up to 100000 characters are required", 400);
+    const task = this.db.select().from(tasks).where(eq(tasks.id, scope.run.task_id)).get();
+    if (!task) throw new GatewayError("task_not_found", "Task no longer exists", 404);
     const existing = taskReportForRun(this.db, scope.run.id);
     if (existing) {
-      if (existing.requestId !== requestId || existing.content !== content || existing.actorUserId !== runnerActorUserId(scope.claims))
+      // block_reason is cleared when a run starts, so during this run it reflects the accepted report.
+      if (existing.requestId !== requestId || existing.content !== content || existing.actorUserId !== runnerActorUserId(scope.claims)
+        || (task.block_reason === WAITING_FOR_INPUT) !== waiting)
         throw new GatewayError("report_conflict", "This run already has a final report; retry with the same request ID and content", 409);
       return this.receipt(existing);
     }
-    const task = this.db.select().from(tasks).where(eq(tasks.id, scope.run.task_id)).get();
-    if (!task) throw new GatewayError("task_not_found", "Task no longer exists", 404);
     const registry = new ArtifactRegistry(this.db);
     const metadata = scope.token.metadataJson;
     const allowlist = Array.isArray(metadata?.artifactIds) ? metadata.artifactIds.filter((id): id is string => typeof id === "string") : [];
@@ -63,13 +67,14 @@ export class TaskReportService {
         actorUserId: runnerActorUserId(scope.claims), content, reportArtifactId: artifact.id, createdAt: Date.now()};
       db.insert(taskReportCommands).values(row).run();
       db.update(taskRuns).set({final_report_artifact_id: artifact.id}).where(eq(taskRuns.id, scope.run.id)).run();
+      db.update(tasks).set({block_reason: waiting ? WAITING_FOR_INPUT : null}).where(eq(tasks.id, task.id)).run();
       const result: TaskResultForMainRunner = {taskId: task.id, taskRunId: scope.run.id, runIndex: scope.run.run_index,
         status: "completed", title: task.title, summary: task.summary ?? "", userVisibleReport: content,
-        evidenceSummary: [], artifactIds: [artifact.id], nextActions: []};
+        evidenceSummary: [], artifactIds: [artifact.id], nextActions: [], ...(waiting ? {waitingForInput: true} : {})};
       for (const subscription of db.select().from(taskSubscriptions).where(eq(taskSubscriptions.task_id, task.id)).all())
         enqueueTaskResult(db, result, subscription);
       new TimelineStore(db).append({taskId: task.id, type: "runner.report_submitted", summary: "Task submitted its final report to Main",
-        data: {taskRunId: scope.run.id, commandId: row.id, finalReportArtifactId: artifact.id}});
+        data: {taskRunId: scope.run.id, commandId: row.id, finalReportArtifactId: artifact.id, ...(waiting ? {waitingForInput: true} : {})}});
       return {row, result};
     });
     // The outbox is committed before acknowledgement. Main may run while Task is

@@ -6,7 +6,7 @@ import { taskReportForRun } from "@/tasks/task-report-store";
 import { runnerAnswers } from "@/messaging/runner-answer";
 import { taskResultMessageOrigin } from "@/runners/main-invocation-registry";
 import { sessionDispatcherFor } from "@/sessions/session-dispatcher";
-import { sessionTriggers } from "@/data/schema";
+import { runnerOperations, sessionTriggers } from "@/data/schema";
 import { createHash } from "node:crypto";
 
 import { and, asc, desc, eq, ne } from "drizzle-orm";
@@ -235,7 +235,7 @@ export class TaskResultEventPublisher {
     });
     const attempt = claim.attempt;
     const recovering = new InvocationStore(this._db).findActive({ runnerKind: "main", sessionId: input.subscription.session_id, originId: taskResultMessageOrigin(result.taskRunId, input.subscription.session_id) });
-    if (!recovering && attempt.status === "sent" && attempt.outbound_id !== null) {
+    if (!recovering && (attempt.status === "skipped" || (attempt.status === "sent" && attempt.outbound_id !== null))) {
       return true;
     }
     if (!recovering && this._completeCommandReply(input.result, input.subscription, attempt)) return true;
@@ -282,8 +282,28 @@ export class TaskResultEventPublisher {
     );
 
     if (this._completeCommandReply(input.result, input.subscription, attempt)) return true;
+    if (this._mayEndSilently(input.result, input.subscription)) {
+      this._attempts.markSkipped(attempt.id);
+      return true;
+    }
     this._attempts.markFailed(attempt.id);
     throw new Error("Main Runner completed without submitting the task result through a message command");
+  }
+
+  /**
+   * A result needs a reply unless nobody is waiting on it: Main started the run
+   * as a quiet background check, or in this turn Main already sent the Task on
+   * (update, restart or cancel), so the work continues there.
+   */
+  private _mayEndSilently(result: TaskResultForMainRunner, subscription: TaskSubscription): boolean {
+    const run = this._db.select({ input: taskRuns.input_snapshot }).from(taskRuns).where(eq(taskRuns.id, result.taskRunId)).get();
+    if ((run?.input as { quiet?: unknown } | null | undefined)?.quiet === true) return true;
+    const origin = taskResultMessageOrigin(result.taskRunId, subscription.session_id);
+    return this._db.select().from(runnerOperations)
+      .where(and(eq(runnerOperations.sessionId, subscription.session_id), eq(runnerOperations.originId, origin))).all()
+      .some(row => row.status === "applied"
+        && (row.request.kind === "task.update" || row.request.kind === "task.restart" || row.request.kind === "task.cancel")
+        && row.request.payload.taskId === result.taskId);
   }
 
   private _completeCommandReply(
@@ -564,7 +584,7 @@ export class TaskResultEventPublisher {
         asc(notificationAttempts.id),
       )
       .all()
-      .filter((attempt) => attempt.status !== "sent");
+      .filter((attempt) => attempt.status !== "sent" && attempt.status !== "skipped");
   }
 
   private _taskResultEventForAttempt(

@@ -180,7 +180,7 @@ src/prompts/
 | `<history>` | 有 `launchSeed` 或 `deltaContext` 时 | JSON 数组，取代现在嵌在 `context` 里的同名字段 |
 | `<tasks>` | 有绑定或候选任务时 | JSON：`bound`、`candidates` |
 | `<messages>` | Main、Work 的用户消息轮 | JSON：`now`、`weekday`、`addressing`、`items[]`，私聊和群聊同一种形状 |
-| `<task_result>` / `<trigger>` | 对应的 Main 调用 | JSON 头（含 `now`、`weekday`）+ 报告或请求正文 |
+| `<task_result>` / `<trigger>` | 对应的 Main 调用 | JSON 头（含 `now`、`weekday`；Task 在等答复时带 `waitingForInput: true`）+ 报告或请求正文 |
 | `<task>` | Task Runner | JSON：`type`、`reason`、`title`、`summary`、`facts`、`assumptions`；`<launch_context>`、`<update_context>` 各为 JSON 数组；`<user_input>` 是本次 run 的新输入；`<report_sections>` 是按任务类型给的报告要求 |
 | `<now>` | Task 和记忆整理轮次 | JSON：`now`、`weekday`、`timezone`。Task 的 prompt 会持久化并在恢复时重放，时间只能在发送时追加 |
 | `<clarification>` | 有待澄清的问题时 | JSON |

@@ -498,3 +498,30 @@ test("several commands from one message each take effect, and a retried command 
   expect(f.db.select().from(schema.taskRuns).where(eq(schema.taskRuns.task_id,taskId)).all().length).toBe(runs);
   await f.supervisor.waitForIdle();
 });
+
+test("update and restart switch the progress card on request and mark quiet runs",async()=>{
+  const f=fixture();
+  const newCards=()=>f.channel.outbound.filter(o=>o.statusCard && o.replyMode!=="update_status_card").length;
+  const level=()=>f.db.select().from(schema.taskSubscriptions).all()[0]!.notification_level;
+  const snapshot=(runId:string)=>f.db.select().from(schema.taskRuns).where(eq(schema.taskRuns.id,runId)).get()!.input_snapshot as {quiet?:boolean};
+  const created=await f.service.execute(f.claims,"task.create","base",{title:"Deliver",summary:"Deliver",facts:[],sendStatusCard:true});
+  const taskId=created.taskIds[0]!;
+  await f.supervisor.waitForIdle();
+  expect(newCards()).toBe(1);
+  // A background check: no card from this run on, and the run is marked quiet.
+  const check=await f.service.execute(f.claims,"task.update","check",{taskId,updateSummary:"Look at the review",sendStatusCard:false,quiet:true});
+  await f.supervisor.waitForIdle();
+  expect(newCards()).toBe(1);
+  expect(level()).toBe("none");
+  expect(snapshot(check.runId!).quiet).toBe(true);
+  // Leaving the options out keeps the card choice and is not quiet.
+  const retry=await f.service.execute(f.claims,"task.restart","retry",{taskId});
+  await f.supervisor.waitForIdle();
+  expect(newCards()).toBe(1);
+  expect(snapshot(retry.runId!).quiet).toBeUndefined();
+  // Work someone follows again: the card comes back.
+  await f.service.execute(f.claims,"task.restart","rework",{taskId,sendStatusCard:true});
+  await f.supervisor.waitForIdle();
+  expect(newCards()).toBe(2);
+  expect(level()).toBe("major_updates");
+});

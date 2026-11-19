@@ -15,8 +15,9 @@ export function createTaskReportRoutes(service?: TaskReportService) {
     .post("/", async c => {
       const key = c.req.header("Idempotency-Key");
       if (!key || !/^[\w.-]{1,128}$/.test(key)) return c.json({error: "invalid_idempotency_key"}, 400);
-      const body = z.object({content: z.string().min(1).max(100000).refine(s => s.trim().length > 0)}).strict().parse(await c.req.json().catch(() => null));
-      return c.json(reports().submit(c.get("lunaAccessTokenClaims"), key, body.content));
+      const body = z.object({content: z.string().min(1).max(100000).refine(s => s.trim().length > 0), waiting: z.boolean().optional()})
+        .strict().parse(await c.req.json().catch(() => null));
+      return c.json(reports().submit(c.get("lunaAccessTokenClaims"), key, body.content, body.waiting === true));
     })
     .get("/:id", c => c.json(reports().get(c.get("lunaAccessTokenClaims"), c.req.param("id"))));
 }

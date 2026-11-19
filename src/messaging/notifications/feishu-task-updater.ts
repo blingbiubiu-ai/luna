@@ -1,6 +1,6 @@
 import type { NormalizedInboundMessage } from "@/channels";
 import type { OutboundChannelOperation, ReplyChannel } from "@/channels/outbound";
-import type { TaskSubscription, TaskView } from "@/tasks/types";
+import { WAITING_FOR_INPUT, type TaskSubscription, type TaskView } from "@/tasks/types";
 
 export interface TaskStatusCardStepEvent {
   readonly type: string;
@@ -147,9 +147,10 @@ export class TaskStatusCardUpdater {
   ): string {
     const persistentTask = taskView.persistentTask;
     if (this._statusCardState(persistentTask.status) === "terminal") {
-      return options.includeTerminalStatusText
-        ? this._statusLabel(persistentTask.status)
-        : "";
+      if (!options.includeTerminalStatusText) return "";
+      return persistentTask.status === "completed" && persistentTask.block_reason === WAITING_FOR_INPUT
+        ? "等待答复。"
+        : this._statusLabel(persistentTask.status);
     }
 
     if (subscription.visibility === "summary") {

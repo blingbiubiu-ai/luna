@@ -29,6 +29,10 @@ export const AgentSettings = z.object({
       style: ProgressCardStyle.default("native"),
     }).strict().default({ send: true, style: "native" }),
   }).strict().default({ taskProgressCard: { send: true, style: "native" } }),
+  /** Tasks: how long one run may take before Runtime stops it. A stopped run fails and can be restarted. */
+  task: z.object({
+    runLimitHours: z.number().int().min(1).max(168).default(10),
+  }).strict().default({ runLimitHours: 10 }),
 }).strict();
 export type AgentSettings = z.infer<typeof AgentSettings>;
 

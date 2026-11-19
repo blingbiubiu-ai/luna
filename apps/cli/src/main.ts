@@ -118,7 +118,7 @@ function clientHelpText(): string {
     "  luna task create|update|restart|cancel (--stdin | --json <JSON>) --request-id <id>",
     "  luna task status <command-id>",
     "  luna task status-card --task-id <id> --request-id <id> [--resend] [--style card|native]",
-    "  luna task report (--stdin | --text <report>) --request-id <id>",
+    "  luna task report (--stdin | --text <report>) --request-id <id> [--waiting]",
     "  luna task report status <command-id>",
     "  luna session clarify|release (--stdin | --json <JSON>) --request-id <id>",
     "  luna session status <command-id>",

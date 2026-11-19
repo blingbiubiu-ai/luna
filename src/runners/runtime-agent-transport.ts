@@ -1,4 +1,5 @@
 import { ShadowRootAccessStore } from "@/agents/shadow-root-access-store";
+import { AgentSettingsStore } from "@/agents/agent-settings-store";
 import {InvocationResources} from "./invocation-resources";
 import {AgentError} from "@/agents/agent-store";
 import {GatewayError} from "@/server/gateway-error";
@@ -25,6 +26,13 @@ import { RunnerOutputState, _containerProtocolError, _containerProtocolErrorCode
 
 import { RuntimeDetachedError } from "./runtime-detach";
 export { RuntimeDetachedError } from "./runtime-detach";
+/** A Task run may take as long as its Agent allows; Main and Work turns keep the Service-wide limit. */
+export function jobTimeoutMs(db: DrizzleDB, invocation: { readonly runnerKind: string; readonly agentId: string }): number {
+  return invocation.runnerKind === "task"
+    ? new AgentSettingsStore(db).get(invocation.agentId).task.runLimitHours * 3_600_000
+    : config.sandbox.containerTimeoutMs;
+}
+
 export interface AgentAttemptTransport {
   stream(message: UserMessage, options: AgentRunOptions, runnerType: string, model: string | undefined, hooks: RunnerOutputHooks): AsyncIterableIterator<SystemMessage | AssistantMessage | ToolMessage>;
 }
@@ -114,7 +122,7 @@ export class RuntimeAgentTransport implements AgentAttemptTransport {
         ...(invocation.sessionId ? { sessionId: invocation.sessionId } : {}), ...(invocation.taskId ? { taskId: invocation.taskId } : {}), ...(invocation.taskRunId ? { taskRunId: invocation.taskRunId } : {}),
         input: { runnerType, prompt: extractTextContent(message), ...(model ? { model } : {}), ...(options.runnerSessionId ? { sessionId: options.runnerSessionId } : {}) },
         retryPolicy: { maxConsecutiveRetries: config.runner.maxTransientRetries, maxTotalRetries: 10, baseDelayMs: 2000, maxDelayMs: 30000 },
-        credentialsRevision: 1, timeoutMs: config.sandbox.containerTimeoutMs });
+        credentialsRevision: 1, timeoutMs: jobTimeoutMs(this.db, invocation) });
       job = this.store.createJob(this.client.runtimeId, request);
     }
     const id = job.id;

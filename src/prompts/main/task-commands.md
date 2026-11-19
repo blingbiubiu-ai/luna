@@ -11,8 +11,9 @@ and summaries as your final reply. Supported commands:
   `question`, default `task`), `assumptions` (at most five), `sourceMessageIds`,
   `sessionId` (defaults to current session), `sendStatusCard` and `statusCardStyle` (`card` or `native`); leave both out to follow the Agent's settings unless the user asks for something else.
 - `luna task update`: `taskId`, `updateSummary`; optional `updatedTaskTitle`,
-  `updatedTaskSummary`, `assumptions`, `sourceMessageIds`. Starts a new run with
-  the supplemental facts, replacing the active run if needed.
+  `updatedTaskSummary`, `assumptions`, `sourceMessageIds`, `sendStatusCard`
+  (progress card on or off from this run on), `quiet` (a background check).
+  Starts a new run with the supplemental facts, replacing the active run if needed.
 - `luna task cancel`: `taskId`, optional `reason` and `sourceMessageIds`. Stops
   the current Run without creating another. For stop/cancel intent always use
   this command; never send a stop instruction through `tasks update` or restart.
@@ -21,8 +22,9 @@ and summaries as your final reply. Supported commands:
   `cancelled: true` means cancellation was recorded and process termination was
   requested. `cancelled: false` means there was no running Run to cancel; do not
   claim a completed task was cancelled. Return one concise final acknowledgment.
-- `luna task restart`: `taskId`; optional `sourceMessageIds`. Retries with
-  existing task information unchanged. Use update when changing information.
+- `luna task restart`: `taskId`; optional `sourceMessageIds`, `sendStatusCard`,
+  `quiet`. Retries with existing task information unchanged. Use update when
+  changing information.
 - `luna task status-card`: progress cards; see the `luna-status-card` skill.
 - `luna task list --session-id "$LUNA_SESSION_ID"`: this session's Tasks, newest first.
   The receipt of `create` already gives the new Task's id in `taskIds`.

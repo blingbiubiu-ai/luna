@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { createFileRoute } from "@tanstack/react-router";
 
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 import { useRouteAgent } from "@/lib/agent-route";
 import { apiFetch } from "@/lib/api/client";
@@ -14,6 +15,7 @@ export interface AgentSettings {
   inbound: { processingReaction: boolean };
   work: { progressCard: { show: boolean; style: ProgressCardStyle } };
   main: { taskProgressCard: { send: boolean; style: ProgressCardStyle } };
+  task: { runLimitHours: number };
 }
 
 function AgentSettingsPage() {
@@ -88,10 +90,25 @@ export function AgentSettingsForm({ settings, saving, error, saved, onSave }: {
           onChange={style => update({ ...value, main: { taskProgressCard: { ...main, style } } })} />
       </Row>
     </section>
+    <section className="space-y-4 rounded-lg border p-4" aria-labelledby="task-limit-title">
+      <div>
+        <h2 id="task-limit-title" className="font-medium">任务运行时长</h2>
+        <p className="text-sm text-muted-foreground">任务每次运行最多可以持续多久。超过后这次运行会被停止并记为失败，可以重新运行。</p>
+      </div>
+      <Row label="单次运行上限（小时）" hint="1 到 168 之间的整数。对之后开始的运行生效。">
+        <Input type="number" aria-label="任务单次运行上限（小时）" className="w-24" min={1} max={168} step={1}
+          value={Number.isFinite(value.task.runLimitHours) ? value.task.runLimitHours : ""} disabled={saving}
+          onChange={event => update({ ...value, task: { runLimitHours: event.target.valueAsNumber } })} />
+      </Row>
+    </section>
     {error && <p role="alert" className="text-sm text-destructive">保存失败。{error.message}</p>}
     {saved && !touched && <p role="status" className="text-sm text-muted-foreground">已保存。</p>}
-    <Button disabled={saving || !touched} onClick={() => { onSave(value); setTouched(false); }}>{saving ? "正在保存…" : "保存"}</Button>
+    <Button disabled={saving || !touched || !validRunLimit(value.task.runLimitHours)} onClick={() => { onSave(value); setTouched(false); }}>{saving ? "正在保存…" : "保存"}</Button>
   </div>;
+}
+
+function validRunLimit(hours: number): boolean {
+  return Number.isInteger(hours) && hours >= 1 && hours <= 168;
 }
 
 function Row({ label, hint, children }: { label: string; hint?: string; children: ReactNode }) {

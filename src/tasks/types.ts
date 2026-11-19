@@ -42,6 +42,8 @@ export type TaskBlockReason =
   | "waiting_user"
   | "waiting_dev"
   | "waiting_approval";
+/** Set by a Task report that asks for an answer; cleared when the next run starts. */
+export const WAITING_FOR_INPUT: TaskBlockReason = "waiting_user";
 /**
  * Defines canonical Task thread statuses that can still receive follow-up input.
  *

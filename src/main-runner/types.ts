@@ -33,6 +33,8 @@ export interface TaskResultForMainRunner {
   /** Downloadable managed artifacts; artifactIds retain timeline/report identity. */
   readonly artifactRefs?: readonly string[];
   readonly nextActions: readonly string[];
+  /** The Task stopped to wait for an answer; its report holds the questions. */
+  readonly waitingForInput?: boolean;
 }
 
 /**
