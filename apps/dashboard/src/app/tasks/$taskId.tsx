@@ -2,7 +2,7 @@ import { useAgentBasePath } from "@/lib/agent-route";
 import { DeleteRecordButton } from "@/components/delete-record-button";
 import { useTranslation } from "@/lib/i18n";
 import { createFileRoute } from "@tanstack/react-router";
-import { ArrowLeft } from "lucide-react";
+import { ArrowLeft, TerminalSquareIcon } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -56,7 +56,17 @@ function TaskDetailPage() {
           <a href={`${base}/tasks`}>
             <ArrowLeft className="size-4" />{t("Tasks")}</a>
         </Button>
-        {taskDetail ? <DeleteRecordButton kind="tasks" id={taskId} path={`/tasks/${encodeURIComponent(taskId)}?agentId=${encodeURIComponent(agentId)}`} name={taskDetail.title} onDeleted={() => { window.location.assign(`${base}/tasks`); }} /> : null}
+        {taskDetail ? (
+          <div className="flex items-center gap-1.5">
+            <Button size="sm" variant="outline" asChild>
+              <a href={`${base}/terminals?taskId=${encodeURIComponent(taskId)}`}>
+                <TerminalSquareIcon className="size-3.5" />
+                {t("Open TUI")}
+              </a>
+            </Button>
+            <DeleteRecordButton kind="tasks" id={taskId} path={`/tasks/${encodeURIComponent(taskId)}?agentId=${encodeURIComponent(agentId)}`} name={taskDetail.title} onDeleted={() => { window.location.assign(`${base}/tasks`); }} />
+          </div>
+        ) : null}
       </div>
       <TaskDetailView
         taskDetail={taskDetail}

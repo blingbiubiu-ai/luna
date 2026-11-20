@@ -4,7 +4,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 
 import { ShadowCard, type ShadowEnvironment } from "../src/components/shadow-card";
 import { ShadowRootSwitchView } from "../src/components/shadow-root-access";
-import { imageCurrent, primaryContainer, type ContainerRow } from "../src/lib/containers";
+import { consoleTitle, imageCurrent, ownerPath, primaryContainer, runnerKindBadge, type ContainerRow } from "../src/lib/containers";
 
 const card = (environment: ShadowEnvironment, extra: Partial<Parameters<typeof ShadowCard>[0]> = {}) => renderToStaticMarkup(createElement(ShadowCard, {
   id: "s1", name: "桑果", isBody: false, subtitle: "飞书 · 桑果机器人", environment,
@@ -54,4 +54,20 @@ test("the card shows the Shadow user's avatar, and its initial without one", () 
   const plain = card({ state: "cold" });
   expect(plain).not.toContain("<img");
   expect(plain).toContain("桑");
+});
+
+test("unified console helpers format Shadow console titles, PTY titles, and session/task owner links", () => {
+  const baseRow = { workerId: "local", environmentId: "env_1", shadowId: "s1", shadowName: "Luna", running: true, supported: true } as ContainerRow;
+  expect(consoleTitle({ key: "t1", row: baseRow, kind: "terminal" })).toBe("Luna · 终端");
+  expect(consoleTitle({ key: "t2", row: baseRow, kind: "vnc" })).toBe("Luna · 桌面");
+  expect(consoleTitle({
+    key: "pty:ctx_1",
+    row: baseRow,
+    kind: "pty",
+    pty: { contextId: "ctx_1", label: "线上排查任务", subtitle: "Task · codex", ownerType: "task", ownerId: "task_42" },
+  })).toBe("线上排查任务");
+  expect(ownerPath("agent_1", "session", "sess_9")).toBe("/agent/agent_1/sessions/sess_9");
+  expect(ownerPath("agent_1", "task", "task_42")).toBe("/agent/agent_1/tasks/task_42");
+  expect(ownerPath("agent_1", "unknown", null)).toBeNull();
+  expect([runnerKindBadge("main"), runnerKindBadge("work"), runnerKindBadge("task")]).toEqual(["Main", "Work", "Task"]);
 });

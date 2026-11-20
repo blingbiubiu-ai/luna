@@ -1,4 +1,4 @@
-/** Shadow containers as the Dashboard sees them, and the pure helpers shared by the console and the Shadow card. */
+/** Shadow containers and live AI PTY sessions as the Dashboard sees them, plus shared helpers. */
 export interface ContainerRow {
   workerId: string;
   environmentId: string;
@@ -28,10 +28,86 @@ export interface ContainerList {
   shadows?: ShadowItem[];
 }
 
+export interface LivePtySessionItem {
+  readonly workerId: string;
+  readonly environmentId: string;
+  readonly shadowId: string;
+  readonly shadowName: string | null;
+  readonly contextId: string;
+  readonly runnerType: "claude" | "codex";
+  readonly model?: string;
+  readonly sessionId?: string;
+  readonly busy: boolean;
+  readonly privileged: boolean;
+  readonly pid: number;
+  readonly startedAt: number;
+  readonly lastActiveAt: number;
+  readonly ownerType: "session" | "task" | "unknown";
+  readonly ownerId: string | null;
+  readonly runnerKind: "main" | "work" | "task";
+  readonly title: string | null;
+  readonly channelType: string | null;
+}
+
+export interface DormantPtyContextItem {
+  readonly contextId: string;
+  readonly shadowId: string;
+  readonly shadowName: string | null;
+  readonly runnerType: string;
+  readonly sessionId: string | null;
+  readonly updatedAt: number;
+  readonly ownerType: "session" | "task" | "unknown";
+  readonly ownerId: string | null;
+  readonly runnerKind: "main" | "work" | "task";
+  readonly title: string | null;
+  readonly channelType: string | null;
+}
+
+export interface PtySessionsResponse {
+  readonly sessions: LivePtySessionItem[];
+  readonly dormantContexts: DormantPtyContextItem[];
+}
+
+export interface PtyConsoleMeta {
+  readonly contextId: string;
+  readonly label: string;
+  readonly subtitle: string;
+  readonly ownerType: "session" | "task" | "unknown";
+  readonly ownerId: string | null;
+  readonly busy?: boolean;
+}
+
 export type ConsoleKind = "terminal" | "root" | "vnc";
-export interface OpenConsole { key: string; row: ContainerRow; kind: ConsoleKind }
+export type OpenConsoleKind = ConsoleKind | "pty";
+
+export interface OpenConsole {
+  key: string;
+  row: ContainerRow;
+  kind: OpenConsoleKind;
+  pty?: PtyConsoleMeta;
+}
 
 export const consoleLabels: Record<ConsoleKind, string> = { terminal: "终端", root: "Root 终端", vnc: "桌面" };
+
+export function consoleTitle(item: OpenConsole): string {
+  if (item.kind === "pty") {
+    return item.pty?.label ?? `${item.row.shadowName ?? item.row.shadowId} · TUI`;
+  }
+  return `${item.row.shadowName ?? item.row.shadowId} · ${consoleLabels[item.kind]}`;
+}
+
+export function runnerKindBadge(kind: "main" | "work" | "task"): string {
+  if (kind === "task") return "Task";
+  if (kind === "work") return "Work";
+  return "Main";
+}
+
+export function ownerPath(agentId: string, ownerType: "session" | "task" | "unknown", ownerId: string | null): string | null {
+  if (!ownerId) return null;
+  if (ownerType === "session") return `/agent/${encodeURIComponent(agentId)}/sessions/${encodeURIComponent(ownerId)}`;
+  if (ownerType === "task") return `/agent/${encodeURIComponent(agentId)}/tasks/${encodeURIComponent(ownerId)}`;
+  return null;
+}
 
 /** The container a Shadow's console opens: the running one, else any. Others are left over on other Workers. */
 export function primaryContainer(containers: readonly ContainerRow[], shadowId: string): ContainerRow | undefined {
@@ -59,4 +135,3 @@ export const rootReasons: Record<string, string> = {
   home_requires_nosuid: "Worker 主机上分身 HOME 所在的文件系统没有以 nosuid 挂载，为防止提权到主机，禁止使用容器 Root",
   unsupported_host: "当前 Worker 主机平台不支持 root",
 };
-
