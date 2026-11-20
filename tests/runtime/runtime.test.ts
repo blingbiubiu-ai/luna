@@ -70,16 +70,11 @@ const SessionConfigForTests = {
   coalesce_idle_ms: 1,
   coalesce_max_wait_ms: 25,
   max_batch_size: 8,
-  max_task_actions_per_batch: 3,
-  processing_notice_after_ms: 1500,
   stale_claim_ms: 120000,
-  turn_warn_after_ms: 120000,
-  max_queue_depth: 50,
   activation_context_window_ms: 300000,
   activation_context_max_messages: 12,
   activation_context_max_chars: 6000,
   activation_context_recent_unprocessed_messages: 10,
-  activation_context_max_cc_reporters: 1,
   group_bot_aliases: [],
   group_activation_followup_window_ms: 300000,
   group_activation_followup_senders: "requester_and_reporters",
@@ -447,11 +442,7 @@ describe("agent runtime package shell", () => {
     expect(source).toContain("coalesce_idle_ms");
     expect(source).toContain("coalesce_max_wait_ms");
     expect(source).toContain("max_batch_size");
-    expect(source).toContain("max_task_actions_per_batch");
-    expect(source).toContain("processing_notice_after_ms");
     expect(source).toContain("stale_claim_ms");
-    expect(source).toContain("turn_warn_after_ms");
-    expect(source).toContain("max_queue_depth");
   });
 
   test("app config reads session queue settings from the session block", () => {
@@ -483,7 +474,6 @@ describe("agent runtime package shell", () => {
         coalesce_idle_ms: 1200,
         coalesce_max_wait_ms: 10000,
         max_batch_size: 8,
-        max_task_actions_per_batch: 3,
       },
       messaging: {
         default_channel_id: "feishu-default",
@@ -493,7 +483,7 @@ describe("agent runtime package shell", () => {
     });
 
     expect(parsed.session.coalesce_max_wait_ms).toBe(10000);
-    expect(parsed.session.max_task_actions_per_batch).toBe(3);
+    expect(parsed.session.max_batch_size).toBe(8);
     expect(parsed.service.host).toBe("0.0.0.0");
     expect(parsed.paths.runtimeDir).toBe("/tmp/luna");
     expect(parsed.logging.pretty).toBe(true);
@@ -602,7 +592,6 @@ describe("agent runtime package shell", () => {
       activation_context_max_messages: 12,
       activation_context_max_chars: 6000,
       activation_context_recent_unprocessed_messages: 10,
-      activation_context_max_cc_reporters: 1,
       group_bot_aliases: [],
     });
     expect(defaults.group_activation_followup_window_ms).toBe(300000);

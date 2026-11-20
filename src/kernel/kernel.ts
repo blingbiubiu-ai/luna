@@ -8,6 +8,9 @@ import {InvocationStore} from "@/runners/invocation-store";
 import {AgentError, type AgentScope} from "@/agents/agent-store";
 import {ExecutionError} from "@luna/execution-store";
 import {AgentLifecycleStore} from "@/agents/agent-lifecycle-store";
+import {sessionConfigForAgent} from "@/agents/agent-settings-store";
+import {eq} from "drizzle-orm";
+import type {DrizzleDB} from "@/data";
 import {TaskScopeResolver} from "@/agents/task-scope";
 import { Runtime, runtimeConfigFile } from "@/runtime/runtime";
 import { join } from "node:path";
@@ -729,10 +732,18 @@ function registerFeishuChannelAdapterFactory(
         ...optionalStringOption(params, "bot_open_id", "botOpenId"),
         ...optionalStringOption(params, "bot_user_id", "botUserId"),
         ...optionalStringOption(params, "bot_union_id", "botUnionId"),
-        groupBotAliases: config.session.group_bot_aliases,
+        // The bot's Agent may name its own aliases; without a database only the configured ones apply.
+        groupBotAliases: deps.db === undefined ? config.session.group_bot_aliases
+          : () => sessionConfigForAgent(deps.db!, agentOfChannel(deps.db!, channelConfig.id), config.session).group_bot_aliases,
       });
     },
   });
+}
+
+/** The Agent a bot channel belongs to. */
+function agentOfChannel(db: DrizzleDB, channelId: string): string | undefined {
+  return db.select({agentId: lunaSchema.channelConfigs.agentId}).from(lunaSchema.channelConfigs)
+    .where(eq(lunaSchema.channelConfigs.id, channelId)).get()?.agentId;
 }
 
 function stringOption(

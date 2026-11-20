@@ -50,11 +50,7 @@ export const SessionConfig = z.object({
   coalesce_idle_ms: z.number().int().positive().default(1200),
   coalesce_max_wait_ms: z.number().int().positive().default(5000),
   max_batch_size: z.number().int().positive().default(8),
-  max_task_actions_per_batch: z.number().int().positive().default(3),
-  processing_notice_after_ms: z.number().int().positive().default(1500),
   stale_claim_ms: z.number().int().positive().default(120000),
-  turn_warn_after_ms: z.number().int().positive().default(120000),
-  max_queue_depth: z.number().int().positive().default(50),
   activation_context_window_ms: z.number().int().nonnegative().default(300000),
   activation_context_max_messages: z.number().int().nonnegative().default(12),
   activation_context_max_chars: z.number().int().nonnegative().default(6000),
@@ -63,11 +59,6 @@ export const SessionConfig = z.object({
     .int()
     .nonnegative()
     .default(10),
-  activation_context_max_cc_reporters: z
-    .number()
-    .int()
-    .nonnegative()
-    .default(1),
   group_activation_followup_window_ms: z
     .number()
     .int()

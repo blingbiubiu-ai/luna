@@ -363,7 +363,8 @@ export interface FeishuMessageChannelOptions {
   readonly botOpenId?: string;
   readonly botUserId?: string;
   readonly botUnionId?: string;
-  readonly groupBotAliases?: readonly string[];
+  /** Names that address the bot in a group; a function is read for every message, so a changed setting applies at once. */
+  readonly groupBotAliases?: readonly string[] | (() => readonly string[]);
 }
 
 /** Message channel implementation for Feishu (Lark) chat platform. */
@@ -1222,7 +1223,7 @@ export class FeishuMessageChannel
       ...(botIdentity !== undefined
         ? { botIdentity: this._channelIdentityFromBotIdentity(botIdentity) }
         : {}),
-      groupBotAliases: this.config.groupBotAliases ?? [],
+      groupBotAliases: this._groupBotAliases(),
     }).normalizeMessageEvent({
       ...receivedMessage,
       sender,
@@ -2170,7 +2171,12 @@ export class FeishuMessageChannel
   }
 
   private _configuredBotDisplayName(): string | undefined {
-    return firstString(...(this.config.groupBotAliases ?? []));
+    return firstString(...this._groupBotAliases());
+  }
+
+  private _groupBotAliases(): readonly string[] {
+    const aliases = this.config.groupBotAliases;
+    return typeof aliases === "function" ? aliases() : aliases ?? [];
   }
 
   private async _markProcessing(messageId: string): Promise<void> {

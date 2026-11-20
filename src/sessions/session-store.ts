@@ -1,5 +1,6 @@
 import { AgentError, AgentStore, type AgentScope } from "@/agents/agent-store";
 import { BotBindingStore } from "@/agents/bot-binding-store";
+import { sessionConfigForAgent } from "@/agents/agent-settings-store";
 import { and, eq, isNull, ne } from "drizzle-orm";
 
 import type { DrizzleDB } from "@/data";
@@ -446,13 +447,14 @@ export class SessionStore {
       input.rootMessageId !== undefined &&
       input.createThreadLaunchContext !== false
     ) {
+      const threadConfig = sessionConfigForAgent(db, row.agent_id, config.session);
       new LaunchContextBuilder(db).buildForThreadSessionFromSurface({
         threadSessionId: row.id,
         channelType: input.channelType,
         channelId: input.channelId,
         anchorExternalMessageId: input.rootMessageId,
-        maxMessages: config.session.activation_context_max_messages,
-        maxChars: config.session.activation_context_max_chars,
+        maxMessages: threadConfig.activation_context_max_messages,
+        maxChars: threadConfig.activation_context_max_chars,
       });
     }
 

@@ -16,6 +16,58 @@ export interface AgentSettings {
   main: { taskProgressCard: { send: boolean; style: ProgressCardStyle } };
   task?: { runLimitHours: number };
   pty?: { idleTimeoutMinutes: number };
+  messages?: MessageSettings;
+}
+
+/** How incoming messages become Runner turns; a field left out follows the Service configuration. */
+export interface MessageSettings {
+  coalesceIdleMs?: number;
+  coalesceMaxWaitMs?: number;
+  maxBatchSize?: number;
+  groupBotAliases?: string[];
+  followupWindowMs?: number;
+  followupMaxMessages?: number;
+  followupSenders?: FollowupSenders;
+  followupInterruptOnOtherUser?: boolean;
+  followupRecentMessages?: number;
+  contextWindowMs?: number;
+  contextMaxMessages?: number;
+  contextMaxChars?: number;
+  contextRecentUnprocessedMessages?: number;
+}
+export type FollowupSenders = "requester_only" | "requester_and_reporters";
+export type MessageDefaults = Required<MessageSettings>;
+
+/** The Service defaults, used until the server has said what they are. */
+const FALLBACK_MESSAGE_DEFAULTS: MessageDefaults = {
+  coalesceIdleMs: 1200, coalesceMaxWaitMs: 5000, maxBatchSize: 8, groupBotAliases: [],
+  followupWindowMs: 300000, followupMaxMessages: 8, followupSenders: "requester_and_reporters",
+  followupInterruptOnOtherUser: true, followupRecentMessages: 3,
+  contextWindowMs: 300000, contextMaxMessages: 12, contextMaxChars: 6000, contextRecentUnprocessedMessages: 10,
+};
+
+type NumericMessageSetting = { [K in keyof MessageSettings]-?: MessageSettings[K] extends number | undefined ? K : never }[keyof MessageSettings];
+
+/** Each number setting as shown on the page: the unit it is edited in and its allowed range in that unit. */
+const NUMBER_FIELDS: Record<NumericMessageSetting, { label: string; hint: string; unit: string; scale: number; min: number; max: number; step: number }> = {
+  coalesceIdleMs: { label: "合并等待（秒）", hint: "会话空闲时收到一条消息，等同一个人在这段时间内继续发，再一起交给分身。", unit: "秒", scale: 1000, min: 0.1, max: 60, step: 0.1 },
+  coalesceMaxWaitMs: { label: "最长合并时间（秒）", hint: "从第一条消息起最多等这么久，不能短于合并等待。", unit: "秒", scale: 1000, min: 0.1, max: 300, step: 0.1 },
+  maxBatchSize: { label: "每轮最多几条", hint: "一轮最多合并同一个人的几条消息。", unit: "条", scale: 1, min: 1, max: 50, step: 1 },
+  followupWindowMs: { label: "追问有效时长（分钟）", hint: "群里有人叫过分身后，这段时间内不 @ 也算在叫它；0 表示关闭追问。", unit: "分钟", scale: 60000, min: 0, max: 60, step: 1 },
+  followupMaxMessages: { label: "追问最多几条", hint: "一次唤醒之后最多把几条不 @ 的消息当作追问。", unit: "条", scale: 1, min: 0, max: 50, step: 1 },
+  followupRecentMessages: { label: "判断追问时看最近几条", hint: "判断话题有没有转移、以及唤醒时至少带几条最近消息。", unit: "条", scale: 1, min: 0, max: 20, step: 1 },
+  contextWindowMs: { label: "上下文时间窗口（分钟）", hint: "群里被叫时，把这段时间内的群消息作为上下文一起交给分身。", unit: "分钟", scale: 60000, min: 0, max: 1440, step: 1 },
+  contextMaxMessages: { label: "上下文最多几条", hint: "带进去的群消息条数上限。", unit: "条", scale: 1, min: 0, max: 100, step: 1 },
+  contextMaxChars: { label: "上下文最多多少字", hint: "带进去的群消息总字数上限。", unit: "字", scale: 1, min: 0, max: 50000, step: 100 },
+  contextRecentUnprocessedMessages: { label: "补充未处理消息条数", hint: "时间窗口内消息太少时，最多再补几条还没交给过分身的消息。", unit: "条", scale: 1, min: 0, max: 100, step: 1 },
+};
+
+/** Whether a value typed in a field's unit is allowed; the stored value is in milliseconds or a count. */
+function validNumber(field: NumericMessageSetting, shown: number): boolean {
+  const { min, max, scale } = NUMBER_FIELDS[field];
+  if (!Number.isFinite(shown) || shown < min || shown > max) return false;
+  // Counts are whole numbers; a time may have a fraction as long as it is a whole number of milliseconds.
+  return scale === 1 ? Number.isInteger(shown) : Math.abs(shown * scale - Math.round(shown * scale)) < 1e-6;
 }
 
 const PTY_TIMEOUT_PRESETS: ReadonlyArray<{ readonly minutes: number; readonly label: string }> = [
@@ -40,6 +92,7 @@ function normalizeSettings(settings: AgentSettings): Required<AgentSettings> {
     main: settings.main,
     task: { runLimitHours: settings.task?.runLimitHours ?? 10 },
     pty: { idleTimeoutMinutes: settings.pty?.idleTimeoutMinutes ?? 10 },
+    messages: settings.messages ?? {},
   };
 }
 
@@ -53,7 +106,7 @@ function AgentSettingsLoader({ agentId, agentName }: { agentId: string; agentNam
   const path = `/agents/${encodeURIComponent(agentId)}/settings`;
   const query = useQuery({
     queryKey: [path],
-    queryFn: ({ signal }) => apiFetch<{ settings: AgentSettings }>(path, { signal }),
+    queryFn: ({ signal }) => apiFetch<{ settings: AgentSettings; messageDefaults?: MessageDefaults }>(path, { signal }),
   });
 
   const [saving, setSaving] = useState(false);
@@ -70,7 +123,7 @@ function AgentSettingsLoader({ agentId, agentName }: { agentId: string; agentNam
       .catch(() => {})
       .then(async () => {
         try {
-          const data = await apiFetch<{ settings: AgentSettings }>(path, {
+          const data = await apiFetch<{ settings: AgentSettings; messageDefaults?: MessageDefaults }>(path, {
             method: "PUT",
             body: JSON.stringify(nextSettings),
           });
@@ -104,6 +157,7 @@ function AgentSettingsLoader({ agentId, agentName }: { agentId: string; agentNam
       {query.data && (
         <AgentSettingsForm
           settings={query.data.settings}
+          {...(query.data.messageDefaults ? { messageDefaults: query.data.messageDefaults } : {})}
           error={saveError}
           onChange={enqueueSave}
         />
@@ -114,10 +168,13 @@ function AgentSettingsLoader({ agentId, agentName }: { agentId: string; agentNam
 
 export function AgentSettingsForm({
   settings,
+  messageDefaults = FALLBACK_MESSAGE_DEFAULTS,
   error,
   onChange,
 }: {
   readonly settings: AgentSettings;
+  /** What each message setting the Agent leaves unset follows. */
+  readonly messageDefaults?: MessageDefaults;
   readonly error: Error | null;
   readonly onChange: (value: AgentSettings) => void;
 }) {
@@ -129,7 +186,9 @@ export function AgentSettingsForm({
 
   const update = (next: Required<AgentSettings>) => {
     setValue(next);
-    if (validRunLimit(next.task.runLimitHours)) {
+    const idle = next.messages.coalesceIdleMs ?? messageDefaults.coalesceIdleMs;
+    const maxWait = next.messages.coalesceMaxWaitMs ?? messageDefaults.coalesceMaxWaitMs;
+    if (validRunLimit(next.task.runLimitHours) && maxWait >= idle) {
       onChange(next);
     }
   };
@@ -139,6 +198,24 @@ export function AgentSettingsForm({
   const ptyMinutes = value.pty.idleTimeoutMinutes;
   const runLimitValid = validRunLimit(value.task.runLimitHours);
   const hasPreset = PTY_TIMEOUT_PRESETS.some(p => p.minutes === ptyMinutes);
+  const messages = value.messages;
+  /** Sets or, with undefined, clears one message setting; the server checks the combination. */
+  const setMessage = <K extends keyof MessageSettings>(key: K, next: MessageSettings[K] | undefined) => {
+    const rest = { ...messages };
+    delete rest[key];
+    update({ ...value, messages: next === undefined ? rest : { ...rest, [key]: next } });
+  };
+  const effectiveIdle = messages.coalesceIdleMs ?? messageDefaults.coalesceIdleMs;
+  const effectiveMaxWait = messages.coalesceMaxWaitMs ?? messageDefaults.coalesceMaxWaitMs;
+  const numberRow = (field: NumericMessageSetting) => (
+    <MessageNumberRow
+      key={field}
+      field={field}
+      value={messages[field]}
+      fallback={messageDefaults[field]}
+      onChange={next => setMessage(field, next)}
+    />
+  );
 
   return (
     <div className="space-y-4">
@@ -156,6 +233,68 @@ export function AgentSettingsForm({
             onCheckedChange={processingReaction => update({ ...value, inbound: { processingReaction } })}
           />
         </Row>
+      </section>
+
+      <section className="space-y-4 rounded-lg border p-4" aria-labelledby="messages-title">
+        <div className="flex flex-wrap items-start justify-between gap-2">
+          <div>
+            <h2 id="messages-title" className="font-medium">消息处理</h2>
+            <p className="text-sm text-muted-foreground">
+              消息怎么合并成一轮交给分身、群里什么算在叫分身、被叫时带多少群上下文。留空的项使用平台默认值（输入框里灰色显示）。
+            </p>
+          </div>
+          <button
+            type="button"
+            className="rounded-md border px-3 py-1.5 text-xs disabled:opacity-50"
+            disabled={Object.keys(messages).length === 0}
+            onClick={() => update({ ...value, messages: {} })}
+          >
+            全部恢复默认
+          </button>
+        </div>
+
+        <h3 className="text-sm font-medium text-muted-foreground">合并消息</h3>
+        {numberRow("coalesceIdleMs")}
+        {numberRow("coalesceMaxWaitMs")}
+        {effectiveMaxWait < effectiveIdle && (
+          <p role="alert" className="text-xs text-destructive">最长合并时间不能短于合并等待，这次修改没有保存。</p>
+        )}
+        {numberRow("maxBatchSize")}
+
+        <h3 className="text-sm font-medium text-muted-foreground">群里怎么算叫分身</h3>
+        <AliasRow
+          value={messages.groupBotAliases}
+          fallback={messageDefaults.groupBotAliases}
+          onChange={next => setMessage("groupBotAliases", next)}
+        />
+        {numberRow("followupWindowMs")}
+        {numberRow("followupMaxMessages")}
+        <Row label="谁的消息算追问">
+          <select
+            aria-label="谁的消息算追问"
+            className="h-9 rounded-md border bg-background px-3 text-sm"
+            value={messages.followupSenders ?? ""}
+            onChange={event => setMessage("followupSenders", (event.target.value || undefined) as FollowupSenders | undefined)}
+          >
+            <option value="">默认（{SENDER_LABEL[messageDefaults.followupSenders]}）</option>
+            <option value="requester_only">{SENDER_LABEL.requester_only}</option>
+            <option value="requester_and_reporters">{SENDER_LABEL.requester_and_reporters}</option>
+          </select>
+        </Row>
+        <Row label="别人插话时结束追问" hint="开启后，追问期间有其他人说话，就要重新 @ 分身。">
+          <Switch
+            aria-label="别人插话时结束追问"
+            checked={messages.followupInterruptOnOtherUser ?? messageDefaults.followupInterruptOnOtherUser}
+            onCheckedChange={next => setMessage("followupInterruptOnOtherUser", next === messageDefaults.followupInterruptOnOtherUser ? undefined : next)}
+          />
+        </Row>
+        {numberRow("followupRecentMessages")}
+
+        <h3 className="text-sm font-medium text-muted-foreground">被叫时带的群上下文</h3>
+        {numberRow("contextWindowMs")}
+        {numberRow("contextMaxMessages")}
+        {numberRow("contextMaxChars")}
+        {numberRow("contextRecentUnprocessedMessages")}
       </section>
 
       <section className="space-y-4 rounded-lg border p-4" aria-labelledby="pty-title">
@@ -263,6 +402,82 @@ export function AgentSettingsForm({
           </p>
         )}
       </section>
+    </div>
+  );
+}
+
+const SENDER_LABEL: Record<FollowupSenders, string> = {
+  requester_only: "只有叫分身的人",
+  requester_and_reporters: "叫分身的人和向它汇报的人",
+};
+
+/**
+ * One number setting, edited in its own unit. An empty box follows the default; a value out of range is not saved.
+ * The typed text is kept while editing so a half-typed number is not overwritten.
+ */
+function MessageNumberRow({ field, value, fallback, onChange }: {
+  field: NumericMessageSetting;
+  value: number | undefined;
+  fallback: number;
+  onChange: (next: number | undefined) => void;
+}) {
+  const meta = NUMBER_FIELDS[field];
+  const shown = (ms: number | undefined) => ms === undefined ? "" : String(Math.round((ms / meta.scale) * 1000) / 1000);
+  const [text, setText] = useState(shown(value));
+  useEffect(() => { setText(shown(value)); }, [value]); // eslint-disable-line react-hooks/exhaustive-deps
+  const parsed = text.trim() === "" ? undefined : Number(text);
+  const invalid = parsed !== undefined && !validNumber(field, parsed);
+  return (
+    <div className="space-y-1">
+      <Row label={meta.label} hint={meta.hint}>
+        <Input
+          type="number"
+          aria-label={meta.label}
+          className="w-28"
+          min={meta.min}
+          max={meta.max}
+          step={meta.step}
+          placeholder={shown(fallback)}
+          value={text}
+          onChange={event => {
+            const next = event.target.value;
+            setText(next);
+            if (next.trim() === "") { onChange(undefined); return; }
+            const number = Number(next);
+            if (validNumber(field, number)) onChange(Math.round(number * meta.scale));
+          }}
+        />
+      </Row>
+      {invalid && (
+        <p role="alert" className="text-xs text-destructive">请输入 {meta.min} 到 {meta.max} {meta.unit}之间的数，这次修改没有保存。</p>
+      )}
+    </div>
+  );
+}
+
+/** Group aliases as one comma-separated line, saved when the box loses focus; empty follows the default. */
+function AliasRow({ value, fallback, onChange }: {
+  value: string[] | undefined;
+  fallback: string[];
+  onChange: (next: string[] | undefined) => void;
+}) {
+  const [text, setText] = useState((value ?? []).join("，"));
+  useEffect(() => { setText((value ?? []).join("，")); }, [value]);
+  const aliases = text.split(/[,，]/).map(alias => alias.trim()).filter(Boolean);
+  const invalid = aliases.length > 10 || aliases.some(alias => alias.length > 32);
+  return (
+    <div className="space-y-1">
+      <Row label="唤醒别名" hint="群消息以这些名字开头时，和 @ 分身一样。多个用逗号分隔，最多 10 个，每个不超过 32 字。">
+        <Input
+          aria-label="唤醒别名"
+          className="w-56"
+          placeholder={fallback.length ? fallback.join("，") : "默认：无"}
+          value={text}
+          onChange={event => setText(event.target.value)}
+          onBlur={() => { if (!invalid) onChange(aliases.length ? aliases : undefined); }}
+        />
+      </Row>
+      {invalid && <p role="alert" className="text-xs text-destructive">最多 10 个别名，每个不超过 32 字，这次修改没有保存。</p>}
     </div>
   );
 }

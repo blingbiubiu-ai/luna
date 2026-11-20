@@ -69,6 +69,30 @@ finalization still performs cleanup as a fallback. This visual acknowledgment
 does not finish the turn or release the session execution lane: pending input
 still waits for the current Runner to complete.
 
+## Message Turn Settings
+
+Whether an inbound message addresses the Agent, how inbox rows are batched into
+one turn and how much group context an activation carries follow the `session`
+block of the Service configuration. Each Agent may replace any of these in its
+own settings (`agent_settings.settings.messages`, Dashboard Agent 设置 → 消息处理);
+a field it leaves unset follows the Service value, which the settings API
+returns as `messageDefaults`.
+
+| Agent setting | Session configuration key |
+| --- | --- |
+| `coalesceIdleMs`, `coalesceMaxWaitMs`, `maxBatchSize` | `coalesce_idle_ms`, `coalesce_max_wait_ms`, `max_batch_size` |
+| `groupBotAliases` | `group_bot_aliases` |
+| `followupWindowMs`, `followupMaxMessages`, `followupSenders`, `followupInterruptOnOtherUser`, `followupRecentMessages` | `group_activation_followup_*` |
+| `contextWindowMs`, `contextMaxMessages`, `contextMaxChars`, `contextRecentUnprocessedMessages` | `activation_context_*` |
+
+They are read where they are used, for the Agent of the session, so a change
+applies to the next message or turn without a restart: addressing and follow-up
+decisions per inbound message, batching when a turn's rows are selected,
+activation and thread-launch context when a turn is built, and group aliases by
+the Feishu channel for every message. A max wait shorter than the idle wait is
+refused (`invalid_message_coalesce`). `stale_claim_ms` stays Service-wide: it
+only governs recovery at startup.
+
 ## Timeline And Context Pack
 
 `session_timeline_entries` is the smallest discussable unit shared by Dashboard, Main Runner context builder, and Task source context.

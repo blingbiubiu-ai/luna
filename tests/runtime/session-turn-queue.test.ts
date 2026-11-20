@@ -7,6 +7,8 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 
 import { SessionInboxStore } from "../../src/sessions/session-inbox-store";
 import { SessionQueue } from "../../src/sessions/session-queue";
+import { AgentSettingsStore } from "../../src/agents/agent-settings-store";
+import { eq } from "drizzle-orm";
 import { SessionStore } from "../../src/sessions/session-store";
 import { MessageStore } from "../../src/sessions/message-store";
 import { SessionTurnStore } from "../../src/sessions/session-turn-store";
@@ -368,6 +370,23 @@ describe("SessionQueue", () => {
       [firstB.message.id],
       [thirdA.message.id],
     ]);
+  });
+
+  test("batches by the session's Agent message settings, read when the turn starts", async () => {
+    const session = createSession();
+    const rows = [1, 2, 3].map(n => enqueueUserMessage(session.id, {
+      channelMessageKey: `message-agent-batch-${n}`, senderUserId: "user-a", text: `A${n}`, receivedAt: n }));
+    const owner = database.db.select().from(lunaSchema.lunaAgents).where(eq(lunaSchema.lunaAgents.id, session.agent_id)).get()!.ownerAccountId;
+    new AgentSettingsStore(database.db).save(owner, session.agent_id, { messages: { maxBatchSize: 2 } });
+    const batches: string[][] = [];
+    const queue = new SessionQueue({
+      db: database.db,
+      config: createSessionQueueConfig({ coalesce_idle_ms: 1, max_batch_size: 8 }),
+      executeTurn: async (input) => { batches.push(input.messageRows.map((message) => message.id)); },
+    });
+    queue.schedule(session.id);
+    await queue.waitForIdle();
+    expect(batches).toEqual([[rows[0]!.message.id, rows[1]!.message.id], [rows[2]!.message.id]]);
   });
 
   test("does not batch across max batch size", async () => {
@@ -851,16 +870,11 @@ function createSessionQueueConfig(
     coalesce_idle_ms: 1200,
     coalesce_max_wait_ms: 5000,
     max_batch_size: 8,
-    max_task_actions_per_batch: 3,
-    processing_notice_after_ms: 1500,
     stale_claim_ms: 120000,
-    turn_warn_after_ms: 120000,
-    max_queue_depth: 50,
     activation_context_window_ms: 300000,
     activation_context_max_messages: 12,
     activation_context_max_chars: 6000,
     activation_context_recent_unprocessed_messages: 10,
-    activation_context_max_cc_reporters: 1,
     group_bot_aliases: [],
     group_activation_followup_window_ms: 300000,
     group_activation_followup_senders: "requester_and_reporters",

@@ -2,6 +2,7 @@ import { InvocationStore } from "@/runners/invocation-store";
 import { decodeInvocation } from "@/runners/invocation-codec";
 import { RuntimeDetachedError } from "@/runners/runtime-detach";
 import { sessionDispatcherFor } from "./session-dispatcher";
+import { sessionConfigForSession } from "@/agents/agent-settings-store";
 import { and, asc, eq, inArray, lt } from "drizzle-orm";
 
 import type { DrizzleDB } from "@/data";
@@ -294,14 +295,16 @@ export class SessionQueue {
       return [];
     }
 
+    // The session's Agent may set its own batching; it is read per turn so a change applies to the next one.
+    const config = sessionConfigForSession(this._options.db, sessionId, this._options.config);
     const selected = [firstRow];
     const selectedIds = new Set([firstRow.id]);
     const senderIdentityId = firstRow.sender_identity_id;
     const maxWaitDeadline = firstRow.received_at +
-      this._options.config.coalesce_max_wait_ms;
+      config.coalesce_max_wait_ms;
     let lastSelectedRow = firstRow;
 
-    while (selected.length < this._options.config.max_batch_size) {
+    while (selected.length < config.max_batch_size) {
       const nextRow = this._findNextPendingRow(sessionId, selectedIds);
       if (nextRow) {
         if (nextRow.sender_identity_id !== senderIdentityId) {
@@ -313,7 +316,7 @@ export class SessionQueue {
         if (
           options.enforceIdleGap &&
           nextRow.received_at >
-            lastSelectedRow.received_at + this._options.config.coalesce_idle_ms
+            lastSelectedRow.received_at + config.coalesce_idle_ms
         ) {
           break;
         }
@@ -328,7 +331,7 @@ export class SessionQueue {
       }
       const waitDeadline = Math.min(
         maxWaitDeadline,
-        lastSelectedRow.received_at + this._options.config.coalesce_idle_ms,
+        lastSelectedRow.received_at + config.coalesce_idle_ms,
       );
       const remainingMs = waitDeadline - Date.now();
       if (remainingMs <= 0) {

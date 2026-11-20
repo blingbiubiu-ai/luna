@@ -29,6 +29,7 @@ import {
   users,
 } from "@/data/schema";
 import { selectActivationContext } from "@/main-runner/activation-context";
+import { sessionConfigForAgent, sessionConfigForSession } from "@/agents/agent-settings-store";
 import { MainRunnerContextBuilder } from "@/main-runner/context-builder";
 import { ContextPackStore, LaunchContextBuilder } from "@/context";
 import {
@@ -190,6 +191,8 @@ export class SessionInboundRouter {
         text: renderNormalizedMentions(durableMessage.text, durableMessage.mentions),
       };
       const userMessageResult = this._messageStore.appendOnce(appendInput);
+      // Whether a message addresses the Agent follows that Agent's own message settings.
+      const sessionConfig = sessionConfigForAgent(this._db, session.agent_id, this._sessionConfig);
       const botSender = durableMessage.sender.kind === "bot";
       const selfBot = botSender && (
         durableMessage.sender.externalId === this._channel.getBotIdentity?.()?.externalId ||
@@ -199,7 +202,7 @@ export class SessionInboundRouter {
         ? { addressedToBot: false as const, reason: "silent_group" as const }
         : decideInboundAddressing({
             message: durableMessage,
-            config: this._sessionConfig,
+            config: sessionConfig,
             repliesToBotMessage: !botSender && this._repliesToBotMessage(session.id, durableMessage),
           });
       const followupDecision = !botSender && !baseAddressing.addressedToBot
@@ -209,7 +212,7 @@ export class SessionInboundRouter {
             sessionId: session.id,
             candidateRow: userMessageResult.row,
             message: durableMessage,
-            config: this._sessionConfig,
+            config: sessionConfig,
           })
         : undefined;
       let addressing: typeof baseAddressing = baseAddressing;
@@ -743,8 +746,8 @@ export class SessionTurnProcessor {
       triggerEntryId: input.triggerEntryId,
       triggerMessageId: input.triggerMessageId,
       excludeEntryIds: input.excludeEntryIds,
-      maxMessages: this._sessionConfig.activation_context_max_messages,
-      maxChars: this._sessionConfig.activation_context_max_chars,
+      maxMessages: this._configFor(input.sessionId).activation_context_max_messages,
+      maxChars: this._configFor(input.sessionId).activation_context_max_chars,
     });
   }
 
@@ -878,6 +881,11 @@ export class SessionTurnProcessor {
     return activationContextMessageFromPersistedMessage(row.message);
   }
 
+  /** The session configuration with the session's Agent's own message settings applied. */
+  private _configFor(sessionId: string): SessionConfig {
+    return sessionConfigForSession(this._db, sessionId, this._sessionConfig);
+  }
+
   private _selectActivationContextMessages(input: {
     readonly sessionId: string;
     readonly messageRows: readonly MessageRow[];
@@ -892,15 +900,16 @@ export class SessionTurnProcessor {
     }
 
     try {
+      const sessionConfig = this._configFor(input.sessionId);
       return selectActivationContext({
         messageStore: new MessageStore(this._db),
         sessionId: input.sessionId,
         activationMessageRow,
-        config: this._sessionConfig,
+        config: sessionConfig,
         ...(explicitActivationReasons.has(input.latestInbound.addressing.reason)
           ? {
               minimumRecentMessages:
-                this._sessionConfig.group_activation_followup_recent_messages,
+                sessionConfig.group_activation_followup_recent_messages,
             }
           : {}),
       });

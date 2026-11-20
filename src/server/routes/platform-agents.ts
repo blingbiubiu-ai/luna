@@ -16,7 +16,7 @@ import { loadDashboardUserRows } from "@/dashboard-api/user-display";
 import { ShadowWorkerRoutingStore } from "@/agents/shadow-worker-routing-store";
 import { ShadowModelSelectionStore } from "@/agents/shadow-model-selection-store";
 import { AuthorizationRuleStore } from "../policy/authorization-rule-store";
-import { AgentSettingsStore } from "@/agents/agent-settings-store";
+import { AgentSettingsStore, messageDefaults } from "@/agents/agent-settings-store";
 import { AgentWorkerAccessStore } from "@/agents/agent-worker-access-store";
 import { isGuardResponse, requireDashboardOnly } from "../auth/guards";
 import { getKernel } from "./kernel";
@@ -99,11 +99,12 @@ export function createPlatformAgentRoutes(db: DrizzleDB, registry?:PluginRegistr
       const shadow = store.renameShadow(actor(c), {agentId, shadowId}, z.object({name: z.string().trim().max(100)}).strict().parse(await c.req.json()));
       return c.json({shadow});
     })
-    .get("/:agentId/settings", c => c.json({settings: new AgentSettingsStore(db).read(actor(c), c.req.param("agentId"))}))
+    // `messageDefaults` is what a message setting the Agent leaves unset follows: the Service configuration.
+    .get("/:agentId/settings", c => c.json({settings: new AgentSettingsStore(db).read(actor(c), c.req.param("agentId")), messageDefaults: messageDefaults(config.session)}))
     .put("/:agentId/settings", async c => {
       const accountId = actor(c);
       const agentId = c.req.param("agentId");
-      const saved = new AgentSettingsStore(db).save(accountId, agentId, await c.req.json());
+      const saved = new AgentSettingsStore(db).save(accountId, agentId, await c.req.json(), config.session);
       // Best-effort live push of updated PTY idle timeout to online assigned Workers.
       void (async () => {
         try {
@@ -123,7 +124,7 @@ export function createPlatformAgentRoutes(db: DrizzleDB, registry?:PluginRegistr
           ));
         } catch { /* runtime detached or uninitialized in standalone unit tests */ }
       })();
-      return c.json({settings: saved});
+      return c.json({settings: saved, messageDefaults: messageDefaults(config.session)});
     })
     .get("/:agentId/shadows/:shadowId/worker-routing", c => c.json({ routing: new ShadowWorkerRoutingStore(db).read(actor(c), c.req.param()) }))
     .get("/:agentId/shadows/:shadowId/model-selection",c=>c.json({selection:new ShadowModelSelectionStore(db).read(actor(c),c.req.param())}))
