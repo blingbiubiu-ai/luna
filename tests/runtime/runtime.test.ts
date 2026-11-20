@@ -1200,7 +1200,9 @@ describe("agent runtime package shell", () => {
       expect(loginHtml).toContain("简体中文");
       expect(loginHtml).toContain('data-testid="service-login-page"');
       expect(loginHtml).toContain('type="password"');
-      expect(loginHtml).toContain('href="/api/auth/sso/start?next=%2F"');
+      expect(loginHtml).not.toContain("/api/auth/sso/start");
+      expect(loginHtml).toContain('href="/api/auth/feishu/start?next=%2F"');
+      expect(loginHtml).toContain('data-configured="false"');
     } finally {
       process.chdir(previousCwd);
       if (previousToken === undefined) {
@@ -1507,12 +1509,9 @@ describe("agent runtime package shell", () => {
           id: "local-dashboard-user",
           displayName: "Local dashboard user",
         },
-        isPlatformAdmin: false,
+        isPlatformAdmin: true,
+        isSuperAdmin: true,
       });
-      // The Dashboard shows platform pages from this flag.
-      fixturePlatformAdmin(runtime.database.db, "local-dashboard-user");
-      expect(await (await server.app.fetch(new Request("http://luna.test/api/auth/me", { headers: { cookie } }))).json())
-        .toMatchObject({ isPlatformAdmin: true });
 
       const bearerConfirm = await server.app.fetch(
         new Request("http://luna.test/api/auth/cli/confirm", {

@@ -42,8 +42,10 @@ import {
   createDashboardAuthMiddleware,
   dashboardAuthSessionFromContext,
   DashboardAuthService,
+  normalizeDashboardNextPath,
 } from "./auth";
 import { hashAccessToken } from "./auth/access-token-service";
+import { FeishuAuthConfigStore, type FeishuFetch } from "./auth/feishu-oauth";
 import {
   agentRoutes,
   artifactsRoutes,
@@ -85,6 +87,7 @@ function createApp(
   db?: DrizzleDB,
   pluginRegistry?: PluginRegistry,
   resumeChannels?: (job: AgentLifecycleJob) => Promise<void>,
+  feishuFetch?: FeishuFetch,
 ) {
   return (
     new Hono()
@@ -96,7 +99,13 @@ function createApp(
       )
       // Routes
       .route("/api", healthRoutes)
-      .route("/api/auth", createAuthRoutes(auth, db === undefined ? {} : { db }))
+      .route(
+        "/api/auth",
+        createAuthRoutes(auth, {
+          ...(db === undefined ? {} : { db }),
+          ...(feishuFetch === undefined ? {} : { feishuFetch }),
+        }),
+      )
       .route(
         "/api/artifacts",
         db === undefined ? artifactsRoutes : createArtifactsRoutes({ db }),
@@ -198,6 +207,7 @@ export class HonoServer {
     readonly db?: DrizzleDB;
     readonly pluginRegistry?: PluginRegistry;
     readonly resumeChannels?: (job: AgentLifecycleJob) => Promise<void>;
+    readonly feishuFetch?: FeishuFetch;
   } = {}) {
     this._logger = createLogger("hono-server");
     const auth = new DashboardAuthService();
@@ -206,9 +216,15 @@ export class HonoServer {
         "LUNA_DASHBOARD_TOKEN is not configured; using the local development dashboard login token",
       );
     }
-    this._app = createApp(auth, input.db, input.pluginRegistry, input.resumeChannels);
+    this._app = createApp(
+      auth,
+      input.db,
+      input.pluginRegistry,
+      input.resumeChannels,
+      input.feishuFetch,
+    );
     this._setupStaticServing();
-    this._setupLoginPage();
+    this._setupLoginPage(input.db);
     this._setupCliAuthPage(input.db, auth);
   }
 
@@ -356,10 +372,18 @@ export class HonoServer {
     }
   }
 
-  private _setupLoginPage(): void {
-    this._app.get("/login", (c) =>
-      c.html(renderLoginPage(new URL(c.req.url).searchParams.get("next"))),
-    );
+  private _setupLoginPage(db?: DrizzleDB): void {
+    this._app.get("/login", (c) => {
+      const url = new URL(c.req.url);
+      const feishuConfigured = new FeishuAuthConfigStore(db === undefined ? {} : { db }).isEnabled();
+      return c.html(
+        renderLoginPage({
+          next: url.searchParams.get("next"),
+          errorCode: url.searchParams.get("error"),
+          feishuConfigured,
+        }),
+      );
+    });
   }
 
   private _setupCliAuthPage(
@@ -423,8 +447,31 @@ function uniquePaths(paths: readonly (string | undefined)[]): string[] {
   return result;
 }
 
-function renderLoginPage(next: string | null): string {
-  const safeNext = normalizeNextPath(next);
+function renderLoginPage(input: {
+  readonly next: string | null;
+  readonly errorCode?: string | null;
+  readonly feishuConfigured: boolean;
+}): string {
+  const safeNext = normalizeDashboardNextPath(input.next);
+  const oauthErrorKey = loginOAuthErrorMessage(input.errorCode ?? null);
+  const feishuStartHref = `/api/auth/feishu/start?next=${encodeURIComponent(safeNext)}`;
+  const tokenFormMarkup = `<form id="login-form">
+            <div class="form-field">
+              <label for="token" class="field-label" data-i18n="Access token">Access token</label>
+              <div class="token-field">
+                <input id="token" name="token" type="password" placeholder="Enter your access token" autocomplete="current-password"${input.feishuConfigured ? "" : " autofocus"} />
+                <button class="token-visibility" id="token-visibility" type="button" aria-controls="token" aria-label="Show access token" aria-pressed="false">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <path d="M2 12s3.6-6 10-6 10 6 10 6-3.6 6-10 6-10-6-10-6Z"/>
+                    <circle cx="12" cy="12" r="2.5"/>
+                    <path class="eye-slash" d="m3 3 18 18"/>
+                  </svg>
+                </button>
+              </div>
+            </div>
+            <p id="error" role="alert"></p>
+            <button type="submit" data-i18n="Login">Login</button>
+          </form>`;
   return `<!doctype html>
 <html lang="zh-CN">
   <head>
@@ -444,6 +491,8 @@ function renderLoginPage(next: string | null): string {
         --ink-text: #fafaf9;
         --dots: #83877e;
         --danger: #b24739;
+        --danger-bg: rgb(178 71 57 / .08);
+        --danger-border: rgb(178 71 57 / .25);
         --field-bg: rgb(28 25 23 / .025);
         --field-focus-bg: #fff;
         --field-border: rgb(28 25 23 / .12);
@@ -466,6 +515,8 @@ function renderLoginPage(next: string | null): string {
           --ink-text: #252720;
           --dots: #929c83;
           --danger: #f1b0a6;
+          --danger-bg: rgb(241 176 166 / .1);
+          --danger-border: rgb(241 176 166 / .3);
           --field-bg: rgb(255 255 255 / .03);
           --field-focus-bg: rgb(255 255 255 / .05);
           --field-border: rgb(255 255 255 / .1);
@@ -614,10 +665,14 @@ function renderLoginPage(next: string | null): string {
         font-size: 14px;
         line-height: 1.5;
       }
-      form {
+      .login-stack {
         margin-top: 28px;
         display: grid;
         gap: 20px;
+      }
+      form {
+        display: grid;
+        gap: 16px;
       }
       .form-field {
         display: grid;
@@ -640,7 +695,7 @@ function renderLoginPage(next: string | null): string {
         font: 13px ui-monospace, monospace;
         overflow-wrap: anywhere;
       }
-      #token, button[type="submit"], a.sso {
+      #token, button[type="submit"], a.feishu-login {
         width: 100%;
         min-height: 44px;
         border-radius: 10px;
@@ -682,30 +737,89 @@ function renderLoginPage(next: string | null): string {
       .token-visibility:hover { background: var(--subtle); color: var(--foreground); }
       .token-visibility svg { width: 16px; height: 16px; }
       .token-visibility[aria-pressed="false"] .eye-slash { display: none; }
-      :is(button, summary, a.sso):focus-visible {
+      :is(button, summary, a.feishu-login):focus-visible {
         outline: 2px solid var(--dots);
         outline-offset: 2px;
       }
-      button[type="submit"], a.sso {
+      button[type="submit"], a.feishu-login {
         font-weight: 600;
         letter-spacing: .01em;
         text-align: center;
         text-decoration: none;
       }
-      button[type="submit"] {
+      button[type="submit"], a.feishu-login {
         border: 1px solid var(--ink);
         background: var(--ink);
         color: var(--ink-text);
         cursor: pointer;
       }
-      button[type="submit"]:hover { opacity: .88; }
-      a.sso {
-        display: block;
-        margin-top: 12px;
-        border: 1px solid var(--border);
+      button[type="submit"]:hover, a.feishu-login:hover { opacity: .88; }
+      a.feishu-login {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 10px;
+      }
+      a.feishu-login.secondary {
+        border-color: var(--border);
+        background: transparent;
         color: var(--foreground);
       }
-      a.sso:hover { background: var(--subtle); }
+      a.feishu-login.secondary:hover {
+        background: var(--subtle);
+        opacity: 1;
+      }
+      a.feishu-login svg {
+        width: 18px;
+        height: 18px;
+        flex: none;
+      }
+      .token-fallback {
+        border-top: 1px solid var(--border);
+        padding-top: 14px;
+      }
+      .token-fallback summary {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+        padding: 6px 2px;
+        color: var(--muted);
+        font-size: 13px;
+        font-weight: 500;
+        list-style: none;
+        cursor: pointer;
+        user-select: none;
+      }
+      .token-fallback summary::-webkit-details-marker { display: none; }
+      .token-fallback summary:hover { color: var(--foreground); }
+      .token-fallback summary svg {
+        width: 14px;
+        height: 14px;
+        flex: none;
+        transition: transform .15s ease;
+      }
+      .token-fallback[open] summary svg { transform: rotate(180deg); }
+      .token-fallback form { margin-top: 12px; }
+      .token-fallback button[type="submit"] {
+        border-color: var(--border);
+        background: var(--subtle);
+        color: var(--foreground);
+      }
+      .token-fallback button[type="submit"]:hover {
+        border-color: var(--field-hover-border);
+        opacity: 1;
+      }
+      #oauth-error {
+        margin: 0;
+        padding: 10px 12px;
+        border-radius: 10px;
+        border: 1px solid var(--danger-border);
+        background: var(--danger-bg);
+        color: var(--danger);
+        font-size: 13px;
+        line-height: 1.45;
+      }
       #error {
         margin: 0;
         color: var(--danger);
@@ -773,34 +887,63 @@ function renderLoginPage(next: string | null): string {
         <main>
           <h1 data-i18n="Dashboard Login">Dashboard Login</h1>
           <p class="description" data-i18n="Sign in to manage your Luna workspace.">Sign in to manage your Luna workspace.</p>
-          <form id="login-form">
+          <div class="login-stack">
             <div class="form-field">
               <span class="field-label" id="server-label" data-i18n="Current URL">Current URL</span>
               <output id="server-url" class="server-url" aria-labelledby="server-label"></output>
             </div>
-            <div class="form-field">
-              <label for="token" class="field-label" data-i18n="Access token">Access token</label>
-              <div class="token-field">
-                <input id="token" name="token" type="password" placeholder="Enter your access token" autocomplete="current-password" autofocus />
-                <button class="token-visibility" id="token-visibility" type="button" aria-controls="token" aria-label="Show access token" aria-pressed="false">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                    <path d="M2 12s3.6-6 10-6 10 6 10 6-3.6 6-10 6-10-6-10-6Z"/>
-                    <circle cx="12" cy="12" r="2.5"/>
-                    <path class="eye-slash" d="m3 3 18 18"/>
-                  </svg>
-                </button>
-              </div>
-            </div>
-            <p id="error" role="alert"></p>
-            <button type="submit" data-i18n="Login">Login</button>
-          </form>
-          <a class="sso" href="/api/auth/sso/start?next=${encodeURIComponent(safeNext)}" data-i18n="SSO Login">SSO Login</a>
+            ${oauthErrorKey
+              ? `<p id="oauth-error" role="alert" data-i18n="${escapeHtml(oauthErrorKey)}">${escapeHtml(oauthErrorKey)}</p>`
+              : ""}
+            ${input.feishuConfigured
+              ? `<a class="feishu-login primary" data-testid="feishu-login-button" data-configured="true" href="${escapeHtml(feishuStartHref)}">
+              <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                <path d="M5.4 4.6c3.7 1.2 7.8 4.2 10.6 7.8-2.6.8-5.4 1.1-8.2.5L4.3 6c-.3-.8.3-1.6 1.1-1.4Z" fill="#00D6B9"/>
+                <path d="M7.8 12.9c3.7-.3 7.7-1.8 11.7-4.8.5-.4 1.2.1 1 .8l-2.4 8.3c-.4 1.4-1.9 2.2-3.3 1.7-3.1-1-5.6-3.1-7-6Z" fill="#3370FF"/>
+                <path d="M7.8 12.9c1.2 2.4 3.2 4.3 5.8 5.5l-4.5 1.5c-.8.3-1.6-.5-1.3-1.3l1.7-4.9c-.6-.2-1.2-.5-1.7-.8Z" fill="#1456F0"/>
+              </svg>
+              <span data-i18n="Continue with Feishu">Continue with Feishu</span>
+            </a>
+            <details class="token-fallback" data-testid="token-login-disclosure">
+              <summary>
+                <span data-i18n="Sign in with access token">Sign in with access token</span>
+                <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="m4 6 4 4 4-4"/></svg>
+              </summary>
+              ${tokenFormMarkup}
+            </details>`
+              : `${tokenFormMarkup}
+            <a class="feishu-login secondary" data-testid="feishu-login-button" data-configured="false" href="${escapeHtml(feishuStartHref)}">
+              <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                <path d="M5.4 4.6c3.7 1.2 7.8 4.2 10.6 7.8-2.6.8-5.4 1.1-8.2.5L4.3 6c-.3-.8.3-1.6 1.1-1.4Z" fill="#00D6B9"/>
+                <path d="M7.8 12.9c3.7-.3 7.7-1.8 11.7-4.8.5-.4 1.2.1 1 .8l-2.4 8.3c-.4 1.4-1.9 2.2-3.3 1.7-3.1-1-5.6-3.1-7-6Z" fill="#3370FF"/>
+                <path d="M7.8 12.9c1.2 2.4 3.2 4.3 5.8 5.5l-4.5 1.5c-.8.3-1.6-.5-1.3-1.3l1.7-4.9c-.6-.2-1.2-.5-1.7-.8Z" fill="#1456F0"/>
+              </svg>
+              <span data-i18n="Continue with Feishu">Continue with Feishu</span>
+            </a>`}
+          </div>
         </main>
       </div>
     </div>
     <script>${loginDotMatrixScript}</script>
     <script>
-      const translations = {"Dashboard Login": "登录控制台", "Sign in to manage your Luna workspace.": "登录以管理你的 Luna 工作空间。", "SSO Login": "SSO 登录", "Luna Management Console": "Luna 管理控制台", "Current URL": "当前地址", "Access token": "访问令牌", "Login": "登录", "Enter your access token": "输入访问令牌", "Show access token": "显示访问令牌", "Invalid token": "访问令牌无效"};
+      const translations = {
+        "Dashboard Login": "登录控制台",
+        "Sign in to manage your Luna workspace.": "登录以管理你的 Luna 工作空间。",
+        "Continue with Feishu": "飞书登录",
+        "Sign in with access token": "使用访问令牌登录",
+        "Luna Management Console": "Luna 管理控制台",
+        "Current URL": "当前地址",
+        "Access token": "访问令牌",
+        "Login": "登录",
+        "Enter your access token": "输入访问令牌",
+        "Show access token": "显示访问令牌",
+        "Invalid token": "访问令牌无效",
+        "Account is disabled or deleted. Contact an administrator.": "账号已停用或删除，请联系管理员。",
+        "Feishu authorization was cancelled.": "飞书授权已取消。",
+        "Login state expired or invalid. Please try again.": "登录校验已过期或无效，请重试。",
+        "Feishu login failed. Check app settings or try again.": "飞书登录失败，请检查应用配置或稍后重试。",
+        "Feishu login is not configured yet. Sign in with your access token and configure Feishu App ID & App Secret in Settings.": "飞书登录尚未配置，请先使用访问令牌登录并在左下角「设置」中填写飞书应用 App ID 与 App Secret。"
+      };
       let language = navigator.language.startsWith("zh") ? "zh-CN" : "en";
       try {
         const savedLanguage = localStorage.getItem("luna-ui-language");
@@ -812,12 +955,17 @@ function renderLoginPage(next: string | null): string {
       const languageOptions = languageMenu.querySelectorAll("[data-language]");
       const tokenInput = document.getElementById("token");
       const tokenVisibility = document.getElementById("token-visibility");
+      const tokenDisclosure = document.querySelector(".token-fallback");
       document.getElementById("server-url").textContent = window.location.origin;
       tokenVisibility.addEventListener("click", () => {
         const show = tokenInput.type === "password";
         tokenInput.type = show ? "text" : "password";
         tokenVisibility.setAttribute("aria-pressed", String(show));
       });
+      tokenDisclosure?.addEventListener("toggle", () => {
+        if (tokenDisclosure.open) tokenInput.focus();
+      });
+      const error = document.getElementById("error");
       function applyLanguage() {
         document.documentElement.lang = language;
         languageOptions.forEach(option => {
@@ -828,7 +976,7 @@ function renderLoginPage(next: string | null): string {
         document.querySelectorAll("[data-i18n]").forEach(el => { el.textContent = translate(el.dataset.i18n); });
         tokenInput.placeholder = translate("Enter your access token");
         tokenVisibility.setAttribute("aria-label", translate("Show access token"));
-        if (document.getElementById("error").textContent) document.getElementById("error").textContent = translate("Invalid token");
+        if (error.dataset.errorKey) error.textContent = translate(error.dataset.errorKey);
       }
       languageOptions.forEach(option => option.addEventListener("click", () => {
         language = option.dataset.language;
@@ -848,10 +996,10 @@ function renderLoginPage(next: string | null): string {
       });
       applyLanguage();
       const form = document.getElementById("login-form");
-      const error = document.getElementById("error");
       form.addEventListener("submit", async (event) => {
         event.preventDefault();
         error.textContent = "";
+        delete error.dataset.errorKey;
         tokenInput.removeAttribute("aria-invalid");
         const response = await fetch("/api/auth/login", {
           method: "POST",
@@ -860,7 +1008,11 @@ function renderLoginPage(next: string | null): string {
         });
         if (!response.ok) {
           tokenInput.setAttribute("aria-invalid", "true");
-          error.textContent = translate("Invalid token");
+          const errorKey = response.status === 403
+            ? "Account is disabled or deleted. Contact an administrator."
+            : "Invalid token";
+          error.dataset.errorKey = errorKey;
+          error.textContent = translate(errorKey);
           return;
         }
         window.location.assign(${JSON.stringify(safeNext)});
@@ -868,6 +1020,23 @@ function renderLoginPage(next: string | null): string {
     </script>
   </body>
 </html>`;
+}
+
+function loginOAuthErrorMessage(errorCode: string | null): string | null {
+  switch (errorCode) {
+    case "feishu_access_denied":
+      return "Feishu authorization was cancelled.";
+    case "feishu_invalid_state":
+      return "Login state expired or invalid. Please try again.";
+    case "feishu_exchange_failed":
+      return "Feishu login failed. Check app settings or try again.";
+    case "feishu_not_configured":
+      return "Feishu login is not configured yet. Sign in with your access token and configure Feishu App ID & App Secret in Settings.";
+    case "account_inactive":
+      return "Account is disabled or deleted. Contact an administrator.";
+    default:
+      return null;
+  }
 }
 
 function renderCliAuthPage(input: {
@@ -999,13 +1168,6 @@ function renderCliAuthPage(input: {
     </script>
   </body>
 </html>`;
-}
-
-function normalizeNextPath(value: string | null): string {
-  if (!value || !value.startsWith("/") || value.startsWith("//")) {
-    return "/";
-  }
-  return value;
 }
 
 function escapeHtml(value: string): string {

@@ -4,6 +4,7 @@ import { createSessionRunnerPaths } from "@/shared/runner-paths";
 import { sql, and, eq, inArray, isNull, ne, or } from "drizzle-orm";
 import { HTTPException } from "hono/http-exception";
 import type { DrizzleDB } from "@/data";
+import { isSuperAdminAccountId } from "@/identity/account-store";
 import { runnerOperations, accounts, lunaAgents, accessTokens, authorizationRules, channelAuthTokens, channelUserBindings, cliAuthSessions, directRecipients, groupMemberships, identityObservations, messages, sessionChannelBindings, sessionCommands, sessionInbox, sessionSchedules, sessions, sessionSurfaceAliases, sessionTimelineEntries, sessionTriggers, sessionTurns, taskSubscriptions, tasks, userIdentityLinks, users } from "@/data/schema";
 
 function deletionError(status: 404 | 409, message: string): never {
@@ -126,6 +127,7 @@ export function deleteDashboardSession(db: DrizzleDB, id: string): void {
  */
 export function deleteAccount(db: DrizzleDB, id: string, requesterAccountId: string | undefined): void {
   db.transaction(tx => {
+    if (isSuperAdminAccountId(id)) deletionError(409, "内置超级管理员账号不可删除。");
     const account = tx.select().from(accounts).where(eq(accounts.id, id)).get();
     if (!account) deletionError(404, "账号不存在");
     if (id === requesterAccountId) deletionError(409, "不能删除当前登录账号。");

@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { Toaster } from "@/components/ui/sonner";
 import { PluginDetailDashboard, PluginsDashboard } from "@/app/plugins/plugins-dashboard";
+import { PlatformAccountsPage } from "@/app/platform-accounts";
 import { PlatformSettingsPage } from "@/app/platform-settings";
 import {
   useDashboardAgents, useDashboardMe, useDisablePlugin, useEnablePlugin, usePlugin, usePlugins,
@@ -29,6 +30,13 @@ export function PlatformShell({ pathname }: { readonly pathname: string }) {
   if (path === "/platform/settings") {
     title = "设置";
     page = <PlatformSettingsPage />;
+  } else if (path === "/platform/accounts") {
+    title = "账号管理";
+    page = me.isPending
+      ? <p role="status" className="p-6">正在加载…</p>
+      : !isAdmin
+        ? <p role="alert" className="p-6 text-sm text-muted-foreground">账号管理需要平台管理员权限。</p>
+        : <PlatformAccountsPage currentAccountId={me.data?.account?.id} />;
   } else if (path === "/platform/plugins" || detail) {
     title = "插件管理";
     page = me.isPending ? <p role="status" className="p-6">正在加载…</p>

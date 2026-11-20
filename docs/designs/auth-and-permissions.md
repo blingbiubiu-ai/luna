@@ -13,9 +13,18 @@ Channel identities are display and provider-debug records. They are not authoriz
 
 ## Dashboard User Access
 
-Dashboard uses authenticated user/session access. User identity is resolved to a canonical user and then evaluated through group membership, operation grants, and resource-specific policies.
+Dashboard uses authenticated account/session access (`luna_dashboard_session`). Sign-in resolves to a platform `accounts` record (`local-dashboard-user` for local access-token login or `feishu:<union_id|open_id>` for Feishu OAuth login), and Agent-scoped requests then map that account to its per-Agent `users` record for group membership, operation grants, and resource-specific policies.
 
 Dashboard should not read local databases or files directly. It must use Luna Service APIs so authorization, audit, and artifact signing remain centralized.
+
+### Feishu OAuth Sign-In
+
+Feishu OAuth sign-in replaces the legacy `/api/auth/sso/*` placeholders with:
+
+- `GET /api/auth/feishu/start?next=...`: issues a 10-minute HMAC-signed OAuth state (`feishu-oauth-state`) carrying a sanitized relative `next` path and CSRF `nonce`, writes `luna_feishu_oauth_state` (`HttpOnly`, `Path=/api/auth/feishu`, `SameSite=None; Secure` over HTTPS and `SameSite=Lax` over HTTP), and redirects to `${feishuHost}/open-apis/authen/v1/authorize` without requesting sensitive scopes.
+- `GET /api/auth/feishu/callback`: validates the signed state (requiring matching `luna_feishu_oauth_state` when the cookie is present, while remaining compatible with Feishu webview cross-site hops), exchanges `code` via Feishu v1 OIDC (`app_access_token/internal` → `authen/v1/oidc/access_token` → `authen/v1/user_info`), ensures an active `accounts` record (`feishu:<union_id>` with `open_id` fallback, keeping `display_name` and `avatar_url` current), sets `luna_dashboard_session`, and redirects to `next`.
+
+Feishu OAuth credentials are resolved from `platform_auth_settings` (`provider = 'feishu'`, managed by platform administrators via `/api/platform-settings/feishu-auth` with AES-256-GCM secret encryption and live `app_access_token` verification on save), falling back to environment variables (`LUNA_FEISHU_APP_ID` / `FEISHU_APP_ID`, `LUNA_FEISHU_APP_SECRET` / `FEISHU_APP_SECRET`, `LUNA_FEISHU_HOST` / `FEISHU_HOST`, and `LUNA_FEISHU_PUBLIC_BASE_URL` / `LUNA_SERVICE_URL` / `PUBLIC_BASE_URL`) or `config.yaml` (`auth.feishu.*`). API responses never expose `appSecret`.
 
 ## Listener startup safety
 
@@ -135,7 +144,10 @@ The frontend must request links from Service. It must not compute signatures.
 ## Primary Code Paths
 
 - `src/server/auth.ts`
+- `src/server/auth/feishu-oauth.ts`
 - `src/server/auth/access-token-service.ts`
+- `src/server/routes/auth.ts`
+- `src/server/routes/platform-settings.ts`
 - `src/server/auth/token-scope.ts`
 - `src/server/artifact-access-policy.ts`
 - `src/server/routes/artifacts.ts`
@@ -205,14 +217,9 @@ the execution settlement and draining flows retain that responsibility.
 
 ## Platform administration and Dashboard scope
 
-`requireAdmin` requires an active human with platform-scoped `system.admin`.
-Agent grants and Runner identity do not confer administrator status. For initial
-setup, the candidate signs in, an operator obtains its canonical ID from
-`GET /api/auth/session`, and runs
-`luna service admin grant --home <service-home> --user-id <canonical-user-id>`.
-The CLI requires a writable, initialized database and active human. Repeated
-grants are safe; explicit denies still take precedence. Login and Agent creation
-do not elevate privileges.
+The built-in access-token operator account (`local-dashboard-user`, authenticated with `LUNA_DASHBOARD_TOKEN`) is the platform's unrevokable **Super Administrator** (`isSuperAdministrator`): it always satisfies `isPlatformAdministrator` / `requireAdmin` and cannot be disabled, deleted, or stripped of administrator authority.
+
+Feishu OAuth accounts (`feishu:<union_id|open_id>`) start with no platform privileges (they only own and manage the Agents they create). Platform administrators and the Super Administrator manage accounts and grant or revoke platform-scoped `system.admin` on `/platform/accounts` (`GET /api/accounts`, `PUT /api/accounts/:id/admin`, `PUT /api/accounts/:id/status`, `DELETE /api/accounts/:id`), entered from `/platform/settings`. Host operators can also grant `system.admin` via `luna service admin grant --home <service-home> --account-id <account-id>`. Agent grants and Runner identity never confer platform administrator status, and administrators cannot revoke or disable their own currently signed-in account.
 
 Session, task, overview, user and group queries require explicit Agent scope and
 ownership. Shadow-specific lists also include Shadow scope in their cache keys.

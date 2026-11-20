@@ -1,5 +1,6 @@
 import { AccountStore } from "@/identity/account-store";
 import { Hono } from "hono";
+import { deleteCookie, getCookie, setCookie } from "hono/cookie";
 import { and, desc, eq, inArray } from "drizzle-orm";
 
 import type { DrizzleDB } from "@/data";
@@ -7,21 +8,34 @@ import { accessTokens } from "@/data/schema";
 import {
   type DashboardAuthService,
   ensureDashboardAccount,
+  isSecureRequest,
+  normalizeDashboardNextPath,
   withStoredProfile,
   resolveLunaAccessTokenSigningSecret,
 } from "../auth";
 import { AccessTokenService } from "../auth/access-token-service";
+import {
+  buildFeishuAuthorizeUrl,
+  exchangeFeishuAuthorizationCode,
+  FEISHU_OAUTH_STATE_COOKIE,
+  FEISHU_OAUTH_STATE_TTL_SECONDS,
+  FeishuAuthConfigStore,
+  type FeishuFetch,
+  resolveFeishuCallbackUrl,
+} from "../auth/feishu-oauth";
 import {
   isGuardResponse,
   requireAccessTokenSelf,
   requireAuthenticated,
   requireDashboardOnly,
 } from "../auth/guards";
-import { isPlatformAdministrator } from "../policy/platform-administrator";
+import { isPlatformAdministrator, isSuperAdministrator } from "../policy/platform-administrator";
 import { getKernel } from "./kernel";
 
-interface AuthRouteOptions {
+export interface AuthRouteOptions {
   readonly db?: DrizzleDB;
+  readonly feishuAuthStore?: FeishuAuthConfigStore;
+  readonly feishuFetch?: FeishuFetch;
 }
 
 export function createAuthRoutes(
@@ -78,6 +92,10 @@ export function createAuthRoutes(
         isPlatformAdmin: (() => {
           const db = authDb(options);
           return db !== undefined && account !== undefined && isPlatformAdministrator(db, account.id);
+        })(),
+        isSuperAdmin: (() => {
+          const db = authDb(options);
+          return db !== undefined && account !== undefined && isSuperAdministrator(db, account.id);
         })(),
         ...(current.authKind === "luna-access-token"
           ? {
@@ -265,12 +283,112 @@ export function createAuthRoutes(
       service.revokeToken(c.req.param("tokenId"), self.account.id, Date.now());
       return c.json({ status: "revoked" });
     })
-    .get("/sso/start", (c) =>
-      c.json({ error: "sso_not_configured" }, 501),
-    )
-    .get("/sso/callback", (c) =>
-      c.json({ error: "sso_not_configured" }, 501),
-    );
+    .get("/feishu/start", (c) => {
+      const url = new URL(c.req.url);
+      const safeNext = normalizeDashboardNextPath(url.searchParams.get("next"));
+      const credentials = feishuAuthStore(options).resolveActiveCredentials();
+      if (credentials === null) {
+        if ((c.req.header("accept") ?? "").includes("text/html")) {
+          return c.redirect(loginErrorRedirect(safeNext, "feishu_not_configured"), 302);
+        }
+        return c.json({ error: "feishu_not_configured" }, 501);
+      }
+      const redirectUri = resolveFeishuCallbackUrl(c.req.url, credentials.publicBaseUrl);
+      const oauthState = auth.issueOAuthState({
+        next: safeNext,
+        ttlSeconds: FEISHU_OAUTH_STATE_TTL_SECONDS,
+      });
+      const secure = isSecureRequest(c);
+      setCookie(c, FEISHU_OAUTH_STATE_COOKIE, oauthState.nonce, {
+        httpOnly: true,
+        maxAge: FEISHU_OAUTH_STATE_TTL_SECONDS,
+        path: "/api/auth/feishu",
+        sameSite: secure ? "None" : "Lax",
+        secure,
+      });
+      return c.redirect(
+        buildFeishuAuthorizeUrl({
+          appId: credentials.appId,
+          feishuHost: credentials.feishuHost,
+          redirectUri,
+          state: oauthState.state,
+        }),
+        302,
+      );
+    })
+    .get("/feishu/callback", async (c) => {
+      const url = new URL(c.req.url);
+      const code = url.searchParams.get("code")?.trim() ?? "";
+      const state = url.searchParams.get("state")?.trim() ?? "";
+      const oauthError = url.searchParams.get("error")?.trim() ?? "";
+      const cookieNonce = getCookie(c, FEISHU_OAUTH_STATE_COOKIE);
+      deleteCookie(c, FEISHU_OAUTH_STATE_COOKIE, { path: "/api/auth/feishu" });
+
+      const verified = state ? auth.verifyOAuthState(state, cookieNonce) : null;
+      const safeNext = verified?.next ?? "/";
+      if (oauthError) {
+        return c.redirect(loginErrorRedirect(safeNext, "feishu_access_denied"), 302);
+      }
+      if (verified === null || code.length === 0) {
+        return c.redirect(loginErrorRedirect(safeNext, "feishu_invalid_state"), 302);
+      }
+
+      const credentials = feishuAuthStore(options).resolveActiveCredentials();
+      if (credentials === null) {
+        return c.redirect(loginErrorRedirect(safeNext, "feishu_not_configured"), 302);
+      }
+
+      let account;
+      try {
+        account = await exchangeFeishuAuthorizationCode(
+          {
+            code,
+            appId: credentials.appId,
+            appSecret: credentials.appSecret,
+            feishuHost: credentials.feishuHost,
+          },
+          options.feishuFetch,
+        );
+      } catch {
+        return c.redirect(loginErrorRedirect(safeNext, "feishu_exchange_failed"), 302);
+      }
+
+      let sessionAccount = account;
+      const db = authDb(options);
+      if (db !== undefined) {
+        const stored = ensureDashboardAccount(db, account);
+        if (stored.status !== "active") {
+          return c.redirect(loginErrorRedirect(safeNext, "account_inactive"), 302);
+        }
+        sessionAccount = {
+          ...account,
+          name: stored.displayName,
+          ...(stored.avatarUrl ? { avatarUrl: stored.avatarUrl } : {}),
+        };
+      }
+
+      const issued = auth.issueSession(sessionAccount);
+      auth.setSessionCookie(c, issued.sessionToken);
+      return c.redirect(safeNext, 302);
+    });
+}
+
+function feishuAuthStore(options: AuthRouteOptions): FeishuAuthConfigStore {
+  if (options.feishuAuthStore !== undefined) {
+    return options.feishuAuthStore;
+  }
+  const db = authDb(options);
+  return new FeishuAuthConfigStore(db === undefined ? {} : { db });
+}
+
+function loginErrorRedirect(next: string, errorCode: string): string {
+  const params = new URLSearchParams();
+  const safeNext = normalizeDashboardNextPath(next);
+  if (safeNext !== "/") {
+    params.set("next", safeNext);
+  }
+  params.set("error", errorCode);
+  return `/login?${params.toString()}`;
 }
 
 async function readLoginBody(request: Request): Promise<{ token: string }> {

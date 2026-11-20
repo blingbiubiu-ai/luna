@@ -31,10 +31,24 @@ interface RailItem {
  */
 export function PlatformRail({ path }: { readonly path: string }) {
   const me = useDashboardMe();
-  return <PlatformRailView path={path} isAdmin={me.data?.isPlatformAdmin === true} />;
+  return (
+    <PlatformRailView
+      path={path}
+      isAdmin={me.data?.isPlatformAdmin === true}
+      isSuperAdmin={me.data?.isSuperAdmin === true}
+    />
+  );
 }
 
-export function PlatformRailView({ path, isAdmin }: { readonly path: string; readonly isAdmin: boolean }) {
+export function PlatformRailView({
+  path,
+  isAdmin,
+  isSuperAdmin = false,
+}: {
+  readonly path: string;
+  readonly isAdmin: boolean;
+  readonly isSuperAdmin?: boolean;
+}) {
   const { t } = useTranslation();
   const current = path.replace(/\/$/, "") || "/";
   const agents: RailItem = {
@@ -54,7 +68,7 @@ export function PlatformRailView({ path, isAdmin }: { readonly path: string; rea
         {platform.map(item => <RailLink key={item.href} item={item} />)}
       </>}
       <div className="flex-1" />
-      <RailUserMenu />
+      <RailUserMenu isAdmin={isAdmin} isSuperAdmin={isSuperAdmin} />
     </nav>
   );
 }
@@ -97,12 +111,26 @@ interface RailUserInfo {
   readonly avatarUrl: string | null;
 }
 
-function RailUserMenu() {
+function RailUserMenu({
+  isAdmin = false,
+  isSuperAdmin = false,
+}: {
+  readonly isAdmin?: boolean;
+  readonly isSuperAdmin?: boolean;
+}) {
   const { data: session } = useDashboardAuthSession();
-  return <RailUserMenuContent session={session} />;
+  return <RailUserMenuContent session={session} isAdmin={isAdmin} isSuperAdmin={isSuperAdmin} />;
 }
 
-function RailUserMenuContent({ session }: { readonly session: DashboardAuthSession | undefined }) {
+function RailUserMenuContent({
+  session,
+  isAdmin = false,
+  isSuperAdmin = false,
+}: {
+  readonly session: DashboardAuthSession | undefined;
+  readonly isAdmin?: boolean;
+  readonly isSuperAdmin?: boolean;
+}) {
   const { t } = useTranslation();
   async function handleLogout() {
     try {
@@ -127,7 +155,7 @@ function RailUserMenuContent({ session }: { readonly session: DashboardAuthSessi
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="w-64 rounded-xl p-2 shadow-lg" side="right" sideOffset={12}>
         <div className="flex items-center gap-3 rounded-lg px-2 py-2" data-testid="sidebar-user-menu-profile">
-          <UserIdentity userInfo={userInfo} />
+          <UserIdentity userInfo={userInfo} isAdmin={isAdmin} isSuperAdmin={isSuperAdmin} />
         </div>
         <DropdownMenuSeparator />
         <DropdownMenuItem data-testid="sidebar-settings-menu-item" onSelect={() => { if (appHistory.location.pathname !== "/platform/settings") appHistory.push("/platform/settings"); }}>
@@ -144,12 +172,27 @@ function RailUserMenuContent({ session }: { readonly session: DashboardAuthSessi
   );
 }
 
-function UserIdentity({ userInfo }: { readonly userInfo: RailUserInfo }) {
+function UserIdentity({
+  userInfo,
+  isAdmin = false,
+  isSuperAdmin = false,
+}: {
+  readonly userInfo: RailUserInfo;
+  readonly isAdmin?: boolean;
+  readonly isSuperAdmin?: boolean;
+}) {
   return (
     <>
       <UserAvatar avatarUrl={userInfo.avatarUrl} name={userInfo.name} size={36} />
       <div className="grid min-w-0 flex-1 text-left leading-tight">
-        <span className="truncate text-sm font-semibold">{userInfo.name}</span>
+        <div className="flex items-center gap-1.5">
+          <span className="truncate text-sm font-semibold">{userInfo.name}</span>
+          {(isSuperAdmin || isAdmin) && (
+            <span className="shrink-0 rounded-full bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-medium text-amber-800 dark:text-amber-300">
+              {isSuperAdmin ? "超管" : "管理员"}
+            </span>
+          )}
+        </div>
         <span className="truncate text-xs text-muted-foreground">{userInfo.provider}</span>
         <span className="truncate font-mono text-[11px] text-muted-foreground">{userInfo.id}</span>
       </div>

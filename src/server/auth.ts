@@ -5,7 +5,7 @@ import { deleteCookie, getCookie, setCookie } from "hono/cookie";
 
 import type { DrizzleDB } from "@/data";
 import { InvocationService } from "@/runners/invocation-service";
-import { AccountStore } from "@/identity/account-store";
+import { AccountStore, SUPER_ADMIN_ACCOUNT_ID } from "@/identity/account-store";
 
 import { DEFAULT_LUNA_DASHBOARD_TOKEN } from "@luna/host-runtime/defaults";
 import {
@@ -20,7 +20,7 @@ const SESSION_TTL_SECONDS = 60 * 60 * 24 * 30;
 /** The local-token sign-in has no person behind it, so its name is a placeholder a linked chat identity may replace. */
 export const LOCAL_ACCOUNT_NAME = "Local dashboard user";
 const LOCAL_ACCOUNT = {
-  id: "local-dashboard-user",
+  id: SUPER_ADMIN_ACCOUNT_ID,
   name: LOCAL_ACCOUNT_NAME,
   provider: "local-token",
 } as const;
@@ -97,6 +97,13 @@ export class DashboardAuthService {
     if (account === null) {
       return null;
     }
+    return this.issueSession(account);
+  }
+
+  issueSession(account: DashboardAccount): {
+    readonly sessionToken: string;
+    readonly session: DashboardAuthSession;
+  } {
     const sessionToken = this._signSession({
       sub: account.id,
       name: account.name,
@@ -111,6 +118,70 @@ export class DashboardAuthService {
         account,
       },
     };
+  }
+
+  issueOAuthState(input: {
+    readonly next: string | null | undefined;
+    readonly ttlSeconds?: number;
+    readonly nowSeconds?: number;
+  }): {
+    readonly state: string;
+    readonly nonce: string;
+    readonly next: string;
+  } {
+    const nonce = randomBytes(16).toString("hex");
+    const next = normalizeDashboardNextPath(input.next);
+    const now = input.nowSeconds ?? Math.floor(Date.now() / 1000);
+    const claims: OAuthStateClaims = {
+      kind: "feishu-oauth-state",
+      nonce,
+      next,
+      exp: now + (input.ttlSeconds ?? 600),
+    };
+    const payload = base64UrlEncode(JSON.stringify(claims));
+    return {
+      state: `${payload}.${this._signature(payload)}`,
+      nonce,
+      next,
+    };
+  }
+
+  verifyOAuthState(
+    state: string,
+    cookieNonce?: string,
+    nowSeconds = Math.floor(Date.now() / 1000),
+  ): { readonly next: string; readonly nonce: string } | null {
+    const [payload, signature, extra] = state.split(".");
+    if (!payload || !signature || extra !== undefined) {
+      return null;
+    }
+    if (!secureEqual(signature, this._signature(payload))) {
+      return null;
+    }
+    try {
+      const claims = JSON.parse(base64UrlDecode(payload)) as Partial<OAuthStateClaims>;
+      if (
+        claims.kind !== "feishu-oauth-state" ||
+        typeof claims.nonce !== "string" ||
+        claims.nonce.length === 0 ||
+        typeof claims.next !== "string" ||
+        typeof claims.exp !== "number"
+      ) {
+        return null;
+      }
+      if (claims.exp < nowSeconds) {
+        return null;
+      }
+      if (cookieNonce && !secureEqual(cookieNonce, claims.nonce)) {
+        return null;
+      }
+      return {
+        next: normalizeDashboardNextPath(claims.next),
+        nonce: claims.nonce,
+      };
+    } catch {
+      return null;
+    }
   }
 
   sessionFromRequest(c: Context): DashboardAuthSession {
@@ -320,8 +391,8 @@ export function isPublicPath(pathname: string): boolean {
     pathname === "/api/auth/cli/poll" ||
     pathname === "/api/auth/cli/confirm-channel-token" ||
     pathname === "/auth/cli" ||
-    pathname === "/api/auth/sso/start" ||
-    pathname === "/api/auth/sso/callback" ||
+    pathname === "/api/auth/feishu/start" ||
+    pathname === "/api/auth/feishu/callback" ||
     (!isApiPath(pathname) && isStaticAssetPath(pathname))
   );
 }
@@ -446,8 +517,19 @@ function base64UrlDecode(value: string): string {
   return Buffer.from(value, "base64url").toString("utf-8");
 }
 
-function isSecureRequest(c: Context): boolean {
-  return new URL(c.req.url).protocol === "https:";
+export function normalizeDashboardNextPath(value: string | null | undefined): string {
+  if (!value || !value.startsWith("/") || value.startsWith("//")) {
+    return "/";
+  }
+  return value;
+}
+
+export function isSecureRequest(c: Context): boolean {
+  if (new URL(c.req.url).protocol === "https:") {
+    return true;
+  }
+  const forwarded = c.req.header("x-forwarded-proto")?.split(",")[0]?.trim().toLowerCase();
+  return forwarded === "https";
 }
 
 interface SessionClaims {
@@ -455,5 +537,12 @@ interface SessionClaims {
   readonly name: string;
   readonly provider: string;
   readonly avatarUrl?: string | null;
+  readonly exp: number;
+}
+
+interface OAuthStateClaims {
+  readonly kind: "feishu-oauth-state";
+  readonly nonce: string;
+  readonly next: string;
   readonly exp: number;
 }

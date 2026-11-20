@@ -85,6 +85,19 @@ export const ServiceConfig = z.object({
 }).strict();
 export interface ServiceConfig extends z.infer<typeof ServiceConfig> {}
 
+export const FeishuAuthConfig = z.object({
+  appId: z.string().trim().min(1).optional(),
+  appSecret: z.string().trim().min(1).optional(),
+  host: z.string().trim().min(1).optional(),
+  publicBaseUrl: z.string().trim().min(1).optional(),
+}).strict();
+export interface FeishuAuthConfig extends z.infer<typeof FeishuAuthConfig> {}
+
+export const AuthConfig = z.object({
+  feishu: FeishuAuthConfig.optional(),
+}).strict();
+export interface AuthConfig extends z.infer<typeof AuthConfig> {}
+
 export const PathsConfig = z.object({
   repoRoot: z.string().optional(),
   runtimeDir: z.string().optional(),
@@ -172,6 +185,7 @@ export const AppConfig = z.object({
     .string()
     .default(Intl.DateTimeFormat().resolvedOptions().timeZone),
   service: ServiceConfig.default(() => ServiceConfig.parse({})),
+  auth: AuthConfig.optional(),
   paths: PathsConfig.default(() => PathsConfig.parse({})),
   logging: LoggingConfig.default(() => LoggingConfig.parse({})),
   plugins: PluginsConfig.default(() => PluginsConfig.parse({})),

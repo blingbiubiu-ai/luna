@@ -14,6 +14,8 @@ import {
 
 export type {
   AppConfig,
+  AuthConfig,
+  FeishuAuthConfig,
   ChannelConfig,
   ChannelParams,
   PluginsConfig,

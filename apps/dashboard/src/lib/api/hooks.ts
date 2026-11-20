@@ -488,7 +488,12 @@ export interface CreatedAccessToken {
 export function useDashboardMe() {
   return useQuery({
     queryKey: ["luna", "auth", "me"],
-    queryFn: () => apiFetch<{ account?: { id: string; displayName: string }; isPlatformAdmin: boolean }>("/auth/me"),
+    queryFn: () =>
+      apiFetch<{
+        account?: { id: string; displayName: string; provider?: string };
+        isPlatformAdmin: boolean;
+        isSuperAdmin?: boolean;
+      }>("/auth/me"),
   });
 }
 

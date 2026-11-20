@@ -4,6 +4,13 @@ import type { DrizzleDB } from "@/data";
 import { accounts, lunaAgents, users } from "@/data/schema";
 import { AgentError } from "@/agents/agent-store";
 
+/** Built-in super administrator account authenticated via `LUNA_DASHBOARD_TOKEN`. */
+export const SUPER_ADMIN_ACCOUNT_ID = "local-dashboard-user";
+
+export function isSuperAdminAccountId(accountId: string): boolean {
+  return accountId === SUPER_ADMIN_ACCOUNT_ID;
+}
+
 export type AccountRecord = typeof accounts.$inferSelect;
 
 /** The profile a sign-in provider returns for an account. */
