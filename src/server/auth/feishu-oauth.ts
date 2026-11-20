@@ -8,6 +8,7 @@ import { platformAuthSettings } from "@/data/schema";
 import type { AccountIdentityClaimInput } from "@/identity/account-store";
 import { cleanDisplayName } from "@/identity/display-name";
 import { feishuEnvironmentFromHost, feishuIdentityMetadata } from "@/identity/feishu-identity-scopes";
+import { resolvePublicBaseUrl } from "@/platform/platform-settings-store";
 import { createLogger } from "@/shared";
 import type { DashboardAccount } from "../auth";
 
@@ -112,7 +113,7 @@ export class FeishuAuthConfigStore {
         hasSecret: !secretUnreadable,
         secretUnreadable,
         feishuHost: row.feishuHost || DEFAULT_FEISHU_HOST,
-        publicBaseUrl: row.publicBaseUrl,
+        publicBaseUrl: resolvePublicBaseUrl(this.db, this.env),
       };
     }
 
@@ -126,7 +127,7 @@ export class FeishuAuthConfigStore {
       hasSecret: envConfig.appSecret.length > 0,
       secretUnreadable: false,
       feishuHost: envConfig.feishuHost,
-      publicBaseUrl: envConfig.publicBaseUrl,
+      publicBaseUrl: resolvePublicBaseUrl(this.db, this.env),
     };
   }
 
@@ -148,9 +149,7 @@ export class FeishuAuthConfigStore {
         appId: row.appId,
         appSecret: secret,
         feishuHost: normalizeOriginUrl(row.feishuHost || DEFAULT_FEISHU_HOST, DEFAULT_FEISHU_HOST),
-        publicBaseUrl: row.publicBaseUrl
-          ? normalizeOriginUrl(row.publicBaseUrl, "")
-          : readEnvPublicBaseUrl(this.env),
+        publicBaseUrl: resolvePublicBaseUrl(this.db, this.env),
       };
     }
 
@@ -158,7 +157,10 @@ export class FeishuAuthConfigStore {
     if (!envConfig.appId || !envConfig.appSecret) {
       return null;
     }
-    return envConfig;
+    return {
+      ...envConfig,
+      publicBaseUrl: resolvePublicBaseUrl(this.db, this.env),
+    };
   }
 
   async save(raw: unknown, accountId: string): Promise<FeishuAuthPublicSettings> {

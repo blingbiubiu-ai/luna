@@ -76,11 +76,6 @@ function configToEnv(config: unknown): Record<string, string> {
   return compactEnv({
     LUNA_SERVICE_HOST: readPath(config, ["service", "host"]),
     LUNA_SERVICE_PORT: readPath(config, ["service", "port"]),
-    LUNA_SERVICE_URL: readPath(config, ["service", "publicUrl"]),
-    LUNA_FEISHU_APP_ID: readPath(config, ["auth", "feishu", "appId"]),
-    LUNA_FEISHU_APP_SECRET: readPath(config, ["auth", "feishu", "appSecret"]),
-    LUNA_FEISHU_HOST: readPath(config, ["auth", "feishu", "host"]),
-    LUNA_FEISHU_PUBLIC_BASE_URL: readPath(config, ["auth", "feishu", "publicBaseUrl"]),
     LUNA_REPO_ROOT: readPath(config, ["paths", "repoRoot"]),
     LUNA_RUNTIME_DIR: readPath(config, ["paths", "runtimeDir"]),
     LUNA_ARTIFACTS_DIR: readPath(config, ["paths", "artifactsDir"]),

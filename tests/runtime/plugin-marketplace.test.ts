@@ -15,8 +15,8 @@ import { eq } from "drizzle-orm";
 import { DataConnection } from "@/data";
 import * as lunaSchema from "@/data/schema";
 import { pluginInstallations } from "@/data/schema";
+import { PlatformRuntimeSettings } from "@/platform/platform-settings-store";
 import { config, setLunaHome } from "@/shared";
-import { AppConfig as AppConfigSchema } from "@/shared/config/schema";
 import { loadInstalledPlugins } from "@/plugins/installed-loader";
 import {
   canonicalJson,
@@ -29,21 +29,18 @@ import { PluginMarketplaceService } from "@/plugins/marketplace/marketplace-serv
 import { validateReleasePackage } from "@/plugins/marketplace/release-validator";
 
 describe("plugin marketplace schema", () => {
-  test("config accepts a trusted marketplace git source", () => {
-    const parsed = AppConfigSchema.parse({
-      messaging: { default_channel_id: "", channels: [] },
-      plugins: {
-        marketplace: {
-          gitUrl: "git@example.com:luna/luna-plugins.git",
-          branch: "main",
-        },
+  test("platform settings accept a trusted marketplace git source", () => {
+    const parsed = PlatformRuntimeSettings.parse({
+      marketplace: {
+        gitUrl: "git@example.com:luna/luna-plugins.git",
+        branch: "main",
       },
     });
 
-    expect(parsed.plugins.marketplace.gitUrl).toBe(
+    expect(parsed.marketplace.gitUrl).toBe(
       "git@example.com:luna/luna-plugins.git",
     );
-    expect(parsed.plugins.marketplace.branch).toBe("main");
+    expect(parsed.marketplace.branch).toBe("main");
   });
 
   test("marketplace tables are exported from the Luna schema", () => {

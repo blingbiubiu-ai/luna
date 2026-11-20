@@ -4,7 +4,7 @@ import {inArray} from "drizzle-orm";
 import {z} from "zod";
 import type {DrizzleDB} from "@/data";
 import {agentShadows, channelSurfaces, MEMORY_ORIGIN_KINDS, MEMORY_STATUSES, MEMORY_TYPES, users} from "@/data/schema";
-import {config} from "@/shared";
+import {PlatformSettingsStore} from "@/platform/platform-settings-store";
 import {AgentError, AgentStore} from "@/agents/agent-store";
 import {AgentMemoryStore, MemoryConflictError, type MemoryRecord, type MemoryViewer, type MemoryWriter, MemoryTypeFactsError} from "@/agents/agent-memory-store";
 import {isGuardResponse, requireDashboardOnly} from "../auth/guards";
@@ -77,10 +77,11 @@ export function createAgentMemoryRoutes(db: DrizzleDB) {
       const flag = (value: string | undefined) => value === undefined ? undefined : value === "true";
       const {entries, total} = store.page(viewer.agentId, {...filters, core: flag(core), trusted: flag(trusted)});
       const {personaByShadow, ...stats} = store.counts(viewer.agentId);
+      const memorySettings = new PlatformSettingsStore(db).get().memory;
       return c.json({
         memories: named(entries), total, stats,
-        core: {used: store.coreUsed(viewer.agentId, null), limit: config.memory.core_limit, shadowLimit: config.memory.shadow_core_limit},
-        persona: {limit: config.memory.persona_limit, byShadow: personaByShadow},
+        core: {used: store.coreUsed(viewer.agentId, null), limit: memorySettings.coreLimit, shadowLimit: memorySettings.shadowCoreLimit},
+        persona: {limit: memorySettings.personaLimit, byShadow: personaByShadow},
       });
     })
     .post("/:agentId/memories/:id/restore", async c => {

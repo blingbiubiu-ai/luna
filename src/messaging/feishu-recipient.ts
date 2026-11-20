@@ -1,7 +1,7 @@
 import { and, eq, isNull, like } from "drizzle-orm";
 import type { DrizzleDB } from "@/data";
 import { channelConfigs, channelIdentities, channelUserBindings, identityObservations, userIdentityLinks, users } from "@/data/schema";
-import { config } from "@/shared";
+import { PlatformSettingsStore } from "@/platform/platform-settings-store";
 import { GatewayError } from "@/server/gateway-error";
 
 export type FeishuRecipientIdType = "open_id" | "user_id" | "union_id";
@@ -10,7 +10,7 @@ export type FeishuRecipientIdType = "open_id" | "user_id" | "union_id";
 export function feishuRecipientClaims(db: DrizzleDB, channelId: string, idType: FeishuRecipientIdType, target: { id: string } | { userId: string }) {
   const channel = db.select().from(channelConfigs).where(eq(channelConfigs.id, channelId)).get();
   if (channel?.type !== "feishu" || !channel.enabled) return [];
-  const developers = idType === "union_id" ? config.messaging.feishu_developers : undefined;
+  const developers = idType === "union_id" ? new PlatformSettingsStore(db).get().messaging.feishuDevelopers : undefined;
   const developerId = developers && Object.hasOwn(developers, channel.appId) ? developers[channel.appId] : undefined;
   if (idType === "union_id" && !developerId) return [];
   const scope = idType === "open_id" ? eq(userIdentityLinks.identityScope, `app:${channel.appId}`)

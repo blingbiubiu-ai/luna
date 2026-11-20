@@ -7,12 +7,18 @@ import { Hono } from "hono";
 import * as schema from "../../src/data/schema";
 import { openExecutionDatabase } from "@luna/execution-store";
 import { AgentSecretCipher } from "../../src/agent-config/secret-cipher";
+import { ArtifactRegistry } from "../../src/artifacts/artifact-registry";
+import {
+  defaultPlatformRuntimeSettings,
+  PlatformSettingsStore,
+} from "../../src/platform/platform-settings-store";
 import { DashboardAuthService, createDashboardAuthMiddleware } from "../../src/server/auth";
 import { FeishuAuthConfigStore } from "../../src/server/auth/feishu-oauth";
 import { AuthorizationRuleStore } from "../../src/server/policy/authorization-rule-store";
 import { createPlatformSettingsRoutes } from "../../src/server/routes/platform-settings";
 import { OrphanCleanupStore } from "../../src/runtime/orphan-cleanup";
-import { fixtureAgent } from "../helpers/platform-fixtures";
+import { FeishuMessageChannel } from "../../extensions/channels/feishu";
+import { fixtureAgent, fixtureNamedSession } from "../helpers/platform-fixtures";
 
 function testCipher(): AgentSecretCipher {
   return AgentSecretCipher.fromEnvironment({
@@ -20,7 +26,7 @@ function testCipher(): AgentSecretCipher {
   });
 }
 
-test("every account reads platform settings; only a platform administrator changes orphan cleanup or feishu auth", async () => {
+test("every account reads platform settings; only a platform administrator changes platform, orphan cleanup, or feishu auth settings", async () => {
   const sqlite = new Database(":memory:"), runtimeDb = openExecutionDatabase(":memory:");
   try {
     const db = drizzle(sqlite, { schema });
@@ -55,6 +61,12 @@ test("every account reads platform settings; only a platform administrator chang
       cookie: "luna_dashboard_session=" + (await auth.login(id))!.sessionToken,
       "content-type": "application/json",
     });
+    const putPlatform = async (id: string, body: unknown) =>
+      app.request("/api/platform-settings", {
+        method: "PUT",
+        headers: await as(id),
+        body: JSON.stringify(body),
+      });
     const putOrphan = async (id: string, body: unknown) =>
       app.request("/api/platform-settings/orphan-cleanup", {
         method: "PUT",
@@ -70,6 +82,7 @@ test("every account reads platform settings; only a platform administrator chang
 
     expect((await app.request("/api/platform-settings")).status).toBe(401);
     expect(await (await app.request("/api/platform-settings", { headers: await as("member") })).json()).toEqual({
+      platform: defaultPlatformRuntimeSettings(),
       orphanCleanup: { enabled: true, intervalMinutes: 60, retentionDays: 7 },
       feishuAuth: {
         enabled: false,
@@ -84,9 +97,62 @@ test("every account reads platform settings; only a platform administrator chang
       canEdit: false,
     });
 
+    expect((await putPlatform("member", { general: { timezone: "UTC" } })).status).toBe(403);
     expect((await putOrphan("member", { enabled: false, intervalMinutes: 60, retentionDays: 7 })).status).toBe(403);
     expect((await putFeishu("member", { enabled: true, appId: "cli_1", appSecret: "sec" })).status).toBe(403);
     expect((await app.request("/api/platform-settings/feishu-auth", { method: "DELETE", headers: await as("member") })).status).toBe(403);
+
+    // Invalid platform patches are rejected.
+    expect((await putPlatform("admin", {})).status).toBe(400);
+    expect((await putPlatform("admin", { general: { publicBaseUrl: "https://luna.example.com/subpath" } })).status).toBe(400);
+    expect((await putPlatform("admin", { general: { timezone: "Invalid/Zone" } })).status).toBe(400);
+    expect((await putPlatform("admin", { execution: { maxTransientRetries: 99 } })).status).toBe(400);
+
+    // Partial section saves merge atomically without resetting other sections.
+    const savedGeneral = await putPlatform("admin", {
+      general: { publicBaseUrl: "http://10.37.108.127:8090/", timezone: "Asia/Singapore" },
+    });
+    expect(savedGeneral.status).toBe(200);
+    const savedGeneralJson = (await savedGeneral.json()) as {
+      platform: ReturnType<typeof defaultPlatformRuntimeSettings>;
+      feishuAuth: { publicBaseUrl: string };
+    };
+    expect(savedGeneralJson.platform.general).toEqual({
+      publicBaseUrl: "http://10.37.108.127:8090",
+      timezone: "Asia/Singapore",
+    });
+    expect(savedGeneralJson.feishuAuth.publicBaseUrl).toBe("http://10.37.108.127:8090");
+
+    const savedMarketplace = await putPlatform("admin", {
+      marketplace: { gitUrl: "https://git.example.com/luna-plugins.git", branch: "release" },
+      execution: { containerTimeoutMs: 45 * 60_000, taskTimeoutMs: 720 * 60_000, maxTransientRetries: 3 },
+      memory: { recallLimit: 12, coreLimit: 40 },
+      messaging: { maxVisibleSteps: 48, feishuDevelopers: { cli_app_1: "dev_corp" } },
+    });
+    expect(savedMarketplace.status).toBe(200);
+    const mergedPlatform = new PlatformSettingsStore(db).get();
+    expect(mergedPlatform.general).toEqual({
+      publicBaseUrl: "http://10.37.108.127:8090",
+      timezone: "Asia/Singapore",
+    });
+    expect(mergedPlatform.marketplace).toEqual({
+      gitUrl: "https://git.example.com/luna-plugins.git",
+      branch: "release",
+    });
+    expect(mergedPlatform.execution).toEqual({
+      containerTimeoutMs: 45 * 60_000,
+      taskTimeoutMs: 720 * 60_000,
+      maxTransientRetries: 3,
+    });
+    expect(mergedPlatform.memory.recallLimit).toBe(12);
+    expect(mergedPlatform.memory.coreLimit).toBe(40);
+    expect(mergedPlatform.messaging).toEqual({
+      maxVisibleSteps: 48,
+      feishuDevelopers: { cli_app_1: "dev_corp" },
+    });
+
+    // Resetting general.publicBaseUrl to empty lets legacy/feishuAuth tests exercise fallback cleanly.
+    expect((await putPlatform("admin", { general: { publicBaseUrl: "" } })).status).toBe(200);
 
     expect((await putOrphan("admin", { enabled: true, intervalMinutes: 2, retentionDays: 7 })).status).toBe(400);
     const savedOrphan = await putOrphan("admin", { enabled: false, intervalMinutes: 120, retentionDays: 3 });
@@ -177,5 +243,46 @@ test("every account reads platform settings; only a platform administrator chang
   } finally {
     sqlite.close();
     runtimeDb.close();
+  }
+});
+
+test("Feishu outbound artifact preview links use general.publicBaseUrl from PlatformSettingsStore immediately", () => {
+  const sqlite = new Database(":memory:");
+  try {
+    const db = drizzle(sqlite, { schema });
+    migrate(db, { migrationsFolder: "src/data/drizzle" });
+    fixtureNamedSession(db, "session-artifact-preview", "owner");
+    const artifact = new ArtifactRegistry(db).registerContent({
+      scopeType: "session",
+      scopeId: "session-artifact-preview",
+      kind: "report",
+      producer: "runner",
+      name: "report.html",
+      mimeType: "text/html",
+      content: Buffer.from("<h1>Report</h1>"),
+    });
+    const channel = new FeishuMessageChannel("feishu-test", {
+      chatId: "oc_test",
+      appId: "cli_test",
+      appSecret: "sec_test",
+      db,
+    });
+    const signLinks = (text: string) =>
+      (channel as unknown as { _signOutboundArtifactLinks(t: string): string })._signOutboundArtifactLinks(text);
+
+    // Without publicBaseUrl, falls back to signed relative path.
+    expect(signLinks(`[HTML 报告](artifact:${artifact.id})`)).toMatch(
+      new RegExp(`^\\[HTML 报告\\]\\(/artifacts/${artifact.id}/preview\\?expires=\\d+&sig=[^)]+\\)$`),
+    );
+
+    // Once publicBaseUrl is saved in PlatformSettingsStore, outbound links include full host/IP without restart.
+    new PlatformSettingsStore(db).patch({
+      general: { publicBaseUrl: "http://10.37.108.127:8090" },
+    });
+    expect(signLinks(`[HTML 报告](artifact:${artifact.id})`)).toMatch(
+      new RegExp(`^\\[HTML 报告\\]\\(http://10\\.37\\.108\\.127:8090/artifacts/${artifact.id}/preview\\?expires=\\d+&sig=[^)]+\\)$`),
+    );
+  } finally {
+    sqlite.close();
   }
 });

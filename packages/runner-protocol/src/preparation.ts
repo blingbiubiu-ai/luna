@@ -10,7 +10,6 @@ export const ContextPreparation=z.object({
  /** The context's directory under runners/: its owner's (`session-<id>`, `task-<id>`), shared by the owner's contexts. */
  runnerId:Id,scopeKey:z.string().min(1).max(512),runnerKind:RunnerKind,
  context:z.record(z.string(),z.unknown()).optional(),projectId:Id.optional(),
- git:z.object({authorName:z.string(),authorEmail:z.string()}).strict().optional(),
  /** The Shadow's root switch: Worker adds the Root Access rules to Runner instructions. */
  rootAccess:z.boolean().optional(),
  /** Who the Shadow is, rendered at the top of Runner instructions. */

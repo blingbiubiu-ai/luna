@@ -116,7 +116,6 @@ function serviceConfigToEnv(config: unknown): Env {
   return compactEnv({
     LUNA_SERVICE_HOST: readPath(config, ["service", "host"]),
     LUNA_SERVICE_PORT: readPath(config, ["service", "port"]),
-    LUNA_SERVICE_URL: readPath(config, ["service", "publicUrl"]),
   });
 }
 

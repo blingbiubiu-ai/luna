@@ -14,7 +14,6 @@ export interface AgentSettings {
   inbound: { processingReaction: boolean };
   work: { progressCard: { show: boolean; style: ProgressCardStyle } };
   main: { taskProgressCard: { send: boolean; style: ProgressCardStyle } };
-  task?: { runLimitHours: number };
   pty?: { idleTimeoutMinutes: number };
   messages?: MessageSettings;
   listening?: ListeningSettings;
@@ -103,16 +102,11 @@ const PTY_TIMEOUT_PRESETS: ReadonlyArray<{ readonly minutes: number; readonly la
   { minutes: 0, label: "常驻不自动休眠" },
 ];
 
-function validRunLimit(hours: number): boolean {
-  return Number.isInteger(hours) && hours >= 1 && hours <= 168;
-}
-
 function normalizeSettings(settings: AgentSettings): Required<AgentSettings> {
   return {
     inbound: settings.inbound,
     work: settings.work,
     main: settings.main,
-    task: { runLimitHours: settings.task?.runLimitHours ?? 10 },
     pty: { idleTimeoutMinutes: settings.pty?.idleTimeoutMinutes ?? 10 },
     messages: settings.messages ?? {},
     listening: settings.listening ?? DEFAULT_LISTENING,
@@ -211,7 +205,7 @@ export function AgentSettingsForm({
     setValue(next);
     const idle = next.messages.coalesceIdleMs ?? messageDefaults.coalesceIdleMs;
     const maxWait = next.messages.coalesceMaxWaitMs ?? messageDefaults.coalesceMaxWaitMs;
-    if (validRunLimit(next.task.runLimitHours) && maxWait >= idle) {
+    if (maxWait >= idle) {
       onChange(next);
     }
   };
@@ -219,7 +213,6 @@ export function AgentSettingsForm({
   const work = value.work.progressCard;
   const main = value.main.taskProgressCard;
   const ptyMinutes = value.pty.idleTimeoutMinutes;
-  const runLimitValid = validRunLimit(value.task.runLimitHours);
   const hasPreset = PTY_TIMEOUT_PRESETS.some(p => p.minutes === ptyMinutes);
   const messages = value.messages;
   /** Sets or, with undefined, clears one message setting; the server checks the combination. */
@@ -423,32 +416,6 @@ export function AgentSettingsForm({
             onChange={style => update({ ...value, main: { taskProgressCard: { ...main, style } } })}
           />
         </Row>
-      </section>
-
-      <section className="space-y-4 rounded-lg border p-4" aria-labelledby="task-limit-title">
-        <div>
-          <h2 id="task-limit-title" className="font-medium">任务运行时长</h2>
-          <p className="text-sm text-muted-foreground">
-            任务每次运行最多可以持续多久。超过后这次运行会被停止并记为失败，可以重新运行。
-          </p>
-        </div>
-        <Row label="单次运行上限（小时）" hint="1 到 168 之间的整数。对之后开始的运行生效。">
-          <Input
-            type="number"
-            aria-label="任务单次运行上限（小时）"
-            className="w-24"
-            min={1}
-            max={168}
-            step={1}
-            value={Number.isFinite(value.task.runLimitHours) ? value.task.runLimitHours : ""}
-            onChange={event => update({ ...value, task: { runLimitHours: event.target.valueAsNumber } })}
-          />
-        </Row>
-        {!runLimitValid && (
-          <p role="alert" className="text-xs text-destructive">
-            请输入 1 到 168 之间的整数小时数。
-          </p>
-        )}
       </section>
     </div>
   );

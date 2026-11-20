@@ -39,5 +39,5 @@ test("the platform plugin page explains a missing plugin source", async () => {
   const { PluginSourceUnconfigured } = await import("../src/platform-shell");
   const html = renderToStaticMarkup(createElement(PluginSourceUnconfigured));
   expect(html).toContain("未配置插件源");
-  expect(html).toContain("plugins.marketplace.gitUrl");
+  expect(html).toContain("/platform/settings");
 });

@@ -14,6 +14,7 @@ import { parseArtifactRef } from "@luna/service-client/artifact-ref";
 import { ArtifactRegistry } from "@/artifacts/artifact-registry";
 import type { DrizzleDB } from "@/data";
 import { ChannelMessageMarkerStore } from "@/messaging/channel-message-marker-store";
+import { PlatformSettingsStore, resolvePublicBaseUrl } from "@/platform/platform-settings-store";
 import { signedArtifactPreviewUrl } from "@/server/artifact-content-url";
 import type {
   ChannelChatProfileSnapshot,
@@ -358,7 +359,7 @@ export interface FeishuMessageChannelOptions {
   readonly chatId: string;
   readonly appId: string;
   readonly appSecret: string;
-  readonly developerId?: string;
+  readonly developerId?: string | (() => string | undefined);
   readonly db?: DrizzleDB;
   readonly botOpenId?: string;
   readonly botUserId?: string;
@@ -398,11 +399,20 @@ export class FeishuMessageChannel
   private _logger: Logger;
 
   private get _identityScope(): FeishuIdentityScope {
+    const developerId = typeof this.config.developerId === "function"
+      ? this.config.developerId()
+      : this.config.developerId;
     return {
       environment: "feishu",
       appId: this.config.appId,
-      ...(this.config.developerId ? { developerId: this.config.developerId } : {}),
+      ...(developerId ? { developerId } : {}),
     };
+  }
+
+  private get _maxVisibleSteps(): number {
+    return this.config.db
+      ? new PlatformSettingsStore(this.config.db).get().messaging.maxVisibleSteps
+      : 32;
   }
   private _inboundRuntimeStatus: ChannelInboundRuntimeStatus = {
     state: "idle",
@@ -436,7 +446,7 @@ export class FeishuMessageChannel
     });
     if (this.config.db !== undefined) {
       this._groupJoinBackfill = new GroupJoinBackfillService({
-        identityScope: this._identityScope,
+        identityScope: () => this._identityScope,
         db: this.config.db,
         logger: this._logger,
         historyPageSize: 30,
@@ -702,6 +712,7 @@ export class FeishuMessageChannel
     const card = await renderMessageCard(firstMessageContent, {
       streaming,
       uploadImage: this.uploadImage.bind(this),
+      maxVisibleSteps: this._maxVisibleSteps,
     });
     if (!streaming) {
       this._logOutboundMessage(message.session_id, message.content);
@@ -768,6 +779,7 @@ export class FeishuMessageChannel
     const card = await renderMessageCard(firstMessageContent, {
       streaming: false,
       uploadImage: this.uploadImage.bind(this),
+      maxVisibleSteps: this._maxVisibleSteps,
     });
     this._logOutboundMessage(message.session_id, message.content);
     const { data } = await this._client.im.message.create({
@@ -841,6 +853,7 @@ export class FeishuMessageChannel
     const card = await renderMessageCard(firstMessageContent, {
       streaming,
       uploadImage: this.uploadImage.bind(this),
+      maxVisibleSteps: this._maxVisibleSteps,
     });
     if (!streaming) {
       this._logOutboundMessage(message.session_id, message.content);
@@ -1086,6 +1099,7 @@ export class FeishuMessageChannel
         {
           streaming: false,
           uploadImage: this.uploadImage.bind(this),
+          maxVisibleSteps: this._maxVisibleSteps,
         },
       );
       await this._client.im.message.reply({
@@ -3231,7 +3245,7 @@ export class FeishuMessageChannel
       artifactId,
       now: Date.now(),
     });
-    const publicUrl = config.service.publicUrl?.trim();
+    const publicUrl = resolvePublicBaseUrl(this.config.db);
     if (!publicUrl) {
       return path;
     }
@@ -3266,12 +3280,14 @@ export class FeishuMessageChannel
     operation: Pick<OutboundChannelOperation, "assetBasePath">,
   ): {
     uploadImage: (path: string) => Promise<string>;
-    resolveImagePath: (path: string) => string | undefined;
+    resolveImagePath: (imagePath: string) => string | undefined;
+    maxVisibleSteps: number;
   } {
     return {
       uploadImage: this.uploadImage.bind(this),
       resolveImagePath: (imagePath: string) =>
         this._resolveOutboundImagePath(imagePath, operation.assetBasePath),
+      maxVisibleSteps: this._maxVisibleSteps,
     };
   }
 

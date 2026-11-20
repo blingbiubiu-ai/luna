@@ -29,7 +29,7 @@ export function createPluginMarketplaceRoutes(
     .onError((error, c) => {
       if (error instanceof PluginMarketplaceUnconfiguredError) {
         return c.json({ status: "error", code: error.code,
-          message: "未配置插件源：请在 Service 的 config.yaml 中设置 plugins.marketplace.gitUrl 后重启。" }, 503);
+          message: "未配置插件源：请在 Dashboard「平台设置 → 插件市场源」中填写仓库地址。" }, 503);
       }
       throw error;
     })

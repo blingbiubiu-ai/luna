@@ -27,7 +27,7 @@ function openStore() {
   mkdirSync(join(home, "data"), { recursive: true });
   writeFileSync(
     join(home, "config.yaml"),
-    "messaging:\n  default_channel_id: ''\n  channels: []\n",
+    "{}\n",
   );
   setLunaHome(home);
   reloadConfig();

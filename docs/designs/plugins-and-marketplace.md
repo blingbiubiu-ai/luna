@@ -29,16 +29,9 @@ Luna Core must not import marketplace plugin source files. Core code only reads 
 
 ## Configuration
 
-Marketplace configuration belongs to Luna Service:
+Marketplace source configuration (`marketplace.gitUrl` and `marketplace.branch`, defaulting to `"main"`) is stored in SQLite (`platform_settings`) and managed by platform administrators on Dashboard `/platform/settings` (`PUT /api/platform-settings`), taking effect immediately without restarting Service. Per-plugin operational configuration and secrets are scoped per Agent in `agent_plugin_configs`.
 
-```yaml
-plugins:
-  marketplace:
-    gitUrl: "https://git.example.com/luna-plugins.git"
-    branch: "main"
-```
-
-The service keeps a cloned marketplace cache under `LUNA_HOME` and records marketplace releases, installations, enabled state, and pending operations in the runtime database. Marketplace refresh is manual from Dashboard or API. There is no background sync in the current architecture.
+The service keeps a cloned marketplace cache under `LUNA_HOME` and records marketplace releases, installations, enabled state, and pending operations in the runtime database. Marketplace refresh is manual from Dashboard or API (plus an optional non-blocking refresh on Service startup when `marketplace.gitUrl` is configured). There is no background sync loop in the current architecture.
 
 ## Release Validation
 

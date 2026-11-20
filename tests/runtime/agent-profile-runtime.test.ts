@@ -25,7 +25,7 @@ function setup() {
   const home = mkdtempSync(join(tmpdir(), "luna-agent-runtime-"));
   homes.push(home);
   mkdirSync(join(home, "data"), { recursive: true });
-  writeFileSync(join(home, "config.yaml"), "messaging:\n  default_channel_id: ''\n  channels: []\n");
+  writeFileSync(join(home, "config.yaml"), "{}\n");
   setLunaHome(home);
   reloadConfig();
   const connection = new DataConnection(schema);

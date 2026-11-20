@@ -13,7 +13,7 @@ import { SessionQueue } from "@/sessions/session-queue";
 import type { DrizzleDB } from "@/data";
 
 import { MainRunner } from "@/main-runner/main-runner";
-import { config, type SessionConfig } from "@/shared";
+import { DEFAULT_SESSION_CONFIG, type SessionConfig } from "@/shared";
 import { SessionTurnProcessor, SessionInboundRouter } from "@/sessions/inbound/session-inbound-router";
 import { WorkRunner } from "@/work/work-runner";
 import { InboundCommandRouter } from "./inbound-command-router";
@@ -69,7 +69,7 @@ export class LunaMessageIngress {
     this._sessionQueue = options.sessionQueue ??
       new SessionQueue({
         db: options.db,
-        config: options.sessionConfig ?? config.session,
+        config: options.sessionConfig ?? DEFAULT_SESSION_CONFIG,
         executeTurn: (input, signal) =>
           new SessionTurnProcessor({
             db: options.db,

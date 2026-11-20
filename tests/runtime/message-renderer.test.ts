@@ -18,13 +18,7 @@ beforeEach(() => {
   testHome = mkdtempSync(join(tmpdir(), "luna-message-renderer-test-"));
   writeFileSync(
     join(testHome, "config.yaml"),
-    [
-      "messaging:",
-      "  default_channel_id: feishu-main",
-      "  max_visible_steps: 32",
-      "  channels: []",
-      "",
-    ].join("\n"),
+    "{}\n",
   );
   setLunaHome(testHome);
   reloadConfig();

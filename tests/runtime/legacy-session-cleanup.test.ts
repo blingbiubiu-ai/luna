@@ -21,14 +21,7 @@ describe("legacy session runtime cleanup", () => {
       mkdirSync(testHome, { recursive: true });
       writeFileSync(
         join(testHome, "config.yaml"),
-        [
-          'timezone: "Asia/Shanghai"',
-          "messaging:",
-          '  default_channel_id: ""',
-          "  max_visible_steps: 32",
-          "  channels: []",
-          "",
-        ].join("\n"),
+        "{}\n",
         "utf-8",
       );
 

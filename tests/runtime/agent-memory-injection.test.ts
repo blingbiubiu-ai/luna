@@ -4,7 +4,8 @@ import {tmpdir} from "node:os";
 import {join} from "node:path";
 import {DataConnection} from "@/data";
 import * as schema from "@/data/schema";
-import {config, setLunaHome} from "@/shared";
+import {PlatformSettingsStore} from "@/platform/platform-settings-store";
+import {setLunaHome} from "@/shared";
 import {AgentStore} from "@/agents/agent-store";
 import {AgentMemoryStore, type MemoryWriter} from "@/agents/agent-memory-store";
 import {memoryInjection} from "@/agents/agent-memory-injection";
@@ -87,8 +88,9 @@ test("each turn recalls what the message brings to mind, once per conversation a
   expect(recalled).not.toContain("用列表");
   expect(turn("再按周报格式写一份周报")).toBeUndefined();
   expect(turn()).toBeUndefined();
-  for (let i = 0; i < config.memory.recall_limit + 3; i++) store.add(elsewhere(), {...freeze, title: `冻结安排 ${i}`, description: `第 ${i} 次发布冻结安排`}, );
-  expect(turn("发布冻结安排是什么")!.split("\n").filter(line => line.startsWith("- ["))).toHaveLength(config.memory.recall_limit);
+  const recallLimit = new PlatformSettingsStore(db.db).get().memory.recallLimit;
+  for (let i = 0; i < recallLimit + 3; i++) store.add(elsewhere(), {...freeze, title: `冻结安排 ${i}`, description: `第 ${i} 次发布冻结安排`}, );
+  expect(turn("发布冻结安排是什么")!.split("\n").filter(line => line.startsWith("- ["))).toHaveLength(recallLimit);
 });
 
 test("later turns report changes made elsewhere only for entries this conversation was shown, and for core and person entries", () => {

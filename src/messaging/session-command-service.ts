@@ -54,7 +54,7 @@ export interface CommandRuntimeOptions {
     channelFor: (id: string) => ReplyChannel | undefined;
     executeTrigger?: (command: SessionCommand, signal: AbortSignal) => Promise<void>;
     /** Forgetting, reflection and consolidation of Agent memory; unset leaves memory unmaintained. */
-    memory?: MemoryMaintenanceSettings;
+    memory?: MemoryMaintenanceSettings | (() => MemoryMaintenanceSettings);
 }
 /** Durable command acceptance and source-independent delivery/execution lifecycle. */
 export class SessionCommandService {
@@ -224,7 +224,8 @@ export class SessionCommandService {
         this.materializeSchedules(now);
         if (this.options.memory && now - this.memoryScannedAt >= MEMORY_SCAN_INTERVAL_MS) {
             this.memoryScannedAt = now;
-            maintainMemory(this.options.db, this, this.options.memory, now);
+            const memorySettings = typeof this.options.memory === "function" ? this.options.memory() : this.options.memory;
+            maintainMemory(this.options.db, this, memorySettings, now);
         }
         const pending = this.options.db.select().from(sessionCommands).where(and(eq(sessionCommands.status, "pending"), lte(sessionCommands.availableAt, Math.max(now, Date.now())))).orderBy(asc(sessionCommands.createdAt), sql`session_commands.rowid`).all();
         let triggerSlots = 8 - [...this.inFlight.keys()].filter(id => this.get(id)?.kind === "session.invoke").length;

@@ -132,9 +132,11 @@ SETUP
 
 The configuration master key is a Base64-encoded 32-byte key. Back it up with the
 database; do not regenerate it during an update. Alternatively use
-`LUNA_AGENT_CONFIG_MASTER_KEY_FILE` with an owner-readable key file. Non-secret
-settings belong in `/var/lib/luna/config.yaml`; configure `service.publicUrl`
-with your HTTPS address when needed.
+`LUNA_AGENT_CONFIG_MASTER_KEY_FILE` with an owner-readable key file. Bootstrap
+listener, path and logging overrides belong in `/var/lib/luna/config.yaml` (or
+`/var/lib/luna/.env`); configure the public HTTPS/IP base URL, default timezone,
+plugin marketplace source, memory maintenance, and execution limits in Dashboard
+`/platform/settings` after signing in.
 
 Initialize embedded Runtime once. This does not access Docker or select an image:
 

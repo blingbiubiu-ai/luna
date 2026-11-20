@@ -104,10 +104,6 @@ export const AgentSettings = z.object({
       style: ProgressCardStyle.default("native"),
     }).strict().default({ send: true, style: "native" }),
   }).strict().default({ taskProgressCard: { send: true, style: "native" } }),
-  /** Tasks: how long one run may take before Runtime stops it. A stopped run fails and can be restarted. */
-  task: z.object({
-    runLimitHours: z.number().int().min(1).max(168).default(10),
-  }).strict().default({ runLimitHours: 10 }),
   /** Interactive PTY execution: minutes an idle CLI TUI stays resident before sleeping (0 = never sleep). */
   pty: z.object({
     idleTimeoutMinutes: z.number().int().min(0).max(10080).default(10),
@@ -142,8 +138,12 @@ export class AgentSettingsStore {
 
   get(agentId: string): AgentSettings {
     const row = this.db.select().from(agentSettings).where(eq(agentSettings.agentId, agentId)).get();
-    const parsed = row ? AgentSettings.safeParse(row.settings) : undefined;
-    return parsed?.success ? parsed.data : DEFAULT_AGENT_SETTINGS;
+    if (!row) return DEFAULT_AGENT_SETTINGS;
+    const raw = row.settings && typeof row.settings === "object" && !Array.isArray(row.settings)
+      ? (({ task: _retiredTask, ...rest }) => rest)(row.settings as Record<string, unknown>)
+      : row.settings;
+    const parsed = AgentSettings.safeParse(raw);
+    return parsed.success ? parsed.data : DEFAULT_AGENT_SETTINGS;
   }
 
   read(accountId: string, agentId: string): AgentSettings {

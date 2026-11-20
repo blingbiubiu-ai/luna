@@ -1,7 +1,8 @@
 import {and, eq, inArray} from "drizzle-orm";
 import type {DrizzleDB} from "@/data";
 import {memoryInjectedEntries, memoryInjectionCursors, runnerContexts, users} from "@/data/schema";
-import {config, createLogger} from "@/shared";
+import {PlatformSettingsStore} from "@/platform/platform-settings-store";
+import {createLogger} from "@/shared";
 
 const logger = createLogger("agent-memory-injection");
 import {AgentError} from "./agent-store";
@@ -70,7 +71,8 @@ export function memoryInjection(db: DrizzleDB, invocation: MemoryInvocation, mes
     ].join("\n"));
     shown.push(...rules);
   }
-  const recalled = message ? store.recall(viewer, message, {limit: config.memory.recall_limit, exclude: [...seen, ...shown.map(row => row.id)]}) : [];
+  const recallLimit = new PlatformSettingsStore(db).get().memory.recallLimit;
+  const recalled = message ? store.recall(viewer, message, {limit: recallLimit, exclude: [...seen, ...shown.map(row => row.id)]}) : [];
   if (recalled.length) sections.push([
     "## Agent memory: possibly relevant",
     "Entries this message brings to mind. They may not apply; read a body with `luna memory get <id>` before relying on one. Other entries exist: `luna memory search <keywords>`.",

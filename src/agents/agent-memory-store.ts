@@ -5,7 +5,7 @@ import {
   agentMemories, agentMemoryRevisions, messages, MEMORY_TYPES, sessionTimelineEntries,
   type MemoryChangeKind, type MemorySource, type MemoryOriginKind, type MemoryStatus, type MemoryType,
 } from "@/data/schema";
-import {config} from "@/shared";
+import { PlatformSettingsStore } from "@/platform/platform-settings-store";
 import {AgentError} from "./agent-store";
 
 export type MemoryRecord = typeof agentMemories.$inferSelect;
@@ -101,9 +101,16 @@ export function memoryTerms(text: string): string[] {
 const summaryTerms = (entry: Pick<MemoryRecord, "title" | "description">) => new Set(memoryTerms(`${entry.title} ${entry.description}`));
 
 export class AgentMemoryStore {
-  private readonly limits: MemoryLimits;
-  constructor(private readonly db: Db, limits: Partial<MemoryLimits> = {}) {
-    this.limits = {core: config.memory.core_limit, shadowCore: config.memory.shadow_core_limit, persona: config.memory.persona_limit, ...limits};
+  constructor(private readonly db: Db, private readonly limitOverrides: Partial<MemoryLimits> = {}) {}
+
+  private get limits(): MemoryLimits {
+    const memory = new PlatformSettingsStore(this.db as DrizzleDB).get().memory;
+    return {
+      core: memory.coreLimit,
+      shadowCore: memory.shadowCoreLimit,
+      persona: memory.personaLimit,
+      ...this.limitOverrides,
+    };
   }
 
   /** Visible active entries in index order; `omitted` counts those the limit left out. */

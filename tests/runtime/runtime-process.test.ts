@@ -15,7 +15,7 @@ test("Service-owned Runtime preserves mode and drain across process restart", as
   const config = RuntimeConfig.parse({ runtimeId: "runtime", serviceId: "service", dataRoot: root, port, homeWorkerId: "home",  serviceToken: "s".repeat(43), adminToken: "a".repeat(43) });
   writePrivateJson(file, config);
   const client = new ExecutionClient(`http://127.0.0.1:${port}`, config.adminToken);
-  writeFileSync(join(root, "config.yaml"), `messaging:\n  channels: []\n  default_channel_id: ""\nsandbox:\n  runtimeConfigFile: ${JSON.stringify(file)}\n`.replaceAll("\\n", "\n"));
+  writeFileSync(join(root, "config.yaml"), `sandbox:\n  runtimeConfigFile: ${JSON.stringify(file)}\n`);
   const apiProbe = createServer(); await new Promise<void>(resolve => apiProbe.listen(0, "127.0.0.1", resolve));
   const apiPort = (apiProbe.address() as { port: number }).port; await new Promise<void>(resolve => apiProbe.close(() => resolve()));
   let child: ReturnType<typeof Bun.spawn> | undefined;

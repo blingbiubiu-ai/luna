@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import { ZodError } from "zod";
 
 import type { DrizzleDB } from "@/data";
+import { PlatformSettingsStore } from "@/platform/platform-settings-store";
 import type { OrphanCleanupStore } from "@/runtime/orphan-cleanup";
 import { FeishuAuthConfigError, FeishuAuthConfigStore } from "../auth/feishu-oauth";
 import { isGuardResponse, requireAdmin, requireDashboardOnly } from "../auth/guards";
@@ -13,6 +14,7 @@ export function createPlatformSettingsRoutes(
   db: DrizzleDB,
   store: () => OrphanCleanupStore | undefined = runtimeSettings,
   feishuAuth: FeishuAuthConfigStore = new FeishuAuthConfigStore({ db }),
+  platformStore: PlatformSettingsStore = new PlatformSettingsStore(db),
 ) {
   return new Hono()
     .get("/", (c) => {
@@ -21,10 +23,31 @@ export function createPlatformSettingsRoutes(
       const settings = store();
       if (!settings) return c.json({ status: "error", code: "runtime_unavailable" }, 503);
       return c.json({
+        platform: platformStore.get(),
         orphanCleanup: settings.get(),
         feishuAuth: feishuAuth.getPublicSettings(),
         canEdit: isPlatformAdministrator(db, auth.account.id),
       });
+    })
+    .put("/", async (c) => {
+      const admin = requireAdmin(c);
+      if (isGuardResponse(admin)) return admin;
+      try {
+        const platform = platformStore.patch(await c.req.json(), admin.account.id);
+        return c.json({
+          platform,
+          feishuAuth: feishuAuth.getPublicSettings(),
+        });
+      } catch (error) {
+        if (error instanceof ZodError) {
+          const message = error.issues[0]?.message ?? "平台设置格式无效。";
+          return c.json({ status: "error", code: "invalid_settings", message }, 400);
+        }
+        if (error instanceof SyntaxError) {
+          return c.json({ status: "error", code: "invalid_settings", message: "请求格式无效。" }, 400);
+        }
+        throw error;
+      }
     })
     .put("/orphan-cleanup", async (c) => {
       const admin = requireAdmin(c);

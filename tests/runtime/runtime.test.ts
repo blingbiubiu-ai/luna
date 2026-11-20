@@ -146,7 +146,6 @@ describe("agent runtime package shell", () => {
         "service:",
         "  host: 0.0.0.0",
         "  port: 9101",
-        "  publicUrl: http://config-service.test",
         "paths:",
         "  runtimeDir: /tmp/luna-runtime-config",
       ].join("\n"),
@@ -311,9 +310,6 @@ describe("agent runtime package shell", () => {
         "agents:",
         "  default:",
         "    type: mock",
-        "messaging:",
-        "  default_channel_id: fake",
-        "  channels: []",
       ].join("\n"),
       "utf-8",
     );
@@ -445,13 +441,11 @@ describe("agent runtime package shell", () => {
     expect(source).toContain("stale_claim_ms");
   });
 
-  test("app config reads session queue settings from the session block", () => {
+  test("app config parses bootstrap settings and SessionConfig parses queue defaults", () => {
     const parsed = AppConfig.parse({
-      timezone: "Asia/Shanghai",
       service: {
         host: "0.0.0.0",
         port: 8090,
-        publicUrl: "http://127.0.0.1:8090",
       },
       paths: {
         repoRoot: "/tmp/luna-knowledge",
@@ -462,115 +456,45 @@ describe("agent runtime package shell", () => {
         level: "debug",
         pretty: true,
       },
-      plugins: {
-        config: {
-          samplePlugin: {
-            projectId: "304286",
-            appId: "6589",
-          },
-        },
-      },
-      session: {
-        coalesce_idle_ms: 1200,
-        coalesce_max_wait_ms: 10000,
-        max_batch_size: 8,
-      },
-      messaging: {
-        default_channel_id: "feishu-default",
-        max_visible_steps: 32,
-        channels: [],
-      },
+    });
+    const sessionParsed = SessionConfig.parse({
+      coalesce_idle_ms: 1200,
+      coalesce_max_wait_ms: 10000,
+      max_batch_size: 8,
     });
 
-    expect(parsed.session.coalesce_max_wait_ms).toBe(10000);
-    expect(parsed.session.max_batch_size).toBe(8);
+    expect(sessionParsed.coalesce_max_wait_ms).toBe(10000);
+    expect(sessionParsed.max_batch_size).toBe(8);
     expect(parsed.service.host).toBe("0.0.0.0");
     expect(parsed.paths.runtimeDir).toBe("/tmp/luna");
     expect(parsed.logging.pretty).toBe(true);
-    expect(parsed.plugins.config).toMatchObject({
-      samplePlugin: {
-        projectId: "304286",
-      },
-    });
   });
 
-  test("app config reads Runtime configuration override and Job timeout from the sandbox block", () => {
+  test("app config reads Runtime configuration override from the sandbox block", () => {
     const parsed = AppConfig.parse({
-      timezone: "Asia/Shanghai",
-      messaging: {
-        default_channel_id: "feishu-default",
-        channels: [],
-      },
       sandbox: {
         runtimeConfigFile: "/private/runtime.json",
-        containerTimeoutMs: 34_000,
       },
     });
 
     expect(parsed.sandbox).toEqual({
       runtimeConfigFile: "/private/runtime.json",
-      containerTimeoutMs: 34_000,
     });
   });
 
-  test("app config defaults and overrides transient runner retries", () => {
-    const defaults = AppConfig.parse({
-      messaging: { default_channel_id: "", channels: [] },
-    });
-    expect(defaults.runner.maxTransientRetries).toBe(5);
-
-    const configured = AppConfig.parse({
-      messaging: { default_channel_id: "", channels: [] },
-      runner: { maxTransientRetries: 4 },
-    });
-    expect(configured.runner.maxTransientRetries).toBe(4);
+  test("app config rejects removed git and stale conversation keys instead of ignoring them", () => {
     expect(
       AppConfig.safeParse({
-        messaging: { default_channel_id: "", channels: [] },
-        runner: { maxTransientRetries: -1 },
-      }).success,
-    ).toBe(false);
-  });
-
-  test("app config accepts only complete single-line managed Git identities", () => {
-    const configured = AppConfig.parse({
-      messaging: { default_channel_id: "", channels: [] },
-      git: {
-        authorName: "Example Contributor",
-        authorEmail: "contributor@example.com",
-      },
-    });
-    expect(configured.git).toEqual({
-      authorName: "Example Contributor",
-      authorEmail: "contributor@example.com",
-    });
-    expect(
-      AppConfig.safeParse({
-        messaging: { default_channel_id: "", channels: [] },
-        git: { authorName: "Example Contributor" },
-      }).success,
-    ).toBe(false);
-    expect(
-      AppConfig.safeParse({
-        messaging: { default_channel_id: "", channels: [] },
         git: {
-          authorName: "Example Contributor\n[credential]",
+          authorName: "Example Contributor",
           authorEmail: "contributor@example.com",
         },
       }).success,
     ).toBe(false);
-  });
 
-  test("app config rejects stale conversation queue keys instead of ignoring them", () => {
     const parsed = AppConfig.safeParse({
-      timezone: "Asia/Shanghai",
       conversation: {
         coalesce_max_wait_ms: 10000,
-      },
-      messaging: {
-        default_channel_id: "feishu-default",
-        max_visible_steps: 32,
-        channels: [],
       },
     });
 
@@ -1713,12 +1637,7 @@ describe("agent runtime package shell", () => {
       });
       writeFileSync(
         join(testHome, "config.yaml"),
-        [
-          "messaging:",
-          "  default_channel_id: fake",
-          "  channels: []",
-          "",
-        ].join("\n"),
+        "{}\n",
         "utf-8",
       );
       mkdirSync(join(testHome, "data"), { recursive: true });
@@ -1908,16 +1827,7 @@ describe("agent runtime package shell", () => {
       mkdirSync(testHome, { recursive: true });
       writeFileSync(
         join(testHome, "config.yaml"),
-        `timezone: "Asia/Shanghai"
-messaging:
-  default_channel_id: ""
-  max_visible_steps: 32
-  channels: []
-
-session:
-  coalesce_idle_ms: 1
-  coalesce_max_wait_ms: 25
-`,
+        "{}\n",
         "utf-8",
       );
       const port = await _resolveAvailablePort();
@@ -4842,13 +4752,7 @@ describe("agent runtime lifecycle boundaries", () => {
     const previousHome = homedir() ? join(homedir(), ".luna") : testHome;
     writeFileSync(
       join(testHome, "config.yaml"),
-      [
-        "messaging:",
-        "  default_channel_id: test-feishu",
-        "  max_visible_steps: 32",
-        "  channels: []",
-        "",
-      ].join("\n"),
+      "{}\n",
     );
     setLunaHome(testHome);
     reloadConfig();
@@ -5179,11 +5083,7 @@ describe("agent runtime lifecycle boundaries", () => {
     const previousBunLunaHome = Bun.env.LUNA_HOME;
     writeFileSync(
       join(testHome, "config.yaml"),
-      `timezone: "Asia/Shanghai"
-messaging:
-  default_channel_id: ""
-  channels: []
-`,
+      "{}\n",
       "utf-8",
     );
     mkdirSync(join(testHome, "data"), { recursive: true });
@@ -5474,12 +5374,7 @@ messaging:
     mkdirSync(join(testHome, "data"), { recursive: true });
     writeFileSync(
       join(testHome, "config.yaml"),
-      `timezone: "Asia/Shanghai"
-messaging:
-  default_channel_id: ""
-  max_visible_steps: 32
-  channels: []
-`,
+      "{}\n",
       "utf-8",
     );
     process.env.LUNA_HOME = testHome;
@@ -5579,12 +5474,7 @@ messaging:
     mkdirSync(join(testHome, "data"), { recursive: true });
     writeFileSync(
       join(testHome, "config.yaml"),
-      `timezone: "Asia/Shanghai"
-messaging:
-  default_channel_id: ""
-  max_visible_steps: 32
-  channels: []
-`,
+      "{}\n",
       "utf-8",
     );
     process.env.LUNA_HOME = testHome;
@@ -5750,12 +5640,7 @@ messaging:
     mkdirSync(join(testHome, "data"), { recursive: true });
     writeFileSync(
       join(testHome, "config.yaml"),
-      `timezone: "Asia/Shanghai"
-messaging:
-  default_channel_id: ""
-  max_visible_steps: 32
-  channels: []
-`,
+      "{}\n",
       "utf-8",
     );
     process.env.LUNA_HOME = testHome;

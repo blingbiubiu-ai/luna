@@ -10,7 +10,7 @@ import { eq } from "drizzle-orm";
 import { feishuIdentityMetadata } from "../../src/identity/feishu-identity-scopes";
 import { DataConnection } from "../../src/data";
 import * as schema from "../../src/data/schema";
-import { config, setLunaHome } from "../../src/shared";
+import { config, DEFAULT_SESSION_CONFIG, setLunaHome } from "../../src/shared";
 import { SessionStore } from "../../src/sessions/session-store";
 import { SessionResolver } from "../../src/sessions/session-resolver";
 import { createSessionChatRoutes } from "../../src/server/routes/session-chat";
@@ -33,7 +33,7 @@ beforeEach(async () => {
   feishu = new FakeFeishuChannel("test");
   channel = new DashboardChannel(db.db);
   ingress = new LunaMessageIngress({ db: db.db, runnerType: "mock",
-    sessionConfig: { ...config.session, coalesce_idle_ms: 100, coalesce_max_wait_ms: 300 },
+    sessionConfig: { ...DEFAULT_SESSION_CONFIG, coalesce_idle_ms: 100, coalesce_max_wait_ms: 300 },
     mainRunner: { run: async (input: MainRunnerRunInput) => { calls.push(input); return { operation: "message.send", reply: "你好，Tester", reason: "test" }; } } as unknown as MainRunner,
   });
   await ingress.registerChannel(feishu);
@@ -137,7 +137,7 @@ test("execution rejection accepts the message and persists one error reply while
   channel = new DashboardChannel(db.db);
   const { ExecutionError } = await import("@luna/execution-store");
   ingress = new LunaMessageIngress({ db: db.db, runnerType: "mock",
-    sessionConfig: { ...config.session, coalesce_idle_ms: 1 },
+    sessionConfig: { ...DEFAULT_SESSION_CONFIG, coalesce_idle_ms: 1 },
     mainRunner: { run: async () => { throw new ExecutionError(403, "agent_worker_access_denied"); } } as unknown as MainRunner,
   });
   await ingress.registerChannel(feishu);
@@ -165,7 +165,7 @@ test("direct session access survives adapter recreation without adding bindings"
   await send(app()); await ingress.waitForIdle();
   const bindingCount = db.db.select().from(schema.sessionSurfaceAliases).all().length;
   const replacement = new DashboardChannel(db.db);
-  const replacementIngress = new LunaMessageIngress({ db: db.db, runnerType: "mock", sessionConfig: { ...config.session, coalesce_idle_ms: 1 },
+  const replacementIngress = new LunaMessageIngress({ db: db.db, runnerType: "mock", sessionConfig: { ...DEFAULT_SESSION_CONFIG, coalesce_idle_ms: 1 },
     mainRunner: { run: async () => ({ operation: "message.send", reply: "after restart", reason: "test" }) } as unknown as MainRunner });
   const replacementFeishu = new FakeFeishuChannel("test");
   await replacementIngress.registerChannel(replacementFeishu);

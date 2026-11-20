@@ -548,7 +548,7 @@ describe("AgentProfileStore & ActiveAgentConfigService executionDriver persisten
   test("persists executionDriver=pty across SQLite migrations and pins it in AgentExecutionReference", () => {
     const home = makeTempDir("luna-pty-profile-db-");
     mkdirSync(join(home, "data"), { recursive: true });
-    writeFileSync(join(home, "config.yaml"), "messaging:\n  default_channel_id: ''\n  channels: []\n");
+    writeFileSync(join(home, "config.yaml"), "{}\n");
     setLunaHome(home);
     reloadConfig();
 

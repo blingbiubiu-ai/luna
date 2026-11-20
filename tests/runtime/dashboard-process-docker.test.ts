@@ -152,8 +152,7 @@ emit({status:'success',result:'LUNA_NOTHING_TO_SEND'});
     }));
     writeFileSync(join(root, "config.yaml"), [
       "sandbox:", "  runtimeConfigFile: " + JSON.stringify(runtimeFile),
-      "messaging:", "  default_channel_id: ''", "  channels: []", "paths:",
-      "  sharedWorkspaceDir: " + JSON.stringify(join(root, "absent-project")), "",
+      "paths:", "  sharedWorkspaceDir: " + JSON.stringify(join(root, "absent-project")), "",
     ].join("\n"));
     let serviceProcess = await startService();
     runtimeDb = new Database(join(root, "runtime/runtime.sqlite"), {readonly:true});

@@ -50,6 +50,7 @@ import { runnerArtifactAllowlistFromInput } from "@/main-runner/artifact-allowli
 import { TaskSubscriptionStore } from "@/tasks/task-subscription-store";
 import { WAITING_FOR_INPUT, type TaskSubscription } from "@/tasks/types";
 import { renderMessageBlocksForRunner } from "@/main-runner/context-builder";
+import { PlatformSettingsStore } from "@/platform/platform-settings-store";
 import type { MessageContentBlock } from "@/sessions/types";
 import { extractTextContent, type UserMessage } from "@/shared";
 import { FakeRunnerAdapter } from "../../extensions/runners/mock/fake-runner-adapter";
@@ -88,6 +89,7 @@ export interface BuildTaskRunPromptInput {
   readonly updateContext?: readonly TaskRunPromptContextItem[];
   readonly facts: readonly string[];
   readonly assumptions: readonly string[];
+  readonly timezone?: string;
 }
 
 export interface TaskRunPromptContextItem {
@@ -234,6 +236,7 @@ function _buildTaskRunPromptPackage(input: {
     }),
     facts: _stringList(context.knownFacts),
     assumptions: _stringList(context.assumptions),
+    timezone: new PlatformSettingsStore(input.db).get().general.timezone,
   };
   return {
     promptInput,
@@ -467,8 +470,9 @@ async function _runAgentTask(input: {
   const memory = memoryInjection(input.db, {agentId: runnerContext.agent_id, shadowId: runnerContext.shadow_id, actorUserId: actor,
     sessionId: taskRow?.primary_session_id ?? null, taskId: input.taskId, runnerContextId: runnerContext.id},
     input.pendingText.trim() || [taskRow?.title, taskRow?.summary].filter(Boolean).join("\n"));
+  const timezone = new PlatformSettingsStore(input.db).get().general.timezone;
   const turnMessage: UserMessage = {...userMessage, content: [{type: "text", text: joinBlocks([
-    input.materializedPrompt, dataBlock("memory", {text: memory.text ?? ""}), dataBlock("now", {json: turnClock()}),
+    input.materializedPrompt, dataBlock("memory", {text: memory.text ?? ""}), dataBlock("now", {json: turnClock(new Date(), timezone)}),
   ])}]};
   for await (const event of runner.stream(turnMessage, {
     cwd: runnerContext.runner_root_path,
@@ -545,7 +549,7 @@ async function _runAgentTask(input: {
 /** The persisted input of one Task Run. The current time and memory are added when it is sent. */
 export function buildTaskRunPrompt(input: BuildTaskRunPromptInput): string {
   const context = (items: readonly TaskRunPromptContextItem[] | undefined) => (items ?? []).map((item) => compact({
-    role: item.role, source: item.source, reason: item.reason, at: item.occurredAt === undefined ? undefined : zonedIso(new Date(item.occurredAt)),
+    role: item.role, source: item.source, reason: item.reason, at: item.occurredAt === undefined ? undefined : zonedIso(new Date(item.occurredAt), input.timezone),
     text: item.text.trim(),
   }));
   const launch = context(input.launchContext), update = context(input.updateContext);

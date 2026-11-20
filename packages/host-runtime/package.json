@@ -6,7 +6,6 @@
   "exports": {
     "./env": "./src/env.ts",
     "./shared-workspace": "./src/shared-workspace.ts",
-    "./managed-git": "./src/managed-git.ts",
     "./defaults": "./src/defaults.ts",
     "./runner-resources": "./src/runner-resources.ts",
     "./runner-instructions": "./src/runner-instructions.ts",

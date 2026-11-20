@@ -6,28 +6,19 @@ import * as paths from "./paths";
 import type { AppConfig } from "./schema";
 import {
   AppConfig as AppConfigSchema,
-  PluginsConfig as PluginsConfigSchema,
-  RunnerConfig as RunnerConfigSchema,
-  SessionConfig as SessionConfigSchema,
+  DEFAULT_SESSION_CONFIG,
   SandboxConfig as SandboxConfigSchema,
 } from "./schema";
 
+export { DEFAULT_SESSION_CONFIG };
 export type {
   AppConfig,
-  AuthConfig,
-  FeishuAuthConfig,
-  ChannelConfig,
-  ChannelParams,
-  PluginsConfig,
-  PluginMarketplaceConfig,
-  SessionConfig,
-  ServiceConfig,
-  PathsConfig,
+  GroupActivationFollowupSenders,
   LoggingConfig,
-  MessagingConfig,
+  PathsConfig,
   SandboxConfig,
-  RunnerConfig,
-  GitConfig,
+  ServiceConfig,
+  SessionConfig,
 } from "./schema";
 export {
   setLunaHome,
@@ -36,7 +27,7 @@ export {
 } from "./paths";
 
 /**
- * Combined configuration interface including both YAML-loaded app config and paths.
+ * Combined bootstrap configuration interface including YAML-loaded bootstrap config and paths.
  */
 export interface Config extends Omit<AppConfig, "paths"> {
   runtimePaths: AppConfig["paths"];
@@ -46,25 +37,23 @@ export interface Config extends Omit<AppConfig, "paths"> {
 let _appConfig: AppConfig | null = null;
 
 function defaultAppConfig(): AppConfig {
-  return AppConfigSchema.parse({
-    messaging: { default_channel_id: "", channels: [] },
-  });
+  return AppConfigSchema.parse({});
 }
 
 /**
- * Loads the application configuration from `$LUNA_HOME/config.yaml`.
+ * Loads bootstrap configuration from `$LUNA_HOME/config.yaml`.
  * Parses the YAML, resolves `$ENV_VAR` references, and validates against the schema.
  */
 function _loadConfigFromFile(): AppConfig {
   const configPath = join(paths.home, "config.yaml");
   const raw = readFileSync(configPath, "utf-8");
-  const parsed = Bun.YAML.parse(raw);
+  const parsed = Bun.YAML.parse(raw) ?? {};
   const resolved = resolveEnvVars(parsed);
   return AppConfigSchema.parse(resolved);
 }
 
 /**
- * Reloads the application configuration from disk.
+ * Reloads bootstrap configuration from disk.
  * Call this after generating or modifying `config.yaml`.
  */
 export function reloadConfig(): void {
@@ -79,33 +68,10 @@ try {
 }
 
 /**
- * The global application configuration object.
- * `paths` is always available. Other properties require `config.yaml` to be loaded.
+ * The global bootstrap configuration object.
+ * `paths` is always available. Runtime platform settings live in `PlatformSettingsStore`.
  */
 export const config = {
-  get timezone() {
-    if (!_appConfig) {
-      return Intl.DateTimeFormat().resolvedOptions().timeZone;
-    }
-    return _appConfig.timezone;
-  },
-  get messaging() {
-    if (!_appConfig) {
-      throw new Error(
-        "config.yaml has not been loaded yet. Call reloadConfig() first.",
-      );
-    }
-    return _appConfig.messaging;
-  },
-  get session() {
-    if (!_appConfig) {
-      return SessionConfigSchema.parse({});
-    }
-    return _appConfig.session;
-  },
-  get memory() {
-    return (_appConfig ?? defaultAppConfig()).memory;
-  },
   get service() {
     if (!_appConfig) {
       return defaultAppConfig().service;
@@ -124,26 +90,11 @@ export const config = {
     }
     return _appConfig.logging;
   },
-  get plugins() {
-    if (!_appConfig) {
-      return PluginsConfigSchema.parse({});
-    }
-    return _appConfig.plugins;
-  },
   get sandbox() {
     if (!_appConfig) {
       return SandboxConfigSchema.parse({});
     }
     return _appConfig.sandbox;
-  },
-  get runner() {
-    if (!_appConfig) {
-      return RunnerConfigSchema.parse({});
-    }
-    return _appConfig.runner;
-  },
-  get git() {
-    return _appConfig?.git;
   },
   paths,
 };

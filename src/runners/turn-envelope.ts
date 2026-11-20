@@ -1,6 +1,6 @@
 import { dataBlock, joinBlocks } from "@luna/host-runtime/prompt-blocks";
 import type { ChannelMention, NormalizedInboundMessage } from "@/channels/types";
-import { config } from "@/shared";
+import { defaultSystemTimezone } from "@/platform/platform-settings-store";
 import type { RunnerMessageEnvelope } from "./message-envelope";
 
 /**
@@ -18,14 +18,14 @@ export interface PersonFacts {
 export type PeopleResolver = (userId: string) => PersonFacts | undefined;
 
 /** The current time in the configured timezone, for the head of every turn. */
-export function turnClock(now: Date = new Date(), timezone: string = config.timezone): {
+export function turnClock(now: Date = new Date(), timezone: string = defaultSystemTimezone()): {
   readonly now: string; readonly weekday: string; readonly timezone: string;
 } {
   return { now: zonedIso(now, timezone), weekday: new Intl.DateTimeFormat("en-US", { timeZone: timezone, weekday: "long" }).format(now), timezone };
 }
 
 /** `2026-11-18T14:35:26+08:00` for an instant in a timezone. */
-export function zonedIso(date: Date, timezone: string = config.timezone): string {
+export function zonedIso(date: Date, timezone: string = defaultSystemTimezone()): string {
   const parts = Object.fromEntries(new Intl.DateTimeFormat("en-US", {
     timeZone: timezone, year: "numeric", month: "2-digit", day: "2-digit",
     hour: "2-digit", minute: "2-digit", second: "2-digit", hourCycle: "h23", timeZoneName: "longOffset",
@@ -52,7 +52,7 @@ function mentionFacts(mentions: readonly ChannelMention[], addressing: Normalize
 }
 
 /** One message as the Runner sees it: Luna ids, the sender with their relation to the Shadow, local time, text. */
-export function messageItem(message: RunnerMessageEnvelope, people: PeopleResolver | undefined, raw?: NormalizedInboundMessage) {
+export function messageItem(message: RunnerMessageEnvelope, people: PeopleResolver | undefined, raw?: NormalizedInboundMessage, timezone?: string) {
   const userId = message.senderUserId ?? undefined;
   return compact({
     id: message.messageId,
@@ -64,7 +64,7 @@ export function messageItem(message: RunnerMessageEnvelope, people: PeopleResolv
       kind: message.sender.kind,
       ...(userId ? people?.(userId) : undefined),
     }),
-    at: zonedIso(new Date(message.createdAt)),
+    at: zonedIso(new Date(message.createdAt), timezone),
     ...nonDefault("contentKind", raw?.contentKind ?? message.contentKind, "text"),
     ...nonDefault("presentationKind", raw?.presentationKind ?? message.presentationKind, "plain"),
     text: message.text,

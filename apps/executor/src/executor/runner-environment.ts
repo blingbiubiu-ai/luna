@@ -40,8 +40,7 @@ export function prepareRunnerEnvironment(
   }
   seedLink(assets.fswatch, join(env.HOME, ".remoteX/fswatch/linux-amd64/fswatch"));
 
-  // The author config may be mounted read-only. Supply the old safe.directory
-  // behavior as process config, without rewriting or racing on shared gitconfig.
+  // Supply safe.directory=* as process config without rewriting or racing on shared gitconfig.
   const count = Number(env.GIT_CONFIG_COUNT ?? "0");
   if (!Number.isSafeInteger(count) || count < 0) throw new Error("Invalid GIT_CONFIG_COUNT");
   env[`GIT_CONFIG_KEY_${count}`] = "safe.directory";

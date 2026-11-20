@@ -19,7 +19,7 @@ let previousHome: string, home: string, db: DataConnection<typeof schema>, sessi
 beforeEach(() => {
   previousHome = config.paths.home;
   home = mkdtempSync(join(tmpdir(), "luna-reply-")); setLunaHome(home);
-  writeFileSync(join(home, "config.yaml"), "messaging:\n  default_channel_id: test\n  channels: []\n");
+  writeFileSync(join(home, "config.yaml"), "{}\n");
   reloadConfig(); db = new DataConnection(schema);
   fixtureSessionOwnership(db.db, "feishu", "test", "user");
   sessionId = new SessionStore(db.db).resolveByChannelSurface({ channelType: "feishu", channelId: "test", groupId: "room" }).id;

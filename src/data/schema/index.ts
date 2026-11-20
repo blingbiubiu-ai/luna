@@ -56,3 +56,4 @@ export * from "./shadow-root-access";
 export * from "./agent-settings";
 export * from "./chat-listening";
 export * from "./platform-auth-settings";
+export * from "./platform-settings";

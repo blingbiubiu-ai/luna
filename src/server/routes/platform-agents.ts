@@ -5,7 +5,7 @@ import {createAgentPluginRoutes} from "./agent-plugins";
 import type {PluginRegistry} from "@/plugins/registry";
 import {createAgentMemoryRoutes} from "./agent-memories";
 import {createAccountLinkRoutes} from "./account-links";
-import {config} from "@/shared";
+import {DEFAULT_SESSION_CONFIG} from "@/shared";
 import {AgentLifecycleStore, type AgentLifecycleJob} from "@/agents/agent-lifecycle-store";
 import { HTTPException } from "hono/http-exception";
 import { Hono, type Context } from "hono";
@@ -100,12 +100,12 @@ export function createPlatformAgentRoutes(db: DrizzleDB, registry?:PluginRegistr
       const shadow = store.renameShadow(actor(c), {agentId, shadowId}, z.object({name: z.string().trim().max(100)}).strict().parse(await c.req.json()));
       return c.json({shadow});
     })
-    // `messageDefaults` is what a message setting the Agent leaves unset follows: the Service configuration.
-    .get("/:agentId/settings", c => c.json({settings: new AgentSettingsStore(db).read(actor(c), c.req.param("agentId")), messageDefaults: messageDefaults(config.session)}))
+    // `messageDefaults` is what a message setting the Agent leaves unset follows: the built-in session defaults.
+    .get("/:agentId/settings", c => c.json({settings: new AgentSettingsStore(db).read(actor(c), c.req.param("agentId")), messageDefaults: messageDefaults(DEFAULT_SESSION_CONFIG)}))
     .put("/:agentId/settings", async c => {
       const accountId = actor(c);
       const agentId = c.req.param("agentId");
-      const saved = new AgentSettingsStore(db).save(accountId, agentId, await c.req.json(), config.session);
+      const saved = new AgentSettingsStore(db).save(accountId, agentId, await c.req.json(), DEFAULT_SESSION_CONFIG);
       // Best-effort live push of updated PTY idle timeout to online assigned Workers.
       void (async () => {
         try {
@@ -125,7 +125,7 @@ export function createPlatformAgentRoutes(db: DrizzleDB, registry?:PluginRegistr
           ));
         } catch { /* runtime detached or uninitialized in standalone unit tests */ }
       })();
-      return c.json({settings: saved, messageDefaults: messageDefaults(config.session)});
+      return c.json({settings: saved, messageDefaults: messageDefaults(DEFAULT_SESSION_CONFIG)});
     })
     // Listening for the group chat of one session, on its Dashboard page; `listening: null` when the session has no group chat.
     .get("/:agentId/sessions/:sessionId/listening", c => {

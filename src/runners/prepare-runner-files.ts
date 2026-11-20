@@ -63,7 +63,6 @@ export async function prepareRunnerFiles(input: {
           scopeKey: context?.runnerKind === "task" ? `task:${context.owner.id}:${input.runner_type}` : `session:${input.id}`,
           runnerKind: context?.runnerKind ?? "main", ...(context ? { context: { ...context } } : {}),
           ...(runtime.sharedProject ? { projectId: runtime.sharedProject.projectId } : {}),
-          ...(config.git ? { git: config.git } : {}),
           ...(new ShadowRootAccessStore(db).enabled(invocation.shadowId) ? { rootAccess: true } : {}),
           ...soulField(db, invocation),
         }, signal);

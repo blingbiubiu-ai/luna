@@ -45,7 +45,7 @@ import { SessionInboxStore } from "../../src/sessions/session-inbox-store";
 import { SessionQueue } from "../../src/sessions/session-queue";
 import { SessionStore } from "../../src/sessions/session-store";
 import { SessionTimelineStore } from "../../src/sessions/session-timeline-store";
-import { config, setLunaHome } from "../../src/shared";
+import { config, DEFAULT_SESSION_CONFIG, setLunaHome } from "../../src/shared";
 import { TaskReportService } from "../../src/tasks/task-report-service";
 import { taskReportForRun } from "../../src/tasks/task-report-store";
 import { TaskRunSupervisor } from "../../src/tasks/task-run-supervisor";
@@ -213,7 +213,7 @@ test.skipIf(process.env.LUNA_PROVIDER_INTEGRATION !== "1")("Real Service transpo
           return { type: runner.type, stream: (message, options) => runner.stream(message, { ...options, env: { ...profile.env, ...options.env } }) };
         } });
         const processor = new SessionTurnProcessor({ db, runnerType: profile.agentType, channelForMessage: channelFor, workRunner: work, mainRunner: main });
-        const queue = new SessionQueue({ db, config: { ...config.session, coalesce_idle_ms: 1, coalesce_max_wait_ms: 25 }, executeTurn: (input, signal) => processor.execute(input, signal) });
+        const queue = new SessionQueue({ db, config: { ...DEFAULT_SESSION_CONFIG, coalesce_idle_ms: 1, coalesce_max_wait_ms: 25 }, executeTurn: (input, signal) => processor.execute(input, signal) });
         const workWatchdog = setTimeout(() => queue.abort(workSession.id), 120000);
         try { queue.schedule(workSession.id); await queue.waitForIdle(); } finally { clearTimeout(workWatchdog); await queue.stop(); }
         const turns = db.select().from(sessionTurns).where(eq(sessionTurns.session_id, workSession.id)).all();

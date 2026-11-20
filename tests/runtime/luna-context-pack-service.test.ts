@@ -246,30 +246,7 @@ function issueDashboardApiToken(db: DrizzleDB): string {
 }
 
 function writeRuntimeConfig(home: string): void {
-  writeFileSync(
-    join(home, "config.yaml"),
-    [
-      "messaging:",
-      "  default_channel_id: fake",
-      "  channels: []",
-      "session:",
-      "  coalesce_idle_ms: 1",
-      "  coalesce_max_wait_ms: 25",
-      "  max_batch_size: 8",
-      "  stale_claim_ms: 120000",
-      "  activation_context_window_ms: 300000",
-      "  activation_context_max_messages: 12",
-      "  activation_context_max_chars: 6000",
-      "  activation_context_recent_unprocessed_messages: 10",
-      "  group_bot_aliases: []",
-      "  group_activation_followup_window_ms: 300000",
-      "  group_activation_followup_senders: requester_and_reporters",
-      "  group_activation_followup_max_messages: 8",
-      "  group_activation_followup_recent_messages: 3",
-      "  group_activation_followup_interrupt_on_other_user: true",
-      "",
-    ].join("\n"),
-  );
+  writeFileSync(join(home, "config.yaml"), "{}\n");
 }
 
 function restoreEnv(name: string, value: string | undefined): void {

@@ -161,11 +161,11 @@ function PlatformPluginDetail({ pluginId }: { readonly pluginId: string }) {
 export function PluginSourceUnconfigured() {
   return (
     <main className="mx-auto w-full max-w-3xl p-6">
-      <div role="status" className="space-y-2 rounded-xl border border-dashed bg-card p-6 text-sm">
+      <div role="status" className="space-y-3 rounded-xl border border-dashed bg-card p-6 text-sm">
         <h1 className="text-base font-semibold">未配置插件源</h1>
         <p className="text-muted-foreground">平台还没有可拉取插件的来源，所以插件列表为空。</p>
         <p className="text-muted-foreground">
-          在 Service 的 <code>config.yaml</code> 中设置 <code>plugins.marketplace.gitUrl</code>（可选 <code>branch</code>），重启 Service 后即可在这里刷新、安装插件。
+          请前往 <a href="/platform/settings" className="font-medium text-foreground underline underline-offset-4">平台设置 → 插件市场源</a> 填写插件仓库 Git 地址（及分支），保存后即可直接在这里刷新、安装插件。
         </p>
       </div>
     </main>

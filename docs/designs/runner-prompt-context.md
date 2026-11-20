@@ -133,7 +133,7 @@ XML 标签只用来分块，块内不逐字段套标签：
 
 - 数据来源：`agent_shadows.name`、`luna_agents.name`、owner 账号对应的用户、记忆库里该分身的 `persona` 条目。存储和修改入口都不变，persona 仍然只有 owner 能改。
 - 传递路径：Service 发给 Worker 的准备请求里已经带 `runnerKind`、`rootAccess` 和 `context`（`apps/worker/src/shadow-preparation.ts`），在同一个请求里加 `soul` 字段。
-- persona 总长超过 4000 字符时，从超出的那一条起不再写入，并打 warn 日志。persona 条目数上限仍是 `config.memory.persona_limit`（默认 5）。
+- persona 总长超过 4000 字符时，从超出的那一条起不再写入，并打 warn 日志。persona 条目数上限仍是平台设置 `memory.personaLimit`（默认 5）。
 
 **为什么不放会话信息（实现时改的）**
 
@@ -187,7 +187,7 @@ src/prompts/
 
 说明：
 
-- 当前时间每轮都变，所以留在每轮输入里，放在该轮主块的 JSON 头（`now`、`weekday`、`timezone`）；`now` 是带时区偏移的 ISO 时间，时区取 `config.timezone`。不单独设 `<context>` 块。
+- 当前时间每轮都变，所以留在每轮输入里，放在该轮主块的 JSON 头（`now`、`weekday`、`timezone`）；`now` 是带时区偏移的 ISO 时间，时区取平台设置 `general.timezone`。不单独设 `<context>` 块。
 - `<history>` 的 JSON 里有 `launchSeed`、`deltaContext`、`activationContext` 三项，有才出现。
 - 发送者跟着每条消息走。`items[]` 每条：`id`、`from{id,externalId,name,kind,role,trusted?}`、`at`、`text`，以及仅在非默认时出现的 `kind`（`activation_source`、`activation_followup`、`background`）、`mentions`、`attachments`、`contentKind`。
 - 删除的字段：`index`、`channelMessageKey`、`sender.id`（与 `externalId` 重复）、`role:"user"`、默认值的 `presentationKind`。
@@ -257,7 +257,7 @@ Main，私聊，会话首轮：
 - **代码**：`runner-instructions.ts`（片段拼装、soul 和 session 块）、`shadow-preparation.ts` 与准备请求的协议（新增两个字段）、`context-preparation.ts` 与 `runner-context-store.ts`（指纹拆分）、新增 `turn-envelope.ts`、`main-runner.ts`、`task-run-handler.ts`、`work-runner.ts`、`agent-memory-injection.ts`、`src/prompts/*`、第二阶段的 `skills/*`。
 - **测试**：13 个测试文件断言提示词文本，需要同步更新。
 - **上线行为**：指令变化在下一轮读到新文件，不重建会话。
-- **大小**：persona 计入 `AGENTS.md`。大小测试要按 persona 条目数上限（`config.memory.persona_limit`）和单条长度上限算最坏情况；单条长度现在有没有上限，实现时确认，没有就加。
+- **大小**：persona 计入 `AGENTS.md`。大小测试要按 persona 条目数上限（`memory.personaLimit`）和单条长度上限算最坏情况；单条长度现在有没有上限，实现时确认，没有就加。
 - **持久化的旧 prompt**：恢复中的 Task run 会重放旧格式，过渡期两种格式并存。
 - **打包**：发布包里有一份 `src/prompts` 的拷贝，需要确认打包脚本带上新的子目录。
 

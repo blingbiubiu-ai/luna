@@ -115,7 +115,6 @@ describe("runner root base configuration", () => {
   test("schema accepts paths.runnersDir", () => {
     const parsed = AppConfig.parse({
       paths: { runnersDir: "/data/luna-runners" },
-      messaging: { default_channel_id: "", channels: [] },
     });
 
     expect((parsed.paths as { runnersDir?: string }).runnersDir).toBe(
@@ -133,7 +132,6 @@ describe("runner root base configuration", () => {
 
     const parsed = AppConfig.parse({
       paths: { sharedWorkspaceDir: "/shared/workspace" },
-      messaging: { default_channel_id: "", channels: [] },
     });
     expect(parsed.paths.sharedWorkspaceDir).toBe("/shared/workspace");
   });
@@ -161,13 +159,11 @@ describe("runner root base configuration", () => {
     expect(
       AppConfig.safeParse({
         paths: { projectsDir: "/legacy/projects" },
-        messaging: { default_channel_id: "", channels: [] },
       }).success,
     ).toBe(false);
     expect(
       AppConfig.safeParse({
         paths: { workspaceDir: "/legacy/workspace" },
-        messaging: { default_channel_id: "", channels: [] },
       }).success,
     ).toBe(false);
   });

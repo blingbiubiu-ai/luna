@@ -1,5 +1,6 @@
 import { ShadowRootAccessStore } from "@/agents/shadow-root-access-store";
 import { AgentSettingsStore } from "@/agents/agent-settings-store";
+import { PlatformSettingsStore } from "@/platform/platform-settings-store";
 import {InvocationResources} from "./invocation-resources";
 import {AgentError} from "@/agents/agent-store";
 import {GatewayError} from "@/server/gateway-error";
@@ -26,11 +27,12 @@ import { RunnerOutputState, _containerProtocolError, _containerProtocolErrorCode
 
 import { RuntimeDetachedError } from "./runtime-detach";
 export { RuntimeDetachedError } from "./runtime-detach";
-/** A Task run may take as long as its Agent allows; Main and Work turns keep the Service-wide limit. */
-export function jobTimeoutMs(db: DrizzleDB, invocation: { readonly runnerKind: string; readonly agentId: string }): number {
+/** Platform-wide execution timeout: Task runs use `taskTimeoutMs`, Main and Work turns use `containerTimeoutMs`. */
+export function jobTimeoutMs(db: DrizzleDB, invocation: { readonly runnerKind: string; readonly agentId?: string }): number {
+  const execution = new PlatformSettingsStore(db).get().execution;
   return invocation.runnerKind === "task"
-    ? new AgentSettingsStore(db).get(invocation.agentId).task.runLimitHours * 3_600_000
-    : config.sandbox.containerTimeoutMs;
+    ? execution.taskTimeoutMs
+    : execution.containerTimeoutMs;
 }
 
 export interface AgentAttemptTransport {
@@ -125,7 +127,7 @@ export class RuntimeAgentTransport implements AgentAttemptTransport {
         ...(projectId ? { projectId } : {}),
         ...(invocation.sessionId ? { sessionId: invocation.sessionId } : {}), ...(invocation.taskId ? { taskId: invocation.taskId } : {}), ...(invocation.taskRunId ? { taskRunId: invocation.taskRunId } : {}),
         input: { runnerType, ...(executionDriver && executionDriver !== "stdio" ? { executionDriver, ...(ptyIdleTimeoutMs !== undefined ? { ptyIdleTimeoutMs } : {}) } : {}), prompt: extractTextContent(message), ...(model ? { model } : {}), ...(options.runnerSessionId ? { sessionId: options.runnerSessionId } : {}) },
-        retryPolicy: { maxConsecutiveRetries: config.runner.maxTransientRetries, maxTotalRetries: 10, baseDelayMs: 2000, maxDelayMs: 30000 },
+        retryPolicy: { maxConsecutiveRetries: new PlatformSettingsStore(this.db).get().execution.maxTransientRetries, maxTotalRetries: 10, baseDelayMs: 2000, maxDelayMs: 30000 },
         credentialsRevision: 1, timeoutMs: jobTimeoutMs(this.db, invocation) });
       job = this.store.createJob(this.client.runtimeId, request);
     }

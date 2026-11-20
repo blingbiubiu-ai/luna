@@ -112,12 +112,7 @@ beforeAll(async () => {
   mkdirSync(join(testHome, "data"), { recursive: true });
   writeFileSync(
     join(testHome, "config.yaml"),
-    [
-      "messaging:",
-      "  default_channel_id: fake",
-      "  channels: []",
-      "",
-    ].join("\n"),
+    "{}\n",
   );
 
   previousLunaHome = config.paths.home;

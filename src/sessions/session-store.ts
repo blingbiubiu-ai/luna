@@ -18,7 +18,7 @@ import {
 import { ContextPackStore, LaunchContextBuilder } from "@/context";
 import { createSessionRunnerPaths } from "@/runners/runner-context-store";
 import { moveTaskSubscriptionsToCanonicalSession } from "@/tasks/task-subscription-merge";
-import { config, uuid } from "@/shared";
+import { DEFAULT_SESSION_CONFIG, uuid } from "@/shared";
 
 import { MessageStore } from "./message-store";
 import { moveTimelineEntriesToCanonicalSession } from "./session-timeline-merge";
@@ -447,7 +447,7 @@ export class SessionStore {
       input.rootMessageId !== undefined &&
       input.createThreadLaunchContext !== false
     ) {
-      const threadConfig = sessionConfigForAgent(db, row.agent_id, config.session);
+      const threadConfig = sessionConfigForAgent(db, row.agent_id, DEFAULT_SESSION_CONFIG);
       new LaunchContextBuilder(db).buildForThreadSessionFromSurface({
         threadSessionId: row.id,
         channelType: input.channelType,

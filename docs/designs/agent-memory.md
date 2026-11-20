@@ -352,16 +352,18 @@ confirmation" filter lists untrusted entries; confirming one shares it.
 
 ## Configuration
 
+Platform administrators manage memory maintenance intervals and quotas live on Dashboard `/platform/settings` (`platform_settings.settings.memory`):
+
 | Key | Default | Meaning |
 | --- | --- | --- |
-| `memory.reflection_idle_ms` | 30 minutes | Idle time before reflection; 0 disables |
-| `memory.consolidation_interval_ms` | 24 hours | Minimum time between consolidations; 0 disables |
-| `memory.forget_unused_ms` | 180 days | Unused time before archiving; 0 keeps unused entries |
-| `memory.episode_retention_ms` | 90 days | Age, since it happened and was last read, at which an episode is archived; 0 keeps episodes |
-| `memory.recall_limit` | 8 | Entries recalled into one turn; 0 disables recall |
-| `memory.core_limit` | 30 | Active shared core entries per Agent |
-| `memory.shadow_core_limit` | 10 | Active Shadow-private core entries per Shadow |
-| `memory.persona_limit` | 5 | Active persona entries per Shadow |
+| `memory.reflectionIdleMs` | 30 minutes | Idle time before reflection; 0 disables |
+| `memory.consolidationIntervalMs` | 24 hours | Minimum time between consolidations; 0 disables |
+| `memory.forgetUnusedMs` | 180 days | Unused time before archiving; 0 keeps unused entries |
+| `memory.episodeRetentionMs` | 90 days | Age, since it happened and was last read, at which an episode is archived; 0 keeps episodes |
+| `memory.recallLimit` | 8 | Entries recalled into one turn; 0 disables recall |
+| `memory.coreLimit` | 30 | Active shared core entries per Agent |
+| `memory.shadowCoreLimit` | 10 | Active Shadow-private core entries per Shadow |
+| `memory.personaLimit` | 5 | Active persona entries per Shadow |
 
 ## Legacy Markdown memory and persona documents
 

@@ -72,10 +72,10 @@ still waits for the current Runner to complete.
 ## Message Turn Settings
 
 Whether an inbound message addresses the Agent, how inbox rows are batched into
-one turn and how much group context an activation carries follow the `session`
-block of the Service configuration. Each Agent may replace any of these in its
+one turn and how much group context an activation carries follow the built-in
+`DEFAULT_SESSION_CONFIG` defaults. Each Agent may replace any of these in its
 own settings (`agent_settings.settings.messages`, Dashboard Agent 设置 → 消息处理);
-a field it leaves unset follows the Service value, which the settings API
+a field it leaves unset follows `DEFAULT_SESSION_CONFIG`, which the settings API
 returns as `messageDefaults`.
 
 | Agent setting | Session configuration key |

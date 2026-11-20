@@ -19,7 +19,7 @@ let connection: DataConnection<typeof schema>;
 beforeEach(() => {
   home = mkdtempSync(join(tmpdir(), "luna-agent-routes-"));
   mkdirSync(join(home, "data"), { recursive: true });
-  writeFileSync(join(home, "config.yaml"), "messaging:\n  default_channel_id: ''\n  channels: []\n");
+  writeFileSync(join(home, "config.yaml"), "{}\n");
   setLunaHome(home);
   reloadConfig();
   connection = new DataConnection(schema);

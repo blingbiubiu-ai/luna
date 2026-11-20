@@ -1,4 +1,5 @@
 import { memoryInjection } from "@/agents/agent-memory-injection";
+import { PlatformSettingsStore } from "@/platform/platform-settings-store";
 import {RunnerContextStore as ExecutionContextStore} from "@/runners/runner-context-store";
 import {TaskScopeResolver} from "@/agents/task-scope";
 import type {AgentScope} from "@/agents/agent-store";
@@ -135,7 +136,10 @@ export class MainRunner {
       : undefined;
     const prompt = renderMainRunnerPrompt(input.input, {
       ...(memory?.text ? { memory: memory.text } : {}),
-      ...(this._options.serviceAuthDb ? { people: shadowPeople(this._options.serviceAuthDb, scope) } : {}),
+      ...(this._options.serviceAuthDb ? {
+        people: shadowPeople(this._options.serviceAuthDb, scope),
+        timezone: new PlatformSettingsStore(this._options.serviceAuthDb).get().general.timezone,
+      } : {}),
     });
     const primaryAttempt = this._options.attemptStore && input.turnId !== undefined
       ? turnAttempt(this._options.attemptStore, { sessionId: sessionIdFromInput(input.input), turnId: input.turnId,
@@ -362,11 +366,12 @@ export interface MainRunnerPromptOptions {
   /** Relation of each sender to this Shadow. */
   readonly people?: PeopleResolver;
   readonly now?: Date;
+  readonly timezone?: string;
 }
 
 /** The turn input for Main: background blocks first, this turn's input last. */
 export function renderMainRunnerPrompt(input: MainRunnerInput, options: MainRunnerPromptOptions = {}): string {
-  const clock = turnClock(options.now);
+  const clock = turnClock(options.now, options.timezone);
   const context = input.context;
   const pack = (value: MainRunnerContextPack | undefined) => value && {
     kind: value.kind,
@@ -375,7 +380,7 @@ export function renderMainRunnerPrompt(input: MainRunnerInput, options: MainRunn
       source: item.source, sourceSessionId: item.sourceSessionId, reason: item.reason,
     })),
   };
-  const activation = input.type === "user_messages" ? input.activationContextMessages?.map((message) => activationItem(message, options.people)) : undefined;
+  const activation = input.type === "user_messages" ? input.activationContextMessages?.map((message) => activationItem(message, options.people, clock.timezone)) : undefined;
   const history = compact({ launchSeed: pack(context.launchSeed), deltaContext: pack(context.deltaContext), activationContext: activation });
   return joinBlocks([
     dataBlock("memory", { text: options.memory ?? "" }),
@@ -412,17 +417,17 @@ function mainTurnBlock(input: MainRunnerInput, clock: ReturnType<typeof turnCloc
       requesterUserId: input.requesterUserId,
       listening: input.ambient,
       addressing: addressingFacts(input.latestMessage),
-      activationSource: input.activationSourceMessage && activationItem(input.activationSourceMessage, people),
-      items: input.messages.map((message) => messageItem(message, people, rawById.get(message.messageId))),
+      activationSource: input.activationSourceMessage && activationItem(input.activationSourceMessage, people, clock.timezone),
+      items: input.messages.map((message) => messageItem(message, people, rawById.get(message.messageId), clock.timezone)),
     }),
   });
 }
 
-function activationItem(message: ActivationContextMessage, people: PeopleResolver | undefined) {
+function activationItem(message: ActivationContextMessage, people: PeopleResolver | undefined, timezone?: string) {
   return compact({
     id: message.messageId,
     from: message.senderUserId ? { id: message.senderUserId, ...people?.(message.senderUserId) } : undefined,
-    at: zonedIso(new Date(message.createdAt)),
+    at: zonedIso(new Date(message.createdAt), timezone),
     text: message.text,
   });
 }

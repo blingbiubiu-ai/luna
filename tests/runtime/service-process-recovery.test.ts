@@ -45,7 +45,6 @@ test("Service process restart settles a cancelled intent and reattaches an activ
   writePrivateJson(connection, { ...scheduler.config, port: (runtime.address() as { port: number }).port });
   await closeExecutionServer(runtime);
   writeFileSync(join(root, "config.yaml"), [
-    "messaging:", "  default_channel_id: ''", "  channels: []",
     "sandbox:", "  runtimeConfigFile: " + JSON.stringify(connection),
     "paths:", "  sharedWorkspaceDir: " + JSON.stringify(join(root, "absent-project")), "",
   ].join("\n"));

@@ -1,4 +1,5 @@
 import { memoryInjection } from "@/agents/agent-memory-injection";
+import { PlatformSettingsStore } from "@/platform/platform-settings-store";
 import { addressingFacts, compact, dataBlock, joinBlocks, messageItem, turnClock, type PeopleResolver } from "@/runners/turn-envelope";
 import { shadowPeople } from "@/runners/shadow-people";
 import type {AgentExecutionSnapshot} from "@/agent-config";
@@ -187,12 +188,14 @@ export class WorkRunner {
       historyMessageCount: historyMessages.length,
     }, "Prepared work runner prompt");
 
+    const timezone = new PlatformSettingsStore(this._options.db).get().general.timezone;
     const prompt = buildWorkTurnPrompt({
       inbound,
       people: shadowPeople(this._options.db, { agentId: session.agent_id, shadowId: session.shadow_id }),
       currentTurnMessages: turnMessages,
       launchContext: historyMessages,
       includeLaunchContext,
+      timezone,
     });
 
     // Execute runner
@@ -391,7 +394,8 @@ export class WorkRunner {
       }
       const memory = memoryInjection(db, {agentId: session.agent_id, shadowId: session.shadow_id, actorUserId: command.actorUserId,
         sessionId: session.id, taskId: null, runnerContextId: runnerContext.id});
-      const prompt = joinBlocks([command.instruction, dataBlock("memory", { text: memory.text ?? "" }), dataBlock("now", { json: turnClock() })]);
+      const timezone = new PlatformSettingsStore(db).get().general.timezone;
+      const prompt = joinBlocks([command.instruction, dataBlock("memory", { text: memory.text ?? "" }), dataBlock("now", { json: turnClock(new Date(), timezone) })]);
       if (prompt !== command.instruction) this._attemptStore.updateInputPrompt(attempt.id, prompt);
       const invocation = await invokeSessionAgent({
         runner: launch.runner, runnerContext, runnerContextStore: this._runnerContexts, runnerKind: "work",
@@ -669,15 +673,17 @@ function buildWorkTurnPrompt(input: {
   readonly launchContext: readonly RunnerMessageEnvelope[];
   readonly includeLaunchContext: boolean;
   readonly people?: PeopleResolver;
+  readonly timezone?: string;
 }): string {
-  const history = input.includeLaunchContext ? input.launchContext.map((message) => messageItem(message, input.people)) : [];
+  const clock = turnClock(new Date(), input.timezone);
+  const history = input.includeLaunchContext ? input.launchContext.map((message) => messageItem(message, input.people, undefined, clock.timezone)) : [];
   return joinBlocks([
     history.length ? dataBlock("history", { json: { launchContext: history } }) : "",
     dataBlock("messages", {
       json: {
-        ...turnClock(),
+        ...clock,
         addressing: compact({ ...addressingFacts(input.inbound), ...activationFollowupAddressing(input.inbound) }),
-        items: input.currentTurnMessages.map((message) => messageItem(message, input.people)),
+        items: input.currentTurnMessages.map((message) => messageItem(message, input.people, undefined, clock.timezone)),
       },
     }),
   ]);

@@ -107,13 +107,13 @@ The supervisor resolves the active Dashboard Agent Profile when a run begins,
 not when a task was originally queued. Provider/model resume compatibility is
 then checked lazily against the selected task runner context.
 
-One Task run may take as long as its Agent allows: the Agent setting
-`task.runLimitHours` (1 to 168, default 10; Dashboard Agent 设置 → 任务运行时长)
+One Task run may take as long as the platform allows: the platform setting
+`execution.taskTimeoutMs` (1 to 10080 minutes, default 600 minutes / 10 hours; Dashboard `/platform/settings` → 运行与重试)
 becomes the Job's `timeoutMs` when the run's Job is created
 (`jobTimeoutMs` in `src/runners/runtime-agent-transport.ts`). Executor stops a
 run that passes it with `execution_timeout`; the run fails, Main is told, and
 the Task can be restarted. A changed setting applies to runs started afterwards.
-Main and Work turns keep the Service-wide `sandbox.containerTimeoutMs`.
+Main and Work turns keep the platform-wide `execution.containerTimeoutMs` setting (`platform_settings`, managed on Dashboard `/platform/settings`).
 
 Task Jobs use the scope `task:<task-id>:<runner-type>` and carry the task and Task Run IDs in their Job credentials. In isolated mode, Worker provides a container for the scope. In shared mode, Task uses the common Executor. Both modes use the public HOME and a task-specific working directory. Runtime and Executor serialize executions for the same context. Worker retains context data after container reaping.
 

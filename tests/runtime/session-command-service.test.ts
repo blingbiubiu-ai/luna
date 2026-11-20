@@ -6,7 +6,7 @@ import { eq } from "drizzle-orm";
 import { DataConnection } from "../../src/data";
 import * as schema from "../../src/data/schema";
 import { config, setLunaHome } from "../../src/shared";
-import { MessagingConfig } from "../../src/shared/config/schema";
+import { PlatformSettingsStore } from "../../src/platform/platform-settings-store";
 import { SessionStore } from "../../src/sessions/session-store";
 import { SessionCommandService } from "../../src/messaging/session-command-service";
 import { SessionReplyDispatcher } from "../../src/messaging/session-reply-dispatcher";
@@ -344,13 +344,11 @@ test("canonical delivery selects the current app's open ID and rejects a differe
 });
 
 test("explicit recipient claims require verified scopes and are checked again before delivery", async () => {
-    const original = Object.getOwnPropertyDescriptor(config, "messaging")!;
-    const messaging = MessagingConfig.parse({
-        channels: [], default_channel_id: "",
-        feishu_developers: {"test:feishu:test": "developer-a"},
+    const platformSettings = new PlatformSettingsStore(connection.db);
+    platformSettings.patch({
+        messaging: { feishuDevelopers: {"test:feishu:test": "developer-a"} },
     });
-    Object.defineProperty(config, "messaging", {...original, get: () => messaging});
-    try {
+    {
         observeRecipient("test", {open_id: "ou_no_scope", user_id: "without_tenant", union_id: "without_developer"});
         for (const [idType, id] of [["user_id", "without_tenant"], ["union_id", "without_developer"]] as const) {
             expect(() => resolveMessageTarget(connection.db, {kind: "feishu_user", channelId: "test", idType, id}, source, true)).toThrow("Resolve this recipient");
@@ -360,9 +358,13 @@ test("explicit recipient claims require verified scopes and are checked again be
         const sessionId = resolveMessageTarget(connection.db, address, source, true);
         const unionAddress = {...address, idType: "union_id" as const, id: "scoped_union"};
         const unionSessionId = resolveMessageTarget(connection.db, unionAddress, source, true);
-        messaging.feishu_developers!["test:feishu:test"] = "developer-b";
+        platformSettings.patch({
+            messaging: { feishuDevelopers: {"test:feishu:test": "developer-b"} },
+        });
         expect(() => resolveMessageTarget(connection.db, unionAddress, source, true)).toThrow("Resolve this recipient");
-        messaging.feishu_developers!["test:feishu:test"] = "developer-a";
+        platformSettings.patch({
+            messaging: { feishuDevelopers: {"test:feishu:test": "developer-a"} },
+        });
         const received: unknown[] = [];
         const service = new SessionCommandService({db: connection.db, channelFor: id => ({send: async () => {throw Error("fallback");}, sendTo: async (address, op) => {
             received.push(address.recipient);
@@ -375,8 +377,6 @@ test("explicit recipient claims require verified scopes and are checked again be
         await service.waitForIdle();
         expect(service.get(queued.id)).toMatchObject({status: "failed", error: expect.stringContaining("Resolve this recipient")});
         expect(received).toEqual([{idType: "union_id", id: "scoped_union"}]);
-    } finally {
-        Object.defineProperty(config, "messaging", original);
     }
 });
 

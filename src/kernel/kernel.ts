@@ -52,7 +52,8 @@ import {
   RunnerContextStore,
 } from "@/runners/runner-context-store";
 import { SessionRunnerAttemptStore } from "@/sessions/session-runner-attempt-store";
-import { config, createLogger, type AgentRunner } from "@/shared";
+import { PlatformSettingsStore } from "@/platform/platform-settings-store";
+import { config, createLogger, DEFAULT_SESSION_CONFIG, type AgentRunner } from "@/shared";
 import {
   ActiveAgentConfigService,
   AgentSecretCipher,
@@ -269,7 +270,7 @@ class Kernel {
     this._sessionCommands = new SessionCommandService({ db: this._database.db, channelFor: id => this.replyChannel(id),
       executeTrigger: createSessionTriggerExecutor(this._database.db, () => this._createMainRunner(), (sessionId) => this._runnerTypeForSession(sessionId),
         (session, command, signal) => new WorkRunner({ db: this._database.db, runnerType: "unconfigured", channelForMessage: id => this.replyChannel(id) }).executeMaintenanceTurn(session, command, signal)),
-      memory: {reflectionIdleMs: config.memory.reflection_idle_ms, consolidationIntervalMs: config.memory.consolidation_interval_ms, forgetUnusedMs: config.memory.forget_unused_ms, episodeRetentionMs: config.memory.episode_retention_ms} });
+      memory: () => new PlatformSettingsStore(this._database.db).get().memory });
     // Entries imported by a migration have no search terms until they are indexed here.
     new AgentMemoryStore(this._database.db).reindex();
     registerSessionCommands(this._database.db, this._sessionCommands);
@@ -459,7 +460,6 @@ class Kernel {
   private async _loadInstalledPluginsForBoot(): Promise<void> {
     this._pluginRegistry = await loadPluginsForBoot({
       db: this._database.db,
-      configByPluginId: config.plugins.config,
     });
     materializeRunnerSkills({
       pluginRegistry: this._pluginRegistry,
@@ -479,7 +479,7 @@ class Kernel {
   }
 
   private _refreshMarketplaceAfterServerStart(): void {
-    if (config.plugins.marketplace.gitUrl === undefined) {
+    if (!new PlatformSettingsStore(this._database.db).get().marketplace.gitUrl) {
       return;
     }
     void new PluginMarketplaceService({ db: this._database.db })
@@ -721,10 +721,15 @@ function registerFeishuChannelAdapterFactory(
         );
       }
 
-      const developers = config.messaging.feishu_developers;
-      const developerId = developers && Object.hasOwn(developers, appId) ? developers[appId] : undefined;
       return new FeishuMessageChannel(channelConfig.id, {
-        ...(developerId === undefined ? {} : {developerId}),
+        ...(deps.db === undefined
+          ? {}
+          : {
+              developerId: () => {
+                const developers = new PlatformSettingsStore(deps.db!).get().messaging.feishuDevelopers;
+                return Object.hasOwn(developers, appId) ? developers[appId] : undefined;
+              },
+            }),
         chatId: chatId ?? "",
         appId,
         appSecret,
@@ -732,9 +737,9 @@ function registerFeishuChannelAdapterFactory(
         ...optionalStringOption(params, "bot_open_id", "botOpenId"),
         ...optionalStringOption(params, "bot_user_id", "botUserId"),
         ...optionalStringOption(params, "bot_union_id", "botUnionId"),
-        // The bot's Agent may name its own aliases; without a database only the configured ones apply.
-        groupBotAliases: deps.db === undefined ? config.session.group_bot_aliases
-          : () => sessionConfigForAgent(deps.db!, agentOfChannel(deps.db!, channelConfig.id), config.session).group_bot_aliases,
+        // The bot's Agent may name its own aliases; without a database only the default ones apply.
+        groupBotAliases: deps.db === undefined ? DEFAULT_SESSION_CONFIG.group_bot_aliases
+          : () => sessionConfigForAgent(deps.db!, agentOfChannel(deps.db!, channelConfig.id), DEFAULT_SESSION_CONFIG).group_bot_aliases,
       });
     },
   });

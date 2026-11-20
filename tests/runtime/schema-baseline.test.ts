@@ -26,12 +26,7 @@ function makeHome(): string {
   mkdirSync(join(home, "data"), { recursive: true });
   writeFileSync(
     join(home, "config.yaml"),
-    [
-      "messaging:",
-      "  default_channel_id: fake",
-      "  channels: []",
-      "",
-    ].join("\n"),
+    "{}\n",
   );
   return home;
 }

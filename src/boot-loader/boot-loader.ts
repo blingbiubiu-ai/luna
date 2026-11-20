@@ -91,11 +91,7 @@ class BootLoader {
     const configPath = join(config.paths.home, "config.yaml");
     if (!existsSync(configPath)) {
       logger.info("config.yaml not found, generating default configuration...");
-      const defaultTimezone =
-        Intl.DateTimeFormat().resolvedOptions().timeZone;
-      const defaultConfig = `timezone: "${defaultTimezone}"
-
-service:
+      const defaultConfig = `service:
   host: 127.0.0.1
   port: 8090
 
@@ -104,15 +100,6 @@ paths: {}
 logging:
   level: info
   pretty: false
-
-plugins:
-  marketplace: {}
-  config: {}
-
-messaging:
-  default_channel_id: ""
-  max_visible_steps: 32
-  channels: []
 `;
       writeFileSync(configPath, defaultConfig, "utf-8");
     }

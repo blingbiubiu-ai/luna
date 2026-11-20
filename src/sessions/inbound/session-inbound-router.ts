@@ -56,8 +56,9 @@ import {
   textFromMessageRow,
 } from "@/runners/message-envelope";
 import { createAgentRunnerForConfig } from "@/kernel/agents/factory";
+import { PlatformSettingsStore } from "@/platform/platform-settings-store";
 import { getKernel } from "@/server/routes/kernel";
-import { config, createLogger, type SessionConfig } from "@/shared";
+import { createLogger, DEFAULT_SESSION_CONFIG, type SessionConfig } from "@/shared";
 
 import { decideGroupActivationFollowup } from "./group-activation-followup";
 import { WorkRunner } from "@/work/work-runner";
@@ -125,7 +126,7 @@ export class SessionInboundRouter {
     this._db = options.db;
     this._prepareSession = options.prepareSession;
     this._channel = options.channel;
-    this._sessionConfig = options.sessionConfig ?? config.session;
+    this._sessionConfig = options.sessionConfig ?? DEFAULT_SESSION_CONFIG;
     this._sessionResolver = new SessionResolver(
       new SessionStore(options.db),
     );
@@ -496,7 +497,7 @@ export class SessionTurnProcessor {
   constructor(private readonly _options: SessionTurnProcessorOptions) {
     this._db = _options.db;
     this._runnerType = _options.runnerType;
-    this._sessionConfig = _options.sessionConfig ?? config.session;
+    this._sessionConfig = _options.sessionConfig ?? DEFAULT_SESSION_CONFIG;
     this._runnerContextStore = new RunnerContextStore(_options.db);
     this._contextBuilder = new MainRunnerContextBuilder(_options.db);
     this._contextPackStore = new ContextPackStore(_options.db);
@@ -735,7 +736,9 @@ export class SessionTurnProcessor {
         };
       this._turnStore.recordMaterializedPrompt(
         input.turnId,
-        renderMainRunnerPrompt(mainRunnerInput),
+        renderMainRunnerPrompt(mainRunnerInput, {
+          timezone: new PlatformSettingsStore(this._db).get().general.timezone,
+        }),
       );
       const completion = await this._mainRunner.run({
         input: mainRunnerInput,

@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
 import type { DrizzleDB } from "@/data";
+import { PlatformSettingsStore } from "@/platform/platform-settings-store";
 import { config } from "@/shared";
 
 import { syncGitMarketplace } from "./git-marketplace";
@@ -43,10 +44,10 @@ export interface PluginActionResult {
   readonly installation: PluginInstallationSummary;
 }
 
-/** No plugin source is configured (`plugins.marketplace.gitUrl` in config.yaml). */
+/** No plugin source is configured in Platform Settings (`marketplace.gitUrl`). */
 export class PluginMarketplaceUnconfiguredError extends Error {
   readonly code = "plugin_marketplace_unconfigured";
-  constructor() { super("plugins.marketplace.gitUrl is not configured."); }
+  constructor() { super("Plugin marketplace gitUrl is not configured."); }
 }
 
 export class PluginMarketplaceService {
@@ -61,7 +62,7 @@ export class PluginMarketplaceService {
     readonly lunaHome?: string;
     readonly currentLunaApiVersion?: string;
   }) {
-    this._marketplace = input.marketplace ?? defaultMarketplace();
+    this._marketplace = input.marketplace ?? defaultMarketplace(input.db, input.lunaHome);
     this._store = new PluginMarketplaceStore(input.db);
     this._installed = new InstalledPluginStore(
       input.db,
@@ -275,16 +276,16 @@ export class PluginMarketplaceService {
   }
 }
 
-function defaultMarketplace(): PluginMarketplaceConfig {
-  const gitUrl = config.plugins.marketplace.gitUrl;
-  if (gitUrl === undefined) {
+function defaultMarketplace(db: DrizzleDB, lunaHome?: string): PluginMarketplaceConfig {
+  const { gitUrl, branch } = new PlatformSettingsStore(db).get().marketplace;
+  if (!gitUrl) {
     throw new PluginMarketplaceUnconfiguredError();
   }
   return {
     id: "trusted",
     gitUrl,
-    branch: config.plugins.marketplace.branch,
-    localPath: join(config.paths.home, "plugins", "marketplace", "trusted"),
+    branch,
+    localPath: join(lunaHome ?? config.paths.home, "plugins", "marketplace", "trusted"),
   };
 }
 

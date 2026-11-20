@@ -41,7 +41,7 @@ export class GroupJoinBackfillService {
   constructor(
     private readonly _options: {
       readonly db: DrizzleDB;
-      readonly identityScope: FeishuIdentityScope;
+      readonly identityScope: FeishuIdentityScope | (() => FeishuIdentityScope);
       readonly historyPageSize?: number;
       readonly listChatHistory?: (input: {
         readonly chatId: string;
@@ -122,10 +122,13 @@ export class GroupJoinBackfillService {
 
     let importedCount = 0;
     let skippedCount = 0;
+    const identityScope = typeof this._options.identityScope === "function"
+      ? this._options.identityScope()
+      : this._options.identityScope;
     const importedThreadIds = new Set<string>();
     for (const item of [...history.items].reverse()) {
       const normalized = normalizeFeishuHistoryMessage({
-        identityScope: this._options.identityScope,
+        identityScope,
         channel: { type: input.channelType, id: input.channelId },
         event: item,
       });
@@ -175,7 +178,7 @@ export class GroupJoinBackfillService {
       binding.assertCurrent();
       for (const item of [...threadHistory.items].reverse()) {
         const normalized = normalizeFeishuHistoryMessage({
-        identityScope: this._options.identityScope,
+          identityScope,
           channel: { type: input.channelType, id: input.channelId },
           event: item,
         });

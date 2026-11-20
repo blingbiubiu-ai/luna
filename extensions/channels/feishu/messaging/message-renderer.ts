@@ -175,10 +175,11 @@ export async function renderStatusCard(
     readonly content: string;
     readonly steps?: readonly string[];
   },
-  { uploadImage, resolveImagePath }: {
+  { uploadImage, resolveImagePath, maxVisibleSteps }: {
     // eslint-disable-next-line no-unused-vars
     uploadImage: (path: string) => Promise<string>;
     resolveImagePath?: (path: string) => string | undefined;
+    maxVisibleSteps?: number;
   },
 ): Promise<Card> {
   const active = input.state === "active";
@@ -186,7 +187,7 @@ export async function renderStatusCard(
     input.content,
     imageUploadOptions({ uploadImage, resolveImagePath }),
   );
-  const stepPanel = _renderStatusCardStepPanel(input.steps ?? [], active);
+  const stepPanel = _renderStatusCardStepPanel(input.steps ?? [], active, maxVisibleSteps);
   const renderedSummary = _cardSummary(renderedContent.summaryContent);
   const card: Card = {
     schema: "2.0",
@@ -226,11 +227,11 @@ export async function renderStatusCard(
 function _renderStatusCardStepPanel(
   steps: readonly string[],
   active: boolean,
+  maxVisibleSteps: number = 32,
 ): CollapsiblePanel | undefined {
   if (steps.length === 0) {
     return undefined;
   }
-  const maxVisibleSteps = config.messaging.max_visible_steps;
   const visibleSteps = steps.slice(-maxVisibleSteps);
   const omittedStepCount = steps.length - visibleSteps.length;
   const renderedSteps = renderStatusCardSteps(visibleSteps);
@@ -281,14 +282,15 @@ export async function renderMessageCard(
     streaming,
     uploadImage,
     resolveImagePath,
+    maxVisibleSteps = 32,
   }: {
     streaming: boolean;
     // eslint-disable-next-line no-unused-vars
     uploadImage: (path: string) => Promise<string>;
     resolveImagePath?: (path: string) => string | undefined;
+    maxVisibleSteps?: number;
   },
 ): Promise<Card> {
-  const maxVisibleSteps = config.messaging.max_visible_steps;
   const stepPanel: CollapsiblePanel = {
     tag: "collapsible_panel",
     expanded: streaming,

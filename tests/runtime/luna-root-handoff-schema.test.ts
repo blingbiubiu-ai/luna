@@ -19,7 +19,7 @@ async function openFreshDatabase(): Promise<{
   mkdirSync(join(home, "data"), { recursive: true });
   writeFileSync(
     join(home, "config.yaml"),
-    "messaging:\n  default_channel_id: fake\n  channels: []\n",
+    "{}\n",
   );
 
   const config = await import("../../src/shared/config/index");

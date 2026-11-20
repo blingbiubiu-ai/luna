@@ -13,7 +13,7 @@ import { MessageStore } from "../../src/sessions/message-store";
 import { SessionInboxStore } from "../../src/sessions/session-inbox-store";
 import { SessionQueue, type SessionTurnExecutionInput } from "../../src/sessions/session-queue";
 import { SessionStore, type SessionRow } from "../../src/sessions/session-store";
-import { config, setLunaHome, uuid } from "../../src/shared";
+import { DEFAULT_SESSION_CONFIG, setLunaHome, uuid } from "../../src/shared";
 import { fixtureSessionOwnership } from "../helpers/platform-fixtures";
 
 let home: string;
@@ -55,7 +55,7 @@ function message(sender: string, agoMs: number, options: { direct?: boolean; due
 /** Runs the queue until idle and returns the turns it executed. */
 async function run(execute: (input: SessionTurnExecutionInput, signal: AbortSignal) => Promise<void> = async () => {}) {
   const turns: SessionTurnExecutionInput[] = [];
-  queue = new SessionQueue({ db: database.db, config: { ...config.session, coalesce_idle_ms: 1 },
+  queue = new SessionQueue({ db: database.db, config: { ...DEFAULT_SESSION_CONFIG, coalesce_idle_ms: 1 },
     executeTurn: async (input, signal) => { turns.push(input); await execute(input, signal); } });
   queue.schedule(session.id);
   await queue.waitForIdle();

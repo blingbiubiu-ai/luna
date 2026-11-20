@@ -8,12 +8,19 @@ import { z } from "zod";
 import type { DrizzleDB } from "@/data";
 import { channelConfigs, shadowBotBindings, agentShadows, lunaAgents } from "@/data/schema";
 import { AgentSecretCipher } from "@/agent-config/secret-cipher";
-import type { ChannelConfig } from "@/shared";
 import { resolveDataFilePath } from "@/shared/config/paths";
 import { recordShadowBotIdentity } from "@/identity/shadow-bot";
 import { AgentError, AgentStore } from "@/agents/agent-store";
 import { BotBindingStore } from "@/agents/bot-binding-store";
 import type { ChannelIdentity } from "./types";
+
+export interface RuntimeChannelRecord {
+  id: string;
+  type: string;
+  name: string;
+  description: string;
+  params: Record<string, string>;
+}
 export const feishuConfigInput = z.object({agentId:z.string().min(1),shadowId:z.string().min(1).optional(),id:z.string().regex(/^[a-zA-Z0-9_-]{1,80}$/).refine(id=>id!=="luna-dashboard"),name:z.string().trim().min(1).max(100),appId:z.string().trim().min(1).max(150),appSecret:z.string().max(1000).optional(),chatId:z.string().trim().max(150).default(""),enabled:z.boolean().default(true)}).strict();
 export type BotVerifier=(appId:string,secret:string)=>Promise<ChannelIdentity>;
 export async function verifyFeishuBot(appId:string,appSecret:string):Promise<ChannelIdentity>{
@@ -69,13 +76,13 @@ export class ChannelConfigStore {
   });
  }
  /** Enabled, bound and active channels to run, and those whose saved App Secret can no longer be decrypted. */
- runtimeChannels():{configs:ChannelConfig[];unreadable:{id:string;type:string}[]}{
+ runtimeChannels():{configs:RuntimeChannelRecord[];unreadable:{id:string;type:string}[]}{
   const rows=this.db.select({channel:channelConfigs}).from(channelConfigs)
    .innerJoin(shadowBotBindings,and(eq(shadowBotBindings.channelConfigId,channelConfigs.id),eq(shadowBotBindings.status,"active")))
    .innerJoin(agentShadows,and(eq(agentShadows.id,shadowBotBindings.shadowId),eq(agentShadows.status,"active")))
    .innerJoin(lunaAgents,and(eq(lunaAgents.id,channelConfigs.agentId),eq(lunaAgents.status,"active")))
    .where(eq(channelConfigs.enabled,true)).all().map(({channel})=>channel);
-  const configs:ChannelConfig[]=[],unreadable:{id:string;type:string}[]=[];
+  const configs:RuntimeChannelRecord[]=[],unreadable:{id:string;type:string}[]=[];
   for(const row of rows){
    // One bot's unreadable secret (e.g. a lost master key) must not stop the other channels.
    const secret=this.tryDecrypt(row);
@@ -84,7 +91,7 @@ export class ChannelConfigStore {
   }
   return {configs,unreadable};
  }
- runtimeConfigs():ChannelConfig[]{return this.runtimeChannels().configs;}
+ runtimeConfigs():RuntimeChannelRecord[]{return this.runtimeChannels().configs;}
  /** Turn a bot on or off without touching its Shadow. Turning on checks the saved secret with Feishu. */
  async setEnabled(accountId:string,agentId:string,id:string,enabled:boolean){
   new AgentStore(this.db).requireOwner(accountId,agentId);

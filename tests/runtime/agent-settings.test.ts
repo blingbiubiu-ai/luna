@@ -5,7 +5,8 @@ import { join } from "node:path";
 import { Hono } from "hono";
 import { DataConnection } from "@/data";
 import * as schema from "@/data/schema";
-import { config, setLunaHome } from "@/shared";
+import { PlatformSettingsStore } from "@/platform/platform-settings-store";
+import { DEFAULT_SESSION_CONFIG, setLunaHome } from "@/shared";
 import { AgentSettingsStore, DEFAULT_AGENT_SETTINGS, messageDefaults, sessionConfigForAgent, sessionConfigForSession } from "@/agents/agent-settings-store";
 import { decideInboundAddressing } from "@/sessions/inbound/group-addressing";
 import type { NormalizedInboundMessage } from "@/channels";
@@ -27,7 +28,6 @@ test("an Agent without settings gets today's behaviour as defaults", () => {
     inbound: { processingReaction: true },
     work: { progressCard: { show: true, style: "card" } },
     main: { taskProgressCard: { send: true, style: "native" } },
-    task: { runLimitHours: 10 },
     pty: { idleTimeoutMinutes: 10 },
     messages: {},
     listening: { defaultEnabled: false, quietMs: 30000, batchSize: 10, maxWaitMs: 180000, backoffMaxMs: 600000, maxTurnsPerHour: 12 },
@@ -40,7 +40,6 @@ test("the owner saves settings; omitted groups keep their defaults and bad value
     inbound: { processingReaction: true },
     work: { progressCard: { show: false, style: "card" } },
     main: { taskProgressCard: { send: true, style: "native" } },
-    task: { runLimitHours: 10 },
     pty: { idleTimeoutMinutes: 10 },
     messages: {},
     listening: { defaultEnabled: false, quietMs: 30000, batchSize: 10, maxWaitMs: 180000, backoffMaxMs: 600000, maxTurnsPerHour: 12 },
@@ -64,7 +63,7 @@ test("the settings API is the owner's: read, save, reject others and invalid inp
   }).route("/agents", createPlatformAgentRoutes(connection.db));
   const call = (actor: string, method = "GET", body?: unknown) => app.request(`/agents/${agentId}/settings`, {
     method, headers: { "Test-Actor": actor, "content-type": "application/json" }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
-  expect(await (await call("owner")).json()).toEqual({ settings: DEFAULT_AGENT_SETTINGS, messageDefaults: messageDefaults(config.session) });
+  expect(await (await call("owner")).json()).toEqual({ settings: DEFAULT_AGENT_SETTINGS, messageDefaults: messageDefaults(DEFAULT_SESSION_CONFIG) });
   const saved = await call("owner", "PUT", { main: { taskProgressCard: { send: false, style: "card" } } });
   expect(saved.status).toBe(200);
   expect(((await saved.json()) as { settings: typeof DEFAULT_AGENT_SETTINGS }).settings.main.taskProgressCard).toEqual({ send: false, style: "card" });
@@ -73,18 +72,27 @@ test("the settings API is the owner's: read, save, reject others and invalid inp
   expect((await call("other", "PUT", {})).status).not.toBe(200);
 });
 
-test("a Task run gets the Agent's run limit; Main and Work turns keep the Service limit", () => {
-  const store = new AgentSettingsStore(connection.db);
-  expect(jobTimeoutMs(connection.db, { runnerKind: "task", agentId })).toBe(10 * 3_600_000);
-  expect(store.save("owner", agentId, { task: { runLimitHours: 3 } }).task.runLimitHours).toBe(3);
-  expect(jobTimeoutMs(connection.db, { runnerKind: "task", agentId })).toBe(3 * 3_600_000);
-  for (const runnerKind of ["main", "work"]) expect(jobTimeoutMs(connection.db, { runnerKind, agentId })).toBe(config.sandbox.containerTimeoutMs);
-  for (const runLimitHours of [0, 1.5, 169, "10"]) expect(() => store.save("owner", agentId, { task: { runLimitHours } })).toThrow();
+test("Task runs and Main/Work turns both read platform-level execution timeouts; legacy Agent task rows still parse", () => {
+  const platform = new PlatformSettingsStore(connection.db);
+  expect(jobTimeoutMs(connection.db, { runnerKind: "task", agentId })).toBe(600 * 60_000);
+  platform.patch({ execution: { taskTimeoutMs: 180 * 60_000, containerTimeoutMs: 25 * 60_000 } });
+  expect(jobTimeoutMs(connection.db, { runnerKind: "task", agentId })).toBe(180 * 60_000);
+  for (const runnerKind of ["main", "work"]) expect(jobTimeoutMs(connection.db, { runnerKind, agentId })).toBe(25 * 60_000);
+  for (const taskTimeoutMs of [0, 59_999, 7 * 24 * 3_600_000 + 1, "600"]) {
+    expect(() => platform.patch({ execution: { taskTimeoutMs: taskTimeoutMs as number } })).toThrow();
+  }
+  connection.db.insert(schema.agentSettings).values({
+    agentId,
+    settings: { pty: { idleTimeoutMinutes: 45 }, task: { runLimitHours: 12 } },
+    updatedByAccountId: "owner",
+    updatedAt: Date.now(),
+  }).run();
+  expect(new AgentSettingsStore(connection.db).get(agentId).pty.idleTimeoutMinutes).toBe(45);
 });
 
 test("an Agent's message settings replace the Service configuration for its own sessions only", () => {
   const store = new AgentSettingsStore(connection.db);
-  const base = config.session;
+  const base = DEFAULT_SESSION_CONFIG;
   const other = fixtureScope(connection.db, "third").agentId;
   expect(sessionConfigForAgent(connection.db, agentId, base)).toEqual(base);
   expect(messageDefaults(base)).toMatchObject({ coalesceIdleMs: base.coalesce_idle_ms, maxBatchSize: base.max_batch_size, groupBotAliases: base.group_bot_aliases });
