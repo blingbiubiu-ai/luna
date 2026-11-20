@@ -129,3 +129,15 @@ test("restart recovers activated initialization and interrupted sync can retry",
   restarted.sync("a"); await restarted.wait("a");
   expect(restarted.read("a")?.status).toBe("ready");
 });
+
+test("Service home Git config is used even when the login home is different", async () => {
+  // Redirect a normal-looking URL to the fixture through trusted global config.
+  writeFileSync(join(home, ".gitconfig"), `[url "${input().url}"]\n\tinsteadOf = https://knowledge.example.test/repo.git\n`);
+  const configured = new AgentKnowledgeSource(home);
+  configured.initialize("a", { url: "https://knowledge.example.test/repo.git" });
+  await configured.wait("a");
+  expect(configured.read("a")?.status).toBe("ready");
+  expect(createKnowledgeWorkspaceRepository(home, "a").readFile("wiki/index.md").content).toBe("Original knowledge");
+  configured.sync("a"); await configured.wait("a");
+  expect(configured.read("a")?.status).toBe("ready");
+});

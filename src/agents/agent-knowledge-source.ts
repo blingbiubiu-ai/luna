@@ -23,10 +23,22 @@ const State = z.object({
 export type KnowledgeSourceState = z.infer<typeof State>;
 
 const gitConfig = ["-c", "core.hooksPath=/dev/null", "-c", "protocol.file.allow=never", "-c", "protocol.ext.allow=never"];
-const gitEnv = () => ({
-  ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("GIT_"))),
-  GIT_TERMINAL_PROMPT: "0", GIT_SSH_COMMAND: "ssh -o BatchMode=yes",
-});
+function gitEnv(serviceHome?: string): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = {
+    ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("GIT_"))),
+    GIT_TERMINAL_PROMPT: "0",
+  };
+  // System accounts may have /nonexistent as their login home. The Service's
+  // own trusted global Git config holds its credential helper / SSH command.
+  if (serviceHome && existsSync(join(serviceHome, ".gitconfig"))) {
+    env.GIT_CONFIG_GLOBAL = join(serviceHome, ".gitconfig");
+  }
+  const ssh = spawnSync("git", ["config", "--get", "core.sshCommand"], {
+    ...(serviceHome ? { cwd: serviceHome } : {}), env, encoding: "utf8", timeout: 5000,
+  });
+  env.GIT_SSH_COMMAND = `${ssh.status === 0 ? ssh.stdout.trim() : "ssh"} -o BatchMode=yes`;
+  return env;
+}
 
 function validGitUrl(value: string): boolean {
   if (/[\s\x00-\x1f\x7f]/.test(value)) return false;
@@ -41,9 +53,9 @@ function validBranch(branch: string): boolean {
   return spawnSync("git", ["check-ref-format", "--branch", branch], { encoding: "utf8", env: gitEnv() }).status === 0
     && !branch.startsWith("-") && !branch.startsWith("@");
 }
-function git(cwd: string, args: string[]): Promise<string> {
+function git(cwd: string, args: string[], env: NodeJS.ProcessEnv): Promise<string> {
   return new Promise((resolve, reject) => {
-    execFile("git", [...gitConfig, ...args], { cwd, env: gitEnv(), timeout: 300_000, maxBuffer: 1024 * 1024 }, (error, stdout, stderr) => {
+    execFile("git", [...gitConfig, ...args], { cwd, env, timeout: 300_000, maxBuffer: 1024 * 1024 }, (error, stdout, stderr) => {
       if (!error) { resolve(stdout.trim()); return; }
       // Don't persist raw remote diagnostics: they may contain credential-helper output.
       const message = /local changes|untracked working tree|would be overwritten/i.test(stderr) ? "本地有未提交修改，请先提交后再同步。"
@@ -57,7 +69,10 @@ function git(cwd: string, args: string[]): Promise<string> {
 
 /** Durable Agent-local source metadata is outside the Runner-readable knowledge repo. */
 export class AgentKnowledgeSource {
-  constructor(private readonly home: string) {}
+  private readonly env: NodeJS.ProcessEnv;
+  constructor(private readonly home: string) { this.env = gitEnv(home); }
+
+  private git(cwd: string, args: string[]) { return git(cwd, args, this.env); }
 
   read(agentId: string): KnowledgeSourceState | null {
     const { root, statePath } = knowledgeStorage(this.home, agentId);
@@ -71,7 +86,7 @@ export class AgentKnowledgeSource {
       if (state.status === "initializing" && !state.initialized) {
         const repo = createKnowledgeWorkspaceRepository(this.home, agentId);
         const probe = (args: string[]) => {
-          const result = spawnSync("git", [...gitConfig, ...args], { cwd: repo.root, env: gitEnv(), encoding: "utf8", timeout: 5000 });
+          const result = spawnSync("git", [...gitConfig, ...args], { cwd: repo.root, env: this.env, encoding: "utf8", timeout: 5000 });
           return result.status === 0 ? result.stdout.trim() : null;
         };
         const commit = probe(["rev-parse", "--verify", "HEAD"]);
@@ -125,7 +140,7 @@ export class AgentKnowledgeSource {
 
   private requireEmpty(agentId: string) {
     const repo = createKnowledgeWorkspaceRepository(this.home, agentId);
-    const head = spawnSync("git", [...gitConfig, "rev-parse", "--verify", "HEAD"], { cwd: repo.root, env: gitEnv() });
+    const head = spawnSync("git", [...gitConfig, "rev-parse", "--verify", "HEAD"], { cwd: repo.root, env: this.env });
     if (head.status === 0 || readdirSync(repo.root).some(name => name !== ".git")) throw new AgentError("knowledge_not_empty", 409);
   }
 
@@ -144,30 +159,30 @@ export class AgentKnowledgeSource {
       try {
         let commit: string, branch = state.branch;
         if (initial) {
-          await git(agentRoot, ["clone", "--single-branch", ...(branch ? ["--branch", branch] : []), "--", state.url, stage]);
+          await this.git(agentRoot, ["clone", "--single-branch", ...(branch ? ["--branch", branch] : []), "--", state.url, stage]);
           if (lstatSync(join(stage, ".git")).isSymbolicLink()) throw new Error("知识仓库的 Git 目录无效。");
-          const top = await git(stage, ["rev-parse", "--show-toplevel"]);
+          const top = await this.git(stage, ["rev-parse", "--show-toplevel"]);
           if (top !== stage) throw new Error("知识仓库的 Git 根目录无效。");
           if (!KNOWLEDGE_WORKSPACE_ALLOWED_ROOTS.some(name => {
             const path = join(stage, name);
             return existsSync(path) && lstatSync(path).isDirectory() && !lstatSync(path).isSymbolicLink();
           })) throw new Error("仓库根目录需要包含 wiki、notes、archive 或 policies 文件夹，请先调整仓库结构。");
-          branch = await git(stage, ["symbolic-ref", "--short", "HEAD"]);
-          commit = await git(stage, ["rev-parse", "HEAD"]);
+          branch = await this.git(stage, ["symbolic-ref", "--short", "HEAD"]);
+          commit = await this.git(stage, ["rev-parse", "HEAD"]);
           // Recheck under the operation gate before activation; outside edits never get overwritten.
-          const head = spawnSync("git", [...gitConfig, "rev-parse", "--verify", "HEAD"], { cwd: root, env: gitEnv() });
+          const head = spawnSync("git", [...gitConfig, "rev-parse", "--verify", "HEAD"], { cwd: root, env: this.env });
           if (head.status === 0 || readdirSync(root).some(name => name !== ".git")) throw new Error("知识库出现了本地内容，初始化已停止。");
           const backup = join(agentRoot, `.knowledge-empty-${randomUUID()}`);
           renameSync(root, backup);
           try { renameSync(stage, root); } catch (error) { renameSync(backup, root); throw error; }
           rmSync(backup, { recursive: true });
         } else {
-          if (await git(root, ["status", "--porcelain", "-uall"])) throw new Error("本地有未提交修改，请先提交后再同步。");
-          if (await git(root, ["symbolic-ref", "--short", "HEAD"]) !== branch) throw new Error("本地分支已改变，请恢复配置的分支后再同步。");
-          if (await git(root, ["config", "--get", "remote.origin.url"]) !== state.url) throw new Error("本地远端地址已改变，请恢复配置的地址后再同步。");
-          await git(root, ["fetch", "origin", branch]);
-          await git(root, ["merge", "--ff-only", "FETCH_HEAD"]);
-          commit = await git(root, ["rev-parse", "HEAD"]);
+          if (await this.git(root, ["status", "--porcelain", "-uall"])) throw new Error("本地有未提交修改，请先提交后再同步。");
+          if (await this.git(root, ["symbolic-ref", "--short", "HEAD"]) !== branch) throw new Error("本地分支已改变，请恢复配置的分支后再同步。");
+          if (await this.git(root, ["config", "--get", "remote.origin.url"]) !== state.url) throw new Error("本地远端地址已改变，请恢复配置的地址后再同步。");
+          await this.git(root, ["fetch", "origin", branch]);
+          await this.git(root, ["merge", "--ff-only", "FETCH_HEAD"]);
+          commit = await this.git(root, ["rev-parse", "HEAD"]);
         }
         this.write(agentId, { ...state, initialized: true, status: "ready", branch, commit, updatedAt: Date.now(), error: null });
       } catch (error) {

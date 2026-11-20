@@ -45,7 +45,9 @@ command transports and URL-embedded credentials are rejected. Git runs through
 argument arrays with timeouts, terminal prompting disabled, inherited `GIT_*`
 variables removed and hooks/file/ext transports disabled. Private repository
 credentials come from the Service account's existing Git credential helper or
-SSH credentials; this feature does not store new credentials. Raw Git diagnostics
+SSH credentials. If `<serviceHome>/.gitconfig` exists, Git uses it as the trusted
+global config even when the system account has no login home. Its configured
+`core.sshCommand` is preserved and SSH is forced into batch mode; this feature does not store new credentials. Raw Git diagnostics
 are not persisted. Knowledge file confinement and Agent authorization continue to
 apply after cloning.
 
