@@ -140,3 +140,7 @@ revision history ([Agent memory](agent-memory.md)). A Shadow's persona is edited
 there as `persona` entries of that Shadow. Saves use the revision captured when
 opening the draft. Stale writes require reloading. Scope changes reset editor state and
 Agent-scoped knowledge directory, file, search and Git caches.
+
+Agent settings also manage an optional Git knowledge source. Source configuration
+and operation state live outside the knowledge repository; initialization and
+manual synchronization run in Service. See [Agent knowledge Git sources](agent-knowledge-sources.md).

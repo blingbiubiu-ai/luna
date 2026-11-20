@@ -1,6 +1,7 @@
 import {lstatSync,mkdirSync,realpathSync,existsSync} from "node:fs";
 import {spawnSync} from "node:child_process";
 import { resolve } from "node:path";
+import { assertKnowledgeAvailable, knowledgeStorage } from "@/workspace/knowledge-storage";
 
 import { WorkspaceRepository } from "@/workspace/repository";
 
@@ -46,6 +47,7 @@ export function knowledgeWorkspaceOperation(
 
 /** Each Agent has a separate Git repository; never discover a parent repository. */
 export function createKnowledgeWorkspaceRepository(serviceHome: string, agentId:string): WorkspaceRepository {
+  assertKnowledgeAvailable(knowledgeStorage(serviceHome, agentId).root);
   if(!/^[A-Za-z0-9_-]+$/.test(agentId)) throw new Error("Invalid knowledge Agent identity");
   let root=realpathSync(serviceHome);
   for(const part of ["agents",agentId,KNOWLEDGE_WORKSPACE_ROOT]) {

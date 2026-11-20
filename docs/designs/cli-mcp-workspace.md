@@ -120,6 +120,12 @@ luna workspace knowledge write wiki/domains/example.md --body-file /tmp/example.
 luna workspace knowledge git-commit --message "docs: update example"
 ```
 
+The Agent owner can initialize a root-layout knowledge repository from Git in
+Agent settings. [Git source management](agent-knowledge-sources.md) is a Dashboard
+management API; CLI/MCP workspace operations remain scoped file and Git access.
+During initialization or synchronization, workspace calls return `knowledge_busy`
+(409) and should be retried after the operation finishes.
+
 Writes are explicit two-step operations: `write` updates workspace files, and `git-commit` commits the changes.
 
 ## Primary Code Paths

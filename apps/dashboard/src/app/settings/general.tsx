@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { createFileRoute } from "@tanstack/react-router";
 
+import { KnowledgeSourceSettings } from "./knowledge-source";
 import { Input } from "@/components/ui/input";
 import { SelectField } from "@/components/ui/select-field";
 import { Switch } from "@/components/ui/switch";
@@ -164,7 +165,7 @@ function AgentSettingsLoader({ agentId, agentName }: { agentId: string; agentNam
       <div className="flex flex-wrap items-baseline justify-between gap-2">
         <div>
           <h1 className="text-2xl font-semibold">Agent 设置</h1>
-          <p className="text-muted-foreground">{agentName} 的通用设置，修改后立即自动保存并对所有分身生效。</p>
+          <p className="text-muted-foreground">{agentName} 的设置对所有分身生效。通用设置自动保存，知识库通过下方按钮初始化。</p>
         </div>
         <div className="text-xs text-muted-foreground" role="status" aria-live="polite">
           {saving ? "正在自动保存…" : saveError ? null : savedAt ? "已自动保存" : null}
@@ -172,6 +173,7 @@ function AgentSettingsLoader({ agentId, agentName }: { agentId: string; agentNam
       </div>
       {query.error && <p role="alert" className="text-destructive">无法加载设置。{query.error.message}</p>}
       {query.isLoading && <p role="status">正在加载…</p>}
+      <KnowledgeSourceSettings agentId={agentId} />
       {query.data && (
         <AgentSettingsForm
           settings={query.data.settings}

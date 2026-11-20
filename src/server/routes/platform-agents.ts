@@ -3,6 +3,7 @@ import {createAgentContainerRoutes} from "./agent-containers";
 import {createShadowRootAccessRoutes} from "./shadow-root-access";
 import {createAgentPluginRoutes} from "./agent-plugins";
 import type {PluginRegistry} from "@/plugins/registry";
+import { createAgentKnowledgeSourceRoutes } from "./agent-knowledge-source";
 import {createAgentMemoryRoutes} from "./agent-memories";
 import {createAccountLinkRoutes} from "./account-links";
 import {DEFAULT_SESSION_CONFIG} from "@/shared";
@@ -49,6 +50,7 @@ export function createPlatformAgentRoutes(db: DrizzleDB, registry?:PluginRegistr
   const withOwnerUser = (agent: ReturnType<AgentStore["get"]>) => ({...agent, ownerUserId: store.ownerUserId(agent.id)});
   return new Hono()
     .route("/",createAgentMemoryRoutes(db))
+    .route("/",createAgentKnowledgeSourceRoutes(db))
     .route("/",createAccountLinkRoutes(db))
     .route("/",createAgentWorkerAccessRoutes(db))
     .route("/",createAgentContainerRoutes(db))
