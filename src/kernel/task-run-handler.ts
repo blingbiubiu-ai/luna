@@ -8,6 +8,7 @@ import { randomUUID } from "node:crypto";
 import { InvocationStore } from "@/runners/invocation-store";
 import { taskInvocations, requireTaskReportCompletion } from "@/tasks/task-report-store";
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
+import { setTimeout as delay } from "node:timers/promises";
 
 import { and, asc, desc, eq } from "drizzle-orm";
 
@@ -113,7 +114,13 @@ export async function executeTaskRun(
   const artifacts = new ArtifactStore(input.db);
   const pendingText = taskRunInputText(input.inputSnapshot);
   _throwIfAborted(input.signal);
-  const activeInvocation = new InvocationStore(input.db).findActive({ runnerKind: "task", taskRunId: input.taskRunId });
+  const invocations = new InvocationStore(input.db);
+  const activeInvocation = invocations.findActive({ runnerKind: "task", taskRunId: input.taskRunId });
+  while (invocations.pending().some(item => item.runnerKind === "task" && item.taskId === input.taskId && item.id !== activeInvocation?.id && item.state === "revoked")) {
+    _throwIfAborted(input.signal);
+    if (input.runnerType !== "mock") getKernel().runtimeAgentTransport?.recoverCancellations();
+    await delay(250, undefined, input.signal ? { signal: input.signal } : {});
+  }
   const agentConfig=input.runnerType === "mock" ? undefined : getKernel().resolveAgentExecutionSnapshot(
     new TaskScopeResolver(input.db).task(input.taskId),activeInvocation?.id);
   if(agentConfig) input={...input,runnerType:agentConfig.agentType,

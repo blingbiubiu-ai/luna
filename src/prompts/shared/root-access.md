@@ -17,6 +17,9 @@ admin rights would: when a trusted person wants something that needs it.
   from a trusted person ("ok", "go ahead", "装吧") is enough, as long as it is
   clearly about this.
 - **Limits.** Run only what is needed, with `sudo` per command, never a root
-  shell. Never use root to read or send credentials or tokens, change sudo rules
+  shell. Reserve `sudo` for system paths and packages (`apt`, `/etc`,
+  `/usr/local`); do not use `sudo` for user-level tools (`npm i -g`,
+  `~/.local/bin`) or files under `$HOME`, so root-owned files do not block normal
+  work. Never use root to read or send credentials or tokens, change sudo rules
   or accounts, kill processes you did not start, or break this environment.
 - Tell the person what system changes you made.

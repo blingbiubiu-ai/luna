@@ -7,7 +7,6 @@ import { ProviderOutput } from "@luna/runner-protocol";
 import { StreamEventParser } from "@luna/runner-protocol/stream-parser";
 import type { ExecutionContext } from "./contexts";
 import { processStartTime } from "./process-cleanup";
-import { sanitizeHome } from "./runner-sudo";
 import { splitStaticAndTurnEnv } from "../pty/pty-session";
 import type { PtyHostCommand, PtySessionSummary } from "../pty/types";
 
@@ -167,9 +166,6 @@ class WarmPtyHost {
             if (this.activeTurn && this.activeTurn.turnId === turnId) {
               const handler = this.activeTurn;
               this.activeTurn = null;
-              if (this.privileged) {
-                sanitizeHome(this.context.home, this.context.uid, this.context.gid);
-              }
               const succeeded = outcome === "succeeded";
               handler.finish({
                 code: succeeded ? 0 : 1,
@@ -226,9 +222,6 @@ class WarmPtyHost {
         viewer.onClose(`exited:${code ?? 0}`);
       }
       this.viewers.clear();
-      if (this.privileged) {
-        sanitizeHome(this.context.home, this.context.uid, this.context.gid);
-      }
       if (!readySettled) {
         readySettled = true;
         rejectReady(new Error(`PTY host exited before ready with code ${code ?? "null"}`));

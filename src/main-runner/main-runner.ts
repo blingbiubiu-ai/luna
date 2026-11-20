@@ -6,13 +6,14 @@ import type {AgentScope} from "@/agents/agent-store";
 import { contextFileSurface, prepareRunnerDirectory, syncAgentCompatibility, turnAttempt } from "@/runners/session-runner-turn";
 import { finalizeRunnerReply, type ReplyAddressee } from "@/messaging/runner-answer";
 import { RuntimeDetachedError } from "@/runners/runtime-detach";
+import { ExecutionError } from "@luna/execution-store";
 import { InvocationStore } from "@/runners/invocation-store";
 import { decodeInvocation } from "@/runners/invocation-codec";
 import { randomUUID } from "node:crypto";
 import { mainInvocations, mainMessageOrigin } from "@/runners/main-invocation-registry";
 import type { AgentExecutionSnapshot } from "@/agent-config";
 import type { DrizzleDB } from "@/data";
-import { runnerOperations, tasks } from "@/data/schema";
+import { channelSurfaces, runnerOperations, sessions, tasks } from "@/data/schema";
 import {
   requestedIdentityFromInbound,
   requiresExplicitRequesterIdentity,
@@ -86,13 +87,33 @@ export class MainRunner {
     }) : undefined;
     const restored = prior ? decodeInvocation(prior.inputSnapshot) : undefined;
     if (restored && restored.kind !== "main") throw new Error("Main invocation snapshot kind mismatch");
+    const runOnce = async (invocationId: string): Promise<MainRunnerCompletion> => {
+      const scopedInput = { ...(restored?.input ?? input), invocationId, ...(input.signal ? { signal: input.signal } : {}) } as MainRunnerRunInput;
+      if (db) mainInvocations(db).set(invocationId, scopedInput);
+      try {
+        return await this._run(scopedInput);
+      } finally {
+        if (db) mainInvocations(db).delete(invocationId);
+      }
+    };
     const invocationId = prior?.id ?? input.invocationId ?? randomUUID();
-    const scopedInput = { ...(restored?.input ?? input), invocationId, ...(input.signal ? { signal: input.signal } : {}) } as MainRunnerRunInput;
-    if (db) mainInvocations(db).set(invocationId, scopedInput);
     try {
-      return await this._run(scopedInput);
-    } finally {
-      if (db) mainInvocations(db).delete(invocationId);
+      return await runOnce(invocationId);
+    } catch (error) {
+      if (
+        db &&
+        prior &&
+        !prior.activeJobId &&
+        error instanceof ExecutionError &&
+        ["invocation_preparation_conflict", "context_preparation_conflict"].includes(error.code)
+      ) {
+        const store = new InvocationStore(db);
+        if (!store.jobsFor(prior.id).length) {
+          store.finish(prior.id);
+          return await runOnce(randomUUID());
+        }
+      }
+      throw error;
     }
   }
 
@@ -122,7 +143,7 @@ export class MainRunner {
     let runnerContext = compatibleContext;
     if (!invocation?.activeJobId) {
       const prepared = await prepareRunnerDirectory({ store: this._options.runnerContextStore, runnerContext: compatibleContext,
-        contextFile: buildMainRunnerContextFile(input.input), invocationId: input.invocationId, signal: input.signal });
+        contextFile: buildMainRunnerContextFile(input.input, this._options.serviceAuthDb), invocationId: input.invocationId, signal: input.signal });
       runnerContext = prepared.runnerContext;
       if (invocationStore && invocation && prepared.runnerSessionInvalidated && (input.input.type === "user_messages" || input.input.type === "session_trigger" || input.input.type === "task_result")) {
         invocationStore.finish(invocation.id);
@@ -327,8 +348,9 @@ function replyAddressee(db: DrizzleDB, input: MainRunnerRunInput): ReplyAddresse
   return { ...(task.source ? { messageId: task.source } : {}), ...(task.creator ? { userId: task.creator } : {}) };
 }
 
-function buildMainRunnerContextFile(input: MainRunnerInput) {
+function buildMainRunnerContextFile(input: MainRunnerInput, db?: DrizzleDB) {
   const sessionId = sessionIdFromInput(input);
+  const sessionRow = db?.select().from(sessions).where(eq(sessions.id, sessionId)).get();
   if (input.type === "user_messages") {
     return {
       schemaVersion: 1,
@@ -338,6 +360,7 @@ function buildMainRunnerContextFile(input: MainRunnerInput) {
         session: {
           id: sessionId,
           kind: "ordinary",
+          ...(sessionRow?.title ? { title: sessionRow.title } : {}),
           channel: input.latestMessage.channel,
           surface: contextFileSurface(input.latestMessage.surface),
           ...(input.latestMessage.thread !== undefined
@@ -347,6 +370,20 @@ function buildMainRunnerContextFile(input: MainRunnerInput) {
       },
     } as const;
   }
+  const surfaceRow = sessionRow?.group_id
+    ? db?.select().from(channelSurfaces).where(and(
+        eq(channelSurfaces.channelType, sessionRow.channel_type),
+        eq(channelSurfaces.channelId, sessionRow.channel_id),
+        eq(channelSurfaces.externalId, sessionRow.group_id),
+      )).get()
+    : undefined;
+  let providerIds: Record<string, unknown> | undefined;
+  if (surfaceRow?.providerIdsJson) {
+    try {
+      const parsed = JSON.parse(surfaceRow.providerIdsJson) as unknown;
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) providerIds = parsed as Record<string, unknown>;
+    } catch { /* ignore malformed cached providerIds */ }
+  }
   return {
     schemaVersion: 1,
     runnerKind: "main",
@@ -355,6 +392,38 @@ function buildMainRunnerContextFile(input: MainRunnerInput) {
       session: {
         id: sessionId,
         kind: "ordinary",
+        ...(sessionRow?.title ? { title: sessionRow.title } : {}),
+        ...(sessionRow
+          ? {
+              channel: {
+                type: sessionRow.channel_type,
+                id: sessionRow.channel_id,
+              },
+              ...(sessionRow.group_id !== null
+                ? {
+                    surface: {
+                      externalId: sessionRow.group_id,
+                      kind: surfaceRow?.surfaceKind === "p2p" || surfaceRow?.surfaceKind === "group"
+                        ? surfaceRow.surfaceKind
+                        : "group",
+                      ...(surfaceRow?.displayName ? { displayName: surfaceRow.displayName } : {}),
+                      ...(surfaceRow?.avatarUrl ? { avatarUrl: surfaceRow.avatarUrl } : {}),
+                      ...(providerIds ? { providerIds } : {}),
+                    },
+                  }
+                : {}),
+              ...(sessionRow.thread_key !== null
+                ? {
+                    thread: {
+                      externalId: sessionRow.thread_key,
+                      ...(sessionRow.root_message_key !== null
+                        ? { rootMessageExternalId: sessionRow.root_message_key }
+                        : {}),
+                    },
+                  }
+                : {}),
+            }
+          : {}),
       },
     },
   } as const;

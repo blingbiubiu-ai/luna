@@ -93,6 +93,25 @@ test("changing bound routing never moves a context with a reserved execution", a
  } finally {f.close();}
 });
 
+test("next invocation on the same Worker waits with context_busy while a superseded execution drains", async () => {
+ const f=fixture(undefined,8,()=>"old");
+ try {
+  f.attach("old",()=>prepared);
+  await f.scheduler.preparation.prepare(input);
+  f.scheduler.submit(job);
+  f.scheduler.jobs.reserve(job.jobId,"old");
+  f.scheduler.cancel(job.jobId);
+  await expect(f.scheduler.preparation.prepare({...input,invocationId:"next"})).rejects.toMatchObject({status:503,code:"context_busy"});
+  const settled=f.scheduler.jobs.require(job.jobId);
+  settled.placementState="terminal";
+  settled.terminalResult={state:"cancelled",reason:"user_cancelled"};
+  f.scheduler.jobs.save(settled);
+  const after=await f.scheduler.preparation.prepare({...input,invocationId:"next"});
+  expect(after.workerId).toBe("old");
+  expect(f.scheduler.preparation.input("ctx")?.invocationId).toBe("next");
+ } finally {f.close();}
+});
+
 test("automatic routing replaces an idle paused Worker on the next invocation",async()=>{
  let allowed=["old","new"];
  const f=fixture(undefined,8,undefined,()=>allowed);

@@ -137,7 +137,7 @@ XML 标签只用来分块，块内不逐字段套标签：
 
 **为什么不放会话信息（实现时改的）**
 
-原计划在 soul 之后放一个 `<session>` 块（渠道、私聊或群聊、sessionId）。实现时发现 Main 的 `task_result` 轮次拿不到渠道和会话界面，`<session>` 的内容会随轮次类型变化。静态文件一变，Codex 就在会话里追加一整份 `AGENTS.md`，所以静态文件必须在各轮之间逐字节不变。会话信息仍留在 `.luna/runner-context.json`，时区随每轮的 `now` 一起给出。
+原计划在 soul 之后放一个 `<session>` 块（渠道、私聊或群聊、sessionId）。静态文件一变，Codex 就在会话里追加一整份 `AGENTS.md`，所以静态文件必须在各轮之间逐字节不变。会话信息（含 `channel`、`surface`、`thread`、`title`，在 `session_trigger` / `task_result` 轮次也由 `MainRunner` 从持久化的 `sessions` 与 `channel_surfaces` 补齐）统一写在 `.luna/runner-context.json`，时区随每轮的 `now` 一起给出。
 - persona 是 owner 写的文字，进文件前同样过 4.6 的中和。
 - 默认人格：
 

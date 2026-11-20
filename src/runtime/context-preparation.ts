@@ -59,9 +59,9 @@ export class ContextPreparationManager {
    const intent=this.db.prepare("SELECT * FROM runtime_preparation_intents WHERE invocation_id=?").get(input.invocationId) as PreparationIntent|undefined;
    if(intent && (intent.state==="released" || contentHash(JSON.parse(intent.input_json))!==contentHash(input)))throw new ExecutionError(409,"invocation_preparation_conflict");
    const allowed=this.scheduler.allowedWorkers(input.scope);
+   const bound=this.scheduler.placements.boundWorkerId(input.scope);
    const executing=this.scheduler.jobs.list(true).some(job=>job.job.runnerContextId===input.contextId && job.workerId && job.placementState!=="terminal");
    if(!intent && !executing) {
-    const bound=this.scheduler.placements.boundWorkerId(input.scope);
     const route=this.scheduler.placements.context(input.scope,input.contextId);
     const changing=route && (bound ? bound!==route.workerId : !allowed.includes(route.workerId));
     if(changing && this.scheduler.isContextFileBusy(input.contextId))throw new ExecutionError(503,"context_busy");
@@ -71,13 +71,17 @@ export class ContextPreparationManager {
    if(intent && (intent.worker_id!==placement.workerId || intent.generation!==placement.generation))throw new ExecutionError(409,"invocation_preparation_conflict");
    const prior=this.cached(input.contextId);
    const activeJobs=this.scheduler.jobs.list(true).filter(job=>job.job.runnerContextId===input.contextId && job.placementState!=="terminal");
+   if(activeJobs.some(job=>job.job.invocationId!==input.invocationId)){
+    if(activeJobs.some(job=>job.workerId) && (!prior || (bound && bound!==placement.workerId) || prior.workerId!==placement.workerId || prior.scope.placementGeneration!==placement.generation))
+      throw new ExecutionError(409,"context_execution_unknown");
+    throw new ExecutionError(503,"context_busy");
+   }
    if(activeJobs.some(job=>job.workerId)){
-    if(!prior || prior.workerId!==placement.workerId || prior.scope.placementGeneration!==placement.generation
+    if(!prior || (bound && bound!==placement.workerId) || prior.workerId!==placement.workerId || prior.scope.placementGeneration!==placement.generation
       || contentHash(this.input(input.contextId))!==contentHash(input))throw new ExecutionError(409,"context_execution_unknown");
     this.scheduler.placements.bindContext(input.scope,input.contextId,input.scopeKey,allowed,input.projectId);
     return prior;
    }
-   if(activeJobs.some(job=>job.job.invocationId!==input.invocationId))throw new ExecutionError(503,"context_busy");
    this.db.prepare("INSERT OR IGNORE INTO runtime_preparation_intents VALUES (?,?,?,?,'active',NULL)").run(input.invocationId,JSON.stringify(input),placement.workerId,placement.generation);
    let reply:unknown;
    try{

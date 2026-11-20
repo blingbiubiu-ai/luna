@@ -107,8 +107,6 @@ them immediately.
 - **Root terminal** uses `docker exec -u 0` with `HOME=/tmp` and requires the same
   host `nosuid` check as Shadow root access (`rootHostCheck`). apt works here, and
   what it installs stays until the image is upgraded or the system disk is reset.
-  When the session ends, Worker runs `luna-home-sanitize` in the container to clear
-  setuid/setgid bits and restore any non-Runner file ownership in the Shadow HOME.
 - **Desktop** runs `luna-desktop start` as the Runner: Xvfb, openbox with a tint2
   panel (Chrome and terminal launchers, window list, clock) and x11vnc (`-xkb`) on
   container-local `127.0.0.1:5900`; `luna-desktop bridge` then pipes the RFB bytes,
@@ -180,8 +178,11 @@ their other grants.
   without mentioning root; any natural agreement from a trusted person is enough
   (and their reply runs in a `privileged` turn). It never uses root for credentials,
   sudo rules or accounts, other processes, or breaking the environment.
-- **HOME cleanup.** After a privileged Job, and when the container starts, Executor
-  runs `luna-home-sanitize` like the root terminal does.
+- **No exit-time HOME tree scan.** Host `nosuid` mounts and kernel `no_new_privs` on
+  unprivileged Jobs neutralize any `setuid`/`setgid` bits in `HOME` in `O(1)` without
+  walking the directory tree on exit, and `purgeShadowFiles` uses a root helper when
+  removing a deleted Shadow's directories. `prompts/shared/root-access.md` directs
+  Runners to reserve `sudo` for system paths rather than user tools or `$HOME` files.
 
 Container root shares the container namespace with Executor: prompt injection
 through untrusted messages, web pages, files or a HOME shared by all of the

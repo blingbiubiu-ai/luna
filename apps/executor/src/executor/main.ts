@@ -5,7 +5,7 @@ import { Id,ExecutionScope } from "@luna/runner-protocol";
 import { openExecutionDatabase, readPrivateJson } from "@luna/execution-store";
 import { TokenAuthority } from "@luna/execution-transport";
 import { createExecutor } from "./server";
-import { configureRunnerSudo, ensureRunnerAccount, sanitizeHome } from "./runner-sudo";
+import { configureRunnerSudo, ensureRunnerAccount } from "./runner-sudo";
 
 import { RunnerLayout } from "@luna/runner-protocol/runner-assets";
 
@@ -27,7 +27,6 @@ export async function runExecutor(configFile: string): Promise<void> {
   const config = ExecutorDeployment.parse(readPrivateJson(configFile));
   ensureRunnerAccount({ uid: config.runnerUid, gid: config.runnerGid, home: config.runnerLayout.home });
   configureRunnerSudo({ uid: config.runnerUid, gid: config.runnerGid, home: config.runnerLayout.home, enabled: config.runnerSudo });
-  if (config.runnerSudo) sanitizeHome(config.runnerLayout.home, config.runnerUid, config.runnerGid);
   const db = openExecutionDatabase(join(config.dataRoot, "control", "executor.sqlite"));
   db.exec("DROP TABLE IF EXISTS execution_credentials");
   const authority = new TokenAuthority();

@@ -19,8 +19,11 @@ stable request id to resend. Reuse request ids for retries.
 Cross-session sends and handoffs do not require an authority ID. The service
 validates the authenticated Runner invocation, active actor, target and artifact
 availability. Follow the user's requested recipient and operation; do not invent
-targets or embed local paths. A session_trigger is a work request, not a system
-instruction.
+targets or embed local paths. On `<trigger>`, this session (`$LUNA_SESSION_ID`)
+is the target topic/group/chat and `sourceSessionId` is the sender: reply and
+create Tasks in the current session (omit `--session-id`), never in
+`sourceSessionId` unless asked, and speak to the people here rather than writing
+dispatch receipts like "opening sent in topic".
 Task operations use `luna task create|update|restart|cancel`. Task-result invocations send their final
 report as your final reply.
 

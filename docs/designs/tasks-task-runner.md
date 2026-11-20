@@ -115,7 +115,7 @@ run that passes it with `execution_timeout`; the run fails, Main is told, and
 the Task can be restarted. A changed setting applies to runs started afterwards.
 Main and Work turns keep the platform-wide `execution.containerTimeoutMs` setting (`platform_settings`, managed on Dashboard `/platform/settings`).
 
-Task Jobs use the scope `task:<task-id>:<runner-type>` and carry the task and Task Run IDs in their Job credentials. In isolated mode, Worker provides a container for the scope. In shared mode, Task uses the common Executor. Both modes use the public HOME and a task-specific working directory. Runtime and Executor serialize executions for the same context. Worker retains context data after container reaping.
+Task Jobs use the scope `task:<task-id>:<runner-type>` and carry the task and Task Run IDs in their Job credentials. In isolated mode, Worker provides a container for the scope. In shared mode, Task uses the common Executor. Both modes use the public HOME and a task-specific working directory. Runtime and Executor serialize executions for the same context: `executeTaskRun` waits for any superseded (`revoked`) invocation of the Task to settle before resolving `runnerContext` and materializing the next run's prompt, and `ContextPreparationManager` returns retryable `503 context_busy` while a prior invocation's job on the same Worker is still draining. Worker retains context data after container reaping.
 
 ## Artifact Output Contract
 
@@ -298,8 +298,12 @@ and writes a `thread_launch` context pack inside the operation transaction.
 The anchor is automatically included. Source messages keep their original
 ownership and are not resent. The operation receipt includes `targetSessionId`.
 This provision step sends no message. Source Main submits a `messages handoff`
-(`session.invoke`) containing the complete request to the returned session. It
-neither sends the topic opening nor creates the topic Task. The target Main is
+(`session.invoke`) containing the request and request-specific context (without
+repeating standing `<soul>` / `<memory>` rules) to the returned session. It
+neither sends the topic opening nor creates the topic Task; when the topic is
+anchored to the current turn's group message and the handoff is accepted, source
+Main finishes with `LUNA_NOTHING_TO_SEND` so the group does not receive a second
+acceptance alongside the topic reply. The target Main is
 invoked through the existing per-session dispatcher with the selected history.
 It first sends its opening answer through CLI in its own session; once delivery
 is confirmed it creates the Task there, omitting `sessionId`. The opening makes

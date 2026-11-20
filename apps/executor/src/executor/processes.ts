@@ -1,4 +1,3 @@
-import { sanitizeHome } from "./runner-sudo";
 import { spawn } from "node:child_process";
 import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
@@ -202,8 +201,7 @@ export class ExecutorProcesses {
       finally { finish(); }
     };
     child.once("error", () => { failed = true; unsafeFailure = true; });
-    // Root may have left setuid or root-owned files in the host-backed HOME.
-    child.once("close", (code, signal) => { if (this.runnerSudo && job.privileged === true) sanitizeHome(context.home, context.uid, context.gid); void complete(code, signal); });
+    child.once("close", (code, signal) => { void complete(code, signal); });
     child.once("spawn", () => {
       try {
         if (!child.pid) throw new Error("Runner PID missing after spawn");

@@ -114,13 +114,9 @@ export class ContainerStreams {
     const runnerEnv = ["-e", `HOME=${target.home}`, "-e", "LANG=C.UTF-8"];
     if (command.kind === "terminal") {
       // Root keeps its own HOME so its dotfiles never become root-owned files in the Shadow HOME.
-      const shell = this.spawn(["docker", "exec", "-it", "-u", root ? "0:0" : runner, "-w", target.home,
+      return this.spawn(["docker", "exec", "-it", "-u", root ? "0:0" : runner, "-w", target.home,
         "-e", `HOME=${root ? "/tmp" : target.home}`, "-e", "LANG=C.UTF-8", "-e", "TERM=xterm-256color",
         target.containerId, "bash", "-l"], { tty: { cols: command.cols, rows: command.rows }, onData });
-      // Whatever root left in the host-backed HOME (setuid bits, non-Runner ownership) is undone afterwards.
-      if (root) void shell.exited.then(() => this.run(["exec", "-u", "0:0", target.containerId, "luna-home-sanitize", target.home,
-        String(this.runner.runnerUid), String(this.runner.runnerGid)]).catch(() => {}));
-      return shell;
     }
     // The desktop always runs as the Runner so browser profiles stay usable by Jobs.
     await this.run(["exec", "-u", runner, ...runnerEnv, target.containerId, "luna-desktop", "start"]);

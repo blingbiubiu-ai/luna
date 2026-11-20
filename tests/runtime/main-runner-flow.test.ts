@@ -1403,6 +1403,101 @@ test("Main Runner accepts sentinel completion and injects runtime context", asyn
   expect(existsSync(join(runnerContext.runner_root_path, ".luna-prompts"))).toBe(false);
 });
 
+test("Main Runner writes channel, surface, thread, and title into runner-context.json on session_trigger turns", async () => {
+  class SilentAgentRunner implements AgentRunner {
+    readonly type = "fake";
+    async *stream(userMessage: UserMessage): ReturnType<AgentRunner["stream"]> {
+      yield {
+        id: "assistant-trigger-silent",
+        session_id: userMessage.session_id,
+        role: "assistant",
+        content: [{ type: "text", text: "LUNA_NOTHING_TO_SEND" }],
+      };
+    }
+  }
+
+  const requester = materializeTestRequester("main-runner-trigger-context");
+  const ownership = fixtureSessionOwnership(database.db, "feishu", "feishu-main");
+  const nowIso = new Date(1000).toISOString();
+  database.db.insert(lunaSchema.channelSurfaces).values({
+    id: "surface:feishu-main:oc_group_topic",
+    channelType: "feishu",
+    channelId: "feishu-main",
+    externalId: "oc_group_topic",
+    surfaceKind: "group",
+    displayName: "测试接单群",
+    providerIdsJson: JSON.stringify({ tenant_key: "tenant-1" }),
+    firstSeenAt: nowIso,
+    lastSeenAt: nowIso,
+    createdAt: nowIso,
+    updatedAt: nowIso,
+  }).run();
+  database.db.insert(lunaSchema.sessions).values({
+    id: "topic-session-1",
+    channel_type: "feishu",
+    channel_id: "feishu-main",
+    group_id: "oc_group_topic",
+    thread_key: "om_anchor_1",
+    root_message_key: "om_anchor_1",
+    title: "测试话题标题",
+    created_by_user_id: requester.id,
+    created_at: 1000,
+    updated_at: 1000,
+    ...ownership,
+  }).run();
+
+  const runnerContext = new RunnerContextStore(database.db).resolveForSession("topic-session-1", "fake");
+  await new MainRunner({
+    runner: new SilentAgentRunner(),
+    serviceAuthDb: database.db,
+    accessTokenSigningSecret: TEST_ACCESS_TOKEN_SECRET,
+    serviceAuthNow: 1000,
+  }).run({
+    input: {
+      type: "session_trigger",
+      triggerId: "trigger-topic-1",
+      instruction: "跟进该话题需求",
+      requesterUserId: requester.id,
+      sourceSessionId: "parent-group-session",
+      correlationId: "trigger-topic-1",
+      hops: 2,
+      artifactRefs: [],
+      context: {
+        sessionId: "topic-session-1",
+        candidateOpenTasks: [],
+      },
+    },
+    runnerContext,
+  });
+
+  const contextFile = JSON.parse(
+    readFileSync(runnerContextFilePath(runnerContext.runner_root_path), "utf-8"),
+  );
+  expect(contextFile).toEqual({
+    schemaVersion: 1,
+    runnerKind: "main",
+    owner: { type: "session", id: "topic-session-1" },
+    stableContext: {
+      session: {
+        id: "topic-session-1",
+        kind: "ordinary",
+        title: "测试话题标题",
+        channel: { type: "feishu", id: "feishu-main" },
+        surface: {
+          externalId: "oc_group_topic",
+          kind: "group",
+          displayName: "测试接单群",
+          providerIds: { tenant_key: "tenant-1" },
+        },
+        thread: {
+          externalId: "om_anchor_1",
+          rootMessageExternalId: "om_anchor_1",
+        },
+      },
+    },
+  });
+});
+
 test("Main Runner service env does not use Feishu external id as local fallback without open_id", async () => {
   class FakeAgentRunner implements AgentRunner {
     readonly type = "fake";

@@ -1,5 +1,4 @@
 import { appendFileSync, chmodSync, existsSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
-import { spawnSync } from "node:child_process";
 import { join } from "node:path";
 
 export const RUNNER_SUDOERS = "etc/sudoers.d/luna-runner";
@@ -58,11 +57,6 @@ function ensureShadow(file: string, name: string): void {
   const existing = existsSync(file) ? readFileSync(file, "utf8") : "";
   if (existing.split("\n").some(entry => entry.startsWith(`${name}:`))) return;
   appendFileSync(file, (existing === "" || existing.endsWith("\n") ? "" : "\n") + `${name}:*:19000:0:99999:7:::\n`);
-}
-
-/** Clear setuid/setgid bits and root ownership left in HOME (see container/luna-home-sanitize). */
-export function sanitizeHome(home: string, uid: number, gid: number): void {
-  spawnSync("/usr/local/bin/luna-home-sanitize", [home, String(uid), String(gid)], { stdio: "ignore", timeout: 120000 });
 }
 
 /** setpriv flags for a Runner process; sudo needs a usable bounding set and no no_new_privs. */

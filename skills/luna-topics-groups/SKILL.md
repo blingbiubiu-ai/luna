@@ -19,27 +19,41 @@ creates a topic automatically. For a Feishu topic, use this order:
    relevant messages to that default window; it does not replace the window. Optional `title` labels the session.
 2. Read `targetSessionId` from the receipt. This only provisions the topic and
    context references; it sends no message and starts no Task.
-3. Hand the complete request to that topic's Main with
-   `luna messages handoff --session-id <targetSessionId> --request-id topic-handoff-1 --text '<request, constraints and expected result>'`.
-   Include the user's requirements and ask the receiving Main to send the opening
-   reply first, then create/manage the Task in its own session. Do not send the
-   topic opening or create its Task from the source session. A handoff receipt
-   means accepted, not that the Task already exists. Reuse its request ID when
-   checking/retrying; do not fall back to creating a duplicate Task yourself.
-4. The receiving topic Main reads the handoff and selected history. If this is
-   actionable new work, first send a brief opening in the current topic using
-   `luna messages send --purpose answer --request-id topic-opening-1 --text '…'`.
-   Say what you are about to do; do not claim the Task already exists. Wait for
-   the sent receipt, then call `luna task create` in the current session (omit
-   `sessionId`). The opening materializes the Feishu topic before its progress
-   card. Do not create another topic or hand the request back to its source.
-   If the request needs clarification, ask it in the topic instead of starting
-   a Task. Reuse a matching existing Task rather than duplicating it.
+3. Hand the request to that topic's Main with
+   `luna messages handoff --session-id <targetSessionId> --request-id topic-handoff-1 --text '<user request and request-specific context>'`.
+   Pass only this request's requirements and request-specific context; do not
+   copy standing `<soul>` or `<memory>` working rules into the handoff (the
+   topic's Main already shares them), so they are not echoed back to the user.
+   Ask the receiving Main to reply directly to the requester in the topic and
+   manage the Task there. Do not send the topic opening or create its Task from
+   the source session. A handoff receipt means accepted, not that the Task
+   already exists. Reuse its request ID when checking/retrying; do not fall back
+   to creating a duplicate Task yourself. When the topic is anchored to the
+   current turn's group message and the handoff is accepted, finish the source
+   turn with `LUNA_NOTHING_TO_SEND` so the main group does not get a duplicate
+   acceptance alongside the topic reply; reply in the source session only if
+   topic creation/handoff fails or the topic is anchored elsewhere.
+4. On the receiving topic Main's `<trigger>` turn, the current session
+   (`$LUNA_SESSION_ID`) **is** the Feishu topic; `sourceSessionId` is the parent
+   group chat—never send the topic opening to `sourceSessionId`. Read the
+   handoff and selected history. If this is actionable new work, first send one
+   brief, natural colleague-style opening in the current topic using
+   `luna messages send --purpose answer --request-id topic-opening-1 --text '…'`
+   (omit `--session-id`). Speak directly to the requester about what you are
+   starting on for this request; do not recite standing working rules,
+   document/permission habits or approval disclaimers, and do not claim the Task
+   already exists. Wait for the `sent` receipt, then call `luna task create` in
+   the current session (omit `sessionId`). The opening materializes the Feishu
+   topic before its progress card. Do not create another topic or hand the
+   request back to its source. If the request needs clarification, ask it in the
+   topic instead of starting a Task. Reuse a matching existing Task rather than
+   duplicating it.
 5. After successful creation, finish with `LUNA_NOTHING_TO_SEND` because the
-   opening answer already owns this turn's reply. If creation fails after the
-   opening was sent, send a concise failure notification before finishing; never
-   silently leave a promise of work that did not start. Later Task results go to
-   this topic's Main. Progress cards remain enabled by default.
+   opening answer already owns this turn's reply—never output a second
+   meta-summary such as "opening sent and Task started". If creation fails after
+   the opening was sent, send a concise failure notification before finishing;
+   never silently leave a promise of work that did not start. Later Task results
+   go to this topic's Main. Progress cards remain enabled by default.
 
 Use `luna session status COMMAND_ID` to inspect the topic receipt.
 Task updates and retries retain the bound session and status-card preference.
