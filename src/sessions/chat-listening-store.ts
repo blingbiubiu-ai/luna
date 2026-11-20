@@ -1,8 +1,8 @@
-import { and, eq, gt, isNull, sql } from "drizzle-orm";
+import { and, eq, gt, sql } from "drizzle-orm";
 
 import { AgentSettingsStore } from "@/agents/agent-settings-store";
 import type { DrizzleDB } from "@/data";
-import { agentShadows, channelSurfaces, chatListening, sessions, sessionTurns } from "@/data/schema";
+import { channelSurfaces, chatListening, sessions, sessionTurns } from "@/data/schema";
 
 /** The chat a session belongs to, as far as listening is concerned. */
 export type ListeningChat = { readonly agent_id: string; readonly shadow_id: string; readonly group_id: string | null };
@@ -55,22 +55,17 @@ export class ChatListeningStore {
       .orderBy(sessionTurns.started_at).all().map(row => row.at);
   }
 
-  /** Every group chat the Agent's Shadows have a conversation in, with its switch, for the owner. */
-  chats(agentId: string) {
-    const fallback = new AgentSettingsStore(this.db).get(agentId).listening.defaultEnabled;
-    const rows = this.db.select({ shadowId: sessions.shadow_id, shadowName: agentShadows.name, chatId: sessions.group_id,
-      channelId: sessions.channel_id, lastActivityAt: sessions.last_activity_at })
-      .from(sessions).innerJoin(agentShadows, eq(agentShadows.id, sessions.shadow_id))
-      .where(and(eq(sessions.agent_id, agentId), eq(sessions.kind, "main"), eq(sessions.status, "active"), isNull(sessions.thread_key))).all();
-    return rows.flatMap(row => {
-      if (!row.chatId) return [];
-      const surface = this.db.select().from(channelSurfaces)
-        .where(and(eq(channelSurfaces.channelId, row.channelId), eq(channelSurfaces.externalId, row.chatId))).get();
-      if (surface?.surfaceKind !== "group") return [];
-      const own = this.row(row.shadowId, row.chatId)?.enabled ?? null;
-      return [{ shadowId: row.shadowId, shadowName: row.shadowName, chatId: row.chatId, chatName: surface.displayName ?? null,
-        enabled: own, effective: own ?? fallback, lastActivityAt: row.lastActivityAt }];
-    }).sort((a, b) => b.lastActivityAt - a.lastActivityAt);
+  /**
+   * Listening for the group chat a session is a Main conversation of, for the Agent owner's session page.
+   * Undefined when the session has none: a private chat, a Work or Dashboard session, or another Agent's.
+   */
+  forSession(agentId: string, sessionId: string): { shadowId: string; chatId: string; listening: boolean } | undefined {
+    const session = this.db.select().from(sessions).where(and(eq(sessions.id, sessionId), eq(sessions.agent_id, agentId))).get();
+    if (!session?.group_id || session.kind !== "main") return undefined;
+    const surface = this.db.select({ kind: channelSurfaces.surfaceKind }).from(channelSurfaces)
+      .where(and(eq(channelSurfaces.channelId, session.channel_id), eq(channelSurfaces.externalId, session.group_id))).get();
+    if (surface?.kind !== "group") return undefined;
+    return { shadowId: session.shadow_id, chatId: session.group_id, listening: this.enabled(session) };
   }
 
   private row(shadowId: string, chatId: string) {

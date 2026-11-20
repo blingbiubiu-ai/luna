@@ -127,21 +127,21 @@ export function createPlatformAgentRoutes(db: DrizzleDB, registry?:PluginRegistr
       })();
       return c.json({settings: saved, messageDefaults: messageDefaults(config.session)});
     })
-    // The group chats the Agent's bots are in, each with its listening switch; `enabled: null` follows the Agent default.
-    .get("/:agentId/listening-chats", c => {
-      const agentId = c.req.param("agentId");
+    // Listening for the group chat of one session, on its Dashboard page; `listening: null` when the session has no group chat.
+    .get("/:agentId/sessions/:sessionId/listening", c => {
+      const {agentId, sessionId} = c.req.param();
       store.requireOwner(actor(c), agentId);
-      return c.json({chats: new ChatListeningStore(db).chats(agentId)});
+      return c.json({listening: new ChatListeningStore(db).forSession(agentId, sessionId)?.listening ?? null});
     })
-    .put("/:agentId/listening-chats", async c => {
-      const agentId = c.req.param("agentId");
-      const accountId = actor(c);
-      store.requireOwner(accountId, agentId);
-      const input = z.object({shadowId: z.string().min(1), chatId: z.string().min(1).max(256), enabled: z.boolean().nullable()}).strict().parse(await c.req.json());
+    .put("/:agentId/sessions/:sessionId/listening", async c => {
+      const {agentId, sessionId} = c.req.param();
+      store.requireOwner(actor(c), agentId);
+      const {enabled} = z.object({enabled: z.boolean()}).strict().parse(await c.req.json());
       const listening = new ChatListeningStore(db);
-      if (!listening.chats(agentId).some(chat => chat.shadowId === input.shadowId && chat.chatId === input.chatId)) throw new AgentError("chat_not_found", 404);
-      listening.set(input.shadowId, input.chatId, input.enabled, store.ownerUserId(agentId));
-      return c.json({chats: listening.chats(agentId)});
+      const chat = listening.forSession(agentId, sessionId);
+      if (!chat) throw new AgentError("chat_not_found", 404);
+      listening.set(chat.shadowId, chat.chatId, enabled, store.ownerUserId(agentId));
+      return c.json({listening: enabled});
     })
     .get("/:agentId/shadows/:shadowId/worker-routing", c => c.json({ routing: new ShadowWorkerRoutingStore(db).read(actor(c), c.req.param()) }))
     .get("/:agentId/shadows/:shadowId/model-selection",c=>c.json({selection:new ShadowModelSelectionStore(db).read(actor(c),c.req.param())}))

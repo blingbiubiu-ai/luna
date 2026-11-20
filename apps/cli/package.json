@@ -6,6 +6,7 @@
   "exports": {
     "./main": "./src/main.ts",
     "./commands/schedules": "./src/commands/schedules.ts",
+    "./commands/chat": "./src/commands/chat.ts",
     "./commands/knowledge": "./src/commands/knowledge.ts",
     "./commands/workspace": "./src/commands/workspace.ts",
     "./commands/artifacts": "./src/commands/artifacts.ts",

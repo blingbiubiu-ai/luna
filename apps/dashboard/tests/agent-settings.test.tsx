@@ -65,7 +65,6 @@ describe("AgentSettingsForm", () => {
           main: { taskProgressCard: { send: true, style: "native" } },
           listening: { defaultEnabled: false, quietMs: 45000, batchSize: 10, maxWaitMs: 180000, backoffMaxMs: 600000, maxTurnsPerHour: 12 },
         },
-        listeningChats: createElement("p", null, "群列表"),
         error: null,
         onChange: () => {},
       }),
@@ -75,6 +74,5 @@ describe("AgentSettingsForm", () => {
     expect(html).toMatch(/aria-label="最长攒多久（分钟）"[^>]*value="3"/);
     expect(html).toMatch(/aria-label="连续沉默后的间隔上限（分钟）"[^>]*value="10"/);
     expect(html).toMatch(/aria-label="每个群每小时最多几轮"[^>]*value="12"/);
-    expect(html).toContain("群列表");
   });
 });

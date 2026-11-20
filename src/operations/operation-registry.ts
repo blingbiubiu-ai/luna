@@ -18,7 +18,7 @@ export interface OperationPolicy {
     readonly metadata?: Record<string, unknown>;
 }
 export const DEFAULT_OPERATION_POLICIES: readonly OperationPolicy[] = [
-    // Switching listening in a group chat (`#listen on|off`): the Agent owner, or a member allowed here.
+    // Switching listening in a group chat (`luna chat listen on|off`): the Agent owner, or a member allowed here.
     {id:"chat.listen",namespace:"chat",operationKind:"write",riskLevel:"medium",defaultDecision:"deny",providerType:"core",allowedSubjectTypes:["user","group"]},
     ...(["read","write"] as const).map(verb=>({id:`memory.${verb}`,namespace:"memory",operationKind:verb,riskLevel:verb==="read" ? "low" as const : "medium" as const,defaultDecision:"deny" as const,providerType:"core" as const,allowedSubjectTypes:["user","group"] as const})),
     ...([

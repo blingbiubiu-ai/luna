@@ -13,6 +13,7 @@ import { runSchedulesCli } from "./commands/schedules";
 import { runRunnerOperationsCli } from "./commands/runner-operations";
 import { runMessagesCli } from "./commands/messages";
 import { runMemoryCli } from "./commands/memory";
+import { runChatCli } from "./commands/chat";
 import { runAuthCli } from "./commands/auth";
 import { runKnowledgeCli } from "./commands/knowledge";
 import { runWorkspaceCli } from "./commands/workspace";
@@ -65,6 +66,7 @@ export async function runClientCli(
   if (command === "task" || command === "session") return runRunnerOperationsCli(command, rest, env);
   if (command === "messages") return runMessagesCli(rest, env);
   if (command === "memory") return runMemoryCli(rest, env);
+  if (command === "chat") return runChatCli(rest, env);
   if (command === "auth") {
     return runAuthCli(rest, env);
   }
@@ -115,6 +117,7 @@ function clientHelpText(): string {
     "  luna root status [--user <user-id>]",
     "  luna messages send (--text <text> | --stdin) [--json] [--request-id <id>] [--purpose progress|answer|notification] [--session-id <id> | --user-id <id> | --feishu-user-id <id> --channel-id <id>]",
     "  luna memory list|search|get|add|update|delete (see `luna memory help`)",
+    "  luna chat listen status|on|off",
     "  luna task create|update|restart|cancel (--stdin | --json <JSON>) --request-id <id>",
     "  luna task status <command-id>",
     "  luna task status-card --task-id <id> --request-id <id> [--resend] [--style card|native]",

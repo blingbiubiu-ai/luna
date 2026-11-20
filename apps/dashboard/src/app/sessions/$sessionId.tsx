@@ -14,6 +14,7 @@ import {
 } from "@/lib/api";
 
 import { SessionDetailView } from "./session-detail-view";
+import { SessionListeningSwitch } from "./session-listening-switch";
 
 export const Route = createFileRoute("/$agentId/sessions/$sessionId")({
   /** `entry` opens the session at one timeline entry, such as where a memory was written. */
@@ -72,7 +73,8 @@ function SessionDetailPage() {
 
   return (
     <SessionDetailView
-      actions={session ? (
+      actions={session ? (<>
+        <SessionListeningSwitch agentId={agentId} sessionId={sessionId} />
         <div className="flex items-center gap-1.5">
           <Button size="sm" variant="outline" asChild>
             <a href={`${base}/terminals?sessionId=${encodeURIComponent(sessionId)}`}>
@@ -82,7 +84,7 @@ function SessionDetailPage() {
           </Button>
           <DeleteRecordButton kind="sessions" id={sessionId} path={`/sessions/${encodeURIComponent(sessionId)}?agentId=${encodeURIComponent(agentId)}`} name={session.displayTitle || session.title || sessionId} onDeleted={() => { window.location.assign(`${base}/sessions`); }} />
         </div>
-      ) : null}
+      </>) : null}
       key={sessionId}
       composer={<SessionComposer key={sessionId} agentId={agentId} sessionId={sessionId} disabled={!session || session.status !== "active" || sessionsIsError} />}
       sessionId={sessionId}

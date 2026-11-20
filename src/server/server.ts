@@ -13,6 +13,7 @@ import { createChannelConfigRoutes } from "./routes/channel-config";
 import { createRunnerGroupRoutes } from "./routes/runner-groups";
 import { createRunnerUserRoutes } from "./routes/runner-users";
 import { createRunnerMemoryRoutes } from "./routes/runner-memory";
+import { createRunnerChatRoutes } from "./routes/runner-chat";
 import { createRunnerRootRoutes } from "./routes/runner-root";
 import { createSessionCommandAdminRoutes } from "./routes/session-commands";
 import { createRunnerMessageRoutes } from "./routes/runner-messages";
@@ -114,6 +115,7 @@ function createApp(
       .route("/api/runner", createRunnerGroupRoutes(db === undefined ? {} : { db }))
       .route("/api/runner", createRunnerUserRoutes(db === undefined ? {} : { db }))
       .route("/api/runner", createRunnerMemoryRoutes(db === undefined ? {} : { db }))
+      .route("/api/runner", createRunnerChatRoutes(db === undefined ? {} : { db }))
       .route("/api/runner", createRunnerRootRoutes(db === undefined ? {} : { db }))
       .route("/api/runner", createRunnerOperationRoutes())
       .route("/api/runner/task-reports", createTaskReportRoutes())

@@ -34,4 +34,5 @@ Read the matching skill before using these commands; do not guess them:
 - `luna-topics-groups`: opening a topic, creating a group, inviting people.
 - `luna-status-card`: showing, refreshing or restyling a Task progress card.
 - `luna-memory`: saving, correcting or forgetting memory.
+- `luna-listening`: following a group chat without being @-mentioned, or stopping.
 

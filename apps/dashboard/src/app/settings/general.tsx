@@ -40,15 +40,6 @@ const LISTENING_FIELDS: Record<ListeningNumber, { label: string; hint: string; u
   maxTurnsPerHour: { label: "每个群每小时最多几轮", hint: "一个群一小时内最多旁听这么多轮，超出的消息攒到下一小时或有人 @ 时一起看。", unit: "轮", scale: 1, min: 1, max: 120, step: 1 },
 };
 
-export interface ListeningChat {
-  shadowId: string;
-  shadowName: string;
-  chatId: string;
-  chatName: string | null;
-  /** The chat's own switch; null follows the Agent default. */
-  enabled: boolean | null;
-  effective: boolean;
-}
 
 /** How incoming messages become Runner turns; a field left out follows the Service configuration. */
 export interface MessageSettings {
@@ -190,7 +181,6 @@ function AgentSettingsLoader({ agentId, agentName }: { agentId: string; agentNam
         <AgentSettingsForm
           settings={query.data.settings}
           {...(query.data.messageDefaults ? { messageDefaults: query.data.messageDefaults } : {})}
-          listeningChats={<ListeningChats agentId={agentId} defaultEnabled={(query.data.settings.listening ?? DEFAULT_LISTENING).defaultEnabled} />}
           error={saveError}
           onChange={enqueueSave}
         />
@@ -202,12 +192,9 @@ function AgentSettingsLoader({ agentId, agentName }: { agentId: string; agentNam
 export function AgentSettingsForm({
   settings,
   messageDefaults = FALLBACK_MESSAGE_DEFAULTS,
-  listeningChats,
   error,
   onChange,
 }: {
-  /** The per-chat listening switches, which load and save by themselves. */
-  readonly listeningChats?: ReactNode;
   readonly settings: AgentSettings;
   /** What each message setting the Agent leaves unset follows. */
   readonly messageDefaults?: MessageDefaults;
@@ -338,7 +325,7 @@ export function AgentSettingsForm({
           <h2 id="listening-title" className="font-medium">旁听</h2>
           <p className="text-sm text-muted-foreground">
             在开了旁听的群里，没有 @ 分身的消息会攒成一批交给它，它觉得该说话时才开口，否则保持沉默。@ 它的消息仍然立即处理。
-            可信成员也可以在群里发「@分身 #listen on」或「#listen off」来开关。
+            每个群单独开关：在群里 @ 分身让它开始或停止旁听，或在该群的会话页面右上角切换。
           </p>
         </div>
         <Row label="新群默认开启旁听" hint="没有单独设置过的群是否旁听。开启后，这些群里所有人的消息都会发给模型。">
@@ -356,7 +343,6 @@ export function AgentSettingsForm({
             onChange={next => update({ ...value, listening: { ...value.listening, [field]: next } })}
           />
         ))}
-        {listeningChats}
       </section>
 
       <section className="space-y-4 rounded-lg border p-4" aria-labelledby="pty-title">
@@ -548,49 +534,6 @@ function RequiredNumberRow({ meta, value, onChange }: {
       {(text.trim() === "" || !valid(Number(text))) && (
         <p role="alert" className="text-xs text-destructive">请输入 {meta.min} 到 {meta.max} {meta.unit}之间的数，这次修改没有保存。</p>
       )}
-    </div>
-  );
-}
-
-/** The group chats the Agent's bots are in, each with its own listening switch. */
-function ListeningChats({ agentId, defaultEnabled }: { agentId: string; defaultEnabled: boolean }) {
-  const client = useQueryClient();
-  const path = `/agents/${encodeURIComponent(agentId)}/listening-chats`;
-  const query = useQuery({ queryKey: [path, defaultEnabled], queryFn: ({ signal }) => apiFetch<{ chats: ListeningChat[] }>(path, { signal }) });
-  const [error, setError] = useState<string | null>(null);
-  const set = async (chat: ListeningChat, enabled: boolean | null) => {
-    setError(null);
-    try {
-      const data = await apiFetch<{ chats: ListeningChat[] }>(path, { method: "PUT", body: JSON.stringify({ shadowId: chat.shadowId, chatId: chat.chatId, enabled }) });
-      client.setQueryData([path, defaultEnabled], data);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-    }
-  };
-  return (
-    <div className="space-y-2" data-testid="listening-chats">
-      <h3 className="text-sm font-medium text-muted-foreground">各个群的开关</h3>
-      {query.error && <p role="alert" className="text-xs text-destructive">无法加载群列表。{query.error.message}</p>}
-      {error && <p role="alert" className="text-xs text-destructive">保存失败：{error}</p>}
-      {query.data && query.data.chats.length === 0 && <p className="text-xs text-muted-foreground">分身还没有加入任何群。</p>}
-      {query.data?.chats.map(chat => (
-        <Row
-          key={`${chat.shadowId}:${chat.chatId}`}
-          label={chat.chatName ?? chat.chatId}
-          hint={`${chat.shadowName}${chat.enabled === null ? " · 跟随默认" : ""}`}
-        >
-          <div className="flex items-center gap-2">
-            {chat.enabled !== null && (
-              <button type="button" className="rounded-md border px-2 py-1 text-xs" onClick={() => void set(chat, null)}>跟随默认</button>
-            )}
-            <Switch
-              aria-label={`旁听 ${chat.chatName ?? chat.chatId}`}
-              checked={chat.effective}
-              onCheckedChange={enabled => void set(chat, enabled)}
-            />
-          </div>
-        </Row>
-      ))}
     </div>
   );
 }

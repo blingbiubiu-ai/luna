@@ -118,3 +118,36 @@ test("an Agent's message settings replace the Service configuration for its own 
   store.save("owner", agentId, { messages: {} }, base);
   expect(sessionConfigForAgent(connection.db, agentId, base)).toEqual(base);
 });
+
+test("the owner switches listening on the page of a group chat's session; other sessions have no switch", async () => {
+  const { SessionStore } = await import("@/sessions/session-store");
+  const { ChatListeningStore } = await import("@/sessions/chat-listening-store");
+  const { fixtureSessionOwnership } = await import("../helpers/platform-fixtures");
+  const owned = fixtureSessionOwnership(connection.db, "feishu", "feishu-main");
+  const owner = connection.db.select().from(schema.lunaAgents).all().find(agent => agent.id === owned.agent_id)!.ownerAccountId;
+  const group = new SessionStore(connection.db).resolveByChannelSurface({ channelType: "feishu", channelId: "feishu-main", groupId: "oc_group" });
+  const direct = new SessionStore(connection.db).resolveByChannelSurface({ channelType: "feishu", channelId: "feishu-main", groupId: "oc_p2p" });
+  const now = new Date().toISOString();
+  for (const [externalId, surfaceKind] of [["oc_group", "group"], ["oc_p2p", "p2p"]] as const)
+    connection.db.insert(schema.channelSurfaces).values({ id: externalId, channelType: "feishu", channelId: "feishu-main", externalId, surfaceKind,
+      firstSeenAt: now, lastSeenAt: now, createdAt: now, updatedAt: now }).run();
+  const app = new Hono().use("*", async (c, next) => {
+    const id = c.req.header("Test-Actor")!;
+    (c as never as { set: (k: string, v: unknown) => void }).set("dashboardAuthSession", { authenticated: true, account: { id, name: id, provider: "test" } });
+    (c as never as { set: (k: string, v: unknown) => void }).set("lunaRequestAuthKind", "dashboard-cookie");
+    await next();
+  }).route("/agents", createPlatformAgentRoutes(connection.db));
+  const call = async (actor: string, sessionId: string, enabled?: boolean) => {
+    const response = await app.request(`/agents/${owned.agent_id}/sessions/${sessionId}/listening`, { method: enabled === undefined ? "GET" : "PUT",
+      headers: { "Test-Actor": actor, "content-type": "application/json" }, ...(enabled === undefined ? {} : { body: JSON.stringify({ enabled }) }) });
+    return { status: response.status, body: await response.json() as { listening?: boolean | null } };
+  };
+  expect(await call(owner, group.id)).toEqual({ status: 200, body: { listening: false } });
+  expect(await call(owner, group.id, true)).toEqual({ status: 200, body: { listening: true } });
+  expect(new ChatListeningStore(connection.db).enabled(group)).toBe(true);
+  expect((await call(owner, group.id)).body.listening).toBe(true);
+  expect((await call(owner, direct.id)).body.listening).toBeNull();
+  expect((await call(owner, direct.id, true)).status).toBe(404);
+  expect((await call("other", group.id, false)).status).not.toBe(200);
+  expect(new ChatListeningStore(connection.db).enabled(group)).toBe(true);
+});

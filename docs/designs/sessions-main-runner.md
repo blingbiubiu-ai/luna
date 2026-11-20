@@ -99,8 +99,12 @@ A Shadow can follow a group chat without being addressed. `chat_listening`
 holds the switch per Shadow and provider chat; a chat without its own value
 follows the Agent setting `listening.defaultEnabled` (off by default). The
 Agent owner, or a member with an allow rule for `chat.listen`, switches it in
-the chat with `@bot #listen on|off`; the owner also sees every chat's switch
-under Dashboard Agent 设置 → 旁听.
+the chat by asking the Agent, which runs `luna chat listen on|off` (skill
+`luna-listening`); Service takes the chat from the invocation's session and
+refuses the switch in a listening turn, outside a group chat's Main
+conversation, or when the turn's actor is neither. The owner can also switch it on the
+Dashboard page of the chat's session; the thresholds and the default are under
+Agent 设置 → 旁听.
 
 In a listened chat, a person's message that does not address the Agent is
 *overheard*: it enters `session_inbox` with `lane='ambient'` instead of getting
