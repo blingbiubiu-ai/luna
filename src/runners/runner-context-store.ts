@@ -61,7 +61,6 @@ export function assertStoredRunnerRoots(db: DrizzleDB): void {
 
 export interface SyncInstructionFingerprintResult {
   readonly runnerContext: ResolvedRunnerContext;
-  readonly instructionFingerprintChanged: boolean;
   readonly runnerSessionInvalidated: boolean;
 }
 
@@ -179,6 +178,11 @@ export class RunnerContextStore {
       .run();
   }
 
+  /**
+   * Records the context's session fingerprint and starts a fresh provider session when it changed.
+   * The fingerprint covers the Shadow scope (with placement generation) and the Worker
+   * (`context-preparation.ts`).
+   */
   syncInstructionFingerprint(
     runnerContextId: string,
     instructionFingerprint: string,
@@ -194,7 +198,6 @@ export class RunnerContextStore {
     if (existing.instruction_fingerprint === instructionFingerprint) {
       return {
         runnerContext: withDerivedPaths(existing),
-        instructionFingerprintChanged: false,
         runnerSessionInvalidated: false,
       };
     }
@@ -219,7 +222,6 @@ export class RunnerContextStore {
     }
     return {
       runnerContext: withDerivedPaths(updated),
-      instructionFingerprintChanged: true,
       runnerSessionInvalidated: existing.runner_session_id !== null,
     };
   }

@@ -25,8 +25,9 @@ export function syncAgentCompatibility(
 }
 
 /**
- * Have the Worker prepare the context's directory and instructions, and record their
- * fingerprint. `runnerSessionInvalidated` says the instructions changed under a provider session.
+ * Have the Worker prepare the context's directory and instructions, and record the session
+ * fingerprint. `runnerSessionInvalidated` says the context moved to another Worker or placement,
+ * so its provider session could not be resumed.
  */
 export async function prepareRunnerDirectory(input: {
   readonly store: Pick<RunnerContextStore, "syncInstructionFingerprint"> | undefined;

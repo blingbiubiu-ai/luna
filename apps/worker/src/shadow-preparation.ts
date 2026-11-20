@@ -49,7 +49,7 @@ export class ShadowPreparation {
     if(info && (!info.isFile() || info.isSymbolicLink() || info.nlink!==1))throw new ExecutionError(409,"invalid_context_target");
    }
    const rendered=ensureRunnerWorkspaceInstructionFiles({home:plan.layout.home,promptsRoot:join(plan.resourceSource,"prompts"),
-    runnerRootPath:containerCwd,writeRoot:cwd,runnerKind:input.runnerKind,previousFingerprint:null,
+    runnerRootPath:containerCwd,writeRoot:cwd,runnerKind:input.runnerKind,
     // The rules accompany the Shadow switch only where this host lets the container use sudo.
     runnerSudo:input.rootAccess===true && rootHostCheck(plan.layout.homeSource).allowed,
     ...(input.soul ? {soul:input.soul} : {})});

@@ -39,7 +39,7 @@ export function ownerDirectoryName(ownerType: string, ownerId: string, contextId
 
 /** Worker owns filesystem rendering; the local fallback supports non-runtime test adapters. */
 export async function prepareRunnerFiles(input: {
-  id: string; runner_root_path: string; runner_type: string; instruction_fingerprint: string | null;
+  id: string; runner_root_path: string; runner_type: string;
 }, context?: RunnerContextFile, signal?: AbortSignal, invocationId?:string) {
   const runtime = getKernel().executionRuntime;
   if (runtime) {
@@ -64,7 +64,7 @@ export async function prepareRunnerFiles(input: {
         const current=new InvocationStore(db).require(invocationId);
         if(current.state!=="active" || current.settledAt!==null)throw new ExecutionError(409,"invocation_preparation_mismatch");
         resolveInvocationScope(db,current);
-        return { instructionFingerprint: prepared.instructionFingerprint, changed: prepared.instructionFingerprint !== input.instruction_fingerprint };
+        return { instructionFingerprint: prepared.instructionFingerprint };
       } catch (error) {
         if (!(error instanceof ExecutionError) || !["worker_not_ready", "no_worker_available", "worker_disconnected", "shadow_worker_unavailable",
           "worker_delivery_failed", "shadow_resources_pending", "shadow_preparation_busy", "context_busy", "runtime_draining"].includes(error.code)) throw error;
@@ -72,8 +72,8 @@ export async function prepareRunnerFiles(input: {
       }
     }
   }
-  const result = ensureRunnerWorkspaceInstructionFiles({ runnerKind: context?.runnerKind ?? "main", runnerRootPath: input.runner_root_path, previousFingerprint: null });
+  ensureRunnerWorkspaceInstructionFiles({ runnerKind: context?.runnerKind ?? "main", runnerRootPath: input.runner_root_path });
   if (context) writeRunnerContextFile(input.runner_root_path, context);
-  // Instruction changes reach a resumed provider session, so they never require a fresh one.
-  return { instructionFingerprint: LOCAL_SESSION_FINGERPRINT, changed: result.changed };
+  // Without a Worker there is no placement to move, so the provider session is always kept.
+  return { instructionFingerprint: LOCAL_SESSION_FINGERPRINT };
 }

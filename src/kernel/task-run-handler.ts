@@ -47,7 +47,6 @@ import {
 } from "@/kernel/agents";
 import { getKernel } from "@/server/routes/kernel";
 import { runnerArtifactAllowlistFromInput } from "@/main-runner/artifact-allowlist";
-import { ensureTaskRunnerWorkspaceInstructions } from "@/task-runner/workspace-instructions";
 import { TaskSubscriptionStore } from "@/tasks/task-subscription-store";
 import { WAITING_FOR_INPUT, type TaskSubscription } from "@/tasks/types";
 import { renderMessageBlocksForRunner } from "@/main-runner/context-builder";

@@ -199,7 +199,7 @@ container; the host runner home does not create skills links.
 
 Runtime passes the runner context ID in `AgentRunOptions.runnerContextId`. Each session context has its own working directory in the Shadow container.
 
-Main registers the invocation and pins its resources before asking the Worker to prepare that directory. The prepared instruction fingerprint determines whether Main can resume a provider session. Recovery attaches to an existing Job using its saved request and skips file preparation.
+Main registers the invocation and pins its resources before asking the Worker to prepare that directory. The prepared session fingerprint (Shadow scope with its placement generation, and Worker) determines whether Main can resume a provider session. Recovery attaches to an existing Job using its saved request and skips file preparation.
 
 It also carries provider and model fingerprints from the active Dashboard
 Profile. Runtime compares them immediately before execution. Provider identity
@@ -207,7 +207,7 @@ changes always clear the provider resume id; model-only changes follow the
 active revision's resume policy. Agent type changes resolve a separate runner
 context. Activation itself does not mutate existing contexts.
 
-If the stored fingerprint does not match:
+If the stored session fingerprint does not match, because the context moved to another Worker or placement:
 
 - Runtime clears the persisted `runner_session_id`.
 - the current turn is treated as a fresh runner session.

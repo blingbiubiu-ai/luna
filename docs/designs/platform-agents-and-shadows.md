@@ -42,8 +42,8 @@ routing. A missing record means automatic selection. A bound Worker must have an
 active assignment to the same Agent; routing configuration does not grant access.
 
 A changed rule applies when the next session or task execution is prepared.
-Runtime switches only eligible idle contexts and invalidates provider sessions
-when the instruction fingerprint changes. Worker-local files are not migrated.
+Runtime switches only eligible idle contexts and invalidates their provider
+sessions, because the session fingerprint covers the Worker and placement. Worker-local files are not migrated.
 Existing reservations and unknown execution outcomes retain their original
 Worker. See [Execution runtime](execution-runtime-foundation.md).
 

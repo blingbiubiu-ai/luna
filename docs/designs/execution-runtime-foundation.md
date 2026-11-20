@@ -183,8 +183,9 @@ The existing `runtime_prepared_contexts` table also stores the preparation input
 It supports rebuilding a job still in the Service queue, before it has a Worker
 reservation. Preparing a context with an outstanding reserved job never changes
 its owner. The replacement contributes its paths, environment and resource
-revision. A Worker-qualified instruction fingerprint invalidates the previous
-provider session through the existing Service context rebuild path. For queued
+revision. The session fingerprint covers the Shadow placement and Worker, so a move
+invalidates the previous provider session through the existing Service context
+rebuild path. For queued
 jobs, Runtime removes the old provider session ID and prefixes the supplied
 prompt with an environment-reset notice; it does not invent missing history or
 assume old filesystem changes exist. Original submission hashes are retained for

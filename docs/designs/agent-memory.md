@@ -31,10 +31,6 @@ cannot support Shadows that learn while they work:
 - one revision for the whole document set makes concurrent Shadow writes conflict;
 - the snapshot is pinned at acceptance, so a running session never sees what
   another Shadow just learned;
-- `instructionFingerprint` hashes the resource selection
-  (`src/runtime/context-preparation.ts`). A changed
-  fingerprint invalidates provider sessions, so frequent memory writes would
-  reset every Shadow's conversation context;
 - a snapshot is per Shadow, while `person` visibility is per session.
 
 ## Entries
@@ -246,8 +242,8 @@ The message is the user messages of a Main turn, the messages of a Work turn,
 or a Task Run's new input (its title and summary when there is none).
 Maintenance turns recall nothing. Only id, type, title, description and
 attribution are injected; bodies are fetched with `luna memory get`. Work
-computes the injection after the instruction fingerprint sync, so a provider
-session reset by it is told persona and standing memory again.
+computes the injection after preparing the Runner directory, so a provider
+session that starts afresh is told standing memory again.
 
 `memory_injection_cursors` records, per Runner context, the provider session and
 the last `change_seq` it was told about; `memory_injected_entries` records which

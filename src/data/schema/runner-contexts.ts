@@ -19,6 +19,7 @@ export const runnerContexts = sqliteTable(
     owner_id: text("owner_id").notNull(),
     runner_type: text("runner_type").notNull(),
     runner_session_id: text("runner_session_id"),
+    /** Session fingerprint: Shadow scope (with placement generation) and Worker. */
     instruction_fingerprint: text("instruction_fingerprint"),
     provider_fingerprint: text("provider_fingerprint"),
     model_fingerprint: text("model_fingerprint"),

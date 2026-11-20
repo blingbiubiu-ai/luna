@@ -204,16 +204,14 @@ src/prompts/
 
 ### 4.5 指令变化不重建会话
 
-现状：Service 把 `scope`、`resources`、`workerId` 和 Worker 返回的指令哈希合成一个指纹（`context-preparation.ts`）；指纹一变，`syncInstructionFingerprint` 就把 `runner_session_id` 置空。
+会话指纹只包含 `scope`（含 placement generation）和 `workerId`（`context-preparation.ts`）。指纹变化时 `syncInstructionFingerprint` 把 `runner_session_id` 置空。
 
-改为把指纹拆成两部分：
-
-| 部分 | 变化时 |
+| 变化 | 结果 |
 |---|---|
 | 指令内容（规则、soul）和资源包（prompts、skills、工具） | 只重写文件，provider 会话保留。Claude 下一轮读到新文件；Codex 下一轮追加一条替换指令；skill 正文用到时才读，所以改动下一次使用就生效 |
-| `scope`（含 placement generation）、`workerId` | 重建会话：换了 Worker 或 placement，HOME 里没有原来的 provider 会话 |
+| Worker 或 placement | 重建会话：新的 HOME 里没有原来的 provider 会话 |
 
-资源包原先也在指纹里，导致每次发布改了内置 skill 或 prompt，所有会话都重开一次（HostA 11-19 实际发生）。已移出。已知代价：Codex 只在会话开始时列出 skill 清单，恢复的会话看不到新增的 skill，直到下一次因别的原因开新会话。
+已知代价：Codex 只在会话开始时列出 skill 清单，恢复的会话看不到新增的 skill，直到下一次因别的原因开新会话。
 
 改名或改 persona 之后：
 
@@ -258,7 +256,7 @@ Main，私聊，会话首轮：
 
 - **代码**：`runner-instructions.ts`（片段拼装、soul 和 session 块）、`shadow-preparation.ts` 与准备请求的协议（新增两个字段）、`context-preparation.ts` 与 `runner-context-store.ts`（指纹拆分）、新增 `turn-envelope.ts`、`main-runner.ts`、`task-run-handler.ts`、`work-runner.ts`、`agent-memory-injection.ts`、`src/prompts/*`、第二阶段的 `skills/*`。
 - **测试**：13 个测试文件断言提示词文本，需要同步更新。
-- **上线行为**：指纹算法变化，上线后第一轮各会话重建一次 provider 会话；之后指令变化只在下一轮读到新文件，不再重建。
+- **上线行为**：指令变化在下一轮读到新文件，不重建会话。
 - **大小**：persona 计入 `AGENTS.md`。大小测试要按 persona 条目数上限（`config.memory.persona_limit`）和单条长度上限算最坏情况；单条长度现在有没有上限，实现时确认，没有就加。
 - **持久化的旧 prompt**：恢复中的 Task run 会重放旧格式，过渡期两种格式并存。
 - **打包**：发布包里有一份 `src/prompts` 的拷贝，需要确认打包脚本带上新的子目录。
@@ -313,7 +311,6 @@ Main，私聊，会话首轮：
 - **第一阶段后的大小。** 加了 soul、`<luna_runtime>`、`<identity>`，并把产物规则合成一份完整版本，Main 反而从 33.2KB 涨到 35.7KB（开 root 37.2KB），Task 12.6KB，Work 13.9KB。都在 Codex 64KiB 上限的 75% 以内；真正的瘦身要靠第二阶段。
 - **已确认：Task Runner 每次 run 都重新生成静态文件**（`task-run-handler.ts` 在执行前调用 `prepareRunnerFiles`）。
 - **重试时 persona 恰好被改。** 准备请求按内容哈希去重，同一次调用重试时如果 soul 变了，会以 `invocation_preparation_conflict` 失败一次。改 persona 很少，先接受。
-- **上线时每个会话重建一次。** 指纹的算法变了，所有 runner 上下文的旧指纹都对不上，上线后的第一轮各重建一次 provider 会话。之后指令变化不再重建。
 - **Codex 会话里累积的旧 `AGENTS.md`。** 每次指令变化追加一份。改动很少时可以接受；若某个长会话累积过多，可以让它在累积到一定次数后重建一次。
 - **时区来源。** 目前没有每个用户的时区配置；第一版用服务器时区。
 - **`externalId`。** 若确认 `luna users get` 能返回飞书 ID 且建群、拉人的验收不受影响，可以再删。

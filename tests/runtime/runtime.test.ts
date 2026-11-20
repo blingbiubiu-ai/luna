@@ -5403,7 +5403,6 @@ messaging:
         "new-fingerprint",
       );
 
-      expect(result.instructionFingerprintChanged).toBe(true);
       expect(result.runnerSessionInvalidated).toBe(true);
       expect(result.runnerContext.runner_session_id).toBeNull();
       expect(result.runnerContext.instruction_fingerprint).toBe("new-fingerprint");

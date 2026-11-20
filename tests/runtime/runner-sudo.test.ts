@@ -45,7 +45,7 @@ test("an id the image already knows is reused instead of adding a second account
 test("root-access rules are appended to Runner instructions only when the Worker enables sudo", () => {
   const render = (runnerSudo: boolean) => {
     const cwd = mkdtempSync(join(root, "runner-"));
-    const result = ensureRunnerWorkspaceInstructionFiles({ home: "/data/home", promptsRoot: join(import.meta.dir, "../../src/prompts"), runnerKind: "work", runnerRootPath: cwd, previousFingerprint: null, runnerSudo });
+    const result = ensureRunnerWorkspaceInstructionFiles({ home: "/data/home", promptsRoot: join(import.meta.dir, "../../src/prompts"), runnerKind: "work", runnerRootPath: cwd, runnerSudo });
     return { text: readFileSync(join(cwd, "AGENTS.md"), "utf8"), fingerprint: result.instructionFingerprint };
   };
   const off = render(false), on = render(true);

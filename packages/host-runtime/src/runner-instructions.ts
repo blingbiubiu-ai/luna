@@ -30,13 +30,13 @@ export interface EnsureRunnerWorkspaceInstructionFilesInput {
   readonly runnerRootPath: string;
   /** Where to write the files when that differs from `runnerRootPath` (a Worker host path). */
   readonly writeRoot?: string;
-  readonly previousFingerprint: string | null;
   /** Worker grants Jobs sudo: add the root-access rules from the prompts directory. */
   readonly runnerSudo?: boolean;
   readonly soul?: RunnerSoul;
 }
 
 export interface EnsureRunnerWorkspaceInstructionFilesResult {
+  /** Hash of the generated instructions. Informational: it never decides whether a provider session resumes. */
   readonly instructionFingerprint: string;
   readonly changed: boolean;
 }
@@ -97,7 +97,7 @@ function _soulBlock(soul: RunnerSoul): string {
 }
 
 /** Renders the instruction file for one runner kind. Exported for size checks. */
-export function renderRunnerInstructions(input: Omit<EnsureRunnerWorkspaceInstructionFilesInput, "previousFingerprint">): string {
+export function renderRunnerInstructions(input: EnsureRunnerWorkspaceInstructionFilesInput): string {
   const read = (file: string) => readFileSync(join(input.promptsRoot, file), "utf-8").trim();
   const resources = join(input.home, ".luna-resources");
   const directories = [
@@ -162,13 +162,6 @@ export function ensureRunnerWorkspaceInstructionFiles(
   const claudePath = _instructionFilePath(writeRoot, "claude");
   const agentsPath = _instructionFilePath(writeRoot, "codex");
   const filesMissing = !existsSync(claudePath) || !existsSync(agentsPath);
-
-  if (input.previousFingerprint === instructionFingerprint && !filesMissing) {
-    return {
-      instructionFingerprint,
-      changed: false,
-    };
-  }
 
   const claudeChanged = _writeFileIfChanged(
     claudePath,

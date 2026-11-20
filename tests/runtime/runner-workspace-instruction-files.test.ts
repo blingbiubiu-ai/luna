@@ -29,7 +29,6 @@ function runEnsure(
   return ensureRunnerWorkspaceInstructionFiles({
     runnerKind: "main",
     runnerRootPath,
-    previousFingerprint: null,
     ...overrides,
   });
 }
@@ -64,28 +63,28 @@ test("materializes CLAUDE.md and AGENTS.md directly from .runner_prompt", () => 
   expect(existsSync(join(runnerRootPath, ".luna-prompts"))).toBe(false);
 });
 
-test("does not rewrite generated files when the fingerprint matches and files exist", async () => {
-  const first = runEnsure();
+test("does not rewrite generated files whose content is unchanged", async () => {
+  runEnsure();
   const claudePath = join(runnerRootPath, "CLAUDE.md");
   const agentsPath = join(runnerRootPath, "AGENTS.md");
   const beforeClaude = statSync(claudePath).mtimeMs;
   const beforeAgents = statSync(agentsPath).mtimeMs;
   await new Promise((resolve) => setTimeout(resolve, 20));
 
-  const second = runEnsure({ previousFingerprint: first.instructionFingerprint });
+  const second = runEnsure();
 
   expect(second.changed).toBe(false);
   expect(statSync(claudePath).mtimeMs).toBe(beforeClaude);
   expect(statSync(agentsPath).mtimeMs).toBe(beforeAgents);
 });
 
-test("regenerates missing files even when the fingerprint matches", async () => {
-  const first = runEnsure();
+test("regenerates a missing file even when the content is unchanged", async () => {
+  runEnsure();
   const agentsPath = join(runnerRootPath, "AGENTS.md");
   rmSync(agentsPath);
   await new Promise((resolve) => setTimeout(resolve, 20));
 
-  const second = runEnsure({ previousFingerprint: first.instructionFingerprint });
+  const second = runEnsure();
 
   expect(second.changed).toBe(true);
   expect(existsSync(agentsPath)).toBe(true);
@@ -108,7 +107,7 @@ test("Codex reads every generated AGENTS.md to its end, root rules included", ()
   for (const runnerKind of ["main", "task", "work"] as const) {
     ensureRunnerInstructionFiles({
       home: "/home/luna", promptsRoot: join(import.meta.dir, "../../src/prompts"), runnerKind,
-      runnerRootPath, previousFingerprint: null, runnerSudo: true,
+      runnerRootPath, runnerSudo: true,
     });
     const doc = readFileSync(join(runnerRootPath, "AGENTS.md"));
     expect(doc.toString()).toContain("Never use root to read or send credentials");
@@ -167,7 +166,7 @@ test("a shared policy change refreshes instructions even when the role is unchan
   const policyPath = join(defaultRunnerPromptsDirectory(), "shared/confidentiality.md");
   writeFileSync(policyPath, readFileSync(policyPath, "utf-8") + "\nAdditional policy revision.\n");
 
-  const second = runEnsure({ previousFingerprint: first.instructionFingerprint });
+  const second = runEnsure();
 
   expect(second.changed).toBe(true);
   expect(second.instructionFingerprint).not.toBe(first.instructionFingerprint);
@@ -177,9 +176,9 @@ test("a shared policy change refreshes instructions even when the role is unchan
 });
 
 test("missing shared policy fails closed instead of generating unprotected instructions", () => {
-  const first = runEnsure();
+  runEnsure();
   rmSync(join(defaultRunnerPromptsDirectory(), "shared/confidentiality.md"));
-  expect(() => runEnsure({ previousFingerprint: first.instructionFingerprint })).toThrow();
+  expect(() => runEnsure()).toThrow();
 });
 
 
