@@ -23,6 +23,10 @@ export const sessionInbox = sqliteTable(
     message_id: text("message_id").notNull(),
     sender_identity_id: text("sender_identity_id"),
     received_at: integer("received_at").notNull(),
+    /** `direct` rows address the Agent. `ambient` rows are group messages it overheard, gathered into listening turns. */
+    lane: text("lane", { enum: ["direct", "ambient"] }).notNull().default("direct"),
+    /** An ambient row that names the Agent: its batch does not wait. */
+    due_now: integer("due_now", { mode: "boolean" }).notNull().default(false),
     status: text("status").notNull(),
     turn_id: text("turn_id"),
     claimed_at: integer("claimed_at"),

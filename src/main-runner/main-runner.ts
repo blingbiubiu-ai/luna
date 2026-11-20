@@ -390,6 +390,7 @@ function mainTurnBlock(input: MainRunnerInput, clock: ReturnType<typeof turnCloc
     json: compact({
       ...clock,
       requesterUserId: input.requesterUserId,
+      listening: input.ambient,
       addressing: addressingFacts(input.latestMessage),
       activationSource: input.activationSourceMessage && activationItem(input.activationSourceMessage, people),
       items: input.messages.map((message) => messageItem(message, people, rawById.get(message.messageId))),

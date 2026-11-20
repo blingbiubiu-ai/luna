@@ -15,7 +15,8 @@ import {
   type SessionTurnExecutionInput,
 } from "@/sessions/session-queue";
 import { SessionResolver } from "@/sessions/session-resolver";
-import { SessionStore } from "@/sessions/session-store";
+import { SessionStore, type SessionRow } from "@/sessions/session-store";
+import { ChatListeningStore } from "@/sessions/chat-listening-store";
 import { SessionTimelineStore } from "@/sessions/session-timeline-store";
 import { SessionTimelineEventStore } from "@/sessions/session-timeline-event-store";
 import { SessionTurnStore } from "@/sessions/session-turn-store";
@@ -255,6 +256,15 @@ export class SessionInboundRouter {
           sessionId: session.id,
           messageId: userMessage.id,
         });
+        if (!botSender && this._listensTo(session, durableMessage)) {
+          // Overheard: it waits with the chat's other messages for a listening turn instead of being skipped.
+          const overheard = this._inboxStore.enqueueOnce({
+            sessionId: session.id, entryId: entry.id, message: userMessage, lane: "ambient",
+            dueNow: this._namesAgent(durableMessage.text, sessionConfig.group_bot_aliases),
+          });
+          if (overheard.row.status === "pending") this._sessionQueue.schedule(session.id);
+          return;
+        }
         this._turnStore.createSkipTurn({
           sessionId: session.id,
           entryId: entry.id,
@@ -296,9 +306,29 @@ export class SessionInboundRouter {
         await this._channel.beginProcessing?.(addressedMessage);
       }
       if (enqueueResult.row.status === "pending") {
+        // A listening turn must not make someone who addressed the Agent wait.
+        this._sessionQueue.preemptAmbient(session.id);
         this._sessionQueue.schedule(session.id);
       }
     });
+  }
+
+  /**
+   * Whether an unaddressed message is overheard: a person's message in a Main conversation of a group
+   * chat that is listened to. A topic thread counts once the Agent has spoken in it.
+   */
+  private _listensTo(session: SessionRow, message: NormalizedInboundMessage): boolean {
+    if (session.kind !== "main" || message.surface.kind !== "group" || message.text.trim().length === 0) return false;
+    if (!new ChatListeningStore(this._db).enabled(session)) return false;
+    return session.thread_key === null || this._db.select({ id: messages.id }).from(messages)
+      .where(and(eq(messages.ownerSessionId, session.id), eq(messages.role, "assistant"))).limit(1).get() !== undefined;
+  }
+
+  /** The message says the bot's name or one of its aliases without addressing it. */
+  private _namesAgent(text: string, aliases: readonly string[]): boolean {
+    const haystack = text.toLocaleLowerCase();
+    return [this._channel.getBotIdentity?.()?.displayName, ...aliases]
+      .some(name => name !== undefined && name.trim().length >= 2 && haystack.includes(name.trim().toLocaleLowerCase()));
   }
 
   async waitForIdle(): Promise<void> {
@@ -511,11 +541,12 @@ export class SessionTurnProcessor {
         await this._workRunner.executeWorkTurn(input, session, signal);
         return;
       }
-      const activationContextMessages = this._selectActivationContextMessages({
+      // What was overheard and not yet delivered comes first-hand from the inbox; the selection may miss it.
+      const activationContextMessages = mergeActivationContext(this._selectActivationContextMessages({
         sessionId: input.turn.sessionId,
         messageRows: input.messageRows,
         latestInbound,
-      });
+      }), (input.overheardMessageRows ?? []).map(activationContextMessageFromRow));
       const activationSourceMessage = this._selectActivationSourceMessage({
         sessionId: input.turn.sessionId,
         latestInbound,
@@ -528,6 +559,7 @@ export class SessionTurnProcessor {
         inbounds,
         latestInbound,
         activationContextMessages,
+        ...(input.ambient ? { ambient: true } : {}),
         ...(signal !== undefined ? { signal } : {}),
         ...(activationSourceMessage !== undefined
           ? { activationSourceMessage }
@@ -542,7 +574,8 @@ export class SessionTurnProcessor {
         ...(activationSourceMessage ? { activationSourceMessage } : {}),
       });
     } catch (error) {
-      if (!signal?.aborted && !(error instanceof RuntimeDetachedError) && session?.kind !== "work" && latestMessageRow.senderUserId) {
+      // Nobody asked for a listening turn, so its failure is not reported to the chat.
+      if (!signal?.aborted && !input.ambient && !(error instanceof RuntimeDetachedError) && session?.kind !== "work" && latestMessageRow.senderUserId) {
         try {
           reportSessionExecutionError(this._db, {
             sessionId: input.turn.sessionId, turnId: input.turn.id,
@@ -555,7 +588,8 @@ export class SessionTurnProcessor {
       }
       throw error;
     } finally {
-      await this._completeProcessing(channel, inbounds);
+      // Overheard messages never got a processing reaction.
+      if (!input.ambient) await this._completeProcessing(channel, inbounds);
     }
   }
 
@@ -573,6 +607,7 @@ export class SessionTurnProcessor {
 
   private _contextExcludedEntryIds(input: {
     readonly sessionId: string;
+    readonly turnId: string;
     readonly currentEntryIds: readonly string[];
   }): readonly string[] {
     const excluded = new Set(input.currentEntryIds);
@@ -580,11 +615,15 @@ export class SessionTurnProcessor {
       .select({
         entryId: sessionInbox.entry_id,
         status: sessionInbox.status,
+        lane: sessionInbox.lane,
+        turnId: sessionInbox.turn_id,
       })
       .from(sessionInbox)
       .where(eq(sessionInbox.session_id, input.sessionId))
       .all();
     for (const row of queuedRows) {
+      // Overheard messages this turn took along are its context, not input still waiting for a turn.
+      if (row.lane === "ambient" && row.status === "claimed" && row.turnId === input.turnId) continue;
       if (row.status === "pending" || row.status === "claimed") {
         excluded.add(row.entryId);
       }
@@ -601,6 +640,7 @@ export class SessionTurnProcessor {
     readonly latestInbound: NormalizedInboundMessage;
     readonly activationContextMessages: readonly ActivationContextMessage[];
     readonly activationSourceMessage?: ActivationContextMessage;
+    readonly ambient?: boolean;
     readonly signal?: AbortSignal;
   }): Promise<MainRunnerCompletion> {
     const triggerEntryId = input.currentEntryIds.at(-1);
@@ -685,6 +725,7 @@ export class SessionTurnProcessor {
           })),
           latestMessage: input.latestInbound,
           context: contextBuild.context,
+          ...(input.ambient ? { ambient: true as const } : {}),
           ...(input.activationSourceMessage !== undefined
             ? { activationSourceMessage: input.activationSourceMessage }
             : {}),
@@ -941,6 +982,13 @@ function activationSessionSourceMessageId(
   return typeof activationFollowup?.sessionSourceMessageId === "string"
     ? activationFollowup.sessionSourceMessageId
     : undefined;
+}
+
+/** Context messages from two sources as one list in time order, each message once. */
+function mergeActivationContext(selected: readonly ActivationContextMessage[], overheard: readonly ActivationContextMessage[]): ActivationContextMessage[] {
+  if (overheard.length === 0) return [...selected];
+  const byId = new Map([...selected, ...overheard].map(message => [message.messageId, message]));
+  return [...byId.values()].filter(message => message.text.length > 0).sort((a, b) => a.createdAt - b.createdAt);
 }
 
 function activationContextMessageFromRow(row: MessageRow): ActivationContextMessage {

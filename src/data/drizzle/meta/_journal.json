@@ -29,6 +29,13 @@
       "when": 1795392000000,
       "tag": "0004_platform_auth_settings",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1795478400000,
+      "tag": "0005_ambient_listening",
+      "breakpoints": true
     }
   ]
 }

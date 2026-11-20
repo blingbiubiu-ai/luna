@@ -101,7 +101,7 @@ export class PluginRegistry {
     const owned=new Set([...manifest.operations.map(o=>o.id.split(".")[0]!),...(manifest.operationNamespaces ?? []).map(n=>n.namespace)]);
     const existing=new Set(this.listPlugins().flatMap(p=>[...p.manifest.operations.map(o=>o.id.split(".")[0]!),...(p.manifest.operationNamespaces ?? []).map(n=>n.namespace)]));
     for (const namespace of owned) {
-      if (["workspace","system","memory"].includes(namespace) || existing.has(namespace) || !/^[a-z][a-z0-9_-]*$/.test(namespace)) throw new PluginManifestValidationError(`Namespace is reserved or already owned: ${namespace}`);
+      if (["workspace","system","memory","chat"].includes(namespace) || existing.has(namespace) || !/^[a-z][a-z0-9_-]*$/.test(namespace)) throw new PluginManifestValidationError(`Namespace is reserved or already owned: ${namespace}`);
     }
     if ((manifest.operationNamespaces ?? []).some(n=>n.mode !== "dynamic")) throw new PluginManifestValidationError("Unsupported namespace mode");
   }

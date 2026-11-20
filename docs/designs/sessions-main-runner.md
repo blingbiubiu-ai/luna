@@ -93,6 +93,56 @@ the Feishu channel for every message. A max wait shorter than the idle wait is
 refused (`invalid_message_coalesce`). `stale_claim_ms` stays Service-wide: it
 only governs recovery at startup.
 
+## Listening In Group Chats
+
+A Shadow can follow a group chat without being addressed. `chat_listening`
+holds the switch per Shadow and provider chat; a chat without its own value
+follows the Agent setting `listening.defaultEnabled` (off by default). The
+Agent owner, or a member with an allow rule for `chat.listen`, switches it in
+the chat with `@bot #listen on|off`; the owner also sees every chat's switch
+under Dashboard Agent 设置 → 旁听.
+
+In a listened chat, a person's message that does not address the Agent is
+*overheard*: it enters `session_inbox` with `lane='ambient'` instead of getting
+a skip turn, and gets no processing reaction. Messages from other bots, Work
+sessions and topic threads the Agent has not yet spoken in are not listened to.
+
+`SessionQueue` keeps the two lanes apart:
+
+| | `direct` lane | `ambient` lane |
+| --- | --- | --- |
+| Rows | Messages that address the Agent | Overheard messages |
+| Batch | Consecutive messages of one sender | Every pending row of the session, whoever sent it |
+| Starts | After the coalescing window | When the batch is due (below) |
+| Turn reason | `addressed` | `ambient` |
+
+An ambient batch is due when the chat has been quiet for `listening.quietMs`
+(30 s), holds `batchSize` (10) messages, or its first message has waited
+`maxWaitMs` (3 min). Each listening turn that ends without an answer doubles
+those three thresholds, the quiet time up to `backoffMaxMs` (10 min); an answer,
+or anyone addressing the Agent, resets them. A chat, counting its threads, gets
+at most `maxTurnsPerHour` (12) listening turns; held messages wait for the next
+hour or for someone to address the Agent. A message that says the bot's name or
+an alias (`due_now`) is due at once and ignores the backoff and the hourly
+limit. Rows that are not due are woken by a timer; they are durable, so a
+restart recomputes the wait from the rows. Rows of a chat whose switch was
+turned off are completed with skip turns.
+
+A listening turn gives the Runner the batch as `<messages>` with
+`"listening": true`. The routing rules make silence (`LUNA_NOTHING_TO_SEND`)
+the normal outcome and say when to speak. Its failure is not reported to the
+chat.
+
+When someone addresses the Agent:
+
+- overheard rows still pending are claimed by that turn and given to the
+  Runner as activation context (`deltaContext`), then completed with it;
+- a listening turn that is running is aborted so the message does not wait
+  behind it. If the provider CLI had reported its session during that turn, its
+  input is already part of the conversation the next turn resumes (verified for
+  Claude and Codex killed after that report), so the rows are completed and not
+  sent again; otherwise they return to pending and go along as context.
+
 ## Timeline And Context Pack
 
 `session_timeline_entries` is the smallest discussable unit shared by Dashboard, Main Runner context builder, and Task source context.

@@ -18,6 +18,10 @@ import { MessageStore } from "@/sessions/message-store";
 import { SessionInboxStore } from "@/sessions/session-inbox-store";
 import { resolveLunaAccessTokenSigningSecret } from "@/server/auth";
 import { extractSystemCommand } from "./system-command-parser";
+import { AgentStore } from "@/agents/agent-store";
+import { AuthorizationRuleStore } from "@/server/policy/authorization-rule-store";
+import { ruleMatchesOperation } from "@/server/policy/operation-policy";
+import { ChatListeningStore } from "@/sessions/chat-listening-store";
 
 const CHANNEL_AUTH_TOKEN_TTL_MS = 10 * 60 * 1000;
 
@@ -57,6 +61,10 @@ export class InboundCommandRouter {
       await this._handleLink(message);
       return true;
     }
+    if (command === "#listen") {
+      await this._handleListen(message);
+      return true;
+    }
     if (command === "#work") {
       const launcher = new WorkSessionLauncher({
         db: this._options.db,
@@ -75,6 +83,44 @@ export class InboundCommandRouter {
       idempotencyKey: `system-command:${message.channel.id}:${message.id}:unknown`,
     });
     return true;
+  }
+
+  /**
+   * `#listen on|off` switches listening for this group chat and this bot; `#listen` alone reports it.
+   * Like the memory rules, the Agent owner or a member with an allow rule for `chat.listen` may switch it:
+   * it decides whether everyone's unaddressed messages in the chat reach the model.
+   */
+  private async _handleListen(message: NormalizedInboundMessage): Promise<void> {
+    const db = this._options.db;
+    const reply = (key: string, content: string) => this._options.channel.send(message, {
+      replyMode: message.surface.kind === "p2p" ? "direct_message" : "channel_message",
+      content, targetMessageId: message.id,
+      idempotencyKey: `system-command:${message.channel.id}:${message.id}:listen:${key}`,
+    });
+    if (message.surface.kind !== "group") {
+      await reply("not-group", "#listen works in a group chat: a private chat always reaches me.");
+      return;
+    }
+    const binding = new BotBindingStore(db).requireActive(message.channel.id);
+    const chat = { agent_id: binding.agentId, shadow_id: binding.shadowId, group_id: message.surface.externalId };
+    const store = new ChatListeningStore(db);
+    const wanted = message.text.match(/#listen\s+(on|off)\b/i)?.[1]?.toLowerCase();
+    if (wanted === undefined) {
+      await reply("status", `Listening is ${store.enabled(chat) ? "on" : "off"} in this chat. Send #listen on or #listen off to change it.`);
+      return;
+    }
+    const userId = canonicalUserIdForRequestedIdentity(db, binding.agentId, requestedIdentityFromInbound(message));
+    const allowed = userId !== undefined && (new AgentStore(db).isOwnerUser(binding.agentId, userId)
+      || new AuthorizationRuleStore(db, { kind: "agent", agentId: binding.agentId }).getEffectiveGrantsForUser(userId)
+        .some(grant => grant.effect === "allow" && ruleMatchesOperation(grant, "chat.listen")));
+    if (!allowed) {
+      await reply("forbidden", "Only my owner, or someone my owner allowed to, can switch listening in a chat.");
+      return;
+    }
+    store.set(chat.shadow_id, chat.group_id, wanted === "on", userId ?? null);
+    await reply(wanted, wanted === "on"
+      ? "Listening is on: I will follow this chat and speak up when I have something to add. Messages that @ me are still answered right away."
+      : "Listening is off: I will only answer when someone @s me or replies to me.");
   }
 
   private async _handleAuth(message: NormalizedInboundMessage): Promise<void> {

@@ -17,6 +17,37 @@ export interface AgentSettings {
   task?: { runLimitHours: number };
   pty?: { idleTimeoutMinutes: number };
   messages?: MessageSettings;
+  listening?: ListeningSettings;
+}
+
+/** Listening in group chats: when overheard messages are given to the Runner together. Times are in milliseconds. */
+export interface ListeningSettings {
+  defaultEnabled: boolean;
+  quietMs: number;
+  batchSize: number;
+  maxWaitMs: number;
+  backoffMaxMs: number;
+  maxTurnsPerHour: number;
+}
+const DEFAULT_LISTENING: ListeningSettings = { defaultEnabled: false, quietMs: 30000, batchSize: 10, maxWaitMs: 180000, backoffMaxMs: 600000, maxTurnsPerHour: 12 };
+
+type ListeningNumber = Exclude<keyof ListeningSettings, "defaultEnabled">;
+const LISTENING_FIELDS: Record<ListeningNumber, { label: string; hint: string; unit: string; scale: number; min: number; max: number; step: number }> = {
+  quietMs: { label: "群里安静多久后看一批（秒）", hint: "最后一条消息之后这么久没人说话，就把攒下的消息交给分身。", unit: "秒", scale: 1000, min: 5, max: 3600, step: 1 },
+  batchSize: { label: "攒够几条就看", hint: "不等安静，攒到这么多条就交给分身。", unit: "条", scale: 1, min: 1, max: 100, step: 1 },
+  maxWaitMs: { label: "最长攒多久（分钟）", hint: "从第一条消息起最多等这么久。", unit: "分钟", scale: 60000, min: 0.5, max: 60, step: 0.5 },
+  backoffMaxMs: { label: "连续沉默后的间隔上限（分钟）", hint: "分身每次看完不说话，下次等待时间翻倍，最长到这个值；它开口或被 @ 后恢复。", unit: "分钟", scale: 60000, min: 0.5, max: 1440, step: 0.5 },
+  maxTurnsPerHour: { label: "每个群每小时最多几轮", hint: "一个群一小时内最多旁听这么多轮，超出的消息攒到下一小时或有人 @ 时一起看。", unit: "轮", scale: 1, min: 1, max: 120, step: 1 },
+};
+
+export interface ListeningChat {
+  shadowId: string;
+  shadowName: string;
+  chatId: string;
+  chatName: string | null;
+  /** The chat's own switch; null follows the Agent default. */
+  enabled: boolean | null;
+  effective: boolean;
 }
 
 /** How incoming messages become Runner turns; a field left out follows the Service configuration. */
@@ -93,6 +124,7 @@ function normalizeSettings(settings: AgentSettings): Required<AgentSettings> {
     task: { runLimitHours: settings.task?.runLimitHours ?? 10 },
     pty: { idleTimeoutMinutes: settings.pty?.idleTimeoutMinutes ?? 10 },
     messages: settings.messages ?? {},
+    listening: settings.listening ?? DEFAULT_LISTENING,
   };
 }
 
@@ -158,6 +190,7 @@ function AgentSettingsLoader({ agentId, agentName }: { agentId: string; agentNam
         <AgentSettingsForm
           settings={query.data.settings}
           {...(query.data.messageDefaults ? { messageDefaults: query.data.messageDefaults } : {})}
+          listeningChats={<ListeningChats agentId={agentId} defaultEnabled={(query.data.settings.listening ?? DEFAULT_LISTENING).defaultEnabled} />}
           error={saveError}
           onChange={enqueueSave}
         />
@@ -169,9 +202,12 @@ function AgentSettingsLoader({ agentId, agentName }: { agentId: string; agentNam
 export function AgentSettingsForm({
   settings,
   messageDefaults = FALLBACK_MESSAGE_DEFAULTS,
+  listeningChats,
   error,
   onChange,
 }: {
+  /** The per-chat listening switches, which load and save by themselves. */
+  readonly listeningChats?: ReactNode;
   readonly settings: AgentSettings;
   /** What each message setting the Agent leaves unset follows. */
   readonly messageDefaults?: MessageDefaults;
@@ -295,6 +331,32 @@ export function AgentSettingsForm({
         {numberRow("contextMaxMessages")}
         {numberRow("contextMaxChars")}
         {numberRow("contextRecentUnprocessedMessages")}
+      </section>
+
+      <section className="space-y-4 rounded-lg border p-4" aria-labelledby="listening-title">
+        <div>
+          <h2 id="listening-title" className="font-medium">旁听</h2>
+          <p className="text-sm text-muted-foreground">
+            在开了旁听的群里，没有 @ 分身的消息会攒成一批交给它，它觉得该说话时才开口，否则保持沉默。@ 它的消息仍然立即处理。
+            可信成员也可以在群里发「@分身 #listen on」或「#listen off」来开关。
+          </p>
+        </div>
+        <Row label="新群默认开启旁听" hint="没有单独设置过的群是否旁听。开启后，这些群里所有人的消息都会发给模型。">
+          <Switch
+            aria-label="新群默认开启旁听"
+            checked={value.listening.defaultEnabled}
+            onCheckedChange={defaultEnabled => update({ ...value, listening: { ...value.listening, defaultEnabled } })}
+          />
+        </Row>
+        {(Object.keys(LISTENING_FIELDS) as ListeningNumber[]).map(field => (
+          <RequiredNumberRow
+            key={field}
+            meta={LISTENING_FIELDS[field]}
+            value={value.listening[field]}
+            onChange={next => update({ ...value, listening: { ...value.listening, [field]: next } })}
+          />
+        ))}
+        {listeningChats}
       </section>
 
       <section className="space-y-4 rounded-lg border p-4" aria-labelledby="pty-title">
@@ -451,6 +513,84 @@ function MessageNumberRow({ field, value, fallback, onChange }: {
       {invalid && (
         <p role="alert" className="text-xs text-destructive">请输入 {meta.min} 到 {meta.max} {meta.unit}之间的数，这次修改没有保存。</p>
       )}
+    </div>
+  );
+}
+
+/** A number setting that always has a value, edited in its own unit; a value out of range is not saved. */
+function RequiredNumberRow({ meta, value, onChange }: {
+  meta: { label: string; hint: string; unit: string; scale: number; min: number; max: number; step: number };
+  value: number;
+  onChange: (next: number) => void;
+}) {
+  const shown = (stored: number) => String(Math.round((stored / meta.scale) * 1000) / 1000);
+  const [text, setText] = useState(shown(value));
+  useEffect(() => { setText(shown(value)); }, [value]); // eslint-disable-line react-hooks/exhaustive-deps
+  const valid = (number: number) => Number.isFinite(number) && number >= meta.min && number <= meta.max && Number.isInteger(Math.round(number * meta.scale * 1000) / 1000);
+  return (
+    <div className="space-y-1">
+      <Row label={meta.label} hint={meta.hint}>
+        <Input
+          type="number"
+          aria-label={meta.label}
+          className="w-28"
+          min={meta.min}
+          max={meta.max}
+          step={meta.step}
+          value={text}
+          onChange={event => {
+            setText(event.target.value);
+            const number = Number(event.target.value);
+            if (event.target.value.trim() !== "" && valid(number)) onChange(Math.round(number * meta.scale));
+          }}
+        />
+      </Row>
+      {(text.trim() === "" || !valid(Number(text))) && (
+        <p role="alert" className="text-xs text-destructive">请输入 {meta.min} 到 {meta.max} {meta.unit}之间的数，这次修改没有保存。</p>
+      )}
+    </div>
+  );
+}
+
+/** The group chats the Agent's bots are in, each with its own listening switch. */
+function ListeningChats({ agentId, defaultEnabled }: { agentId: string; defaultEnabled: boolean }) {
+  const client = useQueryClient();
+  const path = `/agents/${encodeURIComponent(agentId)}/listening-chats`;
+  const query = useQuery({ queryKey: [path, defaultEnabled], queryFn: ({ signal }) => apiFetch<{ chats: ListeningChat[] }>(path, { signal }) });
+  const [error, setError] = useState<string | null>(null);
+  const set = async (chat: ListeningChat, enabled: boolean | null) => {
+    setError(null);
+    try {
+      const data = await apiFetch<{ chats: ListeningChat[] }>(path, { method: "PUT", body: JSON.stringify({ shadowId: chat.shadowId, chatId: chat.chatId, enabled }) });
+      client.setQueryData([path, defaultEnabled], data);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  };
+  return (
+    <div className="space-y-2" data-testid="listening-chats">
+      <h3 className="text-sm font-medium text-muted-foreground">各个群的开关</h3>
+      {query.error && <p role="alert" className="text-xs text-destructive">无法加载群列表。{query.error.message}</p>}
+      {error && <p role="alert" className="text-xs text-destructive">保存失败：{error}</p>}
+      {query.data && query.data.chats.length === 0 && <p className="text-xs text-muted-foreground">分身还没有加入任何群。</p>}
+      {query.data?.chats.map(chat => (
+        <Row
+          key={`${chat.shadowId}:${chat.chatId}`}
+          label={chat.chatName ?? chat.chatId}
+          hint={`${chat.shadowName}${chat.enabled === null ? " · 跟随默认" : ""}`}
+        >
+          <div className="flex items-center gap-2">
+            {chat.enabled !== null && (
+              <button type="button" className="rounded-md border px-2 py-1 text-xs" onClick={() => void set(chat, null)}>跟随默认</button>
+            )}
+            <Switch
+              aria-label={`旁听 ${chat.chatName ?? chat.chatId}`}
+              checked={chat.effective}
+              onCheckedChange={enabled => void set(chat, enabled)}
+            />
+          </div>
+        </Row>
+      ))}
     </div>
   );
 }

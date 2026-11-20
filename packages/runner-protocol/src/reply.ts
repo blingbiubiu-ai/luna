@@ -13,6 +13,8 @@ export const replySchema = z.object({
   template: z.enum(["markdown", "result"]).optional(),
   title: z.string().max(500).optional(),
   content: z.array(replyBlockSchema).min(1).max(32),
+  /** Id of a message of the conversation, as given in `<messages>`: the reply quotes it instead of standing alone in the chat. */
+  replyTo: z.string().min(1).max(256).optional(),
 }).strict();
 export type ReplyDocument = z.infer<typeof replySchema>;
 
@@ -28,10 +30,11 @@ export function parseReply(text: string): ReplyDocument {
   // Validate media before degrading presentation: never silently discard an image.
   const content = z.array(replyBlockSchema).min(1).max(32).parse(typeof input.content === "string" ? [{ type: "text", text: input.content }] : input.content);
   const title = z.string().max(500).optional().parse(input.title);
+  const replyTo = z.string().min(1).max(256).optional().parse(input.replyTo);
   const supported = input.version === 1 && ["text", "message", "card"].includes(String(input.presentation)) &&
     (input.template === undefined || ["markdown", "result"].includes(String(input.template)));
   return replySchema.parse({ type: "luna.reply", version: 1, presentation: supported ? input.presentation : "message",
-    ...(supported && input.template ? { template: input.template } : {}), ...(title ? { title } : {}), content });
+    ...(supported && input.template ? { template: input.template } : {}), ...(title ? { title } : {}), content, ...(replyTo ? { replyTo } : {}) });
 }
 
 const label = (text: string) => text.replace(/[\\\[\]\r\n]/g, " ");

@@ -63,6 +63,8 @@ export interface MainRunnerUserMessagesInput {
   readonly activationSourceMessage?: ActivationContextMessage;
   readonly activationContextMessages?: readonly ActivationContextMessage[];
   readonly requesterUserId?: string;
+  /** A listening turn: `messages` were overheard in a group chat and nobody addressed the Agent. */
+  readonly ambient?: true;
 }
 
 /**

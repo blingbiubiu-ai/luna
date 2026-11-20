@@ -62,7 +62,7 @@ describe("Luna schema baseline", () => {
     // and later migrations apply on top of it.
     expect(baseline[0]!.sql.join("\n")).toContain("luna_agents");
     expect(baseline.map(migration => migration.folderMillis)).toEqual([...baseline.map(migration => migration.folderMillis)].sort((a, b) => a - b));
-    expect(sqlite.query("SELECT count(*) AS n FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name != '__drizzle_migrations'").get()).toEqual({n:90});
+    expect(sqlite.query("SELECT count(*) AS n FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name != '__drizzle_migrations'").get()).toEqual({n:92});
     expect(sqlite.query("SELECT hash, created_at FROM __drizzle_migrations").all()).toEqual([
       ...baseline.map(migration => ({ hash: migration.hash, created_at: migration.folderMillis })),
     ]);

@@ -30,6 +30,7 @@ test("an Agent without settings gets today's behaviour as defaults", () => {
     task: { runLimitHours: 10 },
     pty: { idleTimeoutMinutes: 10 },
     messages: {},
+    listening: { defaultEnabled: false, quietMs: 30000, batchSize: 10, maxWaitMs: 180000, backoffMaxMs: 600000, maxTurnsPerHour: 12 },
   });
 });
 
@@ -42,6 +43,7 @@ test("the owner saves settings; omitted groups keep their defaults and bad value
     task: { runLimitHours: 10 },
     pty: { idleTimeoutMinutes: 10 },
     messages: {},
+    listening: { defaultEnabled: false, quietMs: 30000, batchSize: 10, maxWaitMs: 180000, backoffMaxMs: 600000, maxTurnsPerHour: 12 },
   });
   expect(store.save("owner", agentId, { pty: { idleTimeoutMinutes: 60 } }).pty.idleTimeoutMinutes).toBe(60);
   expect(store.save("owner", agentId, { pty: { idleTimeoutMinutes: 0 } }).pty.idleTimeoutMinutes).toBe(0);

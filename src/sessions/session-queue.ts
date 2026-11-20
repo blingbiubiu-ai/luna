@@ -2,13 +2,18 @@ import { InvocationStore } from "@/runners/invocation-store";
 import { decodeInvocation } from "@/runners/invocation-codec";
 import { RuntimeDetachedError } from "@/runners/runtime-detach";
 import { sessionDispatcherFor } from "./session-dispatcher";
-import { sessionConfigForSession } from "@/agents/agent-settings-store";
+import { AgentSettingsStore, sessionConfigForSession } from "@/agents/agent-settings-store";
+import { AMBIENT_TURN_REASON, ChatListeningStore } from "./chat-listening-store";
 import { and, asc, eq, inArray, lt } from "drizzle-orm";
 
 import type { DrizzleDB } from "@/data";
 import {
   messages,
+  runnerInvocations,
+  runnerJobs,
+  sessionCommands,
   sessionInbox,
+  sessions,
   sessionTurnEntries,
   sessionTurns,
 } from "@/data/schema";
@@ -35,7 +40,15 @@ export interface SessionTurnExecutionInput {
   readonly turn: SessionTurnView;
   readonly inboxRows: readonly SessionInboxRow[];
   readonly messageRows: readonly MessageRow[];
+  /** A listening turn: the messages were overheard in a group and nobody addressed the Agent. */
+  readonly ambient?: boolean;
+  /** Overheard messages no listening turn had delivered yet when someone addressed the Agent; context for this turn. */
+  readonly overheardMessageRows?: readonly MessageRow[];
 }
+
+/** Most overheard messages one turn takes; older ones stay in the timeline only. */
+const AMBIENT_TURN_LIMIT = 50;
+const HOUR_MS = 3_600_000;
 
 export interface SessionQueueOptions {
   readonly db: DrizzleDB;
@@ -62,6 +75,11 @@ export class SessionQueue {
   private readonly _requeueAbortedRows = new Set<string>();
   private readonly _workerErrors: unknown[] = [];
   private readonly _resumeTurns = new Map<string, SessionTurnView[]>();
+  /** Sessions whose running turn is a listening turn, which a message addressed to the Agent interrupts. */
+  private readonly _ambientRunning = new Set<string>();
+  private readonly _ambientPreempted = new Set<string>();
+  /** Wake-ups for overheard messages that are not due yet. */
+  private readonly _ambientTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private _stopped = false;
 
   constructor(private readonly _options: SessionQueueOptions) {
@@ -103,6 +121,16 @@ export class SessionQueue {
       this._requeueAbortedRows.add(sessionId);
     }
     controller.abort();
+  }
+
+  /**
+   * Someone addressed the Agent: a listening turn running in the session stops at once so the
+   * message does not wait behind it. Any other running turn is left alone.
+   */
+  preemptAmbient(sessionId: string): void {
+    if (!this._ambientRunning.has(sessionId)) return;
+    this._ambientPreempted.add(sessionId);
+    this._abortControllers.get(sessionId)?.abort();
   }
 
   async recoverPending(): Promise<void> {
@@ -161,6 +189,8 @@ export class SessionQueue {
   async stop(): Promise<void> {
     this._stopped = true;
     this._reschedule.clear();
+    for (const timer of this._ambientTimers.values()) clearTimeout(timer);
+    this._ambientTimers.clear();
     await this.waitForIdle();
   }
 
@@ -180,9 +210,19 @@ export class SessionQueue {
         await sessionDispatcherFor(this._options.db).dispatch({ kind: "user_messages", sessionId }, () => this._executeClaimedTurn(resume, this._claimedRows(resume.id)));
         continue;
       }
-      const pendingRows = this._inboxStore.listPendingForSession(sessionId);
-      if (pendingRows.length === 0) {
+      const allPending = this._inboxStore.listPendingForSession(sessionId);
+      if (allPending.length === 0) {
         return;
+      }
+      const pendingRows = allPending.filter(isDirect);
+      if (pendingRows.length === 0) {
+        // Only overheard messages wait: they go to the Runner together once their batch is due.
+        const wait = this._ambientDueIn(sessionId, allPending);
+        if (wait === undefined) continue;
+        if (wait > 0) { this._armAmbientTimer(sessionId, wait); return; }
+        await sessionDispatcherFor(this._options.db).dispatch({ kind: "user_messages", sessionId }, () => this._executeAmbientBatch(sessionId));
+        isInitialWorkerPass = false;
+        continue;
       }
       await sessionDispatcherFor(this._options.db).dispatch({ kind: "user_messages", sessionId }, () => this._executeNextBatch(sessionId, {
         enforceIdleGap: isInitialWorkerPass,
@@ -191,6 +231,60 @@ export class SessionQueue {
       }));
       isInitialWorkerPass = false;
     }
+  }
+
+  /**
+   * How long until the overheard messages of a session go to the Runner: 0 when due now, undefined when
+   * the chat is no longer listened to and the rows were dropped. A batch is due when the chat went quiet,
+   * the batch is full or its first message waited long enough. Each listening turn that ended in silence
+   * doubles those thresholds up to the backoff limit, and a chat gets a limited number of turns an hour.
+   * A message that names the Agent is due at once whatever the backoff and the hourly limit say.
+   */
+  private _ambientDueIn(sessionId: string, rows: readonly SessionInboxRow[]): number | undefined {
+    const db = this._options.db;
+    const session = db.select().from(sessions).where(eq(sessions.id, sessionId)).get();
+    const listening = new ChatListeningStore(db);
+    if (!session?.group_id || !listening.enabled(session)) {
+      for (const row of rows) this._turnStore.createSkipTurn({ sessionId, entryId: row.entry_id, reason: "silent_group" });
+      this._inboxStore.discardPending(rows.map(row => row.id));
+      return undefined;
+    }
+    if (rows.some(row => row.due_now)) return 0;
+    const settings = new AgentSettingsStore(db).get(session.agent_id).listening;
+    const now = Date.now();
+    const quiet = Math.min(settings.quietMs * 2 ** Math.min(listening.silentStreak(session.shadow_id, session.group_id), 30),
+      Math.max(settings.backoffMaxMs, settings.quietMs));
+    const backoff = quiet / settings.quietMs;
+    let wait = rows.length >= settings.batchSize * backoff ? 0
+      : Math.min(rows.at(-1)!.received_at + quiet, rows[0]!.received_at + settings.maxWaitMs * backoff) - now;
+    const recent = listening.recentTurnStarts(session.shadow_id, session.group_id, now - HOUR_MS);
+    if (recent.length >= settings.maxTurnsPerHour) wait = Math.max(wait, recent[recent.length - settings.maxTurnsPerHour]! + HOUR_MS - now);
+    return Math.max(0, wait);
+  }
+
+  private _armAmbientTimer(sessionId: string, wait: number): void {
+    clearTimeout(this._ambientTimers.get(sessionId));
+    const timer = setTimeout(() => { this._ambientTimers.delete(sessionId); this.schedule(sessionId); }, wait + 10);
+    // A pending wake-up must not keep the process alive; the rows are durable and recovered at start.
+    (timer as { unref?: () => void }).unref?.();
+    this._ambientTimers.set(sessionId, timer);
+  }
+
+  private async _executeAmbientBatch(sessionId: string): Promise<void> {
+    const pending = this._inboxStore.listPendingForSession(sessionId);
+    // Someone addressed the Agent while this batch waited for the session: that turn takes these messages along.
+    if (pending.length === 0 || pending.some(isDirect)) return;
+    this._inboxStore.discardPending(pending.slice(0, -AMBIENT_TURN_LIMIT).map(row => row.id));
+    const inboxRows = pending.slice(-AMBIENT_TURN_LIMIT);
+    const turnId = uuid();
+    const claimedRows = this._inboxStore.claimBatch({ turnId, inboxIds: inboxRows.map(row => row.id) });
+    if (claimedRows.length !== inboxRows.length) {
+      this._releaseClaimedRows(turnId, claimedRows.map(row => row.id));
+      return;
+    }
+    const turn = this._turnStore.createExecutionTurn({ id: turnId, sessionId, triggerEntryId: claimedRows.at(-1)!.entry_id, reason: AMBIENT_TURN_REASON });
+    this._turnStore.attachEntries(turn.id, claimedRows.slice(0, -1).map(row => ({ entryId: row.entry_id, role: "coalesced_input" })));
+    await this._executeClaimedTurn(turn, claimedRows);
   }
 
   private async _executeNextBatch(
@@ -202,29 +296,38 @@ export class SessionQueue {
       return;
     }
 
+    // Overheard messages no listening turn has delivered go along as context, so they are not handled twice.
+    const lastReceivedAt = inboxRows.at(-1)!.received_at;
+    const overheard = this._inboxStore.listPendingForSession(sessionId).filter(row => !isDirect(row) && row.received_at <= lastReceivedAt);
+    this._inboxStore.discardPending(overheard.slice(0, -AMBIENT_TURN_LIMIT).map(row => row.id));
+    const overheardRows = overheard.slice(-AMBIENT_TURN_LIMIT);
     const turnId = uuid();
     const claimedRows = this._inboxStore.claimBatch({
       turnId,
-      inboxIds: inboxRows.map((row) => row.id),
+      inboxIds: [...inboxRows, ...overheardRows].map((row) => row.id),
     });
-    if (claimedRows.length !== inboxRows.length) {
+    if (claimedRows.length !== inboxRows.length + overheardRows.length) {
       this._releaseClaimedRows(turnId, claimedRows.map((row) => row.id));
       return;
     }
+    const directRows = claimedRows.filter(isDirect);
 
     const turn = this._turnStore.createExecutionTurn({
       id: turnId,
       sessionId,
-      triggerEntryId: claimedRows[0]!.entry_id,
+      triggerEntryId: directRows[0]!.entry_id,
       reason: "addressed",
     });
     this._turnStore.attachEntries(
       turn.id,
-      claimedRows.slice(1).map((row) => ({
+      directRows.slice(1).map((row) => ({
         entryId: row.entry_id,
         role: "coalesced_input",
       })),
     );
+    // Being addressed ends a run of silent listening turns.
+    const session = this._options.db.select().from(sessions).where(eq(sessions.id, sessionId)).get();
+    if (session?.group_id) new ChatListeningStore(this._options.db).resetSilence(session.shadow_id, session.group_id);
 
     await this._executeClaimedTurn(turn, claimedRows);
   }
@@ -236,14 +339,31 @@ export class SessionQueue {
 
   private async _executeClaimedTurn(turn: SessionTurnView, claimedRows: SessionInboxRow[]): Promise<void> {
     const sessionId = turn.sessionId;
-    const messageRows = this._readMessageRows(claimedRows.map(row => row.message_id));
+    const directRows = claimedRows.filter(isDirect);
+    const ambient = directRows.length === 0;
+    // A listening turn's rows are its input; in any other turn the overheard rows are context.
+    const inboxRows = ambient ? claimedRows : directRows;
+    const messageRows = this._readMessageRows(inboxRows.map(row => row.message_id));
+    const overheardMessageRows = ambient ? [] : this._readMessageRows(claimedRows.filter(row => !isDirect(row)).map(row => row.message_id));
     const controller = new AbortController();
     this._abortControllers.set(sessionId, controller);
+    if (ambient) this._ambientRunning.add(sessionId);
+    /** Stopped for a message addressed to the Agent. What the Runner already holds is done; the rest goes along with that message. */
+    const settlePreempted = () => {
+      const ids = claimedRows.map(row => row.id);
+      const delivered = this._providerReceivedInput(turn.id);
+      this._settleTurn(turn, () => {
+      this._turnStore.markFailed(turn.id, "Listening turn interrupted by a message addressed to the Agent.");
+      if (delivered) this._inboxStore.markCompleted({ turnId: turn.id, inboxIds: ids });
+      else this._releaseClaimedRows(turn.id, ids);
+      });
+    };
     try {
       await this._options.executeTurn(
-        { turn, inboxRows: claimedRows, messageRows },
+        { turn, inboxRows, messageRows, ...(ambient ? { ambient } : {}), ...(overheardMessageRows.length ? { overheardMessageRows } : {}) },
         controller.signal,
       );
+      if (controller.signal.aborted && this._ambientPreempted.delete(sessionId)) { settlePreempted(); return; }
       if (controller.signal.aborted && this._requeueAbortedRows.delete(sessionId)) {
         this._settleTurn(turn, () => {
           this._turnStore.markFailed(turn.id, "Session turn interrupted by #steer.");
@@ -257,9 +377,11 @@ export class SessionQueue {
         turnId: turn.id,
         inboxIds: claimedRows.map((row) => row.id),
         });
+        if (ambient) this._recordAmbientOutcome(turn);
       });
     } catch (error) {
       if (error instanceof RuntimeDetachedError) { this._stopped = true; return; }
+      if (controller.signal.aborted && this._ambientPreempted.delete(sessionId)) { settlePreempted(); return; }
       if (controller.signal.aborted && this._requeueAbortedRows.delete(sessionId)) {
         this._settleTurn(turn, () => {
           this._turnStore.markFailed(turn.id, "Session turn interrupted by #steer.");
@@ -278,7 +400,35 @@ export class SessionQueue {
       });
     } finally {
       this._abortControllers.delete(sessionId);
+      this._ambientRunning.delete(sessionId);
+      this._ambientPreempted.delete(sessionId);
     }
+  }
+
+  /**
+   * Whether the provider session took this turn's input before the turn was stopped: its CLI reported
+   * its session, which both Claude and Codex do only once the input is part of the conversation they
+   * resume from. Without that report the input may be lost, so the caller sends it again.
+   */
+  private _providerReceivedInput(turnId: string): boolean {
+    const db = this._options.db;
+    return db.select({ state: runnerJobs.providerState }).from(runnerJobs)
+      .innerJoin(runnerInvocations, eq(runnerInvocations.id, runnerJobs.invocationId))
+      .where(eq(runnerInvocations.originId, turnId)).all()
+      .some(job => typeof (job.state as { sessionId?: unknown } | null)?.sessionId === "string");
+  }
+
+  /** A listening turn that said nothing makes the next one wait longer; one that answered resets the wait. */
+  private _recordAmbientOutcome(turn: SessionTurnView): void {
+    const db = this._options.db;
+    const session = db.select().from(sessions).where(eq(sessions.id, turn.sessionId)).get();
+    if (!session?.group_id) return;
+    const answered = db.select({ payload: sessionCommands.payload }).from(sessionCommands)
+      .where(and(eq(sessionCommands.sessionId, turn.sessionId), eq(sessionCommands.originId, turn.id), eq(sessionCommands.kind, "message.send"))).all()
+      .some(command => (command.payload as { purpose?: unknown }).purpose === "answer");
+    const listening = new ChatListeningStore(db);
+    if (answered) listening.resetSilence(session.shadow_id, session.group_id);
+    else listening.recordSilence(session.shadow_id, session.group_id);
   }
 
   private _settleTurn(turn: SessionTurnView, complete: () => void): void {
@@ -289,7 +439,7 @@ export class SessionQueue {
     sessionId: string,
     options: BatchOptions,
   ): Promise<SessionInboxRow[]> {
-    const firstRows = this._inboxStore.listPendingForSession(sessionId);
+    const firstRows = this._inboxStore.listPendingForSession(sessionId).filter(isDirect);
     const firstRow = firstRows[0];
     if (!firstRow) {
       return [];
@@ -351,7 +501,7 @@ export class SessionQueue {
     selectedIds: ReadonlySet<string>,
   ): SessionInboxRow | undefined {
     for (const row of this._inboxStore.listPendingForSession(sessionId)) {
-      if (!selectedIds.has(row.id)) {
+      if (isDirect(row) && !selectedIds.has(row.id)) {
         return row;
       }
     }
@@ -486,6 +636,11 @@ export class SessionQueue {
       )
       .run();
   }
+}
+
+/** A row that addresses the Agent, as opposed to an overheard one. */
+function isDirect(row: SessionInboxRow): boolean {
+  return row.lane !== "ambient";
 }
 
 function _sleep(ms: number): Promise<void> {

@@ -113,6 +113,24 @@ export const AgentSettings = z.object({
     idleTimeoutMinutes: z.number().int().min(0).max(10080).default(10),
   }).strict().default({ idleTimeoutMinutes: 10 }),
   messages: MessageSettings.default({}),
+  /**
+   * Listening: in a group chat where it is switched on, messages nobody addressed to the Agent are gathered and
+   * given to the Runner together, which answers only when it has reason to.
+   */
+  listening: z.object({
+    /** Whether a group chat without its own switch is listened to. */
+    defaultEnabled: z.boolean().default(false),
+    /** A batch is given to the Runner once the chat has been quiet this long. */
+    quietMs: z.number().int().min(5_000).max(3_600_000).default(30_000),
+    /** Or once it holds this many messages. */
+    batchSize: z.number().int().min(1).max(100).default(10),
+    /** Or once its first message has waited this long. */
+    maxWaitMs: z.number().int().min(10_000).max(3_600_000).default(180_000),
+    /** Each listening turn that ends in silence doubles the quiet time, up to this. */
+    backoffMaxMs: z.number().int().min(5_000).max(86_400_000).default(600_000),
+    /** Most listening turns one chat gets in an hour. */
+    maxTurnsPerHour: z.number().int().min(1).max(120).default(12),
+  }).strict().default({ defaultEnabled: false, quietMs: 30_000, batchSize: 10, maxWaitMs: 180_000, backoffMaxMs: 600_000, maxTurnsPerHour: 12 }),
 }).strict();
 export type AgentSettings = z.infer<typeof AgentSettings>;
 

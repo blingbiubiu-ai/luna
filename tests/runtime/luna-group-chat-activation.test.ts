@@ -3109,3 +3109,97 @@ class DynamicMainRunner {
     return this as unknown as MainRunner;
   }
 }
+
+describe("listening in a group chat", () => {
+  function listeningRouter(handler: () => TestMainPlan = () => ({ operation: "completion", reason: "nothing to add" })) {
+    const channel = new RecordingProcessingChannel("feishu-main");
+    const runner = new DynamicMainRunner(handler);
+    const router = new SessionInboundRouter({ db: database.db, channel, runnerType: "mock", mainRunner: runner.asMainRunner(), sessionConfig: fastSessionConfig });
+    return { channel, runner, router };
+  }
+  async function listenIn(router: SessionInboundRouter) {
+    const { ChatListeningStore } = await import("../../src/sessions/chat-listening-store");
+    // The first message creates the session of the chat; it is skipped because nothing listens yet.
+    await router.routeDirectInboundForTest(groupInbound({ id: "m_before_listening", text: "早上好" }));
+    const session = database.db.select().from(lunaSchema.sessions).all().find(row => row.group_id === "group-alpha" && row.thread_key === null)!;
+    const store = new ChatListeningStore(database.db);
+    store.set(session.shadow_id, "group-alpha", true, null);
+    return { session, store };
+  }
+
+  test("unaddressed messages are overheard: held for a listening turn, run at once when they name the Agent, and may end in silence", async () => {
+    const { channel, runner, router } = listeningRouter();
+    const { session, store } = await listenIn(router);
+
+    await router.routeDirectInboundForTest(groupInbound({ id: "m_overheard_1", text: "线上报错了", senderUserId: "user-a" }));
+    await router.waitForIdle();
+    expect(runner.calls).toHaveLength(0);
+    expect(database.db.select().from(sessionInbox).all()).toMatchObject([{ lane: "ambient", due_now: false, status: "pending" }]);
+
+    await router.routeDirectInboundForTest(groupInbound({ id: "m_overheard_2", text: "要不要问问 Luna", senderUserId: "user-b" }));
+    await router.waitForIdle();
+    expect(runner.calls).toHaveLength(1);
+    const input = userMessagesInput(runner);
+    expect(input.ambient).toBe(true);
+    expect(input.requesterUserId).toBeUndefined();
+    expect(input.messages.map(message => message.text)).toEqual(["线上报错了", "要不要问问 Luna"]);
+    expect(new Set(input.messages.map(message => message.senderUserId)).size).toBe(2);
+    // It said nothing: no reply, no reaction on anyone's message, and the next batch waits longer.
+    expect(channel.outbound).toHaveLength(0);
+    expect(channel.beginProcessingCalls).toHaveLength(0);
+    expect(channel.completeProcessingCalls).toHaveLength(0);
+    expect(store.silentStreak(session.shadow_id, "group-alpha")).toBe(1);
+    expect(database.db.select().from(sessionInbox).all().map(row => row.status)).toEqual(["completed", "completed"]);
+  });
+
+  test("the prompt of a listening turn says nobody addressed the Agent", async () => {
+    const { runner, router } = listeningRouter();
+    await listenIn(router);
+    await router.routeDirectInboundForTest(groupInbound({ id: "m_overheard_prompt", text: "Luna 上次那个报告谁看过", senderUserId: "user-a" }));
+    await router.waitForIdle();
+    const { renderMainRunnerPrompt } = await import("../../src/main-runner/main-runner");
+    const prompt = renderMainRunnerPrompt(userMessagesInput(runner));
+    expect(prompt).toContain('"listening":true');
+    expect(prompt).toContain('"addressing":{"addressed":false,"reason":"silent_group"}');
+  });
+
+  test("an addressed message is answered at once and takes the overheard messages still waiting along as context", async () => {
+    const { channel, runner, router } = listeningRouter(() => replyNormal());
+    await listenIn(router);
+    await router.routeDirectInboundForTest(groupInbound({ id: "m_wait_1", text: "看日志像是配置问题", senderUserId: "user-a" }));
+    await router.routeDirectInboundForTest(groupInbound({ id: "m_direct", text: "@Luna 帮忙看下", senderUserId: "user-b", addressing: { addressedToBot: true, reason: "mention" } }));
+    await router.waitForIdle();
+    expect(runner.calls).toHaveLength(1);
+    const input = userMessagesInput(runner);
+    expect(input.ambient).toBeUndefined();
+    expect(input.messages.map(message => message.text)).toEqual(["@Luna 帮忙看下"]);
+    expect(deltaContextItems(input).map(item => item.text)).toContain("看日志像是配置问题");
+    expect(channel.outbound).toHaveLength(1);
+    expect(database.db.select().from(sessionInbox).all().map(row => [row.lane, row.status]).sort()).toEqual([["ambient", "completed"], ["direct", "completed"]]);
+  });
+
+  test("when it speaks in a listening turn, the reply quotes the message it answers and resets the wait", async () => {
+    const channel = new RecordingProcessingChannel("feishu-main");
+    const runner = new DynamicMainRunner(input => {
+      if (input.input.type !== "user_messages") throw new Error("unexpected input");
+      return { operation: "message.send", reason: "its role covers this", reply: JSON.stringify({ type: "luna.reply", version: 1, presentation: "text",
+        replyTo: input.input.messages[0]!.messageId, content: [{ type: "text", text: "是昨天的配置发布，已回滚。" }] }) };
+    });
+    const router = new SessionInboundRouter({ db: database.db, channel, runnerType: "mock", mainRunner: runner.asMainRunner(), sessionConfig: fastSessionConfig });
+    const { session, store } = await listenIn(router);
+    store.recordSilence(session.shadow_id, "group-alpha");
+    await router.routeDirectInboundForTest(groupInbound({ id: "m_quote_me", text: "Luna 线上报错是怎么回事", senderUserId: "user-a" }));
+    await router.waitForIdle();
+    expect(channel.outbound).toMatchObject([{ replyMode: "channel_message", quoteMessageId: "m_quote_me", content: "是昨天的配置发布，已回滚。" }]);
+    expect(store.silentStreak(session.shadow_id, "group-alpha")).toBe(0);
+  });
+
+  test("a topic thread the Agent has not spoken in, and other bots, are not listened to", async () => {
+    const { runner, router } = listeningRouter();
+    await listenIn(router);
+    await router.routeDirectInboundForTest(groupInbound({ id: "m_thread", text: "Luna 在吗", threadId: "thread-1", rootMessageId: "m_thread_root", senderUserId: "user-a" }));
+    await router.waitForIdle();
+    expect(runner.calls).toHaveLength(0);
+    expect(database.db.select().from(sessionInbox).all()).toHaveLength(0);
+  });
+});

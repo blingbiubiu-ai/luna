@@ -105,6 +105,8 @@ export interface OutboundChannelOperation {
   readonly channelId: string;
   readonly sender?: ChannelIdentity;
   readonly targetMessageId?: string;
+  /** Provider id of a message in the same chat that this message quotes as a reply, without opening a topic thread. */
+  readonly quoteMessageId?: string;
   readonly sessionId?: string;
   readonly threadId?: string;
   readonly rootMessageId?: string;

@@ -26,6 +26,9 @@ export class SessionInboxStore {
     readonly sessionId: string;
     readonly entryId?: string;
     readonly message: MessageRow;
+    /** `ambient` queues an overheard group message; `dueNow` marks one that names the Agent. */
+    readonly lane?: "direct" | "ambient";
+    readonly dueNow?: boolean;
   }): EnqueueInboxResult {
     const entryId = input.entryId ?? this._findMessageEntryId(input);
     const existing = this._findByEntryId(entryId);
@@ -65,6 +68,8 @@ export class SessionInboxStore {
       message_id: input.message.id,
       sender_identity_id: input.message.senderIdentityId ?? null,
       received_at: input.message.created_at,
+      lane: input.lane ?? "direct",
+      due_now: input.dueNow ?? false,
       status: "pending",
       turn_id: null,
       claimed_at: null,
@@ -204,6 +209,14 @@ export class SessionInboxStore {
         .run();
       return _readPendingRowsByIds(tx as unknown as DrizzleDB, ids);
     }) as SessionInboxRow[];
+  }
+
+  /** Ends pending rows no turn will take, such as overheard messages of a chat that is no longer listened to. */
+  discardPending(inboxIds: readonly string[]): void {
+    if (inboxIds.length === 0) return;
+    const now = Date.now();
+    this._db.update(sessionInbox).set({ status: "completed", completed_at: now, updated_at: now })
+      .where(and(inArray(sessionInbox.id, [...inboxIds]), eq(sessionInbox.status, "pending"))).run();
   }
 
   listSessionsWithPending(): string[] {

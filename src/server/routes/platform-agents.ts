@@ -17,6 +17,7 @@ import { ShadowWorkerRoutingStore } from "@/agents/shadow-worker-routing-store";
 import { ShadowModelSelectionStore } from "@/agents/shadow-model-selection-store";
 import { AuthorizationRuleStore } from "../policy/authorization-rule-store";
 import { AgentSettingsStore, messageDefaults } from "@/agents/agent-settings-store";
+import { ChatListeningStore } from "@/sessions/chat-listening-store";
 import { AgentWorkerAccessStore } from "@/agents/agent-worker-access-store";
 import { isGuardResponse, requireDashboardOnly } from "../auth/guards";
 import { getKernel } from "./kernel";
@@ -125,6 +126,22 @@ export function createPlatformAgentRoutes(db: DrizzleDB, registry?:PluginRegistr
         } catch { /* runtime detached or uninitialized in standalone unit tests */ }
       })();
       return c.json({settings: saved, messageDefaults: messageDefaults(config.session)});
+    })
+    // The group chats the Agent's bots are in, each with its listening switch; `enabled: null` follows the Agent default.
+    .get("/:agentId/listening-chats", c => {
+      const agentId = c.req.param("agentId");
+      store.requireOwner(actor(c), agentId);
+      return c.json({chats: new ChatListeningStore(db).chats(agentId)});
+    })
+    .put("/:agentId/listening-chats", async c => {
+      const agentId = c.req.param("agentId");
+      const accountId = actor(c);
+      store.requireOwner(accountId, agentId);
+      const input = z.object({shadowId: z.string().min(1), chatId: z.string().min(1).max(256), enabled: z.boolean().nullable()}).strict().parse(await c.req.json());
+      const listening = new ChatListeningStore(db);
+      if (!listening.chats(agentId).some(chat => chat.shadowId === input.shadowId && chat.chatId === input.chatId)) throw new AgentError("chat_not_found", 404);
+      listening.set(input.shadowId, input.chatId, input.enabled, store.ownerUserId(agentId));
+      return c.json({chats: listening.chats(agentId)});
     })
     .get("/:agentId/shadows/:shadowId/worker-routing", c => c.json({ routing: new ShadowWorkerRoutingStore(db).read(actor(c), c.req.param()) }))
     .get("/:agentId/shadows/:shadowId/model-selection",c=>c.json({selection:new ShadowModelSelectionStore(db).read(actor(c),c.req.param())}))

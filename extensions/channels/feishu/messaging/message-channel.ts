@@ -637,6 +637,13 @@ export class FeishuMessageChannel
       return this._replyLunaMessage({id:target.rootMessageId,channel:{id:target.channelId,type:"feishu"},surface:{externalId:target.surfaceId,kind:"thread"},thread:{externalId:target.threadId,rootMessageExternalId:target.rootMessageId},sender:{externalId:"luna",kind:"bot"},text:"",mentions:[],addressing:{addressedToBot:false,reason:"silent_group"}},operation);
     }
     const payload = await this._replyPayload(operation);
+    const uuid = operation.idempotencyKey ? {uuid: operation.idempotencyKey.length <= 50 ? operation.idempotencyKey : createHash("sha256").update(operation.idempotencyKey).digest("base64url")} : {};
+    if (operation.quoteMessageId && !target.recipient) {
+      // A quote reply stays in the chat. When the quoted message is gone, the reply is sent as an ordinary message below.
+      const quoted = await this._client.im.message.reply({path: {message_id: operation.quoteMessageId}, data: {...payload, reply_in_thread: false, ...uuid}});
+      if (!quoted.code && quoted.data?.message_id)
+        return {...operation, id: quoted.data.message_id, channelId: target.channelId, ...(quoted.data.chat_id ? {deliveredSurfaceId: quoted.data.chat_id} : {}), sender: this._outboundSender()};
+    }
     const {data,code}=await this._client.im.message.create({params:{receive_id_type:target.recipient?.idType ?? "chat_id"},data:{receive_id:target.recipient?.id ?? target.surfaceId,...payload,...(operation.idempotencyKey?{uuid:operation.idempotencyKey.length <= 50 ? operation.idempotencyKey : createHash("sha256").update(operation.idempotencyKey).digest("base64url")}:{})}});
     if(code) throw new ProviderDeliveryRejected(`Feishu rejected message (${code})`);
     if(!data?.message_id || (target.recipient && !data.chat_id))throw new Error("Feishu delivery receipt is incomplete");

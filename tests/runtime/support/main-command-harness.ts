@@ -1,3 +1,4 @@
+import { parseReply, replyMarkdown } from "@luna/runner-protocol/reply";
 import { IdentityDirectory } from "../../../src/identity/identity-directory";
 /** Integration fixtures execute commands during run(), exactly as a real Main does.
  * Declarative plans belong to tests and are never parsed by the service. */
@@ -68,7 +69,7 @@ async function executePlan(db: DrizzleDB, input: MainRunnerRunInput, plan: TestM
   service.dispatch(operationId,request,context,result);
   reply=plan.dispatchReply;
  }else reply=plan.reply;
- if(reply){const accepted=commands.accept({userId,sourceSessionId:sessionId,originId},sessionId,'message.send',randomUUID(),{content:reply,purpose:'answer'});await commands.waitForIdle();const settled=commands.get(accepted.id);if(settled && ['failed','unknown','cancelled'].includes(settled.status))throw new Error(settled.error ?? 'Message command failed');}
+ if(reply){const accepted=commands.accept({userId,sourceSessionId:sessionId,originId},sessionId,'message.send',randomUUID(),replyPayload(reply));await commands.waitForIdle();const settled=commands.get(accepted.id);if(settled && ['failed','unknown','cancelled'].includes(settled.status))throw new Error(settled.error ?? 'Message command failed');}
  return {status:'completed',followupReleased:false};
 }
 export class LunaMessageIngress extends Ingress {
@@ -87,4 +88,12 @@ export class SessionInboundRouter extends Router {
   const main=commandRunner(options.mainRunner,options.db);
   super({...options,taskRunSupervisor:runtime(options.db).supervisor,...(main?{mainRunner:main}:{})});
  }
+}
+
+/** As Service does for a final answer: a reply document is parsed, anything else is plain text. */
+function replyPayload(text:string){
+ const reply=parseReply(text);
+ return text.trim().startsWith('{')&&reply.content[0]?.type==='text'&&reply.content[0].text!==text
+  ? {content:replyMarkdown(reply),reply,purpose:'answer' as const}
+  : {content:text,purpose:'answer' as const};
 }

@@ -285,6 +285,8 @@ describe("session/task schema", () => {
       "error",
       "created_at",
       "updated_at",
+      "lane",
+      "due_now",
     ]);
 
     expect(getColumnNames(sqlite, "channel_message_markers")).toEqual([

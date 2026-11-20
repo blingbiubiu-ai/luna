@@ -200,6 +200,40 @@ describe("work session end-to-end", () => {
     );
   });
 
+  test("#listen switches listening for a group chat, for the owner or a member allowed to", async () => {
+    const { ChatListeningStore } = await import("../../src/sessions/chat-listening-store");
+    const { BotBindingStore } = await import("../../src/agents/bot-binding-store");
+    const { AuthorizationRuleStore } = await import("../../src/server/policy/authorization-rule-store");
+    const channel = new FakeFeishuChannel("feishu-main");
+    const router = new InboundCommandRouter({ db: database.db, channel });
+    const binding = new BotBindingStore(database.db).requireActive("feishu-main");
+    const chat = { agent_id: binding.agentId, shadow_id: binding.shadowId, group_id: "group-listen" };
+    const listening = new ChatListeningStore(database.db);
+    let count = 0;
+    const send = (text: string, kind: "group" | "p2p" = "group") => ({
+      id: `msg-listen-${++count}`, channel: { type: "feishu" as const, id: "feishu-main" }, surface: { externalId: "group-listen", kind },
+      sender: fixtureFeishuSender("feishu-main", "user-listen"), text, mentions: [],
+      addressing: { addressedToBot: true, reason: kind === "p2p" ? "p2p" as const : "mention" as const }, rawPayload: {},
+    });
+    const lastReply = () => String(channel.outbound.at(-1)?.content);
+    const userId = fixtureObserveFeishuSender(database.db, "feishu-main", "user-listen");
+
+    expect(await router.handle(send("@Luna #listen on"))).toBe(true);
+    expect(lastReply()).toContain("Only my owner");
+    expect(listening.enabled(chat)).toBe(false);
+
+    new AuthorizationRuleStore(database.db, { kind: "agent", agentId: binding.agentId }).addGrant({ subjectType: "user", subjectId: userId, target: "chat.listen", effect: "allow" });
+    await router.handle(send("@Luna #listen on"));
+    expect(lastReply()).toContain("Listening is on");
+    expect(listening.enabled(chat)).toBe(true);
+    await router.handle(send("@Luna #listen"));
+    expect(lastReply()).toContain("Listening is on in this chat");
+    await router.handle(send("@Luna #listen off"));
+    expect(listening.enabled(chat)).toBe(false);
+    await router.handle(send("#listen on", "p2p"));
+    expect(lastReply()).toContain("works in a group chat");
+  });
+
   test("inbound command router handles mentioned group #work", async () => {
     const channel = new FakeFeishuChannel("feishu-main");
     let scheduled: string | undefined;

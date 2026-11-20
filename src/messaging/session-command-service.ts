@@ -340,8 +340,13 @@ export class SessionCommandService {
                         : mention ? { type: "luna.reply", version: 1, presentation: "text", content: [{ type: "text", text: String(command.payload.content) }] } : undefined;
                     const inlineMentions = reply?.content.flatMap(block => block.type === "mention"
                         ? [this.mentionAddress(target, block.userId)] : []) ?? [];
+                    // A reply may quote one message of the conversation it is sent to; in a topic thread it already replies in place.
+                    const quoted = reply?.replyTo && !target.thread_key
+                        ? db.select({ externalId: messages.externalMessageId }).from(messages)
+                            .where(and(eq(messages.id, reply.replyTo), eq(messages.ownerSessionId, target.id))).get()?.externalId
+                        : undefined;
                     sending = true;
-                    const operation = { replyMode: target.thread_key ? "reply_in_thread" as const : "channel_message" as const, sessionId: target.id, ...(target.root_message_key ? { targetMessageId: target.root_message_key } : {}), idempotencyKey: command.id, content: String(command.payload.content), ...(reply ? { reply } : {}), ...(mention ? { mention } : {}), ...(inlineMentions.length ? { inlineMentions } : {}) };
+                    const operation = { replyMode: target.thread_key ? "reply_in_thread" as const : "channel_message" as const, sessionId: target.id, ...(target.root_message_key ? { targetMessageId: target.root_message_key } : {}), ...(quoted ? { quoteMessageId: quoted } : {}), idempotencyKey: command.id, content: String(command.payload.content), ...(reply ? { reply } : {}), ...(mention ? { mention } : {}), ...(inlineMentions.length ? { inlineMentions } : {}) };
                     const surfaceId = directAddress ? `recipient:${directAddress.claimId}` : target.group_id ?? target.channel_id;
                     const sent = channel.sendTo ? await channel.sendTo({ channelId: target.channel_id, surfaceId, ...(directAddress ? { recipient: { idType: directAddress.idType, id: directAddress.recipientId } } : {}), ...(target.thread_key ? { threadId: target.thread_key } : {}), ...(target.root_message_key ? { rootMessageId: target.root_message_key } : {}) }, operation) : await channel.send(inbound, operation);
                     if (directAddress) {

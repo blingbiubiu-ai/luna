@@ -14,6 +14,9 @@ You may output plain text or a reply document (without a Markdown code fence):
 Register images/files first; use returned Artifact references, never local paths,
 provider image keys or Base64. Image and text blocks preserve their order.
 For a single image use one image block with presentation `message`.
+An optional top-level `"replyTo":"MESSAGE_ID"` makes the reply quote one message
+of this conversation; use an `id` from `<messages>` or `<history>`. Without it
+the reply is an ordinary message in the chat.
 
 Use the CLI for interim progress, notifications, and explicit cross-session
 messages. All purposes accept the same reply document:
