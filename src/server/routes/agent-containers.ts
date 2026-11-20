@@ -1,7 +1,9 @@
 import { Hono } from "hono";
 import type { Server } from "bun";
+import { desc, eq } from "drizzle-orm";
 import { z } from "zod";
 import type { DrizzleDB } from "@/data";
+import { runnerContexts, sessions, tasks } from "@/data/schema";
 import { AgentError, AgentStore } from "@/agents/agent-store";
 import { AgentWorkerAccessStore } from "@/agents/agent-worker-access-store";
 import { ShadowRootAccessStore } from "@/agents/shadow-root-access-store";
@@ -25,9 +27,23 @@ const Summary = z.object({
   imageDigest: z.string().optional(),
   root: z.object({ requested: z.boolean(), effective: z.boolean(), hostAllowed: z.boolean().optional(), reason: z.string().optional() }).optional(),
 });
+const PtySummary = z.object({
+  environmentId: Id,
+  shadowId: Id,
+  contextId: Id,
+  runnerType: z.enum(["claude", "codex"]),
+  model: z.string().optional(),
+  sessionId: z.string().optional(),
+  busy: z.boolean(),
+  privileged: z.boolean(),
+  pid: z.number().int(),
+  startedAt: z.number(),
+  lastActiveAt: z.number(),
+});
 const StreamQuery = z.object({
-  kind: z.enum(["terminal", "vnc"]), user: z.enum(["runner", "root"]).default("runner"),
+  kind: z.enum(["terminal", "vnc", "pty"]), user: z.enum(["runner", "root"]).default("runner"),
   cols: z.coerce.number().int().min(1).max(1000).default(80), rows: z.coerce.number().int().min(1).max(1000).default(24),
+  contextId: Id.optional(), writable: z.enum(["0", "1"]).optional(),
 });
 const ProvisionBody = z.object({ shadowId: Id, workerId: Id.optional() }).strict();
 /** One piece of an upload; the bytes are the request body. The Worker checks name and directory. */
@@ -206,6 +222,9 @@ export function createAgentContainerRoutes(
     if (!listed) return c.json({ status: "error", code: "worker_unreachable" }, 503);
     const container = z.array(Summary).parse(listed.containers).find(item => item.environmentId === environmentId);
     if (!container) throw new AgentError("container_not_found", 404);
+    if (query.kind === "pty" && !query.contextId) {
+      return c.json({ status: "error", code: "invalid_request" }, 400);
+    }
     if (query.kind === "terminal" && query.user === "root" && container.root?.hostAllowed === false) {
       const code = container.root.reason ?? "root_not_allowed";
       return c.json({ status: "error", code, message: resetMessages[code] ?? code }, 403);
@@ -216,10 +235,128 @@ export function createAgentContainerRoutes(
     }
     const session = new ContainerConsoleSession(gateway, {
       accountId: auth.account.id, agentId: agent.id, shadowId: container.shadowId, workerId, environmentId,
-      kind: query.kind, user: query.kind === "vnc" ? "runner" : query.user, cols: query.cols, rows: query.rows,
+      kind: query.kind, user: query.kind === "terminal" ? query.user : "runner", cols: query.cols, rows: query.rows,
+      ...(query.contextId ? { contextId: query.contextId } : {}),
+      ...(query.writable === "1" ? { writable: true } : {}),
     });
     if (!server.upgrade(c.req.raw, { data: { kind: "container-console", session } })) return c.json({ status: "error", code: "websocket_required" }, 426);
     return new Response(null);
+  }).get("/:agentId/pty-sessions", async c => {
+    const auth = requireDashboardOnly(c); if (isGuardResponse(auth)) return auth;
+    const agent = agents.requireOwner(auth.account.id, c.req.param("agentId"));
+    const gateway = getGateway();
+    if (!gateway) return c.json({ status: "error", code: "runtime_not_ready" }, 503);
+
+    const assigned = assignedWorkers(auth.account.id, agent.id);
+    const allShadows = agents.listShadows(auth.account.id, agent.id);
+    const shadowNames = new Map(allShadows.map(shadow => [shadow.id, shadow.name]));
+
+    const contextRows = db.select().from(runnerContexts)
+      .where(eq(runnerContexts.agent_id, agent.id))
+      .orderBy(desc(runnerContexts.updated_at))
+      .all();
+    const contextById = new Map(contextRows.map(row => [row.id, row]));
+
+    const sessionRows = db.select().from(sessions)
+      .where(eq(sessions.agent_id, agent.id))
+      .all();
+    const sessionById = new Map(sessionRows.map(row => [row.id, row]));
+
+    const taskRows = db.select().from(tasks)
+      .where(eq(tasks.agent_id, agent.id))
+      .all();
+    const taskById = new Map(taskRows.map(row => [row.id, row]));
+
+    const describeContextOwner = (ctx: (typeof contextRows)[number] | undefined) => {
+      if (!ctx) {
+        return {
+          ownerType: "unknown" as const,
+          ownerId: null,
+          runnerKind: "main" as const,
+          title: null,
+          channelType: null,
+        };
+      }
+      if (ctx.owner_type === "task") {
+        const task = taskById.get(ctx.owner_id);
+        return {
+          ownerType: "task" as const,
+          ownerId: ctx.owner_id,
+          runnerKind: "task" as const,
+          title: task?.title?.trim() || `任务 ${ctx.owner_id.slice(0, 8)}`,
+          channelType: null,
+        };
+      }
+      const sess = sessionById.get(ctx.owner_id);
+      const runnerKind = sess?.kind === "work" ? "work" as const : "main" as const;
+      const fallbackTitle = sess?.channel_type === "dashboard"
+        ? `网页会话 ${ctx.owner_id.slice(0, 8)}`
+        : `会话 ${ctx.owner_id.slice(0, 8)}`;
+      return {
+        ownerType: "session" as const,
+        ownerId: ctx.owner_id,
+        runnerKind,
+        title: sess?.title?.trim() || fallbackTitle,
+        channelType: sess?.channel_type ?? null,
+      };
+    };
+
+    const workers = gateway.list().filter(worker => assigned.has(worker.workerId) && worker.connected && !worker.revoked);
+    const workerResults = await Promise.all(workers.map(async worker => {
+      const supported = worker.health?.capabilities?.includes(CONTAINER_STREAMS_CAPABILITY) === true;
+      if (!supported) return [];
+      try {
+        const body = await gateway.scheduler.workers.client(worker.workerId)
+          .call<{ sessions?: unknown[] }>("GET", `/v1/pty-sessions?agentId=${encodeURIComponent(agent.id)}`, undefined, AbortSignal.timeout(8000));
+        return z.array(PtySummary).parse(body.sessions ?? []).map(item => {
+          const ctx = contextById.get(item.contextId);
+          const meta = describeContextOwner(ctx);
+          return {
+            ...item,
+            workerId: worker.workerId,
+            shadowName: shadowNames.get(item.shadowId) ?? null,
+            ...meta,
+          };
+        });
+      } catch {
+        return [];
+      }
+    }));
+
+    const liveSessions = workerResults.flat().toSorted((a, b) => {
+      if (a.busy !== b.busy) return a.busy ? -1 : 1;
+      return b.lastActiveAt - a.lastActiveAt;
+    });
+    const liveContextIds = new Set(liveSessions.map(item => item.contextId));
+
+    const dormantContexts = contextRows
+      .filter(row => row.runner_session_id && !liveContextIds.has(row.id))
+      .filter(row => {
+        if (row.owner_type === "task") {
+          const task = taskById.get(row.owner_id);
+          return Boolean(task && task.status !== "deleted");
+        }
+        const sess = sessionById.get(row.owner_id);
+        return Boolean(sess && sess.status === "active");
+      })
+      .slice(0, 25)
+      .map(row => {
+        const meta = describeContextOwner(row);
+        return {
+          contextId: row.id,
+          shadowId: row.shadow_id,
+          shadowName: shadowNames.get(row.shadow_id) ?? null,
+          runnerType: row.runner_type,
+          sessionId: row.runner_session_id,
+          updatedAt: row.updated_at,
+          ...meta,
+        };
+      });
+
+    return c.json({
+      sessions: liveSessions,
+      dormantContexts,
+    });
   });
 }
 

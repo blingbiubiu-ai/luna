@@ -5,12 +5,11 @@ import { join } from "node:path";
 import { Hono } from "hono";
 import { DataConnection } from "@/data";
 import * as schema from "@/data/schema";
-import { setLunaHome } from "@/shared";
+import { config, setLunaHome } from "@/shared";
 import { AgentSettingsStore, DEFAULT_AGENT_SETTINGS } from "@/agents/agent-settings-store";
+import { jobTimeoutMs } from "@/runners/runtime-agent-transport";
 import { createPlatformAgentRoutes } from "@/server/routes/platform-agents";
 import { fixtureScope } from "../helpers/platform-fixtures";
-import { jobTimeoutMs } from "@/runners/runtime-agent-transport";
-import { config } from "@/shared";
 
 let home: string, connection: DataConnection<typeof schema>, agentId: string;
 beforeEach(() => {
@@ -22,14 +21,28 @@ afterEach(() => { connection.close(); rmSync(home, { recursive: true, force: tru
 
 test("an Agent without settings gets today's behaviour as defaults", () => {
   expect(new AgentSettingsStore(connection.db).get(agentId)).toEqual(DEFAULT_AGENT_SETTINGS);
-  expect(DEFAULT_AGENT_SETTINGS).toEqual({ inbound: { processingReaction: true }, work: { progressCard: { show: true, style: "card" } }, main: { taskProgressCard: { send: true, style: "native" } }, task: { runLimitHours: 10 } });
+  expect(DEFAULT_AGENT_SETTINGS).toEqual({
+    inbound: { processingReaction: true },
+    work: { progressCard: { show: true, style: "card" } },
+    main: { taskProgressCard: { send: true, style: "native" } },
+    task: { runLimitHours: 10 },
+    pty: { idleTimeoutMinutes: 10 },
+  });
 });
 
 test("the owner saves settings; omitted groups keep their defaults and bad values are refused", () => {
   const store = new AgentSettingsStore(connection.db);
   expect(store.save("owner", agentId, { work: { progressCard: { show: false } } })).toEqual({
-    inbound: { processingReaction: true }, work: { progressCard: { show: false, style: "card" } }, main: { taskProgressCard: { send: true, style: "native" } }, task: { runLimitHours: 10 } });
-  expect(store.get(agentId).work.progressCard.show).toBe(false);
+    inbound: { processingReaction: true },
+    work: { progressCard: { show: false, style: "card" } },
+    main: { taskProgressCard: { send: true, style: "native" } },
+    task: { runLimitHours: 10 },
+    pty: { idleTimeoutMinutes: 10 },
+  });
+  expect(store.save("owner", agentId, { pty: { idleTimeoutMinutes: 60 } }).pty.idleTimeoutMinutes).toBe(60);
+  expect(store.save("owner", agentId, { pty: { idleTimeoutMinutes: 0 } }).pty.idleTimeoutMinutes).toBe(0);
+  expect(() => store.save("owner", agentId, { pty: { idleTimeoutMinutes: -1 } })).toThrow();
+  expect(store.save("owner", agentId, { work: { progressCard: { show: false } } }).work.progressCard.show).toBe(false);
   expect(() => store.save("owner", agentId, { work: { progressCard: { style: "fancy" } } })).toThrow();
   expect(() => store.save("owner", agentId, { unknown: true })).toThrow();
   expect(() => store.save("other", agentId, {})).toThrow();

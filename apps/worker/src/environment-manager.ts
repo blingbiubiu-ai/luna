@@ -282,6 +282,85 @@ export class EnvironmentManager {
       .map(environment => this.summarize(environment, states.get(this.driver.name(environment)) === true));
   }
 
+  /** List live warm PTY sessions across all running containers belonging to `agentId`. */
+  async ptySessions(agentId: string): Promise<Array<{
+    environmentId: string;
+    shadowId: string;
+    contextId: string;
+    runnerType: "claude" | "codex";
+    model?: string;
+    sessionId?: string;
+    busy: boolean;
+    privileged: boolean;
+    pid: number;
+    startedAt: number;
+    lastActiveAt: number;
+  }>> {
+    const states = await this.driver.containerStates();
+    const runningEnvs = this.store.list().filter(
+      env => env.spec.scope.agentId === agentId && states.get(this.driver.name(env)) === true,
+    );
+    const lists = await Promise.all(runningEnvs.map(async (env) => {
+      try {
+        const res = await this.executor(env.id).call<{ sessions?: Array<Record<string, unknown>> }>(
+          "GET",
+          "/v1/pty-sessions",
+          undefined,
+          AbortSignal.timeout(3000),
+        );
+        return (res.sessions ?? []).map((item) => ({
+          environmentId: env.id,
+          shadowId: env.spec.scope.shadowId,
+          contextId: String(item.contextId ?? ""),
+          runnerType: (item.runnerType === "codex" ? "codex" : "claude") as "claude" | "codex",
+          ...(typeof item.model === "string" ? { model: item.model } : {}),
+          ...(typeof item.sessionId === "string" ? { sessionId: item.sessionId } : {}),
+          busy: Boolean(item.busy),
+          privileged: Boolean(item.privileged),
+          pid: Number(item.pid ?? 0),
+          startedAt: Number(item.startedAt ?? Date.now()),
+          lastActiveAt: Number(item.lastActiveAt ?? Date.now()),
+        })).filter(row => row.contextId.length > 0);
+      } catch {
+        return [];
+      }
+    }));
+    return lists.flat();
+  }
+
+  /** Apply an updated PTY idle timeout in place across all running containers belonging to `agentId`. */
+  async setPtyIdleTimeout(agentId: string, idleTimeoutMs: number): Promise<void> {
+    const states = await this.driver.containerStates();
+    const runningEnvs = this.store.list().filter(
+      env => env.spec.scope.agentId === agentId && states.get(this.driver.name(env)) === true,
+    );
+    await Promise.all(runningEnvs.map(async (env) => {
+      try {
+        await this.executor(env.id).call(
+          "POST",
+          "/v1/pty-sessions/idle-timeout",
+          { idleTimeoutMs },
+          AbortSignal.timeout(3000),
+        );
+      } catch { /* container busy or older executor */ }
+    }));
+  }
+
+  /** Resolve Executor endpoint & maintenance token for attaching to an already-running PTY session. */
+  async ptyStreamTarget(id: string, agentId: string): Promise<{ endpoint: string; token: string }> {
+    const environment = this.store.require(id);
+    if (environment.spec.scope.agentId !== agentId) throw new ExecutionError(403, "environment_agent_mismatch");
+    if (environment.pendingSpec || ["draining", "reaping"].includes(environment.state)) {
+      throw new ExecutionError(409, "environment_draining");
+    }
+    const inspected = await this.driver.inspect(environment);
+    if (!inspected?.State.Running) throw new ExecutionError(404, "pty_session_not_found");
+    return {
+      endpoint: this.driver.endpoint(id),
+      token: this.driver.deployment(id).maintenanceToken,
+    };
+  }
+
   /**
    * Create or start a Shadow's container on demand from the Dashboard before its first Job.
    * Publishes the verified snapshot so Jobs arriving later reuse the same environment.

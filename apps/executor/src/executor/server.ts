@@ -88,6 +88,68 @@ export function createExecutor(db: SqlDatabase, authority: TokenAuthority, confi
       if ((body.operation as { kind?: string })?.kind === "delete" && store.list(true).some(job => store.binding(job.jobId).contextId === body.contextId)) throw new ExecutionError(409, "context_active");
       json(response, 200, executeFileOperation(contexts.get(body.contextId), body.operation)); return;
     }
+    if (method === "GET" && url.pathname === "/v1/pty-sessions") {
+      requirePeer(peer, "worker", config.workerId);
+      json(response, 200, { sessions: processes.listPtySessions() }); return;
+    }
+    if (method === "POST" && url.pathname === "/v1/pty-sessions/idle-timeout") {
+      requirePeer(peer, "worker", config.workerId);
+      const { idleTimeoutMs } = z.object({ idleTimeoutMs: z.number().int().min(0).max(7 * 86400_000) }).strict().parse(await readJson(request));
+      processes.setPtyIdleTimeout(idleTimeoutMs);
+      json(response, 204); return;
+    }
+    const ptyStream = /^\/v1\/pty-sessions\/([^/]+)\/(stream|control)$/.exec(url.pathname);
+    if (ptyStream) {
+      requirePeer(peer, "worker", config.workerId);
+      const contextId = Id.parse(ptyStream[1]);
+      if (method === "GET" && ptyStream[2] === "stream") {
+        request.socket?.setTimeout(0);
+        let ended = false;
+        const sendHeaders = () => {
+          if (response.headersSent || response.destroyed) return;
+          response.writeHead(200, {
+            "content-type": "application/octet-stream",
+            "cache-control": "no-store",
+            "x-accel-buffering": "no",
+          });
+          response.flushHeaders();
+        };
+        const finishStream = () => {
+          if (ended) return;
+          ended = true;
+          detach?.();
+          if (!response.writableEnded && !response.destroyed) response.end();
+        };
+        const detach = processes.attachPtyViewer(contextId, {
+          onData: (bytes) => {
+            if (ended || response.destroyed || response.writableEnded) return;
+            sendHeaders();
+            response.write(bytes);
+          },
+          onClose: () => finishStream(),
+        });
+        if (!detach) throw new ExecutionError(404, "pty_session_not_found");
+        sendHeaders();
+        await new Promise<void>((resolve) => {
+          request.once("close", () => { finishStream(); resolve(); });
+          response.once("close", () => { finishStream(); resolve(); });
+          response.once("finish", () => { finishStream(); resolve(); });
+        });
+        return;
+      }
+      if (method === "POST" && ptyStream[2] === "control") {
+        const body = z.discriminatedUnion("kind", [
+          z.object({ kind: z.literal("write"), data: z.string().max(1024 * 1024) }).strict(),
+          z.object({ kind: z.literal("resize"), cols: z.number().int().min(1).max(1000), rows: z.number().int().min(1).max(1000) }).strict(),
+        ]).parse(await readJson(request, 2 * 1024 * 1024));
+        const ok = body.kind === "write"
+          ? processes.writePtyInput(contextId, Buffer.from(body.data, "base64"))
+          : processes.resizePtySession(contextId, body.cols, body.rows);
+        if (!ok) throw new ExecutionError(404, "pty_session_not_found");
+        json(response, 204); return;
+      }
+      throw new ExecutionError(405, "method_not_allowed");
+    }
     const deletion = /^\/v1\/jobs\/([^/]+)$/.exec(url.pathname);
     if (method === "DELETE" && deletion) { store.delete(Id.parse(deletion[1])); json(response, 204); return; }
     requirePeer(peer, "runtime", config.runtimeId);

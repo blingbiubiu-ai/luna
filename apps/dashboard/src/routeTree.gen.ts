@@ -26,6 +26,7 @@ import { Route as SkillsIndexRouteImport } from './app/skills/index'
 import { Route as MemoryIndexRouteImport } from './app/memory/index'
 import { Route as PluginsIndexRouteImport } from './app/plugins/index'
 import { Route as SessionsIndexRouteImport } from './app/sessions/index'
+import { Route as TerminalsIndexRouteImport } from './app/terminals/index'
 import { Route as TasksIndexRouteImport } from './app/tasks/index'
 import { Route as SchedulesIndexRouteImport } from './app/schedules/index'
 import { Route as SessionsSessionIdRouteImport } from './app/sessions/$sessionId'
@@ -111,6 +112,11 @@ const SessionsIndexRoute = SessionsIndexRouteImport.update({
   path: '/sessions/',
   getParentRoute: () => AgentIdRoute,
 } as any)
+const TerminalsIndexRoute = TerminalsIndexRouteImport.update({
+  id: '/terminals/',
+  path: '/terminals/',
+  getParentRoute: () => AgentIdRoute,
+} as any)
 const TasksIndexRoute = TasksIndexRouteImport.update({
   id: '/tasks/',
   path: '/tasks/',
@@ -146,6 +152,7 @@ export interface FileRoutesByFullPath {
   '/$agentId/tasks/': typeof TasksIndexRoute
   '/$agentId/schedules/': typeof SchedulesIndexRoute
   '/$agentId/sessions/': typeof SessionsIndexRoute
+  '/$agentId/terminals/': typeof TerminalsIndexRoute
   '/$agentId/memory/': typeof MemoryIndexRoute
   '/$agentId/plugins/': typeof PluginsIndexRoute
   '/$agentId/skills/': typeof SkillsIndexRoute
@@ -168,6 +175,7 @@ export interface FileRoutesByTo {
   '/$agentId/tasks': typeof TasksIndexRoute
   '/$agentId/schedules': typeof SchedulesIndexRoute
   '/$agentId/sessions': typeof SessionsIndexRoute
+  '/$agentId/terminals': typeof TerminalsIndexRoute
   '/$agentId/memory': typeof MemoryIndexRoute
   '/$agentId/plugins': typeof PluginsIndexRoute
   '/$agentId/skills': typeof SkillsIndexRoute
@@ -192,6 +200,7 @@ export interface FileRoutesById {
   '/$agentId/tasks/': typeof TasksIndexRoute
   '/$agentId/schedules/': typeof SchedulesIndexRoute
   '/$agentId/sessions/': typeof SessionsIndexRoute
+  '/$agentId/terminals/': typeof TerminalsIndexRoute
   '/$agentId/memory/': typeof MemoryIndexRoute
   '/$agentId/plugins/': typeof PluginsIndexRoute
   '/$agentId/skills/': typeof SkillsIndexRoute
@@ -217,6 +226,7 @@ export interface FileRouteTypes {
     | '/$agentId/tasks/'
     | '/$agentId/schedules/'
     | '/$agentId/sessions/'
+    | '/$agentId/terminals/'
     | '/$agentId/memory/'
     | '/$agentId/plugins/'
     | '/$agentId/skills/'
@@ -239,6 +249,7 @@ export interface FileRouteTypes {
     | '/$agentId/tasks'
     | '/$agentId/schedules'
     | '/$agentId/sessions'
+    | '/$agentId/terminals'
     | '/$agentId/memory'
     | '/$agentId/plugins'
     | '/$agentId/skills'
@@ -262,6 +273,7 @@ export interface FileRouteTypes {
     | '/$agentId/tasks/'
     | '/$agentId/schedules/'
     | '/$agentId/sessions/'
+    | '/$agentId/terminals/'
     | '/$agentId/memory/'
     | '/$agentId/plugins/'
     | '/$agentId/skills/'
@@ -285,6 +297,7 @@ interface AgentRouteChildren {
   TasksIndexRoute: typeof TasksIndexRoute
   SchedulesIndexRoute: typeof SchedulesIndexRoute
   SessionsIndexRoute: typeof SessionsIndexRoute
+  TerminalsIndexRoute: typeof TerminalsIndexRoute
   MemoryIndexRoute: typeof MemoryIndexRoute
   PluginsIndexRoute: typeof PluginsIndexRoute
   SkillsIndexRoute: typeof SkillsIndexRoute
@@ -350,6 +363,13 @@ declare module '@tanstack/react-router' {
       path: '/sessions'
       fullPath: '/$agentId/sessions/'
       preLoaderRoute: typeof SessionsIndexRouteImport
+      parentRoute: typeof AgentIdRoute
+    }
+    '/$agentId/terminals/': {
+      id: '/$agentId/terminals/'
+      path: '/terminals'
+      fullPath: '/$agentId/terminals/'
+      preLoaderRoute: typeof TerminalsIndexRouteImport
       parentRoute: typeof AgentIdRoute
     }
     '/$agentId/plugins/': {
@@ -460,6 +480,7 @@ const agentRouteChildren: AgentRouteChildren = {
   TasksIndexRoute: TasksIndexRoute,
   SchedulesIndexRoute: SchedulesIndexRoute,
   SessionsIndexRoute: SessionsIndexRoute,
+  TerminalsIndexRoute: TerminalsIndexRoute,
   MemoryIndexRoute: MemoryIndexRoute,
   PluginsIndexRoute: PluginsIndexRoute,
   SkillsIndexRoute: SkillsIndexRoute,

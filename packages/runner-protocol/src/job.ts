@@ -30,6 +30,7 @@ export const JobRequest = z.object({
   runnerKind: RunnerKind, sessionId: Id.optional(), taskId: Id.optional(), taskRunId: Id.optional(),
   input: z.object({
     runnerType: z.enum(["claude", "codex"]), executionDriver: ExecutionDriverKind.optional(),
+    ptyIdleTimeoutMs: z.number().int().min(0).max(7 * 86400_000).optional(),
     prompt: z.string().max(8 * 1024 * 1024),
     sessionId: z.string().min(1).max(512).optional(), model: z.string().min(1).max(256).optional(),
   }).strict(),

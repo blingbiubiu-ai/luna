@@ -22,6 +22,14 @@ export function workerServer(authority: TokenAuthority, manager: EnvironmentMana
     if (request.method === "GET" && url.pathname === "/v1/containers") {
       json(response, 200, { containers: await manager.containers(Id.parse(url.searchParams.get("agentId"))) }); return;
     }
+    if (request.method === "GET" && url.pathname === "/v1/pty-sessions") {
+      json(response, 200, { sessions: await manager.ptySessions(Id.parse(url.searchParams.get("agentId"))) }); return;
+    }
+    if (request.method === "POST" && url.pathname === "/v1/pty-sessions/idle-timeout") {
+      const body = z.object({ agentId: Id, idleTimeoutMs: z.number().int().min(0).max(7 * 86400_000) }).strict().parse(await readJson(request));
+      await manager.setPtyIdleTimeout(body.agentId, body.idleTimeoutMs);
+      json(response, 204); return;
+    }
     if (request.method === "POST" && url.pathname === "/v1/containers/provision") {
       json(response, 200, { container: await manager.provision(await readJson(request, 64 * 1024 * 1024)) }); return;
     }

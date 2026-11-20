@@ -1,4 +1,5 @@
 import { spawn, type ChildProcess } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { createInterface } from "node:readline";
 import { setTimeout as delay } from "node:timers/promises";
 import { contentHash } from "@luna/execution-store";
@@ -8,7 +9,12 @@ import type { ExecutionContext } from "./contexts";
 import { processStartTime } from "./process-cleanup";
 import { sanitizeHome } from "./runner-sudo";
 import { splitStaticAndTurnEnv } from "../pty/pty-session";
-import type { PtyHostCommand } from "../pty/types";
+import type { PtyHostCommand, PtySessionSummary } from "../pty/types";
+
+export interface PtyViewerHandlers {
+  readonly onData: (bytes: Uint8Array) => void;
+  readonly onClose: (reason: string) => void;
+}
 
 export interface PtyTurnAttemptResult {
   readonly code: number | null;
@@ -28,8 +34,14 @@ class WarmPtyHost {
   readonly child: ChildProcess;
   readonly pid: number;
   readonly startTime: string;
+  readonly startedAt = Date.now();
+  readonly runnerType: "claude" | "codex";
+  readonly model: string | undefined;
+  private currentSessionId: string | undefined;
+  private lastActiveAt = Date.now();
   private readonly readyPromise: Promise<void>;
   private activeTurn: ActiveTurnHandler | null = null;
+  private readonly viewers = new Map<string, PtyViewerHandlers & { replayed: boolean }>();
   private closed = false;
   private closePromise: Promise<void>;
   private unsafeFailure = false;
@@ -44,6 +56,9 @@ class WarmPtyHost {
     initCmd: Extract<PtyHostCommand, { type: "init" }>,
     private readonly onEvict: (host: WarmPtyHost) => void,
   ) {
+    this.runnerType = initCmd.runnerType;
+    this.model = initCmd.model;
+    this.currentSessionId = initCmd.sessionId;
     this.child = spawn(
       process.execPath,
       [
@@ -95,23 +110,60 @@ class WarmPtyHost {
         for (const event of parser.feedLine(line)) {
           frameBytes = 0;
           if (event.status === "host_ready") {
+            if (typeof event.data.sessionId === "string" && event.data.sessionId) {
+              this.currentSessionId = event.data.sessionId;
+            }
             if (!readySettled) {
               readySettled = true;
               resolveReady();
             }
             continue;
           }
+          if (event.status === "pty_replay") {
+            const viewerId = typeof event.data.viewerId === "string" ? event.data.viewerId : "";
+            const viewer = this.viewers.get(viewerId);
+            if (typeof event.data.sessionId === "string" && event.data.sessionId) {
+              this.currentSessionId = event.data.sessionId;
+            }
+            if (viewer) {
+              const raw = typeof event.data.data === "string" && event.data.data
+                ? Buffer.from(event.data.data, "base64")
+                : Buffer.alloc(0);
+              if (raw.length > 0) viewer.onData(raw);
+              viewer.replayed = true;
+            }
+            continue;
+          }
+          if (event.status === "pty_data") {
+            this.lastActiveAt = Date.now();
+            if (this.viewers.size > 0 && typeof event.data.data === "string" && event.data.data) {
+              const raw = Buffer.from(event.data.data, "base64");
+              if (raw.length > 0) {
+                for (const viewer of this.viewers.values()) {
+                  if (viewer.replayed) viewer.onData(raw);
+                }
+              }
+            }
+            continue;
+          }
           if (event.status === "turn_output") {
+            this.lastActiveAt = Date.now();
             const turnId = typeof event.data.turnId === "string" ? event.data.turnId : "";
             if (this.activeTurn && this.activeTurn.turnId === turnId) {
               const output = ProviderOutput.parse(event.data.output);
+              if (output.status === "init") this.currentSessionId = output.sessionId;
+              if (output.status === "success" && output.newSessionId) this.currentSessionId = output.newSessionId;
               this.activeTurn.onOutput(output);
             }
             continue;
           }
           if (event.status === "turn_done") {
+            this.lastActiveAt = Date.now();
             const turnId = typeof event.data.turnId === "string" ? event.data.turnId : "";
             const outcome = event.data.outcome;
+            if (typeof event.data.sessionId === "string" && event.data.sessionId) {
+              this.currentSessionId = event.data.sessionId;
+            }
             if (this.activeTurn && this.activeTurn.turnId === turnId) {
               const handler = this.activeTurn;
               this.activeTurn = null;
@@ -129,9 +181,14 @@ class WarmPtyHost {
             continue;
           }
           if (event.status === "session_closed") {
+            const reason = typeof event.data.reason === "string" ? event.data.reason : "pty_session_closed";
+            for (const viewer of this.viewers.values()) {
+              viewer.onClose(reason);
+            }
+            this.viewers.clear();
             if (!readySettled) {
               readySettled = true;
-              rejectReady(new Error(typeof event.data.reason === "string" ? event.data.reason : "PTY session closed"));
+              rejectReady(new Error(reason));
             }
             continue;
           }
@@ -165,6 +222,10 @@ class WarmPtyHost {
       this.closed = true;
       rl.close();
       this.onEvict(this);
+      for (const viewer of this.viewers.values()) {
+        viewer.onClose(`exited:${code ?? 0}`);
+      }
+      this.viewers.clear();
       if (this.privileged) {
         sanitizeHome(this.context.home, this.context.uid, this.context.gid);
       }
@@ -192,6 +253,51 @@ class WarmPtyHost {
     return !this.closed;
   }
 
+  summary(): PtySessionSummary {
+    return {
+      contextId: this.context.id,
+      runnerType: this.runnerType,
+      ...(this.model ? { model: this.model } : {}),
+      ...(this.currentSessionId ? { sessionId: this.currentSessionId } : {}),
+      busy: this.activeTurn !== null,
+      privileged: this.privileged,
+      pid: this.pid,
+      startedAt: this.startedAt,
+      lastActiveAt: this.lastActiveAt,
+    };
+  }
+
+  attachViewer(handlers: PtyViewerHandlers): () => void {
+    if (this.closed) {
+      handlers.onClose("pty_session_closed");
+      return () => {};
+    }
+    const viewerId = randomUUID();
+    this.viewers.set(viewerId, { ...handlers, replayed: false });
+    this.sendCommand({ type: "attach_viewer", viewerId });
+    return () => {
+      if (this.viewers.delete(viewerId) && !this.closed) {
+        this.sendCommand({ type: "detach_viewer", viewerId });
+      }
+    };
+  }
+
+  writeInput(bytes: Uint8Array): void {
+    if (this.closed || bytes.length === 0) return;
+    this.lastActiveAt = Date.now();
+    this.sendCommand({ type: "pty_input", data: Buffer.from(bytes).toString("base64") });
+  }
+
+  resizePty(cols: number, rows: number): void {
+    if (this.closed || cols < 1 || rows < 1) return;
+    this.sendCommand({ type: "pty_resize", cols, rows });
+  }
+
+  setIdleTimeout(idleTimeoutMs: number): void {
+    if (this.closed) return;
+    this.sendCommand({ type: "set_idle_timeout", idleTimeoutMs });
+  }
+
   async waitReady(): Promise<void> {
     await this.readyPromise;
   }
@@ -201,6 +307,7 @@ class WarmPtyHost {
     readonly prompt: string;
     readonly sessionId?: string | undefined;
     readonly turnEnv: Record<string, string>;
+    readonly idleTimeoutMs?: number | undefined;
     readonly onOutput: (output: ProviderOutput) => void;
     readonly onStderr: (text: string) => void;
   }): Promise<PtyTurnAttemptResult> {
@@ -220,6 +327,7 @@ class WarmPtyHost {
         prompt: input.prompt,
         ...(input.sessionId ? { sessionId: input.sessionId } : {}),
         turnEnv: input.turnEnv,
+        ...(input.idleTimeoutMs !== undefined ? { idleTimeoutMs: input.idleTimeoutMs } : {}),
       });
     });
   }
@@ -286,6 +394,7 @@ export class PtyContextPool {
     readonly resourceRevision: string;
     readonly containerEnv: NodeJS.ProcessEnv;
     readonly suppliedEnv: Record<string, string>;
+    readonly idleTimeoutMs?: number | undefined;
   }): Promise<{ readonly host: WarmPtyHost; readonly turnEnv: Record<string, string> }> {
     const cleanSupplied = { ...input.suppliedEnv };
     for (const key of ["HOME", "PATH", "LUNA_HOME", "LUNA_RUNNER_HOME", "LUNA_IPC_DIR"]) {
@@ -324,6 +433,7 @@ export class PtyContextPool {
         ...(input.model ? { model: input.model } : {}),
         ...(input.sessionId ? { sessionId: input.sessionId } : {}),
         staticEnv,
+        ...(input.idleTimeoutMs !== undefined ? { idleTimeoutMs: input.idleTimeoutMs } : {}),
       },
       (evicted) => {
         if (this.hosts.get(input.context.id) === evicted) {
@@ -341,6 +451,40 @@ export class PtyContextPool {
     if (!host) return;
     const { turnEnv } = splitStaticAndTurnEnv(suppliedEnv);
     host.updateCredentials(turnId, turnEnv);
+  }
+
+  listSessions(): PtySessionSummary[] {
+    const out: PtySessionSummary[] = [];
+    for (const host of this.hosts.values()) {
+      if (host.isAlive()) out.push(host.summary());
+    }
+    return out;
+  }
+
+  attachViewer(contextId: string, handlers: PtyViewerHandlers): (() => void) | null {
+    const host = this.hosts.get(contextId);
+    if (!host || !host.isAlive()) return null;
+    return host.attachViewer(handlers);
+  }
+
+  writeInput(contextId: string, bytes: Uint8Array): boolean {
+    const host = this.hosts.get(contextId);
+    if (!host || !host.isAlive()) return false;
+    host.writeInput(bytes);
+    return true;
+  }
+
+  resizePty(contextId: string, cols: number, rows: number): boolean {
+    const host = this.hosts.get(contextId);
+    if (!host || !host.isAlive()) return false;
+    host.resizePty(cols, rows);
+    return true;
+  }
+
+  setIdleTimeoutAll(idleTimeoutMs: number): void {
+    for (const host of this.hosts.values()) {
+      if (host.isAlive()) host.setIdleTimeout(idleTimeoutMs);
+    }
   }
 
   async closeAll(): Promise<void> {

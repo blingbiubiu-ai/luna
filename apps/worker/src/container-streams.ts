@@ -25,7 +25,7 @@ export class ContainerStreams {
   private readonly sockets = new Map<WebSocket, string>();
 
   constructor(
-    private readonly manager: Pick<EnvironmentManager, "streamTarget"> & Partial<Pick<EnvironmentManager, "acquireStream" | "releaseStream" | "setStreamCloser">>,
+    private readonly manager: Pick<EnvironmentManager, "streamTarget"> & Partial<Pick<EnvironmentManager, "ptyStreamTarget" | "acquireStream" | "releaseStream" | "setStreamCloser">>,
     private readonly runner: { runnerUid: number; runnerGid: number },
     private readonly dial: StreamDialer,
     private readonly spawn: StreamSpawner = bunSpawner,
@@ -102,6 +102,12 @@ export class ContainerStreams {
   }
 
   private async start(command: ContainerStreamOpen, onData: (bytes: Uint8Array) => void): Promise<StreamProcess> {
+    if (command.kind === "pty") {
+      if (!command.contextId) throw new ExecutionError(400, "invalid_request");
+      if (!this.manager.ptyStreamTarget) throw new ExecutionError(409, "worker_streams_unsupported");
+      const target = await this.manager.ptyStreamTarget(command.environmentId, command.agentId);
+      return openExecutorPtyStream(target.endpoint, target.token, command.contextId, onData);
+    }
     const root = command.kind === "terminal" && command.user === "root";
     const target = await this.manager.streamTarget(command.environmentId, command.agentId, root ? { root: true } : undefined);
     const runner = `${this.runner.runnerUid}:${this.runner.runnerGid}`;
@@ -155,3 +161,73 @@ export const bunSpawner: StreamSpawner = (command, { tty, onData }) => {
     exited: child.exited,
   };
 };
+
+async function openExecutorPtyStream(
+  endpoint: string,
+  token: string,
+  contextId: string,
+  onData: (bytes: Uint8Array) => void,
+): Promise<StreamProcess> {
+  const abort = new AbortController();
+  const baseUrl = `${endpoint.replace(/\/$/, "")}/v1/pty-sessions/${encodeURIComponent(contextId)}`;
+  const response = await fetch(`${baseUrl}/stream`, {
+    headers: { authorization: `Bearer ${token}` },
+    signal: abort.signal,
+  });
+  if (!response.ok || !response.body) {
+    abort.abort();
+    throw new ExecutionError(
+      response.status || 503,
+      response.status === 404 ? "pty_session_not_found" : "stream_open_failed",
+    );
+  }
+
+  let controlChain: Promise<void> = Promise.resolve();
+  const sendControl = (payload: Record<string, unknown>) => {
+    if (abort.signal.aborted) return;
+    controlChain = controlChain
+      .then(async () => {
+        if (abort.signal.aborted) return;
+        await fetch(`${baseUrl}/control`, {
+          method: "POST",
+          headers: {
+            authorization: `Bearer ${token}`,
+            "content-type": "application/json",
+          },
+          body: JSON.stringify(payload),
+          signal: AbortSignal.any([abort.signal, AbortSignal.timeout(5000)]),
+        });
+      })
+      .catch(() => {});
+  };
+
+  const reader = response.body.getReader();
+  const exited = (async () => {
+    try {
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        if (value && value.byteLength > 0) onData(value);
+      }
+      return 0;
+    } catch {
+      return 0;
+    } finally {
+      reader.releaseLock();
+    }
+  })();
+
+  return {
+    write: (bytes) => {
+      if (bytes.byteLength === 0) return;
+      sendControl({ kind: "write", data: Buffer.from(bytes).toString("base64") });
+    },
+    resize: (cols, rows) => {
+      sendControl({ kind: "resize", cols, rows });
+    },
+    kill: () => {
+      abort.abort();
+    },
+    exited,
+  };
+}

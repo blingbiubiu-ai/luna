@@ -12,10 +12,12 @@ import { createTranscriptTerminalSettle } from "./terminal-settle";
 import type { PtyCliAdapter, PtyWriteTarget } from "./types";
 import { DEFAULT_PTY_COLS, DEFAULT_PTY_ROWS, HeadlessViewport, stripAnsiScreenText } from "./viewport";
 
+const MAX_PTY_REPLAY_BYTES = 256 * 1024;
+
 export interface LivePtyProcess {
   readonly pid: number;
   readonly exited: Promise<number>;
-  write(data: string): void;
+  write(data: string | Uint8Array): void;
   resize(cols: number, rows: number): void;
   close(): void;
   kill(signal?: NodeJS.Signals | number): void;
@@ -47,7 +49,7 @@ export const bunPtySpawner: PtyProcessSpawner = (command, args, options) => {
   return {
     pid: child.pid,
     exited: child.exited,
-    write: (data: string) => {
+    write: (data: string | Uint8Array) => {
       child.terminal?.write(data);
     },
     resize: (cols: number, rows: number) => {
@@ -110,6 +112,7 @@ export interface PtySessionControllerOptions {
   readonly spawner?: PtyProcessSpawner | undefined;
   readonly adapter?: PtyCliAdapter | undefined;
   readonly onIdleExpired?: (() => void) | undefined;
+  readonly onLiveData?: ((bytes: Uint8Array) => void) | undefined;
 }
 
 export class PtySessionController {
@@ -117,7 +120,7 @@ export class PtySessionController {
   private readonly spawner: PtyProcessSpawner;
   private readonly controlDir: string;
   private readonly turnEnvFile: string;
-  private readonly idleTimeoutMs: number;
+  private idleTimeoutMs: number;
   private readonly startupTimeoutMs: number;
 
   private proc: LivePtyProcess | null = null;
@@ -127,6 +130,8 @@ export class PtySessionController {
   private hookEventsOffset = 0;
   private idleReapTimer: ReturnType<typeof setTimeout> | null = null;
   private ptyTextTail = "";
+  private replayChunks: Buffer[] = [];
+  private replayBytes = 0;
   private exitCode: number | null = null;
   private currentSessionId: string | undefined;
   private activeCancelAbort: AbortController | null = null;
@@ -147,12 +152,63 @@ export class PtySessionController {
     return this.currentSessionId;
   }
 
+  setIdleTimeoutMs(ms: number): void {
+    this.idleTimeoutMs = Math.max(0, Math.trunc(ms));
+    this.clearIdleReapTimer();
+    if (!this.activeCancelAbort && this.isAlive()) {
+      this.armIdleReapTimer();
+    }
+  }
+
   getTurnEnvFilePath(): string {
     return this.turnEnvFile;
   }
 
   isAlive(): boolean {
     return !this.closed && this.proc !== null && this.exitCode === null;
+  }
+
+  getReplayBuffer(): Buffer {
+    if (this.replayChunks.length === 0) return Buffer.alloc(0);
+    if (this.replayChunks.length === 1) return this.replayChunks[0]!;
+    const merged = Buffer.concat(this.replayChunks, this.replayBytes);
+    this.replayChunks = [merged];
+    return merged;
+  }
+
+  writeRaw(bytes: Uint8Array): void {
+    if (!this.proc || this.exitCode !== null) return;
+    this.proc.write(bytes);
+    if (!this.activeCancelAbort) {
+      this.armIdleReapTimer();
+    }
+  }
+
+  resize(cols: number, rows: number): void {
+    if (cols < 1 || rows < 1) return;
+    this.viewport?.resize(cols, rows);
+    if (this.proc && this.exitCode === null) {
+      this.proc.resize(cols, rows);
+    }
+  }
+
+  private appendReplay(bytes: Uint8Array): void {
+    if (bytes.length === 0) return;
+    const copy = Buffer.from(bytes);
+    this.replayChunks.push(copy);
+    this.replayBytes += copy.length;
+    while (this.replayBytes > MAX_PTY_REPLAY_BYTES && this.replayChunks.length > 0) {
+      const head = this.replayChunks[0]!;
+      const excess = this.replayBytes - MAX_PTY_REPLAY_BYTES;
+      if (head.length <= excess) {
+        this.replayChunks.shift();
+        this.replayBytes -= head.length;
+      } else {
+        this.replayChunks[0] = head.subarray(excess);
+        this.replayBytes -= excess;
+        break;
+      }
+    }
   }
 
   writeTurnEnv(turnEnv: Readonly<Record<string, string>>): void {
@@ -176,6 +232,8 @@ export class PtySessionController {
     await this.teardownProcess();
     this.exitCode = null;
     this.ptyTextTail = "";
+    this.replayChunks = [];
+    this.replayBytes = 0;
     this.hookEventsOffset = 0;
 
     const effectiveResume = resumeSessionId ?? this.currentSessionId;
@@ -208,6 +266,8 @@ export class PtySessionController {
       cols: DEFAULT_PTY_COLS,
       rows: DEFAULT_PTY_ROWS,
       onData: (bytes: Uint8Array) => {
+        this.appendReplay(bytes);
+        this.options.onLiveData?.(bytes);
         const chunk = decoder.decode(bytes, { stream: true });
         if (!chunk) return;
         this.ptyTextTail = (this.ptyTextTail + stripAnsiScreenText(chunk)).slice(-8192);
@@ -519,6 +579,7 @@ export class PtySessionController {
 
   private armIdleReapTimer(): void {
     this.clearIdleReapTimer();
+    if (this.idleTimeoutMs <= 0) return;
     this.idleReapTimer = setTimeout(() => {
       this.idleReapTimer = null;
       void this.close().finally(() => {

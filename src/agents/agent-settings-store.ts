@@ -33,6 +33,10 @@ export const AgentSettings = z.object({
   task: z.object({
     runLimitHours: z.number().int().min(1).max(168).default(10),
   }).strict().default({ runLimitHours: 10 }),
+  /** Interactive PTY execution: minutes an idle CLI TUI stays resident before sleeping (0 = never sleep). */
+  pty: z.object({
+    idleTimeoutMinutes: z.number().int().min(0).max(10080).default(10),
+  }).strict().default({ idleTimeoutMinutes: 10 }),
 }).strict();
 export type AgentSettings = z.infer<typeof AgentSettings>;
 

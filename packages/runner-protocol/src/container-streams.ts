@@ -12,7 +12,7 @@ import { Id } from "./job.js";
  * `{type:"end",reason}` just before the Worker closes (Bun servers do not
  * receive client close reasons).
  */
-export const ContainerStreamKind = z.enum(["terminal", "vnc"]);
+export const ContainerStreamKind = z.enum(["terminal", "vnc", "pty"]);
 export type ContainerStreamKind = z.infer<typeof ContainerStreamKind>;
 export const ContainerStreamUser = z.enum(["runner", "root"]);
 export type ContainerStreamUser = z.infer<typeof ContainerStreamUser>;
@@ -24,6 +24,7 @@ export const CONTAINER_STREAM_TOKEN_HEADER = "x-luna-stream-token";
 export const ContainerStreamOpen = z.object({
   type: z.literal("stream.open"), streamId: z.uuid(), token: z.string().regex(/^[A-Za-z0-9_-]{43}$/),
   environmentId: Id, agentId: Id, kind: ContainerStreamKind, user: ContainerStreamUser, cols: Dimension, rows: Dimension,
+  contextId: Id.optional(),
 }).strict();
 export type ContainerStreamOpen = z.infer<typeof ContainerStreamOpen>;
 

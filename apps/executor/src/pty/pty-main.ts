@@ -63,6 +63,7 @@ export async function runPtyHostLoop(): Promise<void> {
 
   let controller: PtySessionController | null = null;
   let activeTurnId: string | null = null;
+  const attachedViewers = new Set<string>();
   let shuttingDown = false;
 
   const closeAndExit = async (reason: string) => {
@@ -104,8 +105,58 @@ export async function runPtyHostLoop(): Promise<void> {
         onIdleExpired: () => {
           void closeAndExit("idle_timeout");
         },
+        onLiveData: (bytes) => {
+          if (attachedViewers.size > 0 && bytes.length > 0) {
+            emitHostEvent({ status: "pty_data", data: Buffer.from(bytes).toString("base64") });
+          }
+        },
       });
       emitHostEvent({ status: "host_ready", ...(cmd.sessionId ? { sessionId: cmd.sessionId } : {}) });
+      continue;
+    }
+
+    if (cmd.type === "attach_viewer") {
+      if (controller) {
+        const viewerId = cmd.viewerId;
+        void (async () => {
+          try {
+            if (!controller!.isAlive()) {
+              await controller!.ensureStarted();
+            }
+            const replay = controller!.getReplayBuffer();
+            const sid = controller!.getSessionId();
+            emitHostEvent({
+              status: "pty_replay",
+              viewerId,
+              data: replay.toString("base64"),
+              ...(sid ? { sessionId: sid } : {}),
+            });
+            attachedViewers.add(viewerId);
+          } catch { /* viewer closed or startup failed */ }
+        })();
+      }
+      continue;
+    }
+
+    if (cmd.type === "detach_viewer") {
+      attachedViewers.delete(cmd.viewerId);
+      continue;
+    }
+
+    if (cmd.type === "pty_input") {
+      if (controller && cmd.data) {
+        controller.writeRaw(Buffer.from(cmd.data, "base64"));
+      }
+      continue;
+    }
+
+    if (cmd.type === "pty_resize") {
+      controller?.resize(cmd.cols, cmd.rows);
+      continue;
+    }
+
+    if (cmd.type === "set_idle_timeout") {
+      controller?.setIdleTimeoutMs(cmd.idleTimeoutMs);
       continue;
     }
 
@@ -139,6 +190,9 @@ export async function runPtyHostLoop(): Promise<void> {
         continue;
       }
       activeTurnId = cmd.turnId;
+      if (cmd.idleTimeoutMs !== undefined) {
+        controller.setIdleTimeoutMs(cmd.idleTimeoutMs);
+      }
       void (async () => {
         try {
           const result = await controller!.runTurn({

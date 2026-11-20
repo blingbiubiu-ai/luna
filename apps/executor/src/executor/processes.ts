@@ -5,7 +5,8 @@ import { fileURLToPath } from "node:url";
 import { ExecutorStore } from "./store";
 import { ExecutorContexts } from "./contexts";
 import { processStartTime } from "./process-cleanup";
-import { PtyContextPool } from "./pty-driver";
+import { PtyContextPool, type PtyViewerHandlers } from "./pty-driver";
+import type { PtySessionSummary } from "../pty/types";
 import { transaction } from "@luna/execution-store";
 import { EXECUTION_CONTINUATION_PROMPT, executionRetryDelay, isTransientProviderFailure, isTerminal, ProviderOutput, type JobRequest } from "@luna/runner-protocol";
 import { runnerAssetPaths } from "@luna/runner-protocol/runner-assets";
@@ -96,6 +97,11 @@ export class ExecutorProcesses {
     await this.ptyPool.closeAll();
   }
   activeCount(): number { return this.store.list(true).filter(job => !isTerminal(job.state) && this.store.request(job.jobId)).length; }
+  listPtySessions(): PtySessionSummary[] { return this.ptyPool.listSessions(); }
+  attachPtyViewer(contextId: string, handlers: PtyViewerHandlers): (() => void) | null { return this.ptyPool.attachViewer(contextId, handlers); }
+  writePtyInput(contextId: string, bytes: Uint8Array): boolean { return this.ptyPool.writeInput(contextId, bytes); }
+  resizePtySession(contextId: string, cols: number, rows: number): boolean { return this.ptyPool.resizePty(contextId, cols, rows); }
+  setPtyIdleTimeout(idleTimeoutMs: number): void { this.ptyPool.setIdleTimeoutAll(idleTimeoutMs); }
 
   private launch(job: JobRequest, suppliedEnv: Record<string, string>): void {
     const context = this.contexts.get(job.runnerContextId);
@@ -326,6 +332,7 @@ export class ExecutorProcesses {
           resourceRevision: job.resourceRevision,
           containerEnv: environment,
           suppliedEnv,
+          idleTimeoutMs: job.input.ptyIdleTimeoutMs,
         });
 
         cancelHook = () => {
@@ -351,6 +358,7 @@ export class ExecutorProcesses {
           prompt: effectivePrompt,
           sessionId: resumeSid,
           turnEnv,
+          idleTimeoutMs: job.input.ptyIdleTimeoutMs,
           onOutput: (output) => {
             if (output.status === "checkpoint") checkpoint = true;
             if (output.status === "error") {

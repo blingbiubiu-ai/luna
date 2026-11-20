@@ -1,5 +1,8 @@
 import { useAgentBasePath } from "@/lib/agent-route";
+import { useTranslation } from "@/lib/i18n";
 import { DeleteRecordButton } from "@/components/delete-record-button";
+import { Button } from "@/components/ui/button";
+import { TerminalSquareIcon } from "lucide-react";
 import { SessionComposer } from "./session-composer";
 import { createFileRoute } from "@tanstack/react-router";
 import { useEffect, useRef } from "react";
@@ -31,6 +34,7 @@ function timelineEntryIds(item: DashboardSessionTimelineItem): string[] {
 }
 
 function SessionDetailPage() {
+  const { t } = useTranslation();
   const { agentId, sessionId } = Route.useParams();
   const { entry: focusEntryId } = Route.useSearch();
   const base = useAgentBasePath();
@@ -68,7 +72,17 @@ function SessionDetailPage() {
 
   return (
     <SessionDetailView
-      actions={session ? <DeleteRecordButton kind="sessions" id={sessionId} path={`/sessions/${encodeURIComponent(sessionId)}?agentId=${encodeURIComponent(agentId)}`} name={session.displayTitle || session.title || sessionId} onDeleted={() => { window.location.assign(`${base}/sessions`); }} /> : null}
+      actions={session ? (
+        <div className="flex items-center gap-1.5">
+          <Button size="sm" variant="outline" asChild>
+            <a href={`${base}/terminals?sessionId=${encodeURIComponent(sessionId)}`}>
+              <TerminalSquareIcon className="size-3.5" />
+              {t("Open TUI")}
+            </a>
+          </Button>
+          <DeleteRecordButton kind="sessions" id={sessionId} path={`/sessions/${encodeURIComponent(sessionId)}?agentId=${encodeURIComponent(agentId)}`} name={session.displayTitle || session.title || sessionId} onDeleted={() => { window.location.assign(`${base}/sessions`); }} />
+        </div>
+      ) : null}
       key={sessionId}
       composer={<SessionComposer key={sessionId} agentId={agentId} sessionId={sessionId} disabled={!session || session.status !== "active" || sessionsIsError} />}
       sessionId={sessionId}

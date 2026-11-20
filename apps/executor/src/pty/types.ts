@@ -75,6 +75,11 @@ export type PtyHostCommand =
       readonly prompt: string;
       readonly sessionId?: string;
       readonly turnEnv: Record<string, string>;
+      readonly idleTimeoutMs?: number;
+    }
+  | {
+      readonly type: "set_idle_timeout";
+      readonly idleTimeoutMs: number;
     }
   | {
       readonly type: "update_credentials";
@@ -86,6 +91,23 @@ export type PtyHostCommand =
       readonly turnId: string;
     }
   | {
+      readonly type: "attach_viewer";
+      readonly viewerId: string;
+    }
+  | {
+      readonly type: "detach_viewer";
+      readonly viewerId: string;
+    }
+  | {
+      readonly type: "pty_input";
+      readonly data: string;
+    }
+  | {
+      readonly type: "pty_resize";
+      readonly cols: number;
+      readonly rows: number;
+    }
+  | {
       readonly type: "shutdown";
     };
 
@@ -94,4 +116,18 @@ export type PtyHostEvent =
   | { readonly status: "host_ready"; readonly sessionId?: string }
   | { readonly status: "turn_output"; readonly turnId: string; readonly output: ProviderOutput }
   | { readonly status: "turn_done"; readonly turnId: string; readonly outcome: "succeeded" | "failed" | "cancelled"; readonly sessionId?: string }
+  | { readonly status: "pty_replay"; readonly viewerId: string; readonly data: string; readonly sessionId?: string }
+  | { readonly status: "pty_data"; readonly data: string }
   | { readonly status: "session_closed"; readonly reason: string };
+
+export interface PtySessionSummary {
+  readonly contextId: string;
+  readonly runnerType: "claude" | "codex";
+  readonly model?: string | undefined;
+  readonly sessionId?: string | undefined;
+  readonly busy: boolean;
+  readonly privileged: boolean;
+  readonly pid: number;
+  readonly startedAt: number;
+  readonly lastActiveAt: number;
+}

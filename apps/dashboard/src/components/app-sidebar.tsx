@@ -16,6 +16,7 @@ import {
   PlusIcon,
   BotIcon,
   SparklesIcon,
+  TerminalSquareIcon,
   UsersIcon,
 } from "lucide-react";
 
@@ -49,6 +50,7 @@ const navGroups = [
   { title: "Operate", items: [
     { title: "Overview", icon: LayoutDashboardIcon, to: "/$agentId/" },
     { title: "Sessions", icon: MessagesSquareIcon, to: "/$agentId/sessions" },
+    { title: "Terminals", icon: TerminalSquareIcon, to: "/$agentId/terminals" },
     { title: "Tasks", icon: BriefcaseBusinessIcon, to: "/$agentId/tasks" },
     { title: "Schedules", icon: CalendarClockIcon, to: "/$agentId/schedules" },
   ] },

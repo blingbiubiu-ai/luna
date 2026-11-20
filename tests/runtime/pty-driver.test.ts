@@ -23,6 +23,7 @@ import { HeadlessViewport } from "@luna/executor/pty/viewport";
 import type { PtyCliAdapter } from "@luna/executor/pty/types";
 import { ActiveAgentConfigService, AgentProfileStore, AgentSecretCipher } from "../../src/agent-config";
 import { executionReference } from "../../src/agent-config/execution-reference";
+import { ContainerConsoleSession, type ContainerConsoleSocketData } from "../../src/server/container-console";
 import { DataConnection } from "../../src/data";
 import * as schema from "../../src/data/schema";
 import { RuntimeEventStore } from "../../src/runtime/event-store";
@@ -785,6 +786,21 @@ process.stdin.on("data", (chunk: string) => {
         expect(snap4.finalText).toContain("uid=1000;nnp=1;tok=tok-pty4;prompt=turn-four");
         const pid4 = /cliPid=(\d+)/.exec(snap4.finalText!)?.[1];
         expect(pid4).not.toBe(pid3);
+
+        // Verify /v1/pty-sessions and live replay stream on the warm PTY host!
+        const listed = await worker.call<{ sessions: Array<{ contextId: string; busy: boolean }> }>("GET", "/v1/pty-sessions");
+        expect(listed.sessions).toHaveLength(1);
+        expect(listed.sessions[0]?.contextId).toBe("pty-ctx");
+        expect(listed.sessions[0]?.busy).toBe(false);
+
+        const abortStream = new AbortController();
+        const streamRes = await worker.open("GET", "/v1/pty-sessions/pty-ctx/stream", undefined, abortStream.signal);
+        expect(streamRes.statusCode).toBe(200);
+        const firstChunk = await new Promise<Buffer>((resolve) => {
+          streamRes.once("data", (chunk: Buffer) => resolve(Buffer.from(chunk)));
+        });
+        expect(firstChunk.toString("utf8")).toContain("❯");
+        abortStream.abort();
       } finally {
         await executor.stop();
         await closeExecutionServer(executor.server);
@@ -795,4 +811,65 @@ process.stdin.on("data", (chunk: string) => {
     },
     30_000,
   );
+});
+
+describe("ContainerConsoleSession TUI read-only & takeover gating", () => {
+  test("drops keystrokes and resizes in read-only PTY mode until mode writable=true is sent", () => {
+    const writes: Uint8Array[] = [];
+    const resizes: Array<{ cols: number; rows: number }> = [];
+    let openedRequest: Record<string, unknown> | undefined;
+
+    const fakeGateway = {
+      openStream(_workerId: string, request: Record<string, unknown>) {
+        openedRequest = request;
+        return {
+          write: (bytes: Uint8Array) => { writes.push(bytes); },
+          resize: (cols: number, rows: number) => { resizes.push({ cols, rows }); },
+          close: () => {},
+        };
+      },
+    } as unknown as ConstructorParameters<typeof ContainerConsoleSession>[0];
+
+    const session = new ContainerConsoleSession(fakeGateway, {
+      accountId: "acc-1",
+      agentId: "agent-1",
+      shadowId: "shadow-1",
+      workerId: "local",
+      environmentId: "env-1",
+      kind: "pty",
+      user: "runner",
+      cols: 120,
+      rows: 40,
+      contextId: "ctx-1",
+    });
+
+    const fakeWs = {
+      send: () => 1,
+      close: () => {},
+    } as unknown as import("bun").ServerWebSocket<ContainerConsoleSocketData>;
+
+    session.open(fakeWs);
+    expect(openedRequest?.kind).toBe("pty");
+    expect(openedRequest?.contextId).toBe("ctx-1");
+
+    // Read-only by default: binary input and resize frames are ignored.
+    session.message(fakeWs, Buffer.from("ls\r"));
+    session.message(fakeWs, JSON.stringify({ type: "resize", cols: 140, rows: 45 }));
+    expect(writes).toHaveLength(0);
+    expect(resizes).toHaveLength(0);
+
+    // Take input control: binary input and resize frames now pass through.
+    session.message(fakeWs, JSON.stringify({ type: "mode", writable: true }));
+    session.message(fakeWs, Buffer.from("pwd\r"));
+    session.message(fakeWs, JSON.stringify({ type: "resize", cols: 140, rows: 45 }));
+    expect(writes).toHaveLength(1);
+    expect(Buffer.from(writes[0]!).toString("utf8")).toBe("pwd\r");
+    expect(resizes).toEqual([{ cols: 140, rows: 45 }]);
+
+    // Release input control: subsequent keystrokes are blocked again.
+    session.message(fakeWs, JSON.stringify({ type: "mode", writable: false }));
+    session.message(fakeWs, Buffer.from("rm -rf\r"));
+    expect(writes).toHaveLength(1);
+    session.closed();
+  });
 });

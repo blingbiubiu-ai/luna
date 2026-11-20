@@ -628,5 +628,7 @@
   "Select at least one date": "请至少选择一个日期",
   "Execution driver": "执行驱动",
   "Standard pipe (stdio)": "标准管道（stdio）",
-  "Interactive PTY (pty)": "交互式伪终端（pty）"
+  "Interactive PTY (pty)": "交互式伪终端（pty）",
+  "Terminals": "TUI 终端",
+  "Open TUI": "打开 TUI"
 }
