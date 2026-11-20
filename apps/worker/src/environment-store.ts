@@ -174,7 +174,8 @@ export class EnvironmentStore {
       const env = this.require(id);
       if (environmentKey(target) !== id) throw new ExecutionError(409, "environment_scope_conflict");
       if (env.pendingSpec || ["draining", "reaping"].includes(env.state)) throw new ExecutionError(409, "environment_draining");
-      if (this.active(id).length) throw new ExecutionError(503, "environment_mount_pending");
+      // Only a limit change waits for idle; a new snapshot is switched under running Jobs.
+      if (contentHash(env.spec.resources) !== contentHash(target.resources) && this.active(id).length) throw new ExecutionError(503, "environment_mount_pending");
       if (env.spec.imageDigest !== target.imageDigest) throw new ExecutionError(409, "environment_replacement_required");
       env.spec = target;
       this.saveEnvironment(env);
@@ -225,8 +226,10 @@ export class EnvironmentStore {
   private updateIdle(env: EnvironmentRecord): void { if (!this.active(env.id).length) env.idleSince = Date.now(); this.saveEnvironment(env); }
 }
 
+/** Launch configuration shared by every occupant; the snapshot version is not part of it. */
 function environmentConfiguration(spec: EnvironmentSpec): unknown {
-  return {...spec,scopeKey:"shared-within-shadow"};
+  const {resourceSelection: _, ...rest} = spec;
+  return {...rest,scopeKey:"shared-within-shadow"};
 }
 
 /**

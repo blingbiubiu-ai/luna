@@ -5,14 +5,14 @@ import {tmpdir} from "node:os";
 import {join} from "node:path";
 import {ShadowPreparation} from "../../apps/worker/src/shadow-preparation";
 import {createScopedResources} from "@luna/host-runtime/scoped-runner-resources";
-let root:string,db:Database,server:ReturnType<typeof Bun.serve>,preparer:ShadowPreparation,downloads:number,deny:boolean;
+let served:{selection:unknown}|undefined;let root:string,db:Database,server:ReturnType<typeof Bun.serve>,preparer:ShadowPreparation,downloads:number,deny:boolean;
 const scope={agentId:"agent",shadowId:"shadow",placementGeneration:1};
 const files=["public/prompts/main/filesystem.md","public/prompts/main/input.md","public/prompts/main/messaging.md","public/prompts/main/reply.md","public/prompts/main/role.md","public/prompts/main/routing.md","public/prompts/main/session-commands.md","public/prompts/main/task-commands.md","public/prompts/shared/artifacts.md","public/prompts/shared/confidentiality.md","public/prompts/shared/identity.md","public/prompts/shared/memory.md","public/prompts/shared/reply-protocol.md","public/prompts/shared/root-access.md","public/prompts/shared/runner-context.md","public/prompts/shared/runtime.md","public/prompts/task/evidence.md","public/prompts/task/role.md","public/prompts/work/reply.md","public/prompts/work/role.md","public/prompts/extra.md"].map(path=>({path,content:Buffer.from(path).toString("base64"),mode:0o644}));
 const bundle=createScopedResources(scope,files);
 const input={invocationId:"inv",protocolVersion:2,scope,resources:bundle.selection,contextId:"ctx",runnerId:"ctx",scopeKey:"session:one",runnerKind:"main",context:{sessionId:"one"}};
 beforeEach(()=>{
- root=realpathSync(mkdtempSync(join(tmpdir(),"shadow-prepare-")));db=new Database(join(root,"worker.sqlite"));downloads=0;deny=false;
- server=Bun.serve({hostname:"127.0.0.1",port:0,fetch(request){downloads++;expect(request.headers.get("authorization")).toBe(`Bearer ${"t".repeat(43)}`);return deny ? new Response(null,{status:403}) : Response.json(bundle);}});
+ served=undefined;root=realpathSync(mkdtempSync(join(tmpdir(),"shadow-prepare-")));db=new Database(join(root,"worker.sqlite"));downloads=0;deny=false;
+ server=Bun.serve({hostname:"127.0.0.1",port:0,fetch(request){downloads++;expect(request.headers.get("authorization")).toBe(`Bearer ${"t".repeat(43)}`);return deny ? new Response(null,{status:403}) : Response.json(served ?? bundle);}});
  preparer=new ShadowPreparation(db,root,"worker",server.url.origin,"t".repeat(43));
 });
 afterEach(()=>{server.stop(true);db.close();rmSync(root,{recursive:true,force:true});});
@@ -31,13 +31,18 @@ test("v2 prepare downloads fixed resources, writes scoped context, and persists 
  expect(await restarted.prepare(input)).toEqual(reply);expect(downloads).toBe(2);
  deny=true;await expect(restarted.prepare(input)).rejects.toMatchObject({code:"scoped_resource_download_failed"});
 });
-test("preparation keeps context ownership and rejects resource replacement while references remain",async()=>{
+test("preparation keeps context ownership; a new resource version does not wait for older references",async()=>{
  await preparer.prepare(input);
  await expect(preparer.prepare({...input,scopeKey:"session:other"})).rejects.toMatchObject({code:"context_preparation_conflict"});
  await expect(preparer.prepare({...input,scope:{...scope,shadowId:"other"}})).rejects.toMatchObject({code:"context_preparation_conflict"});
- const next=createScopedResources(scope,[...files,{path:"agent/tools/new.md",content:"",mode:0o644}]);
- await expect(preparer.prepare({...input,invocationId:"next",contextId:"next",runnerId:"next",resources:next.selection})).rejects.toMatchObject({code:"shadow_resources_pending"});
- expect(downloads).toBe(1);
+ // Another placement of the Shadow still waits until this one is released.
+ await expect(preparer.prepare({...input,invocationId:"moved",contextId:"moved",runnerId:"moved",scope:{...scope,placementGeneration:2}})).rejects.toMatchObject({code:"shadow_resources_pending"});
+ const next=createScopedResources(scope,[...files,{path:"public/prompts/next.md",content:Buffer.from("next").toString("base64"),mode:0o644}]);
+ served=next;
+ const reply=await preparer.prepare({...input,invocationId:"next",contextId:"next",runnerId:"next",resources:next.selection});
+ expect(reply.resources).toEqual(next.selection);
+ expect(preparer.store.newer(scope,next.selection.digest,bundle.selection.digest)).toBe(true);
+ expect(preparer.store.newer(scope,bundle.selection.digest,next.selection.digest)).toBe(false);
 });
 test("legacy and invalid preparations fail before downloading or writing",async()=>{
  await expect(preparer.prepare({...input,protocolVersion:1})).rejects.toMatchObject({code:"invalid_context_preparation"});

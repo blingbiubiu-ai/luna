@@ -16,11 +16,23 @@ export class ShadowPreparationStore {
    if(prior?.state==="released")throw new ExecutionError(409,"context_preparation_released");
    if(prior && prior.input_hash!==hash)throw new ExecutionError(409,"context_preparation_conflict");
    if(this.db.prepare("SELECT 1 FROM worker_shadow_preparations WHERE context_id=? AND invocation_id<>? AND state<>'released'").get(input.contextId,input.invocationId))throw new ExecutionError(503,"context_busy");
-   if(this.db.prepare("SELECT 1 FROM worker_shadow_preparations WHERE shadow_id=? AND state<>'released' AND (agent_id<>? OR generation<>? OR digest<>?)")
-    .get(input.scope.shadowId,input.scope.agentId,input.scope.placementGeneration,input.resources.digest))throw new ExecutionError(503,"shadow_resources_pending");
+   // A new resource version does not wait for older preparations: the Shadow switches to it and
+   // running Jobs read it from their next file access. Only another placement must drain first.
+   if(this.db.prepare("SELECT 1 FROM worker_shadow_preparations WHERE shadow_id=? AND state<>'released' AND (agent_id<>? OR generation<>?)")
+    .get(input.scope.shadowId,input.scope.agentId,input.scope.placementGeneration))throw new ExecutionError(503,"shadow_resources_pending");
    this.db.prepare("INSERT OR IGNORE INTO worker_shadow_preparations VALUES (?,?,?,?,?,?,?,'preparing',NULL)")
     .run(input.invocationId,input.contextId,input.scope.agentId,input.scope.shadowId,input.scope.placementGeneration,input.resources.digest,hash);
   });
+ }
+ /**
+  * Whether `candidate` was first prepared for this Shadow after `current`, so switching to it moves
+  * forward. A version this Worker never prepared (e.g. one a console provisioned) counts as oldest.
+  */
+ newer(scope:{agentId:string;shadowId:string;placementGeneration:number},candidate:string,current:string):boolean {
+  const first=(digest:string)=>(this.db.prepare("SELECT min(rowid) AS n FROM worker_shadow_preparations WHERE agent_id=? AND shadow_id=? AND generation=? AND digest=? AND input_hash<>''")
+   .get(scope.agentId,scope.shadowId,scope.placementGeneration,digest) as {n:number|null}).n;
+  const a=first(candidate),b=first(current);
+  return a!==null && (b===null || a>b);
  }
  complete(id:string,reply:unknown):void {
   this.requireLive(id);

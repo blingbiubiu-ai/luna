@@ -58,10 +58,13 @@ skill installation consumes that snapshot. Runner commands are exposed through
 `.luna-resources/commands`.
 
 Preparation records retain their resource selection until trusted Service
-settlement and Job reservation release. A new resource version waits for the
-old preparation references to drain, then switches the link without replacing the
-container. Other Shadows keep their own containers
-and snapshots.
+settlement and Job reservation release. A Shadow always runs its newest version:
+the version first prepared most recently on the Worker. Preparing a new version
+does not wait for older preparations, and its first Job switches the link without
+replacing the container while older Jobs keep running; versions are never deleted,
+so files those Jobs hold open stay readable. Only another placement of the Shadow
+waits for the previous one to be released (`shadow_resources_pending`). Other
+Shadows keep their own containers and snapshots.
 
 While the container runs, Worker switches the link from inside it (`docker exec` as the
 Runner user). Docker Desktop's file sharing keeps serving a symlink the host replaced, so

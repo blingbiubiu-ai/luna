@@ -16,6 +16,9 @@ function fixture(){
  const spec={protocolVersion:2 as const,scope,resourceSelection:old,environmentId:"luna",scopeKey:"session:one",mode:"shared" as const,imageDigest:`sha256:${"a".repeat(64)}`,callbackRuntimeId:"runtime",resources:{memory:"1g",cpus:1,pidsLimit:128}};
  const occupant={kind:"job" as const,invocationId:"old",scope,jobId:"old-job",assignmentId:"old-assignment",requestHash:"a".repeat(64),scopeKey:spec.scopeKey,contextId:"ctx"};
  const held=store.prepare({requestId:"old-request",spec,occupant});
+ // An older Task prepared the old snapshot first; it is still running when the next version arrives.
+ preparations.begin({protocolVersion:2 as const,invocationId:"older",scope,resources:old,contextId:"older-ctx",runnerId:"older-ctx",scopeKey:"task:older:codex",runnerKind:"task" as const});
+ preparations.complete("older",{});
  const input={protocolVersion:2 as const,invocationId:"next",scope,resources:next,contextId:"ctx",runnerId:"ctx",scopeKey:spec.scopeKey,runnerKind:"main" as const};
  preparations.begin(input);preparations.complete("next",{});
  const request={requestId:"new-request",spec:{...spec,resourceSelection:next},occupant:{...occupant,invocationId:"next",jobId:"new-job",assignmentId:"new-assignment"}};
@@ -24,22 +27,28 @@ function fixture(){
   prepareContext:async()=>{throw new Error("reached-context-preparation");}} as unknown as DockerEnvironmentDriver;
  // An image change is the only transition that still replaces the container.
  const imageRequest={...request,spec:{...request.spec,imageDigest:`sha256:${"b".repeat(64)}`}};
- return {store,preparations,request,imageRequest,held,next,scope,manager:new EnvironmentManager(store,driver),removed:()=>removals,limitUpdates,setDuringRemove:(fn:()=>void)=>{duringRemove=fn;}};
+ const olderRequest={requestId:"older-request",spec:{...spec,scopeKey:"task:older:codex"},occupant:{...occupant,invocationId:"older",jobId:"older-job",assignmentId:"older-assignment",scopeKey:"task:older:codex",contextId:"older-ctx"}};
+ return {store,preparations,request,imageRequest,olderRequest,held,next,old,scope,manager:new EnvironmentManager(store,driver),removed:()=>removals,limitUpdates,setDuringRemove:(fn:()=>void)=>{duringRemove=fn;}};
 }
-test("a new snapshot waits for Job reservations, then switches without replacing the container",async()=>{
+test("a newer snapshot switches under a running Job without replacing the container",async()=>{
  const f=fixture();
- await expect(f.manager.prepare(f.request)).rejects.toMatchObject({code:"environment_mount_pending"});expect(f.removed()).toBe(0);
- expect(f.store.require(f.held.environment.id).spec.resourceSelection).not.toEqual(f.next);
- f.store.release("old-request",f.held.reservation.reservationId);
  await expect(f.manager.prepare(f.request)).rejects.toThrow("reached-context-preparation");
  expect(f.removed()).toBe(0);expect(f.store.require(f.held.environment.id).spec.resourceSelection).toEqual(f.next);
  expect(f.store.require(f.held.environment.id).state).not.toBe("draining");
+ expect(f.store.reservation("old-request")?.state).toBe("preparing");
  expect(f.store.reservation("new-request")?.state).toBe("preparing");
 });
-test("file maintenance cannot select a new resource version",async()=>{
+test("a Job prepared with an older snapshot runs on the current one instead of switching back",async()=>{
+ const f=fixture();
+ await expect(f.manager.prepare(f.request)).rejects.toThrow("reached-context-preparation");
+ await expect(f.manager.prepare(f.olderRequest)).rejects.toThrow("reached-context-preparation");
+ expect(f.store.require(f.held.environment.id).spec.resourceSelection).toEqual(f.next);
+ expect(f.store.reservation("older-request")?.state).toBe("preparing");
+});
+test("file maintenance runs on the current snapshot and does not select another",async()=>{
  const f=fixture();f.store.release("old-request",f.held.reservation.reservationId);
- await expect(f.manager.prepare({...f.request,occupant:{kind:"maintenance",scope:f.scope,operationId:"file",operationHash:"a".repeat(64),contextId:"ctx"}})).rejects.toMatchObject({code:"environment_mount_pending"});
- expect(f.removed()).toBe(0);
+ await expect(f.manager.prepare({...f.request,occupant:{kind:"maintenance",scope:f.scope,operationId:"file",operationHash:"a".repeat(64),contextId:"ctx"}})).rejects.toThrow("reached-context-preparation");
+ expect(f.removed()).toBe(0);expect(f.store.require(f.held.environment.id).spec.resourceSelection).toEqual(f.old);
 });
 test("preparation released during image replacement cannot reserve the new environment",async()=>{
  const f=fixture();f.store.release("old-request",f.held.reservation.reservationId);
@@ -50,12 +59,11 @@ test("preparation released during image replacement cannot reserve the new envir
  expect(f.store.require(f.held.environment.id).state).toBe("stopped");
 });
 
-test("an active file lease blocks a snapshot switch",async()=>{
+test("an active file lease does not hold back a snapshot switch",async()=>{
  const f=fixture();f.store.release("old-request",f.held.reservation.reservationId);
- const held=f.store.prepare({requestId:"file-request",spec:f.held.environment.spec,occupant:{kind:"maintenance",scope:f.scope,operationId:"file",operationHash:"a".repeat(64),contextId:"ctx"}});
- await expect(f.manager.prepare(f.request)).rejects.toMatchObject({code:"environment_mount_pending"});expect(f.removed()).toBe(0);
- f.store.release("file-request",held.reservation.reservationId);
+ f.store.prepare({requestId:"file-request",spec:f.held.environment.spec,occupant:{kind:"maintenance",scope:f.scope,operationId:"file",operationHash:"a".repeat(64),contextId:"ctx"}});
  await expect(f.manager.prepare(f.request)).rejects.toThrow("reached-context-preparation");expect(f.removed()).toBe(0);
+ expect(f.store.require(f.held.environment.id).spec.resourceSelection).toEqual(f.next);
 });
 
 test("failed Docker removal on an image change retains the target and a restarted manager resumes it",async()=>{

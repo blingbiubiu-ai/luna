@@ -22,6 +22,16 @@ export class InvocationStore {
     return this.db.transaction(() => {
       const scope=resolveInvocationScope(this.db,input);
       validateInvocationSnapshot(input, scope);
+      const previous = this.find(input.id);
+      if (previous) {
+        // Recovery registers a running invocation again. Its Agent configuration stays the one it
+        // started with, even when a newer Service describes that configuration with more fields.
+        const identity = Object.keys(input).filter(key => key !== "agentConfig");
+        const original = Object.fromEntries(identity.map((key) => [key, previous[key as keyof InvocationRecord]]));
+        if (contentHash(original) !== contentHash(Object.fromEntries(identity.map(key => [key, input[key as keyof typeof input]]))))
+          throw new ExecutionError(409, "invocation_conflict");
+        return previous; // Registration never revives revoked or settled authority.
+      }
       if(input.agentConfig) {
         const ref=executionReferenceSchema.parse(input.agentConfig);
         const revision=this.db.select().from(agentProfileRevisions).where(eq(agentProfileRevisions.id,ref.revisionId)).get();
@@ -29,12 +39,6 @@ export class InvocationStore {
         if(ref.agentId!==scope.agentId || profile?.agent_id!==scope.agentId || profile.deleted_at!==null || revision?.validation_state!=="validated" || revision?.profile_id!==profile.id ||
           revision.config_fingerprint!==ref.configFingerprint || profile.agent_type!==ref.agentType || revision.model!==ref.model)
           throw new ExecutionError(409,"invocation_config_mismatch");
-      }
-      const previous = this.find(input.id);
-      if (previous) {
-        const original = Object.fromEntries(Object.keys(input).map((key) => [key, previous[key as keyof InvocationRecord]]));
-        if (contentHash(original) !== contentHash(input)) throw new ExecutionError(409, "invocation_conflict");
-        return previous; // Registration never revives revoked or settled authority.
       }
       this.db.insert(runnerInvocations).values({ ...input, ...scope, state: "active", createdAt: Date.now() }).run();
       return this.require(input.id);

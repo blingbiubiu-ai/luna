@@ -166,8 +166,9 @@ export function createExecutor(db: SqlDatabase, authority: TokenAuthority, confi
     if (method === "POST" && url.pathname === "/v1/jobs") {
       const submission = JobSubmission.parse(await readJson(request));
       requireScope(submission.job.scope);requireScope(submission.assignment.scope);
-      // Worker points $HOME/.luna-resources at the reserved snapshot before binding the Job.
-      if(config.runnerLayout && activeSnapshot(config.runnerLayout.home)!==submission.job.resources.digest)throw new ExecutionError(409,"executor_resources_mismatch");
+      // Worker points $HOME/.luna-resources at the Shadow's newest snapshot before binding the Job,
+      // which may be newer than the one the Job was prepared with; it must exist.
+      if(config.runnerLayout && activeSnapshot(config.runnerLayout.home)===undefined)throw new ExecutionError(409,"executor_resources_mismatch");
       contexts.get(submission.job.runnerContextId);
       const snapshot = store.submit(submission);
       if (reporter.ready()) processes.tick();

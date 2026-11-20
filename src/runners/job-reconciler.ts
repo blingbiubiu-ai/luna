@@ -10,6 +10,7 @@ import { ExecutionError } from "@luna/execution-store";
 import { InvocationService } from "./invocation-service";
 import { InvocationStore, type InvocationRecord } from "./invocation-store";
 import { decodeInvocation } from "./invocation-codec";
+import { taskReportForRun } from "@/tasks/task-report-store";
 import { TaskRunStore } from "@/tasks/task-run-store";
 import { TimelineStore } from "@/timeline/timeline-store";
 
@@ -69,6 +70,8 @@ export class JobReconciler {
     if (snapshot.kind === "task") {
       const run = this.db.select().from(taskRuns).where(eq(taskRuns.id, snapshot.input.taskRunId)).get();
       if (run?.status !== "running") return;
+      // A submitted report finished the work: TaskRunSupervisor completes the run with it once settled.
+      if (taskReportForRun(this.db, run.id)) return;
       // Same guarded terminal transition and timeline event as TaskRunSupervisor;
       // the supervisor closes the status card when it observes this cancellation.
       const cancelled = new TaskRunStore(this.db).markCancelled(run.id, { cancelReason: reason, finishedAt: now });

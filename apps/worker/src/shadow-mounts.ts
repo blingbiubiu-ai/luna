@@ -36,8 +36,8 @@ export class WorkerShadowMounts {
  }
 
  /**
-  * Point `$HOME/.luna-resources` at the plan's snapshot. Callers switch versions only while
-  * the Shadow has no running Job; re-asserting the same version also repairs a Runner edit.
+  * Point `$HOME/.luna-resources` at the plan's snapshot, the Shadow's newest. Running Jobs see it
+  * from their next file access; re-asserting the same version also repairs a Runner edit.
   */
  /**
   * For a running container: the link switch to perform inside it, or undefined when the link

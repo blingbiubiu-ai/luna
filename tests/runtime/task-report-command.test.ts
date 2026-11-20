@@ -92,6 +92,28 @@ test("startup completes an accepted report instead of failing the interrupted pr
   expect(await supervisor.recoverRunningRuns()).toBe(0);
   expect(()=>f.service.submit(f.claims,"final","Durable report")).toThrow("no longer active");
 });
+test("a submitted report whose Job Service still sees running completes once the Job is drained",async()=>{
+  const f=fixture();
+  const receipt=f.service.submit(f.claims,"final","Durable report");
+  const results: unknown[]=[];
+  // Recovery reattaches, but following the Job fails, as when Service lost its event stream.
+  const supervisor=new TaskRunSupervisor({db:f.db,runnerType:"mock",onTaskResult:async result=>{results.push(result);},
+    executeRun:async()=>{throw new Error("job events unavailable");}});
+  expect(await supervisor.recoverRunningRuns()).toBe(0);
+  await Bun.sleep(50);
+  // Never settled while the Job may still execute; the invocation is revoked so the Job is cancelled.
+  expect(f.store.listRunsForTask("task")[0]?.status).toBe("running");
+  expect(new InvocationStore(f.db).require("invocation")).toMatchObject({state:"revoked",revokeReason:"task_report_submitted"});
+  // The recovery pump drains the Job to terminal and settles; it leaves the reported run to the supervisor.
+  f.finishJob();
+  const reconciler=new (await import("../../src/runners/job-reconciler")).JobReconciler(f.db,{} as never,new AbortController().signal);
+  await reconciler.recover();
+  expect(f.store.listRunsForTask("task")[0]?.status).toBe("running");
+  await Bun.sleep(1200);
+  await supervisor.waitForIdle();
+  expect(f.store.listRunsForTask("task")[0]).toMatchObject({status:"completed",finalReportArtifactId:receipt.reportArtifactId});
+  expect(results).toHaveLength(1);
+});
 test("report CLI posts text and reads receipt through authenticated routes",async()=>{
   const f=fixture();
   const app=new Hono<{Variables:{lunaAccessTokenClaims:LunaAccessTokenClaims}}>();

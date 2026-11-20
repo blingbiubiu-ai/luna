@@ -165,6 +165,13 @@ On failure:
 - Aborted or no-longer-active runs must not overwrite current state.
 - Runtime recovery should mark interrupted runs failed instead of blindly rerunning them.
 - Status cards and result notifications should be reconstructable from persisted task state.
+- A Service restart reattaches a run whose Job is still executing. The run's
+  invocation keeps the Agent configuration it started with, so a newer Service
+  that describes that configuration differently still reattaches it.
+- A submitted report finishes the run. When Service cannot follow the run's Job,
+  it revokes the invocation, the recovery pump cancels and drains the Job to a
+  terminal state, and the run then completes with the report; it is never
+  cancelled or left running.
 - Live provider recovery may continue a Task Runner only after the runner
   protocol has emitted a completed-work checkpoint. Before the first
   checkpoint, a transient provider failure is terminal for that Task Run so

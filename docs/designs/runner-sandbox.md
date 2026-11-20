@@ -71,9 +71,10 @@ settings and Executor parameters, but not the contents of HOME, projects or work
 directories, the snapshot version or resource limits:
 
 - **A new snapshot** (Skills, commands, prompts, tools) switches the
-  `.luna-resources` link once the Shadow has no reservation; running Jobs keep the
-  version they were admitted with. Executor admits a Job only when the link names
-  the Job's snapshot digest.
+  `.luna-resources` link as soon as a Job prepared with it arrives, also while
+  other Jobs of the Shadow run: they read the new version from their next file
+  access. A Job prepared with an older snapshot runs on the current one, so the
+  link never moves back. Executor admits a Job once a snapshot is linked.
 - **Changed limits** (memory, CPUs, pids) are applied with `docker container update`
   once the Shadow is idle.
 - **A new image** or **a changed Shadow root switch** replaces the container after

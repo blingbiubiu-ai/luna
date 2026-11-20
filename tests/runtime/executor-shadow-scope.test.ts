@@ -23,16 +23,21 @@ beforeEach(async()=>{
  worker=new ExecutionClient(`http://127.0.0.1:${port}`,wt);runtime=new ExecutionClient(`http://127.0.0.1:${port}`,rt);
 });
 afterEach(async()=>{if(executor){await executor.stop();await closeExecutionServer(executor.server);}db.close();rmSync(root,{recursive:true,force:true});});
-scopedTest("HTTP reservation and Job admission require the container scope and mounted resource version",async()=>{
+scopedTest("HTTP reservation and Job admission require the container scope and a mounted resource version",async()=>{
  const health=await worker.call<any>("GET","/v1/health");expect(health.scope).toEqual(scope);expect(health.resourceSelection).toBeUndefined();
  await expect(worker.call("PUT","/v1/contexts/ctx",{scope:foreign})).rejects.toMatchObject({code:"executor_scope_mismatch"});
  await worker.call("PUT","/v1/contexts/ctx",{scope});
  await expect(worker.call("PUT","/v1/reservations/reservation",{...binding(),scope:foreign})).rejects.toMatchObject({code:"executor_scope_mismatch"});
  expect(executor.store.list()).toEqual([]);
- const request={...job(),resources:{...fixed.resources,digest:"0".repeat(64)},resourceRevision:"0".repeat(64)};
- const assigned=binding(request);await worker.call("PUT","/v1/reservations/reservation",assigned);
- await expect(runtime.call("POST","/v1/jobs",{job:request,assignment:assigned})).rejects.toMatchObject({code:"executor_resources_mismatch"});
+ // Without a mounted snapshot no Job is admitted.
+ rmSync(join(root,".luna-resources"));
+ const assigned=binding();await worker.call("PUT","/v1/reservations/reservation",assigned);
+ await expect(runtime.call("POST","/v1/jobs",{job:job(),assignment:assigned})).rejects.toMatchObject({code:"executor_resources_mismatch"});
  expect(executor.store.request("job")).toBeNull();
+ // A Job prepared with an older version runs on the Shadow's newer snapshot.
+ symlinkSync(".luna-resource-versions/"+"0".repeat(64),join(root,".luna-resources"));
+ await runtime.call("POST","/v1/jobs",{job:job(),assignment:assigned});
+ expect(executor.store.request("job")).not.toBeNull();
 });
 scopedTest("HTTP files use the registered container context and lease revocation remains a barrier",async()=>{
  await worker.call("PUT","/v1/contexts/ctx",{scope});

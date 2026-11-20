@@ -74,22 +74,24 @@ export class EnvironmentManager {
       // Only a Job carries the Shadow's root switch; file maintenance keeps the current container's.
       const request = input.occupant.kind === "job" || !previous ? input : { ...input, spec: withRootAccess(input.spec, previous.spec.rootAccess === true) };
       const rootChanged = previous && (previous.spec.rootAccess === true) !== (request.spec.rootAccess === true);
-      const resourcesChanged = previous && contentHash(previous.spec.resourceSelection) !== contentHash(request.spec.resourceSelection);
+      // The Shadow always runs its newest snapshot: a Job of a newer version switches it at once,
+      // even while older Jobs run, and a Job or file operation of an older version runs on the current one.
+      const resourcesChanged = previous && contentHash(previous.spec.resourceSelection) !== contentHash(request.spec.resourceSelection)
+        && request.occupant.kind === "job"
+        && new ShadowPreparationStore(this.store.db).newer(request.spec.scope, request.spec.resourceSelection.digest, previous.spec.resourceSelection.digest);
+      const target = previous && !resourcesChanged ? { ...request.spec, resourceSelection: previous.spec.resourceSelection } : request.spec;
       const limitsChanged = previous && contentHash(previous.spec.resources) !== contentHash(request.spec.resources);
-      // A maintenance request cannot choose a new snapshot. A live Job preparation owns
-      // the target version and prevents old-version preparation.
-      if (resourcesChanged && request.occupant.kind !== "job") throw new ExecutionError(503, "environment_mount_pending");
       if (previous && (previous.spec.imageDigest !== request.spec.imageDigest || rootChanged)) {
         // A new image is a new system disk, and the root switch is a launch option
         // (no-new-privileges): either way the container is replaced once idle.
-        this.store.beginReplacement(id, request.spec);
+        this.store.beginReplacement(id, target);
         await this.resumeReplacement(id);
       } else if (previous && (resourcesChanged || limitsChanged)) {
         // Snapshots switch through the HOME link and limits through `docker update`, so the
-        // container and its writable system layer stay. Running Jobs keep their version.
-        if (this.store.active(id).length) throw new ExecutionError(503, "environment_mount_pending");
+        // container and its writable system layer stay. Limits still wait for an idle container.
+        if (limitsChanged && this.store.active(id).length) throw new ExecutionError(503, "environment_mount_pending");
         if (limitsChanged) await this.driver.updateLimits(previous, request.spec.resources);
-        this.store.retarget(id, request.spec);
+        this.store.retarget(id, target);
       }
       // A release can race inspection/removal. The durable transition completes,
       // but a released invocation must never obtain a reservation afterward.

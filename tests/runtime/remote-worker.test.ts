@@ -149,11 +149,11 @@ test("remote Worker binds once, downloads its scoped snapshot and renders its ow
         protocolVersion: 2 as const, invocationId: "updated-invocation", scope, resources: updated.selection,
         contextId: "updated-context", runnerId: "updated-context", scopeKey: "session:updated-context", runnerKind: "work" as const,
       };
-      await expect(scheduler.preparation.prepare(next)).rejects.toMatchObject({ code: "shadow_resources_pending" });
+      // The new version does not wait for the earlier invocations to settle.
+      const context = await scheduler.preparation.prepare(next);
       settled.add("invocation");
       settled.add("invocation-2");
       await scheduler.tick();
-      const context = await scheduler.preparation.prepare(next);
       scheduler.submit({
         version: 2, scope: context.scope, resources: updated.selection, resourceRevision: updated.selection.digest,
         jobId: "updated-job", invocationId: next.invocationId, environmentId: "environment",

@@ -97,13 +97,19 @@ test("invocation pins a secret-free revision across activation and rejects rebin
  expect(active.resolveExecutionSnapshot(scope.agentId).model).toBe("model-second");
  expect(active.resolvePinnedSnapshot(scope.agentId,record.agentConfig!).model).toBe("model-first");
  expect(()=>profiles.deleteProfile(firstProfile.id)).toThrow("unsettled invocation");
- expect(()=>store.register({...invocation(),agentConfig:executionReference(active.resolveExecutionSnapshot(scope.agentId))})).toThrow("invocation_conflict");
+ // Recovery registers the invocation again: it keeps the configuration it started with, also when the
+ // reference is described with fields an older Service did not write, and a different identity still conflicts.
+ expect(store.register({...invocation(),agentConfig:executionReference(active.resolveExecutionSnapshot(scope.agentId))}).agentConfig).toEqual(record.agentConfig);
+ const {executionDriver:_,...older}=executionReference(snapshot);
+ const earlier=store.register({...invocation(),id:"earlier-invocation",originId:"earlier-origin",agentConfig:older as ReturnType<typeof executionReference>}); // as an earlier Service wrote it
+ expect(store.register({...invocation(),id:"earlier-invocation",originId:"earlier-origin",agentConfig:executionReference(snapshot)}).agentConfig).toEqual(earlier.agentConfig);
+ expect(()=>store.register({...invocation(),originId:"another-origin",agentConfig:executionReference(snapshot)})).toThrow("invocation_conflict");
  expect(()=>connection.db.update(schema.runnerInvocations).set({agentConfig:null}).where(eq(schema.runnerInvocations.id,record.id)).run()).toThrow("invocation_config_immutable");
  expect(()=>connection.db.insert(schema.runnerInvocations).values({...record,id:"forged-config",agentConfig:{...record.agentConfig!,agentId:"foreign"}}).run()).toThrow("invocation_config_mismatch");
  const foreign=fixtureScope(connection.db,"foreign-owner");
  expect(()=>active.resolvePinnedSnapshot(foreign.agentId,record.agentConfig!)).toThrow("execution_config_scope_mismatch");
  expect(()=>active.resolvePinnedSnapshot(scope.agentId,{...record.agentConfig!,configFingerprint:"changed"})).toThrow("execution_config_changed");
- store.finish(record.id);
+ store.finish(record.id);store.finish("earlier-invocation");
  profiles.deleteProfile(firstProfile.id);
  expect(profiles.getProfile(firstProfile.id)?.deletedAt).not.toBeNull();
 });

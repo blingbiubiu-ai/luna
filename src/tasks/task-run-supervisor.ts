@@ -2,6 +2,8 @@ import { InvocationService } from "@/runners/invocation-service";
 import { RuntimeDetachedError } from "@/runners/runtime-detach";
 import { InvocationStore } from "@/runners/invocation-store";
 import { taskReportForRun } from "./task-report-store";
+import { setTimeout as delay } from "node:timers/promises";
+import { ExecutionError } from "@luna/execution-store";
 import { asc, eq } from "drizzle-orm";
 
 import type { DrizzleDB } from "@/data";
@@ -251,7 +253,17 @@ export class TaskRunSupervisor {
       const run = this._taskRuns.getActiveRunForTask(invocation.taskId);
       if (run?.id !== invocation.taskRunId) continue;
       resumeIds.add(run.id);
-      if (invocation.state !== "active") continue;
+      if (invocation.state !== "active") {
+        // Revoked after its report was submitted: complete it with the report once the Job is drained.
+        const report = taskReportForRun(this._options.db, run.id);
+        if (report && !this._controllers.has(run.id)) {
+          const controller = new AbortController();
+          this._controllers.set(run.id, controller);
+          this._track(this._completeAfterReport(run, report.reportArtifactId, controller.signal)
+            .finally(() => this._controllers.delete(run.id)));
+        }
+        continue;
+      }
       const runnerContext = this._contexts.getById(invocation.runnerContextId);
       if (!runnerContext) throw new Error(`Runtime Task context ${invocation.runnerContextId} is missing`);
       if (this._controllers.has(run.id)) continue;
@@ -356,7 +368,7 @@ export class TaskRunSupervisor {
       if (acceptedReport) {
         logger.warn({err, task_run_id: input.run.id}, "Task execution ended after report acceptance; preserving submitted result");
         this._timeline.append({taskId: input.run.taskId, type: "runner.completion_warning", summary: "Runner exit did not follow the completion protocol; submitted report retained", data: {..._runMetadata(input.run), error: String(err)}});
-        await this._completeRun(input.run, acceptedReport.reportArtifactId);
+        await this._completeAfterReport(input.run, acceptedReport.reportArtifactId, input.signal);
         return;
       }
       const message = err instanceof Error ? err.message : String(err);
@@ -439,6 +451,31 @@ export class TaskRunSupervisor {
     const current = this._taskRuns.listRunsForTask(run.taskId).find(item => item.id === run.id);
     if (current?.status !== "cancelled") return;
     await this._notifyRunCancelled(current, undefined, current.cancelReason ?? "Task Run cancelled.");
+  }
+
+  /**
+   * A submitted report finishes the run even when Service lost track of its Job: the Job is
+   * cancelled and drained to terminal by the invocation recovery pump, then the run completes.
+   * Until then the run stays running, so it is never settled while its Job may still execute.
+   */
+  private async _completeAfterReport(run: TaskRun, reportArtifactId: string, signal: AbortSignal): Promise<void> {
+    for (let revoked = false; ; ) {
+      try {
+        await this._completeRun(run, reportArtifactId);
+        return;
+      } catch (err) {
+        if (!(err instanceof ExecutionError) || err.code !== "invocation_jobs_active") throw err;
+      }
+      if (!revoked) {
+        const authority = new InvocationService(this._options.db);
+        for (const invocation of authority.store.pending().filter(item => item.taskRunId === run.id && item.state === "active"))
+          authority.revoke(invocation.id, "task_report_submitted");
+        logger.warn({task_run_id: run.id}, "Task report submitted while its Job is unfinished; cancelling the Job before completing");
+        revoked = true;
+      }
+      if (signal.aborted) return;
+      await delay(1000, undefined, {signal}).catch(() => {});
+    }
   }
 
   private _settleRun(run: TaskRun, complete: () => void): void {

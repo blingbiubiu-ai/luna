@@ -5,7 +5,7 @@ import {resolveInvocationScope} from "./invocation-scope";
 import { setTimeout as delay } from "node:timers/promises";
 import { ExecutionError } from "@luna/execution-store";
 import { getKernel } from "@/server/routes/kernel";
-import { config } from "@/shared";
+import { config, createLogger } from "@/shared";
 import type { RunnerContextFile } from "./runner-context-file";
 import { writeRunnerContextFile } from "./runner-context-file";
 import { ensureRunnerWorkspaceInstructionFiles } from "./workspace-instruction-files";
@@ -37,12 +37,18 @@ export function ownerDirectoryName(ownerType: string, ownerId: string, contextId
   return /^[A-Za-z0-9_-]{1,128}$/.test(name) ? name : contextId;
 }
 
+const logger = createLogger("runner-preparation");
+const PREPARATION_WAIT_WARN_MS = 30_000;
+const PREPARATION_WAIT_REPEAT_MS = 5 * 60_000;
+
 /** Worker owns filesystem rendering; the local fallback supports non-runtime test adapters. */
 export async function prepareRunnerFiles(input: {
   id: string; runner_root_path: string; runner_type: string;
 }, context?: RunnerContextFile, signal?: AbortSignal, invocationId?:string) {
   const runtime = getKernel().executionRuntime;
   if (runtime) {
+    const started = Date.now();
+    let warnAt = started + PREPARATION_WAIT_WARN_MS;
     while (true) {
       signal?.throwIfAborted();
       try {
@@ -68,6 +74,12 @@ export async function prepareRunnerFiles(input: {
       } catch (error) {
         if (!(error instanceof ExecutionError) || !["worker_not_ready", "no_worker_available", "worker_disconnected", "shadow_worker_unavailable",
           "worker_delivery_failed", "shadow_resources_pending", "shadow_preparation_busy", "context_busy", "runtime_draining"].includes(error.code)) throw error;
+        // Waiting is the right answer to a Worker that is briefly away, but it must not be silent.
+        if (Date.now() >= warnAt) {
+          logger.warn({ code: error.code, context_id: input.id, invocation_id: invocationId, waited_ms: Date.now() - started },
+            "Runner preparation is still waiting for its Worker");
+          warnAt = Date.now() + PREPARATION_WAIT_REPEAT_MS;
+        }
         await delay(1000, undefined, signal ? { signal } : {});
       }
     }
