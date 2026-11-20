@@ -9,12 +9,12 @@ import * as schema from "../../src/data/schema";
 import { setLunaHome } from "../../src/shared";
 import { AgentStore } from "../../src/agents/agent-store";
 import { AccountLinkService } from "../../src/identity/account-link";
-import { AccountStore } from "../../src/identity/account-store";
+import { AccountStore, SUPER_ADMIN_ACCOUNT_ID } from "../../src/identity/account-store";
 import { cleanDisplayName } from "../../src/identity/display-name";
 import { recordShadowBotIdentity } from "../../src/identity/shadow-bot";
 import { ChannelDirectoryStore } from "../../src/channels/directory-store";
 import { feishuIdentityMetadata } from "../../src/identity/feishu-identity-scopes";
-import { LOCAL_ACCOUNT_NAME } from "../../src/server/auth";
+import { ensureDashboardAccount, LOCAL_ACCOUNT_NAME } from "../../src/server/auth";
 import { fixtureSessionOwnership } from "../helpers/platform-fixtures";
 
 let home: string, connection: DataConnection<typeof schema>, agentId: string, shadowId: string;
@@ -62,6 +62,52 @@ test("linking keeps names someone chose", () => {
   new AccountLinkService(db()).link("fixture-owner", agentId, linkToken("王华杰"));
   expect(user(owner).displayName).toBe("老板");
   expect(new AccountStore(db()).get("fixture-owner")?.displayName).toBe("Wang");
+});
+
+test("linking on the built-in super-admin account updates the Agent owner user but keeps local-dashboard-user's fixed system identity", () => {
+  const superAdminScope = fixtureSessionOwnership(db(), "feishu", "feishu-super", SUPER_ADMIN_ACCOUNT_ID);
+  ensureDashboardAccount(db(), {
+    id: SUPER_ADMIN_ACCOUNT_ID,
+    name: "被污染的昵称",
+    provider: "local-token",
+    avatarUrl: "https://avatar.example/bad.png",
+  });
+  expect(new AccountStore(db()).get(SUPER_ADMIN_ACCOUNT_ID)).toMatchObject({
+    displayName: LOCAL_ACCOUNT_NAME,
+    avatarUrl: null,
+  });
+
+  const senderIdentity = {
+    externalId: "ou_super_owner",
+    kind: "user" as const,
+    displayName: "王华杰",
+    avatarUrl: "https://avatar.example/whj.png",
+    ...feishuIdentityMetadata({ environment: "feishu", appId: "test:feishu:feishu-super" }, { open_id: "ou_super_owner" }),
+  };
+  const stored = new ChannelDirectoryStore(db()).upsertIdentity({
+    channel: { type: "feishu", id: "feishu-super" },
+    identity: senderIdentity,
+    agentId: superAdminScope.agent_id,
+  });
+  const senderUserId = db()
+    .select()
+    .from(schema.channelUserBindings)
+    .where(eq(schema.channelUserBindings.channelIdentityId, stored.id))
+    .get()!.userId;
+  const token = new AccountLinkService(db()).issue({
+    userId: senderUserId,
+    channelType: "feishu",
+    channelId: "feishu-super",
+    channelIdentityId: stored.id,
+  });
+
+  new AccountLinkService(db()).link(SUPER_ADMIN_ACCOUNT_ID, superAdminScope.agent_id, token);
+  const superOwnerUserId = new AgentStore(db()).ownerUserId(superAdminScope.agent_id);
+  expect(user(superOwnerUserId)).toMatchObject({ displayName: "王华杰", profileSource: "channel" });
+  expect(new AccountStore(db()).get(SUPER_ADMIN_ACCOUNT_ID)).toMatchObject({
+    displayName: LOCAL_ACCOUNT_NAME,
+    avatarUrl: null,
+  });
 });
 
 test("a bot-bound Shadow follows its bot's name until the owner names it, and again once the name is cleared", () => {

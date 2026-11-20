@@ -5,7 +5,9 @@ import type { AgentSecretCipher } from "@/agent-config/secret-cipher";
 import { channelSecretCipher } from "@/channels/config-store";
 import type { DrizzleDB } from "@/data";
 import { platformAuthSettings } from "@/data/schema";
+import type { AccountIdentityClaimInput } from "@/identity/account-store";
 import { cleanDisplayName } from "@/identity/display-name";
+import { feishuEnvironmentFromHost, feishuIdentityMetadata } from "@/identity/feishu-identity-scopes";
 import { createLogger } from "@/shared";
 import type { DashboardAccount } from "../auth";
 
@@ -314,10 +316,16 @@ export async function fetchFeishuAppAccessToken(
   return token;
 }
 
+export interface FeishuOAuthExchangeResult {
+  readonly account: DashboardAccount;
+  readonly identityClaims: readonly AccountIdentityClaimInput[];
+}
+
 /**
  * Exchanges a Feishu OAuth `code` via v1 OIDC (`app_access_token/internal` ->
  * `authen/v1/oidc/access_token` -> `authen/v1/user_info`) and resolves the
- * Dashboard account (`union_id` preferred, `open_id` fallback).
+ * Dashboard account (`union_id` preferred, `open_id` fallback) along with
+ * normalized `IdentityClaim`s for channel-agnostic owner association.
  */
 export async function exchangeFeishuAuthorizationCode(
   input: {
@@ -327,7 +335,7 @@ export async function exchangeFeishuAuthorizationCode(
     readonly feishuHost: string;
   },
   fetchImpl: FeishuFetch = fetch,
-): Promise<DashboardAccount> {
+): Promise<FeishuOAuthExchangeResult> {
   const host = normalizeOriginUrl(input.feishuHost, DEFAULT_FEISHU_HOST);
   const appToken = await fetchFeishuAppAccessToken(
     { appId: input.appId, appSecret: input.appSecret, feishuHost: host },
@@ -363,6 +371,8 @@ export async function exchangeFeishuAuthorizationCode(
   const userData = userEnvelope.dataOrSelf;
   const unionId = nonEmptyString(userData.union_id);
   const openId = nonEmptyString(userData.open_id);
+  const userId = nonEmptyString(userData.user_id);
+  const tenantKey = nonEmptyString(userData.tenant_key);
   const identity = unionId ?? openId;
   if (!identity) {
     throw new Error("飞书 user_info 未返回 union_id 或 open_id");
@@ -371,11 +381,36 @@ export async function exchangeFeishuAuthorizationCode(
   const name = cleanDisplayName(rawName) || "飞书用户";
   const avatarUrl = nonEmptyString(userData.avatar_url) ?? nonEmptyString(userData.avatar_thumb) ?? null;
 
+  const { identityClaims: rawClaims } = feishuIdentityMetadata(
+    {
+      environment: feishuEnvironmentFromHost(host),
+      appId: input.appId,
+      ...(tenantKey ? { tenantKey } : {}),
+    },
+    {
+      ...(openId ? { open_id: openId } : {}),
+      ...(userId ? { user_id: userId } : {}),
+      ...(unionId ? { union_id: unionId } : {}),
+    },
+  );
+  const identityClaims: AccountIdentityClaimInput[] = rawClaims
+    .filter((claim): claim is typeof claim & { scope: string } => typeof claim.scope === "string" && claim.scope.length > 0)
+    .map((claim) => ({
+      namespace: claim.namespace,
+      kind: claim.kind,
+      value: claim.value,
+      scope: claim.scope,
+      confidence: claim.confidence ?? "verified",
+    }));
+
   return {
-    id: `${FEISHU_OAUTH_PROVIDER}:${identity}`,
-    name,
-    provider: FEISHU_OAUTH_PROVIDER,
-    avatarUrl,
+    account: {
+      id: `${FEISHU_OAUTH_PROVIDER}:${identity}`,
+      name,
+      provider: FEISHU_OAUTH_PROVIDER,
+      avatarUrl,
+    },
+    identityClaims,
   };
 }
 

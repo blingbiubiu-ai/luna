@@ -184,7 +184,9 @@ export function PlatformAccountsList({
               )}
               <div className="min-w-0 space-y-1">
                 <div className="flex flex-wrap items-center gap-2">
-                  <span className="truncate font-medium">{account.displayName}</span>
+                  <span className="truncate font-medium">
+                    {account.isSuperAdmin ? "内置超级管理员" : account.displayName}
+                  </span>
                   {account.isSuperAdmin ? (
                     <span className="inline-flex items-center rounded-full bg-amber-500/15 px-2 py-0.5 text-xs font-medium text-amber-800 dark:text-amber-300">
                       超级管理员

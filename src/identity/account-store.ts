@@ -1,8 +1,9 @@
 import { and, eq } from "drizzle-orm";
 
 import type { DrizzleDB } from "@/data";
-import { accounts, lunaAgents, users } from "@/data/schema";
+import { accountIdentityClaims, accounts, lunaAgents, users } from "@/data/schema";
 import { AgentError } from "@/agents/agent-store";
+import { validateIdentityClaim } from "./claim-validation";
 
 /** Built-in super administrator account authenticated via `LUNA_DASHBOARD_TOKEN`. */
 export const SUPER_ADMIN_ACCOUNT_ID = "local-dashboard-user";
@@ -13,16 +14,26 @@ export function isSuperAdminAccountId(accountId: string): boolean {
 
 export type AccountRecord = typeof accounts.$inferSelect;
 
+/** Channel-agnostic verified identity claim attached to an account at OAuth/OIDC/SSO sign-in. */
+export interface AccountIdentityClaimInput {
+  readonly namespace: string;
+  readonly kind: string;
+  readonly value: string;
+  readonly scope: string;
+  readonly confidence?: "verified" | "inferred" | "manual";
+}
+
 /** The profile a sign-in provider returns for an account. */
 export interface AccountProfile {
   readonly id: string;
   readonly name: string;
   readonly avatarUrl?: string | null;
+  readonly identityClaims?: readonly AccountIdentityClaimInput[];
   /** The sign-in names nobody in particular; a stored name is kept rather than reset to it. */
   readonly placeholderName?: boolean;
 }
 
-type Db = Pick<DrizzleDB, "select" | "insert" | "update">;
+type Db = Pick<DrizzleDB, "select" | "insert" | "update" | "delete">;
 
 /** Platform accounts: who signs in to the Dashboard. */
 export class AccountStore {
@@ -38,23 +49,106 @@ export class AccountStore {
     return account;
   }
 
-  /** Creates the account on first sign-in and keeps its profile current. A deleted account is not revived. */
+  /** Creates the account on first sign-in and keeps its profile and verified claims current. A deleted account is not revived. */
   ensure(profile: AccountProfile, now = Date.now()): AccountRecord {
     const existing = this.get(profile.id);
     if (!existing) {
-      this.db.insert(accounts).values({id: profile.id, displayName: profile.name, avatarUrl: profile.avatarUrl ?? null,
-        status: "active", createdAt: now, updatedAt: now}).run();
+      this.db.insert(accounts).values({
+        id: profile.id,
+        displayName: profile.name,
+        avatarUrl: profile.avatarUrl ?? null,
+        status: "active",
+        createdAt: now,
+        updatedAt: now,
+      }).run();
+      this.syncIdentityClaims(profile.id, profile.identityClaims, now);
       return this.get(profile.id)!;
+    }
+    if (existing.status === "active") {
+      this.syncIdentityClaims(profile.id, profile.identityClaims, now);
     }
     // A placeholder sign-in keeps a real stored name; a stored name that is only the id is no better than the placeholder.
     if (profile.placeholderName && existing.displayName !== existing.id) return existing;
-    if (existing.status === "active" && (existing.displayName !== profile.name
-      || (profile.avatarUrl !== undefined && existing.avatarUrl !== profile.avatarUrl))) {
-      this.db.update(accounts).set({displayName: profile.name, ...(profile.avatarUrl === undefined ? {} : {avatarUrl: profile.avatarUrl}), updatedAt: now})
-        .where(eq(accounts.id, profile.id)).run();
+    const nextAvatar = profile.avatarUrl === undefined ? existing.avatarUrl : profile.avatarUrl;
+    if (
+      existing.status === "active" &&
+      (existing.displayName !== profile.name || existing.avatarUrl !== nextAvatar)
+    ) {
+      this.db.update(accounts).set({
+        displayName: profile.name,
+        avatarUrl: nextAvatar,
+        updatedAt: now,
+      }).where(eq(accounts.id, profile.id)).run();
       return this.get(profile.id)!;
     }
     return existing;
+  }
+
+  private syncIdentityClaims(
+    accountId: string,
+    claims: readonly AccountIdentityClaimInput[] | undefined,
+    now: number,
+  ): void {
+    if (claims === undefined || isSuperAdminAccountId(accountId)) return;
+    const verified = claims.filter((claim) => claim.confidence === undefined || claim.confidence === "verified");
+    for (const claim of verified) {
+      validateIdentityClaim(claim);
+    }
+    const namespaces = [...new Set(verified.map((claim) => claim.namespace))];
+    for (const namespace of namespaces) {
+      const freshForNamespace = verified.filter((claim) => claim.namespace === namespace);
+      const freshKeys = new Set(freshForNamespace.map((claim) => `${claim.kind}\0${claim.value}\0${claim.scope}`));
+      const existingRows = this.db
+        .select()
+        .from(accountIdentityClaims)
+        .where(
+          and(
+            eq(accountIdentityClaims.accountId, accountId),
+            eq(accountIdentityClaims.identityNamespace, namespace),
+          ),
+        )
+        .all();
+      for (const row of existingRows) {
+        if (!freshKeys.has(`${row.identityKind}\0${row.identityValue}\0${row.identityScope}`)) {
+          this.db
+            .delete(accountIdentityClaims)
+            .where(
+              and(
+                eq(accountIdentityClaims.accountId, accountId),
+                eq(accountIdentityClaims.identityNamespace, row.identityNamespace),
+                eq(accountIdentityClaims.identityKind, row.identityKind),
+                eq(accountIdentityClaims.identityValue, row.identityValue),
+                eq(accountIdentityClaims.identityScope, row.identityScope),
+              ),
+            )
+            .run();
+        }
+      }
+      for (const claim of freshForNamespace) {
+        this.db
+          .insert(accountIdentityClaims)
+          .values({
+            accountId,
+            identityNamespace: claim.namespace,
+            identityKind: claim.kind,
+            identityValue: claim.value,
+            identityScope: claim.scope,
+            createdAt: now,
+            updatedAt: now,
+          })
+          .onConflictDoUpdate({
+            target: [
+              accountIdentityClaims.accountId,
+              accountIdentityClaims.identityNamespace,
+              accountIdentityClaims.identityKind,
+              accountIdentityClaims.identityValue,
+              accountIdentityClaims.identityScope,
+            ],
+            set: { updatedAt: now },
+          })
+          .run();
+      }
+    }
   }
 }
 

@@ -4,9 +4,11 @@ import { and, eq, ne } from "drizzle-orm";
 import type { ChannelIdentity, ChannelRef } from "@/channels";
 import { trustedChannelIdentityProfile } from "@/channels/identity-profile-trust";
 import type { DrizzleDB } from "@/data";
-import { channelConfigs, channelUserBindings, identityObservations, userIdentityLinks, users, type UserKind } from "@/data/schema";
+import { accountIdentityClaims, accounts, channelConfigs, channelUserBindings, identityObservations, lunaAgents, userIdentityLinks, users, type UserKind } from "@/data/schema";
+import { validateIdentityClaim } from "./claim-validation";
 import { cleanDisplayName, usableDisplayName } from "./display-name";
 import { followShadowBotName } from "./shadow-name";
+import { mergeAgentUser } from "./user-merge";
 import { createLogger, uuid } from "@/shared";
 
 export type { UserKind } from "@/data/schema";
@@ -172,6 +174,14 @@ export class IdentityDirectory {
     for (const claim of input.claims) validateIdentityClaim(claim);
     return this._db.transaction(tx => {
       const directory = new IdentityDirectory(tx as unknown as DrizzleDB);
+      const matchedOwnerUser =
+        input.kind === "human" && input.authenticatedUserId === undefined
+          ? directory.resolveMatchingOwnerUserByClaims(input.agentId, input.claims)
+          : undefined;
+      if (matchedOwnerUser !== undefined) {
+        directory.reconcileUnlinkedUsersIntoOwner(input, matchedOwnerUser);
+      }
+
       let existingUser = directory.resolveUserForMaterialization(input);
       if (input.authenticatedUserId !== undefined) {
         const authenticated = tx.select().from(users).where(eq(users.id, input.authenticatedUserId)).get();
@@ -188,6 +198,10 @@ export class IdentityDirectory {
         tx.update(users).set({ status: "active", updatedAt: String(Date.now()) }).where(eq(users.id, existingUser.id)).run();
         existingUser = { ...existingUser, status: "active" };
       }
+      if (matchedOwnerUser !== undefined && existingUser === null) {
+        existingUser = matchedOwnerUser;
+      }
+
       const user = directory.refreshChannelProfile(
         existingUser ??
           directory.createUser({
@@ -210,6 +224,18 @@ export class IdentityDirectory {
           : { channelIdentityId: input.channelIdentityId }),
         claims: input.claims,
       });
+
+      if (matchedOwnerUser !== undefined && user.id === matchedOwnerUser.id) {
+        const adopted = directory.adoptOwnerChannelProfile(user, {
+          displayName: input.displayName,
+          ...(input.avatarUrl === undefined ? {} : { avatarUrl: input.avatarUrl }),
+        });
+        return {
+          id: adopted.id,
+          kind: adopted.kind,
+          displayName: adopted.displayName,
+        };
+      }
 
       return {
         id: user.id,
@@ -516,6 +542,137 @@ export class IdentityDirectory {
     }
   }
 
+  /**
+   * Resolves the Agent's owner user when any verified `IdentityClaim` on the
+   * incoming sender matches a verified `account_identity_claims` record of the
+   * Agent's active owner account. Completely channel-agnostic.
+   */
+  private resolveMatchingOwnerUserByClaims(
+    agentId: string,
+    claims: readonly IdentityClaim[],
+  ): UserRow | undefined {
+    const verifiedClaims = claims.filter((claim) => claim.confidence === "verified");
+    if (verifiedClaims.length === 0) return undefined;
+    const agent = this._db.select().from(lunaAgents).where(eq(lunaAgents.id, agentId)).get();
+    if (!agent || agent.status !== "active") return undefined;
+    const account = this._db.select().from(accounts).where(eq(accounts.id, agent.ownerAccountId)).get();
+    if (!account || account.status !== "active") return undefined;
+    const matched = verifiedClaims.some((claim) =>
+      Boolean(
+        this._db
+          .select({ accountId: accountIdentityClaims.accountId })
+          .from(accountIdentityClaims)
+          .where(
+            and(
+              eq(accountIdentityClaims.accountId, account.id),
+              eq(accountIdentityClaims.identityNamespace, claim.namespace),
+              eq(accountIdentityClaims.identityKind, claim.kind),
+              eq(accountIdentityClaims.identityValue, claim.value),
+              eq(accountIdentityClaims.identityScope, claim.scope),
+            ),
+          )
+          .get(),
+      ),
+    );
+    if (!matched) return undefined;
+    return this._db
+      .select()
+      .from(users)
+      .where(
+        and(
+          eq(users.agentId, agentId),
+          eq(users.accountId, account.id),
+          eq(users.status, "active"),
+          eq(users.kind, "human"),
+        ),
+      )
+      .get();
+  }
+
+  private reconcileUnlinkedUsersIntoOwner(
+    input: {
+      readonly agentId: string;
+      readonly channelIdentityId?: string;
+      readonly claims: readonly IdentityClaim[];
+    },
+    ownerUser: UserRow,
+  ): void {
+    const referenced = new Map<string, UserRow>();
+    if (input.channelIdentityId !== undefined) {
+      const bindings = this._db
+        .select()
+        .from(channelUserBindings)
+        .where(eq(channelUserBindings.channelIdentityId, input.channelIdentityId))
+        .all();
+      for (const binding of bindings) {
+        const user = this.current(binding.userId);
+        if (user !== undefined) referenced.set(user.id, user);
+      }
+    }
+    for (const claim of input.claims) {
+      const link = this.findLinkByClaim(input.agentId, claim);
+      if (link === undefined) continue;
+      const user = this.current(link.userId);
+      if (user !== undefined) referenced.set(user.id, user);
+    }
+
+    const candidates = [...referenced.values()].filter((user) => user.id !== ownerUser.id);
+    if (candidates.length === 0) return;
+    const allMergeable = candidates.every(
+      (user) =>
+        user.agentId === input.agentId &&
+        user.kind === "human" &&
+        user.accountId === null &&
+        (user.status === "active" || user.status === "removed"),
+    );
+    if (!allMergeable) return;
+
+    const now = Date.now();
+    for (const candidate of candidates) {
+      mergeAgentUser(this._db, input.agentId, candidate.id, ownerUser.id, now);
+    }
+    this.ensureSinglePrimaryLink(ownerUser.id);
+  }
+
+  private adoptOwnerChannelProfile(
+    owner: UserRow,
+    input: { readonly displayName?: string; readonly avatarUrl?: string },
+  ): UserRow {
+    if (owner.profileSource === "manual") {
+      return owner;
+    }
+    const ids = new Set([
+      owner.id,
+      ...this._db
+        .select()
+        .from(userIdentityLinks)
+        .where(eq(userIdentityLinks.userId, owner.id))
+        .all()
+        .map((link) => link.identityValue),
+    ]);
+    const displayName = usableDisplayName(cleanDisplayName(input.displayName), ids);
+    const updates: Partial<typeof users.$inferInsert> = {};
+    if (
+      displayName !== undefined &&
+      (displayName !== owner.displayName || owner.profileSource !== "channel")
+    ) {
+      updates.displayName = displayName;
+      updates.profileSource = "channel";
+    }
+    if (input.avatarUrl !== undefined && input.avatarUrl !== owner.avatarUrl) {
+      updates.avatarUrl = input.avatarUrl;
+    }
+    if (Object.keys(updates).length === 0) {
+      return owner;
+    }
+    this._db
+      .update(users)
+      .set({ ...updates, updatedAt: String(Date.now()) })
+      .where(eq(users.id, owner.id))
+      .run();
+    return this._db.select().from(users).where(eq(users.id, owner.id)).get() ?? owner;
+  }
+
 }
 
 export function identityClaimsForChannelIdentity(
@@ -586,15 +743,4 @@ function identityClaimKey(claim: IdentityClaim): string {
 
 function makeStableRowId(prefix: string, stableKey: string): string {
   return `${prefix}_${createHash("sha256").update(stableKey).digest("hex")}`;
-}
-
-
-/** Reject provider evidence that lacks the namespace required for canonical matching. */
-function validateIdentityClaim(claim: IdentityClaim): void {
-  if (!claim.namespace.trim() || !claim.kind.trim() || !claim.value.trim()) throw new Error("identity_claim_invalid");
-  if (claim.namespace !== "feishu" && claim.namespace !== "lark") return;
-  const prefix = ({open_id: "app:", user_id: "tenant:", union_id: "developer:", external_id: "channel:"} as Record<string, string>)[claim.kind];
-  if (!prefix || !claim.scope.startsWith(prefix) || claim.scope.length === prefix.length) {
-    throw new Error("identity_scope_required");
-  }
 }

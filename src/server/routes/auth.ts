@@ -338,9 +338,9 @@ export function createAuthRoutes(
         return c.redirect(loginErrorRedirect(safeNext, "feishu_not_configured"), 302);
       }
 
-      let account;
+      let exchanged;
       try {
-        account = await exchangeFeishuAuthorizationCode(
+        exchanged = await exchangeFeishuAuthorizationCode(
           {
             code,
             appId: credentials.appId,
@@ -353,15 +353,15 @@ export function createAuthRoutes(
         return c.redirect(loginErrorRedirect(safeNext, "feishu_exchange_failed"), 302);
       }
 
-      let sessionAccount = account;
+      let sessionAccount = exchanged.account;
       const db = authDb(options);
       if (db !== undefined) {
-        const stored = ensureDashboardAccount(db, account);
+        const stored = ensureDashboardAccount(db, exchanged.account, exchanged.identityClaims);
         if (stored.status !== "active") {
           return c.redirect(loginErrorRedirect(safeNext, "account_inactive"), 302);
         }
         sessionAccount = {
-          ...account,
+          ...exchanged.account,
           name: stored.displayName,
           ...(stored.avatarUrl ? { avatarUrl: stored.avatarUrl } : {}),
         };

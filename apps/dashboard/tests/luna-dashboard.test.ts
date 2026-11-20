@@ -1369,7 +1369,7 @@ describe("luna dashboard api", () => {
     expect(source).toContain("<DropdownMenuSeparator");
     expect(source).toContain("Settings");
     expect(source).toContain("Log out");
-    expect(source).toContain("<RailUserMenu />");
+    expect(source).toContain("<RailUserMenu isAdmin={isAdmin} isSuperAdmin={isSuperAdmin} />");
     expect(source).not.toContain("<SidebarLogoutButton />");
   });
 

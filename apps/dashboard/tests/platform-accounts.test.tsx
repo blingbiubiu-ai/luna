@@ -40,6 +40,7 @@ test("PlatformAccountsList renders super-admin, platform-admin, and regular Feis
       ],
     }),
   );
+  expect(html).toContain(">内置超级管理员<");
   expect(html).toContain("超级管理员");
   expect(html).toContain("内置超级管理员（不可变更）");
   expect(html).toContain("张三");

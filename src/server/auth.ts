@@ -5,7 +5,12 @@ import { deleteCookie, getCookie, setCookie } from "hono/cookie";
 
 import type { DrizzleDB } from "@/data";
 import { InvocationService } from "@/runners/invocation-service";
-import { AccountStore, SUPER_ADMIN_ACCOUNT_ID } from "@/identity/account-store";
+import {
+  AccountStore,
+  isSuperAdminAccountId,
+  SUPER_ADMIN_ACCOUNT_ID,
+  type AccountIdentityClaimInput,
+} from "@/identity/account-store";
 
 import { DEFAULT_LUNA_DASHBOARD_TOKEN } from "@luna/host-runtime/defaults";
 import {
@@ -369,9 +374,25 @@ export function lunaAccessTokenClaimsFromContext(
   return c.get("lunaAccessTokenClaims") as LunaAccessTokenClaims | undefined;
 }
 
-/** Records a signed-in account and keeps its profile current. */
-export function ensureDashboardAccount(db: DrizzleDB, account: DashboardAccount) {
-  return new AccountStore(db).ensure({...account, placeholderName: account.provider === "local-token"});
+/** Records a signed-in account and keeps its profile and optional verified identity claims current. */
+export function ensureDashboardAccount(
+  db: DrizzleDB,
+  account: DashboardAccount,
+  identityClaims?: readonly AccountIdentityClaimInput[],
+) {
+  if (isSuperAdminAccountId(account.id)) {
+    return new AccountStore(db).ensure({
+      id: account.id,
+      name: LOCAL_ACCOUNT_NAME,
+      avatarUrl: null,
+      placeholderName: false,
+    });
+  }
+  return new AccountStore(db).ensure({
+    ...account,
+    ...(identityClaims === undefined ? {} : { identityClaims }),
+    placeholderName: account.provider === "local-token",
+  });
 }
 
 /** The session shows the account's stored name and avatar, which may differ from the sign-in's placeholder. */

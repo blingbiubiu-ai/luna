@@ -63,14 +63,15 @@ because it excludes the owner and the Shadows.
   signed-in account; `/api/agents/:agentId/users` replaces `/api/users?agentId=`.
   The Runner CLI `luna users` is unchanged: it already lists Agent users.
 
-### `accounts`
+### `accounts` and `account_identity_claims`
 
-| Column | Meaning |
+| Table / Column | Meaning |
 |---|---|
-| `id` | Account id; for a Dashboard login, the id the login provider returns (`DashboardAuthUser.id`) |
-| `display_name`, `avatar_url` | Profile from login |
-| `status` | `active`, `disabled`, `deleted` |
-| `created_at`, `updated_at` | |
+| `accounts.id` | Account id; for a Dashboard login, the id the login provider returns |
+| `accounts.display_name`, `avatar_url` | Profile from login (`local-dashboard-user` keeps its fixed system identity `'Local dashboard user'` / `NULL` avatar and never adopts a personal chat nickname) |
+| `accounts.status` | `active`, `disabled`, `deleted` |
+| `accounts.created_at`, `updated_at` | |
+| `account_identity_claims.(account_id, identity_namespace, identity_kind, identity_value, identity_scope)` | Channel-agnostic verified `IdentityClaim` tuples emitted by the OAuth/OIDC/SSO sign-in adapter (mirroring `user_identity_links`, with zero provider-specific columns on `accounts`) |
 
 ### `users` changes
 
@@ -153,10 +154,35 @@ follow the same rule.
 
 ## Linking an account to its channel identity
 
-Today the owner's Dashboard login and their Feishu sender are two unrelated
-rows, so a Feishu message from the owner is not treated as the owner. Linking
-proves that one person holds both, and works only on what every channel adapter
-already produces after normalization, never on provider fields:
+### Automatic owner recognition via normalized `IdentityClaim`s
+
+Core `accounts`, `AccountStore`, and `IdentityDirectory` are completely
+channel-agnostic and never inspect provider-specific fields. At sign-in, an
+OAuth/OIDC/SSO login adapter (such as Feishu OAuth via `feishuIdentityMetadata`)
+emits scoped, verified `IdentityClaim` tuples into `account_identity_claims`.
+During `IdentityDirectory.materializeIdentityClaims`, when an incoming human
+sender carries any verified `IdentityClaim` matching an entry in
+`account_identity_claims` for the Agent's active `owner_account_id`:
+
+- if the sender has not been materialized in that Agent before, its
+  `channel_user_bindings` and `user_identity_links` bind directly to the owner
+  `users` row;
+- if the sender was previously materialized in that Agent as an unlinked active
+  human `users` row (`account_id IS NULL`), `mergeAgentUser` merges it into the
+  owner `users` row in the same transaction;
+- both normal chat turns and `#auth` therefore work immediately without manual
+  `#link` whenever the login adapter and the channel adapter emit a matching
+  verified `IdentityClaim` (for Feishu, e.g. `tenant_union_id` / `user_id`
+  scoped to `tenant:<tenantKey>`).
+
+### Explicit `#link` fallback
+
+When no shared verified `IdentityClaim` exists between the Dashboard account and
+the channel sender (for example cross-tenant bots, channels without OAuth login,
+or Agents owned by `local-dashboard-user`), explicit `#link` remains available
+as the manual proof that one person holds both. Linking works only on what every
+channel adapter already produces after normalization, never on unverified
+provider fields:
 
 - `NormalizedInboundMessage.sender` (a `ChannelIdentity`) with its scoped,
   verified `identityClaims` and `requesterIdentity`;

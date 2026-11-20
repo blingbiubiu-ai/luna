@@ -6,11 +6,18 @@ import { drizzle } from "drizzle-orm/bun-sqlite";
 import { migrate } from "drizzle-orm/bun-sqlite/migrator";
 
 import { AgentSecretCipher } from "../../src/agent-config/secret-cipher";
+import { AgentStore } from "../../src/agents/agent-store";
+import { ChannelDirectoryStore } from "../../src/channels/directory-store";
 import * as schema from "../../src/data/schema";
-import { accounts } from "../../src/data/schema";
+import { accountIdentityClaims, accounts, channelAuthTokens, channelUserBindings, users } from "../../src/data/schema";
+import { FakeFeishuChannel } from "../../extensions/channels/fake/fake-feishu-channel";
+import { AccountStore } from "../../src/identity/account-store";
+import { feishuIdentityMetadata } from "../../src/identity/feishu-identity-scopes";
+import { LunaMessageIngress } from "../../src/messaging/gateway/luna-message-ingress";
 import { FeishuAuthConfigStore, type FeishuFetch } from "../../src/server/auth/feishu-oauth";
 import { HonoServer } from "../../src/server/server";
-import { fixtureAgent } from "../helpers/platform-fixtures";
+import { fixtureAgent, fixtureSessionOwnership } from "../helpers/platform-fixtures";
+import { normalizedInboundFromDirectCallForTest } from "./support/direct-call-inbound-adapter";
 
 function testCipher(): AgentSecretCipher {
   return AgentSecretCipher.fromEnvironment({
@@ -87,6 +94,7 @@ describe("Feishu OAuth Dashboard login", () => {
             data: {
               union_id: "on_feishu_union_001",
               open_id: "ou_feishu_open_001",
+              tenant_key: "2ed263bf32cf1651",
               name: profileName,
               avatar_url: profileAvatar,
             },
@@ -215,6 +223,30 @@ describe("Feishu OAuth Dashboard login", () => {
       const stored = db.select().from(accounts).where(eq(accounts.id, "feishu:on_feishu_union_001")).get();
       expect(stored?.displayName).toBe("王华杰 (Updated)");
       expect(stored?.avatarUrl).toBe("https://avatar.feishu.test/u2.png");
+      const storedClaims = db
+        .select({
+          namespace: accountIdentityClaims.identityNamespace,
+          kind: accountIdentityClaims.identityKind,
+          value: accountIdentityClaims.identityValue,
+          scope: accountIdentityClaims.identityScope,
+        })
+        .from(accountIdentityClaims)
+        .where(eq(accountIdentityClaims.accountId, "feishu:on_feishu_union_001"))
+        .all();
+      expect(storedClaims).toEqual([
+        {
+          namespace: "feishu",
+          kind: "open_id",
+          value: "ou_feishu_open_001",
+          scope: "app:cli_platform_feishu",
+        },
+        {
+          namespace: "feishu",
+          kind: "tenant_union_id",
+          value: "on_feishu_union_001",
+          scope: "tenant:2ed263bf32cf1651",
+        },
+      ]);
 
       // 6. Disabled account cannot sign in via Feishu callback.
       db.update(accounts)
@@ -265,5 +297,247 @@ describe("Feishu OAuth Dashboard login", () => {
       feishuHost: "https://open.larksuite.com",
       publicBaseUrl: "https://lark.company.test",
     });
+  });
+
+  test("automatically binds and merges same-enterprise Feishu senders into the Agent owner user without #link", async () => {
+    const sqlite = new Database(":memory:");
+    const previousAccessSecret = process.env.LUNA_ACCESS_TOKEN_SECRET;
+    const previousBunAccessSecret = Bun.env.LUNA_ACCESS_TOKEN_SECRET;
+    process.env.LUNA_ACCESS_TOKEN_SECRET = "feishu-auto-owner-secret";
+    Bun.env.LUNA_ACCESS_TOKEN_SECRET = "feishu-auto-owner-secret";
+
+    try {
+      const db = drizzle(sqlite, { schema });
+      migrate(db, { migrationsFolder: "src/data/drizzle" });
+
+      const ownerAccountId = "feishu:on_owner_union";
+      const ownership = fixtureSessionOwnership(db, "feishu", "feishu-bot-app", ownerAccountId);
+      const ownerUserId = new AgentStore(db).ownerUserId(ownership.agent_id);
+      const { identityClaims: oauthClaims } = feishuIdentityMetadata(
+        { environment: "feishu", appId: "cli_platform_oauth", tenantKey: "tenant_same_corp" },
+        { open_id: "ou_oauth_app_owner", union_id: "on_owner_union" },
+      );
+      new AccountStore(db).ensure({
+        id: ownerAccountId,
+        name: "王华杰",
+        avatarUrl: "https://avatar.feishu.test/owner.png",
+        identityClaims: oauthClaims.map((claim) => ({
+          namespace: claim.namespace,
+          kind: claim.kind,
+          value: claim.value,
+          scope: claim.scope!,
+          confidence: claim.confidence ?? "verified",
+        })),
+      });
+      db.update(users)
+        .set({ displayName: "王华杰", avatarUrl: "https://avatar.feishu.test/owner.png" })
+        .where(eq(users.id, ownerUserId))
+        .run();
+      const directory = new ChannelDirectoryStore(db);
+
+      // 1. Unseen Feishu sender from a different bot app (`ou_bot_specific_owner`) with matching
+      // `(tenant_key, union_id)` binds directly to `ownerUserId` and keeps the OAuth display name even when
+      // the bot lacks contact read permission (no sender displayName).
+      const storedOwnerIdentity = directory.upsertIdentity({
+        channel: { type: "feishu", id: "feishu-bot-app" },
+        agentId: ownership.agent_id,
+        identity: {
+          externalId: "ou_bot_specific_owner",
+          kind: "user",
+          providerIds: {
+            open_id: "ou_bot_specific_owner",
+            union_id: "on_owner_union",
+            tenant_key: "tenant_same_corp",
+          },
+          ...feishuIdentityMetadata(
+            { environment: "feishu", appId: "cli_shadow_bot_1", tenantKey: "tenant_same_corp" },
+            { open_id: "ou_bot_specific_owner", union_id: "on_owner_union" },
+          ),
+        },
+      });
+      const boundOwner = db
+        .select()
+        .from(channelUserBindings)
+        .where(eq(channelUserBindings.channelIdentityId, storedOwnerIdentity.id))
+        .get();
+      expect(boundOwner?.userId).toBe(ownerUserId);
+      expect(db.select().from(users).where(eq(users.id, ownerUserId)).get()?.displayName).toBe("王华杰");
+
+      // 2. `#auth` works out-of-the-box without `#link` for the same-enterprise Feishu owner,
+      // even on a brand-new Shadow bot channel where the owner has never sent a message before!
+      const authOwnership = fixtureSessionOwnership(db, "feishu", "feishu-auth-bot", ownerAccountId);
+      expect(authOwnership.agent_id).toBe(ownership.agent_id);
+      const channel = new FakeFeishuChannel("feishu-auth-bot");
+      const ingress = new LunaMessageIngress({ db, runnerType: "mock" });
+      await ingress.registerChannel(channel);
+      await channel.emitNormalizedInbound(
+        normalizedInboundFromDirectCallForTest({
+          id: "msg-owner-auth",
+          channelType: "feishu",
+          channelId: "feishu-auth-bot",
+          chatType: "p2p",
+          senderUserId: "ou_brand_new_auth_bot_owner",
+          text: "#auth",
+          addressing: { addressedToBot: true, reason: "p2p" },
+          senderProfile: {
+            externalUserId: "ou_brand_new_auth_bot_owner",
+            openId: "ou_brand_new_auth_bot_owner",
+            unionId: "on_owner_union",
+            tenantKey: "tenant_same_corp",
+            displayName: "王华杰",
+          },
+        }),
+      );
+      await ingress.waitForIdle();
+      expect(channel.outbound).toHaveLength(1);
+      expect(channel.outbound[0]?.content).toContain("One-time login token");
+      expect(db.select({ purpose: channelAuthTokens.purpose }).from(channelAuthTokens).all()).toEqual([
+        { purpose: "cli_login" },
+      ]);
+
+      // 3. A pre-existing unlinked sender user in the same Agent (e.g. seen before `union_id` was enriched)
+      // merges into `ownerUserId` as soon as matching `(tenant_key, union_id)` arrives.
+      const secondBotOwnership = fixtureSessionOwnership(db, "feishu", "feishu-bot-app-2", ownerAccountId);
+      const secondOwnerUserId = new AgentStore(db).ownerUserId(secondBotOwnership.agent_id);
+      const preExisting = directory.upsertIdentity({
+        channel: { type: "feishu", id: "feishu-bot-app-2" },
+        agentId: secondBotOwnership.agent_id,
+        identity: {
+          externalId: "ou_owner_app2",
+          kind: "user",
+          displayName: "王华杰",
+          providerIds: { open_id: "ou_owner_app2" },
+          ...feishuIdentityMetadata(
+            { environment: "feishu", appId: "cli_shadow_bot_2" },
+            { open_id: "ou_owner_app2" },
+          ),
+        },
+      });
+      const temporaryUserId = db
+        .select()
+        .from(channelUserBindings)
+        .where(eq(channelUserBindings.channelIdentityId, preExisting.id))
+        .get()!.userId;
+      expect(temporaryUserId).not.toBe(secondOwnerUserId);
+
+      directory.upsertIdentity({
+        channel: { type: "feishu", id: "feishu-bot-app-2" },
+        agentId: secondBotOwnership.agent_id,
+        identity: {
+          externalId: "ou_owner_app2",
+          kind: "user",
+          displayName: "王华杰",
+          providerIds: {
+            open_id: "ou_owner_app2",
+            union_id: "on_owner_union",
+            tenant_key: "tenant_same_corp",
+          },
+          ...feishuIdentityMetadata(
+            { environment: "feishu", appId: "cli_shadow_bot_2", tenantKey: "tenant_same_corp" },
+            { open_id: "ou_owner_app2", union_id: "on_owner_union" },
+          ),
+        },
+      });
+      expect(
+        db
+          .select()
+          .from(channelUserBindings)
+          .where(eq(channelUserBindings.channelIdentityId, preExisting.id))
+          .get()?.userId,
+      ).toBe(secondOwnerUserId);
+      expect(db.select().from(users).where(eq(users.id, temporaryUserId)).get()).toMatchObject({
+        status: "merged",
+        mergedIntoUserId: secondOwnerUserId,
+      });
+
+      // 4. Cross-tenant or different-person Feishu senders never bind to `ownerUserId`.
+      const crossTenant = directory.upsertIdentity({
+        channel: { type: "feishu", id: "feishu-bot-app" },
+        agentId: ownership.agent_id,
+        identity: {
+          externalId: "ou_external_tenant",
+          kind: "user",
+          displayName: "外部租户同名用户",
+          providerIds: {
+            open_id: "ou_external_tenant",
+            union_id: "on_owner_union",
+            tenant_key: "tenant_other_corp",
+          },
+          ...feishuIdentityMetadata(
+            { environment: "feishu", appId: "cli_shadow_bot_1", tenantKey: "tenant_other_corp" },
+            { open_id: "ou_external_tenant", union_id: "on_owner_union" },
+          ),
+        },
+      });
+      const crossTenantUserId = db
+        .select()
+        .from(channelUserBindings)
+        .where(eq(channelUserBindings.channelIdentityId, crossTenant.id))
+        .get()!.userId;
+      expect(crossTenantUserId).not.toBe(ownerUserId);
+
+      const colleague = directory.upsertIdentity({
+        channel: { type: "feishu", id: "feishu-bot-app" },
+        agentId: ownership.agent_id,
+        identity: {
+          externalId: "ou_colleague",
+          kind: "user",
+          displayName: "李四",
+          providerIds: {
+            open_id: "ou_colleague",
+            union_id: "on_colleague_union",
+            tenant_key: "tenant_same_corp",
+          },
+          ...feishuIdentityMetadata(
+            { environment: "feishu", appId: "cli_shadow_bot_1", tenantKey: "tenant_same_corp" },
+            { open_id: "ou_colleague", union_id: "on_colleague_union" },
+          ),
+        },
+      });
+      const colleagueUserId = db
+        .select()
+        .from(channelUserBindings)
+        .where(eq(channelUserBindings.channelIdentityId, colleague.id))
+        .get()!.userId;
+      expect(colleagueUserId).not.toBe(ownerUserId);
+
+      // 5. Channel-agnostic: any future OAuth/channel adapter namespace (e.g. `slack`) works identically
+      // through `account_identity_claims` without any provider-specific logic in `IdentityDirectory`.
+      const slackOwnerAccountId = "slack:T_ACME:U_ALICE";
+      const slackOwnership = fixtureSessionOwnership(db, "slack", "slack-bot-1", slackOwnerAccountId);
+      const slackOwnerUserId = new AgentStore(db).ownerUserId(slackOwnership.agent_id);
+      new AccountStore(db).ensure({
+        id: slackOwnerAccountId,
+        name: "Alice",
+        identityClaims: [
+          { namespace: "slack", kind: "user_id", value: "U_ALICE", scope: "workspace:T_ACME", confidence: "verified" },
+        ],
+      });
+      const slackSender = directory.upsertIdentity({
+        channel: { type: "slack", id: "slack-bot-1" },
+        agentId: slackOwnership.agent_id,
+        identity: {
+          externalId: "U_ALICE",
+          kind: "user",
+          displayName: "Alice",
+          identityClaims: [
+            { namespace: "slack", kind: "user_id", value: "U_ALICE", scope: "workspace:T_ACME", confidence: "verified" },
+          ],
+        },
+      });
+      expect(
+        db
+          .select()
+          .from(channelUserBindings)
+          .where(eq(channelUserBindings.channelIdentityId, slackSender.id))
+          .get()?.userId,
+      ).toBe(slackOwnerUserId);
+    } finally {
+      sqlite.close();
+      if (previousAccessSecret === undefined) delete process.env.LUNA_ACCESS_TOKEN_SECRET;
+      else process.env.LUNA_ACCESS_TOKEN_SECRET = previousAccessSecret;
+      if (previousBunAccessSecret === undefined) delete Bun.env.LUNA_ACCESS_TOKEN_SECRET;
+      else Bun.env.LUNA_ACCESS_TOKEN_SECRET = previousBunAccessSecret;
+    }
   });
 });

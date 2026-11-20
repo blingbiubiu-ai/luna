@@ -1,4 +1,4 @@
-import { and, eq, inArray, isNull, ne, sql } from "drizzle-orm";
+import { and, eq, inArray, isNull, ne } from "drizzle-orm";
 
 import type { DrizzleDB } from "@/data";
 import {
@@ -9,7 +9,9 @@ import {
 import { AgentError, AgentStore } from "@/agents/agent-store";
 import { hashAccessToken } from "@/server/auth/access-token-service";
 import { uuid } from "@/shared";
+import { isSuperAdminAccountId } from "./account-store";
 import { cleanDisplayName } from "./display-name";
+import { mergeAgentUser } from "./user-merge";
 import { LOCAL_ACCOUNT_NAME } from "@/server/auth";
 
 /** One-time link tokens are valid this long. */
@@ -73,7 +75,7 @@ export class AccountLinkService {
       const consumed = db.update(channelAuthTokens).set({ consumedAt: now })
         .where(and(eq(channelAuthTokens.id, proofId), isNull(channelAuthTokens.consumedAt))).returning({ id: channelAuthTokens.id }).get();
       if (!consumed) throw new AgentError("account_link_token_invalid", 409);
-      if (preview.userId !== ownerUserId) mergeUser(db, agentId, preview.userId, ownerUserId, now);
+      if (preview.userId !== ownerUserId) mergeAgentUser(db, agentId, preview.userId, ownerUserId, now);
       adoptChatProfile(db, accountId, ownerUserId, preview, now);
       return preview;
     });
@@ -161,38 +163,10 @@ function adoptChatProfile(db: Db, accountId: string, ownerUserId: string, previe
     db.update(users).set({ displayName: name, avatarUrl: preview.avatarUrl ?? owner.avatarUrl, profileSource: "channel", updatedAt: String(now) })
       .where(eq(users.id, ownerUserId)).run();
   }
-  db.update(accounts).set({ displayName: name, ...(preview.avatarUrl ? { avatarUrl: preview.avatarUrl } : {}), updatedAt: now })
-    .where(and(eq(accounts.id, accountId), eq(accounts.displayName, LOCAL_ACCOUNT_NAME))).run();
-}
-
-/**
- * Moves everything a user of the Agent is into `targetId`: chat identities,
- * evidence, and the references that decide what they may do and see. Records
- * of finished work (invocations, commands, audits) keep the old id, which now
- * names the merged user.
- */
-function mergeUser(db: Db, agentId: string, sourceId: string, targetId: string, now: number): void {
-  const timestamp = String(now);
-  db.update(channelUserBindings).set({ userId: targetId }).where(eq(channelUserBindings.userId, sourceId)).run();
-  db.update(userIdentityLinks).set({ userId: targetId, isPrimary: false, updatedAt: timestamp })
-    .where(and(eq(userIdentityLinks.userId, sourceId), eq(userIdentityLinks.agentId, agentId))).run();
-  db.run(sql`UPDATE messages SET sender_user_id = ${targetId} WHERE sender_user_id = ${sourceId} AND agent_id = ${agentId} AND deleted_at IS NULL`);
-  db.run(sql`UPDATE sessions SET created_by_user_id = ${targetId} WHERE created_by_user_id = ${sourceId} AND agent_id = ${agentId}`);
-  db.run(sql`UPDATE tasks SET creator_user_id = ${targetId} WHERE creator_user_id = ${sourceId} AND agent_id = ${agentId}`);
-  db.run(sql`UPDATE OR IGNORE task_participants SET user_id = ${targetId} WHERE user_id = ${sourceId}`);
-  db.run(sql`DELETE FROM task_participants WHERE user_id = ${sourceId}`);
-  db.run(sql`UPDATE session_schedules SET actor_user_id = ${targetId} WHERE actor_user_id = ${sourceId}`);
-  db.run(sql`UPDATE agent_memories SET subject_id = ${targetId} WHERE type = 'person' AND subject_id = ${sourceId} AND agent_id = ${agentId}`);
-  db.run(sql`UPDATE agent_memories SET origin_user_id = ${targetId} WHERE origin_user_id = ${sourceId} AND agent_id = ${agentId}`);
-  db.run(sql`UPDATE agent_memories SET participants_json = (
-      SELECT json_group_array(DISTINCT CASE WHEN value = ${sourceId} THEN ${targetId} ELSE value END) FROM json_each(agent_memories.participants_json))
-    WHERE agent_id = ${agentId} AND EXISTS (SELECT 1 FROM json_each(agent_memories.participants_json) WHERE value = ${sourceId})`);
-  db.run(sql`UPDATE OR IGNORE group_memberships SET user_id = ${targetId} WHERE user_id = ${sourceId}`);
-  db.run(sql`DELETE FROM group_memberships WHERE user_id = ${sourceId}`);
-  db.run(sql`UPDATE OR IGNORE authorization_rules SET subject_id = ${targetId}
-    WHERE scope_type = 'agent' AND agent_id = ${agentId} AND subject_type = 'user' AND subject_id = ${sourceId}`);
-  db.run(sql`DELETE FROM authorization_rules WHERE scope_type = 'agent' AND agent_id = ${agentId} AND subject_type = 'user' AND subject_id = ${sourceId}`);
-  db.update(users).set({ status: "merged", mergedIntoUserId: targetId, updatedAt: timestamp }).where(eq(users.id, sourceId)).run();
+  if (!isSuperAdminAccountId(accountId)) {
+    db.update(accounts).set({ displayName: name, ...(preview.avatarUrl ? { avatarUrl: preview.avatarUrl } : {}), updatedAt: now })
+      .where(and(eq(accounts.id, accountId), eq(accounts.displayName, LOCAL_ACCOUNT_NAME))).run();
+  }
 }
 
 function randomToken(): string {
