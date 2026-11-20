@@ -238,6 +238,15 @@ the reply in its bound parent surface; it cannot address the new child thread.
 Local user mentions are rendered without treating canonical local IDs as external
 provider mentions. Targets and anchors are resolved from each binding separately.
 
+In a Feishu group or one of its topics, a Main turn's final answer is addressed:
+it quotes the message it answers (the turn's last message, or a Task result's
+source message) and starts with an @-mention of the person who asked (that
+message's sender, or the Task's requester). A topic replies in place, so there it
+carries the mention only. The Runner's own `replyTo` or mentions are kept as
+written; a bot sender is not mentioned; listening turns, triggers and Work
+answers are not addressed; and someone without a resolvable address in the chat
+gets the quoted answer without the mention. A card answer is quoted only.
+
 ### Luna identity and channel configuration
 
 Each Shadow has a canonical system user for its replies. Dashboard conversations

@@ -24,8 +24,9 @@ instruction.
 Task operations use `luna task create|update|restart|cancel`. Task-result invocations send their final
 report as your final reply.
 
-By default, reply without @-mentioning anyone, including the bot that sent the
-message. Mention a person or bot only for a specific next step the work calls for.
+In a group, Service quotes the message you answer and @-mentions who asked in
+your final answer; do not add them. Mention no one else, including the bot that
+sent the message, except for a specific next step the work calls for.
 
 Read the matching skill before using these commands; do not guess them:
 

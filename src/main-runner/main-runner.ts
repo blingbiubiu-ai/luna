@@ -3,7 +3,7 @@ import {RunnerContextStore as ExecutionContextStore} from "@/runners/runner-cont
 import {TaskScopeResolver} from "@/agents/task-scope";
 import type {AgentScope} from "@/agents/agent-store";
 import { contextFileSurface, prepareRunnerDirectory, syncAgentCompatibility, turnAttempt } from "@/runners/session-runner-turn";
-import { finalizeRunnerReply } from "@/messaging/runner-answer";
+import { finalizeRunnerReply, type ReplyAddressee } from "@/messaging/runner-answer";
 import { RuntimeDetachedError } from "@/runners/runtime-detach";
 import { InvocationStore } from "@/runners/invocation-store";
 import { decodeInvocation } from "@/runners/invocation-codec";
@@ -186,6 +186,7 @@ export class MainRunner {
         text: primaryOutput.text,
         allowSilent: input.input.type !== "user_messages" || input.input.latestMessage.surface.kind !== "p2p",
         actorUserId: requestedByUserIdForServiceEnv(input, db) ?? (input.input.type === "user_messages" ? input.input.messages.at(-1)?.senderUserId : undefined),
+        addressee: replyAddressee(db, input),
       });
     } catch (error) {
       this._markAttemptRunnerFailed(primaryAttempt, { rawOutput: primaryOutput.text, error });
@@ -301,6 +302,25 @@ function sessionIdFromInput(input: MainRunnerInput): string {
     return input.sessionId;
   }
   return input.context.sessionId;
+}
+
+/**
+ * Whom a group answer is addressed to: the last message of the turn and its sender, or for a Task
+ * result the message the Task came from and its requester. Listening turns and triggers speak
+ * unaddressed, and a bot that wrote to the Agent is answered without a mention.
+ */
+function replyAddressee(db: DrizzleDB, input: MainRunnerRunInput): ReplyAddressee | undefined {
+  if (input.input.type === "user_messages") {
+    if (input.input.ambient) return undefined;
+    const last = input.input.messages.at(-1);
+    if (!last || last.role !== "user") return undefined;
+    return { messageId: last.messageId, ...(last.sender.kind !== "bot" && last.senderUserId ? { userId: last.senderUserId } : {}) };
+  }
+  // A trigger (schedule, handoff) answers no particular message.
+  if (input.input.type !== "task_result") return undefined;
+  const task = db.select({ creator: tasks.creator_user_id, source: tasks.source_message_id }).from(tasks).where(eq(tasks.id, input.input.taskId)).get();
+  if (!task) return undefined;
+  return { ...(task.source ? { messageId: task.source } : {}), ...(task.creator ? { userId: task.creator } : {}) };
 }
 
 function buildMainRunnerContextFile(input: MainRunnerInput) {
