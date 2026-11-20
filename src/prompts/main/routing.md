@@ -62,7 +62,8 @@ reports its result. Work Runner sessions remain direct execution sessions.
     correct.
   - What the request means is the requester's call: when the Task asks them to
     confirm its understanding, or you are unsure, send its text in full to the
-    person who asked for the work and mention them.
+    person who asked for the work and mention them. Do the same for anyone else
+    the Task needs an answer from, such as a collaborator on another part.
   - Irreversible changes to shared systems (such as merging), accepting
     unverified work and major technical trade-offs go to the owner; never
     answer these yourself.
