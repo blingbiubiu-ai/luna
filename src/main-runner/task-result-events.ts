@@ -32,7 +32,7 @@ import type { ReplyChannel } from "@/channels/outbound";
 import { createLogger, uuid } from "@/shared";
 
 import { MainRunnerContextBuilder } from "./context-builder";
-import type { MainRunner } from "./main-runner";
+import { MainRunnerFreshLaunchReplayRequiredError, type MainRunner } from "./main-runner";
 import type {
   TaskResultForMainRunner,
   MainRunnerInput,
@@ -239,9 +239,6 @@ export class TaskResultEventPublisher {
       return true;
     }
     if (!recovering && this._completeCommandReply(input.result, input.subscription, attempt)) return true;
-    const context = this._contextBuilder.buildForSession(
-      input.subscription.session_id,
-    );
 
     const channel = this._channelForSubscription(input.subscription);
     if (channel === undefined) {
@@ -260,7 +257,7 @@ export class TaskResultEventPublisher {
     await this._runMain({
       result,
       subscription: input.subscription,
-      context,
+      attemptId: attempt.id,
     }).catch(
       (err) => {
         if (err instanceof RuntimeDetachedError) throw err;
@@ -402,27 +399,43 @@ export class TaskResultEventPublisher {
   private async _runMain(input: {
     readonly result: TaskResultForMainRunner;
     readonly subscription: TaskSubscription;
-    readonly context: ReturnType<
-      MainRunnerContextBuilder["buildForSession"]
-    >;
+    readonly attemptId: string;
   }): Promise<MainRunnerCompletion> {
-    const runnerContext = this._runnerContexts.resolveForSession(
-      input.subscription.session_id,
-      this._runnerType(input.subscription.session_id),
-    );
-    const mainRunnerInput: MainRunnerInput = {
-      type: "task_result",
-      sessionId: input.subscription.session_id,
-      taskId: input.result.taskId,
-      result: { ...input.result, artifactRefs: taskResultArtifactRefs(this._db, input.result.taskId, input.result.artifactIds) },
-      context: input.context,
+    const runOnce = async () => {
+      const runnerContext = this._runnerContexts.resolveForSession(
+        input.subscription.session_id,
+        this._runnerType(input.subscription.session_id),
+      );
+      const context = this._contextBuilder.buildForSession(
+        input.subscription.session_id,
+        {
+          includeLaunchSeed: runnerContext.runner_session_id === null,
+          createdForInvocationId: input.attemptId,
+        },
+      );
+      const mainRunnerInput: MainRunnerInput = {
+        type: "task_result",
+        sessionId: input.subscription.session_id,
+        taskId: input.result.taskId,
+        result: {
+          ...input.result,
+          artifactRefs: taskResultArtifactRefs(this._db, input.result.taskId, input.result.artifactIds),
+        },
+        context,
+      };
+      return await this._mainRunner.run({
+        input: mainRunnerInput,
+        runnerContext,
+      });
     };
-    const completion = await this._mainRunner.run({
-      input: mainRunnerInput,
-      runnerContext,
-    });
-
-    return completion;
+    try {
+      return await runOnce();
+    } catch (error) {
+      if (error instanceof MainRunnerFreshLaunchReplayRequiredError) {
+        return await runOnce();
+      }
+      throw error;
+    }
   }
 
   private _activeStatusCardSubscriptions(taskId: string): TaskSubscription[] {

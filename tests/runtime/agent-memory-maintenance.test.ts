@@ -405,3 +405,78 @@ test("a conversation that wrote and was shown nothing gets no entry list", () =>
   ask("user:alice", 40 * MIN);
   expect(String(command(schedule()[0]!).payload.content)).not.toContain("Entries this conversation wrote or was shown");
 });
+
+test("Main reflection and inline triggers do not re-inject <history> into an existing provider session", async () => {
+  const {createSessionTriggerExecutor} = await import("@/sessions/trigger-executor");
+  const {MainRunnerFreshLaunchReplayRequiredError, renderMainRunnerPrompt} = await import("@/main-runner/main-runner");
+  type RunInput = import("@/main-runner/main-runner").MainRunnerRunInput;
+
+  const contextStore = new RunnerContextStore(db.db);
+  const resolved = contextStore.resolveForSession("session", "codex");
+  contextStore.persistRunnerSessionId(resolved.id, "provider-session-1");
+
+  const handledId = ask("user:alice", 40 * MIN);
+  const packs = new ContextPackStore(db.db);
+  const seedPack = packs.createPack({ownerType: "session", ownerId: "session", kind: "session_launch", selectionStrategy: "deterministic_window", createdForInvocationId: "init"});
+  packs.addItems(seedPack.id, [{itemKind: "message", itemId: handledId, sourceSessionId: "session", sourceMessageId: handledId, role: "launch_context", reason: "seed"}]);
+  db.db.insert(schema.sessionRunnerAttempts).values({
+    id: "attempt-1", sessionId: "session", turnId: "turn-init", runnerContextId: resolved.id,
+    runnerType: "container", runnerSessionId: "provider-session-1", attemptKind: "primary", attemptIndex: 0,
+    status: "parsed", inputPrompt: "<messages/>", rawOutput: "ok", rawOutputTruncated: false,
+    startedAt: NOW - 39 * MIN, completedAt: NOW - 39 * MIN, createdAt: NOW - 39 * MIN, updatedAt: NOW - 39 * MIN,
+  }).run();
+
+  // 1) Reflection on an existing provider session sends zero <history>.
+  const [reflectId] = schedule();
+  const capturedPrompts: string[] = [];
+  const execReflection = createSessionTriggerExecutor(db.db, () => ({
+    run: async (input: RunInput) => {
+      capturedPrompts.push(renderMainRunnerPrompt(input.input));
+      return {status: "completed", followupReleased: false};
+    },
+  } as never), () => "codex");
+  await execReflection(command(reflectId!), new AbortController().signal);
+  expect(capturedPrompts).toHaveLength(1);
+  expect(capturedPrompts[0]).not.toContain("<history>");
+  expect(capturedPrompts[0]).toContain("<trigger>");
+
+  // 2) Inline trigger on an existing provider session with no unseen messages also sends zero <history>.
+  const quietInline = commands.accept({userId: "user:alice", sourceSessionId: "session", originId: "schedule:daily-1"}, "session", "session.invoke", "daily-1", {content: "daily check", purpose: "notification"});
+  capturedPrompts.length = 0;
+  await execReflection(command(quietInline.id), new AbortController().signal);
+  expect(capturedPrompts).toHaveLength(1);
+  expect(capturedPrompts[0]).not.toContain("<history>");
+
+  // 3) Unaddressed user chatter arriving after the last attempt IS included for inline triggers, without launchSeed or handled messages.
+  const unseenId = say("bob", 10 * MIN);
+  new SessionTimelineStore(db.db).appendMessage({sessionId: "session", messageId: unseenId});
+  db.db.update(schema.sessionTimelineEntries).set({createdAt: NOW - 10 * MIN}).where(eq(schema.sessionTimelineEntries.messageId, unseenId)).run();
+  const deltaInline = commands.accept({userId: "user:alice", sourceSessionId: "session", originId: "schedule:daily-2"}, "session", "session.invoke", "daily-2", {content: "daily check 2", purpose: "notification"});
+  capturedPrompts.length = 0;
+  await execReflection(command(deltaInline.id), new AbortController().signal);
+  expect(capturedPrompts).toHaveLength(1);
+  expect(capturedPrompts[0]).toContain("<history>");
+  expect(capturedPrompts[0]).toContain(unseenId);
+  expect(capturedPrompts[0]).not.toContain(handledId);
+  expect(capturedPrompts[0]).not.toContain("launchSeed");
+
+  // 4) If MainRunner invalidates the provider session (e.g. instructions changed), replay rebuilds fresh-launch context.
+  const replayCmd = commands.accept({userId: "user:alice", sourceSessionId: "session", originId: "memory-reflection:replay"}, "session", "session.invoke", "reflect-replay", {content: "reflect", purpose: "notification"});
+  let calls = 0;
+  capturedPrompts.length = 0;
+  const execReplay = createSessionTriggerExecutor(db.db, () => ({
+    run: async (input: RunInput) => {
+      calls += 1;
+      capturedPrompts.push(renderMainRunnerPrompt(input.input));
+      if (calls === 1) {
+        contextStore.clearRunnerSessionId(resolved.id);
+        throw new MainRunnerFreshLaunchReplayRequiredError();
+      }
+      return {status: "completed", followupReleased: false};
+    },
+  } as never), () => "codex");
+  await execReplay(command(replayCmd.id), new AbortController().signal);
+  expect(calls).toBe(2);
+  expect(capturedPrompts[0]).not.toContain("<history>");
+  expect(capturedPrompts[1]).toContain("<history>");
+});

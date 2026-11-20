@@ -123,7 +123,7 @@ export class MainRunner {
       const prepared = await prepareRunnerDirectory({ store: this._options.runnerContextStore, runnerContext: compatibleContext,
         contextFile: buildMainRunnerContextFile(input.input), invocationId: input.invocationId, signal: input.signal });
       runnerContext = prepared.runnerContext;
-      if (invocationStore && invocation && prepared.runnerSessionInvalidated && input.input.type === "user_messages") {
+      if (invocationStore && invocation && prepared.runnerSessionInvalidated && (input.input.type === "user_messages" || input.input.type === "session_trigger" || input.input.type === "task_result")) {
         invocationStore.finish(invocation.id);
         throw new MainRunnerFreshLaunchReplayRequiredError();
       }
