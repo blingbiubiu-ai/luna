@@ -2093,12 +2093,15 @@ describe("session inbound router", () => {
     await ingress.waitForIdle();
 
     const sessionRows = database.db.select().from(sessions).all();
-    expect(sessionRows).toHaveLength(1);
+    expect(sessionRows).toHaveLength(2);
+    const rootSession = sessionRows.find((row) => row.thread_key === null)!;
+    const threadSession = sessionRows.find((row) => row.thread_key === "thread-1")!;
+    expect(threadSession.parent_session_id).toBe(rootSession.id);
 
     const timeline = new SessionTimelineReader(database.db);
     expect(
       timeline
-        .listForSession(sessionRows[0]!.id)
+        .listForSession(threadSession.id)
         .filter((item) => item.message.role === "user")
         .map((item) => item.message.externalMessageId),
     ).toEqual(["message-root-1", "message-thread-2"]);
@@ -2142,6 +2145,7 @@ describe("session inbound router", () => {
     expect(threadSession).toMatchObject({
       thread_key: "thread-1",
       root_message_key: "message-root-1",
+      parent_session_id: rootSession!.id,
     });
 
     const timeline = new SessionTimelineReader(database.db);
@@ -2196,10 +2200,13 @@ describe("session inbound router", () => {
     await ingress.waitForIdle();
 
     const sessionRows = database.db.select().from(sessions).all();
-    expect(sessionRows).toHaveLength(1);
-    expect(sessionRows[0]).toMatchObject({
+    expect(sessionRows).toHaveLength(2);
+    const rootSession = sessionRows.find((row) => row.thread_key === null)!;
+    const threadSession = sessionRows.find((row) => row.thread_key === "thread-1")!;
+    expect(threadSession).toMatchObject({
       root_message_key: "message-root-1",
       thread_key: "thread-1",
+      parent_session_id: rootSession.id,
     });
   });
 
@@ -2232,10 +2239,13 @@ describe("session inbound router", () => {
     await ingress.waitForIdle();
 
     const sessionRows = database.db.select().from(sessions).all();
-    expect(sessionRows).toHaveLength(1);
-    expect(sessionRows[0]).toMatchObject({
+    expect(sessionRows).toHaveLength(2);
+    const rootSession = sessionRows.find((row) => row.thread_key === null)!;
+    const threadSession = sessionRows.find((row) => row.thread_key === "thread-1")!;
+    expect(threadSession).toMatchObject({
       root_message_key: "message-root-1",
       thread_key: "thread-1",
+      parent_session_id: rootSession.id,
     });
   });
 
@@ -2428,10 +2438,13 @@ describe("session inbound router", () => {
     expect(rootAndThread.id).toBe(threadOnly.id);
 
     const sessionRows = database.db.select().from(sessions).all();
-    expect(sessionRows).toHaveLength(1);
-    expect(sessionRows[0]).toMatchObject({
+    expect(sessionRows).toHaveLength(2);
+    const rootSession = sessionRows.find((row) => row.thread_key === null)!;
+    const threadSession = sessionRows.find((row) => row.thread_key === "thread-1")!;
+    expect(threadSession).toMatchObject({
       root_message_key: "message-root-1",
       thread_key: "thread-1",
+      parent_session_id: rootSession.id,
     });
 
     const sqlite = new SQLiteDatabase(join(testHome, "data", "luna.db"), {
@@ -2443,7 +2456,7 @@ describe("session inbound router", () => {
           "SELECT COUNT(*) AS count FROM session_surface_aliases",
         )
         .get();
-      expect(aliasCount?.count).toBe(2);
+      expect(aliasCount?.count).toBe(3);
     } finally {
       sqlite.close();
     }
@@ -2615,6 +2628,18 @@ describe("session inbound router", () => {
           title: "canonical",
           created_at: 900,
           updated_at: 900, ...fixtureSessionOwnership(database.db,"feishu","feishu-main")},
+        {
+          id: "session_merge_child",
+          surface_key: "feishu:session-merge-child",
+          channel_type: "feishu",
+          channel_id: "feishu-main",
+          group_id: "group-alpha",
+          thread_key: "thread-child",
+          root_message_key: null,
+          parent_session_id: "session_merge_source",
+          title: "child",
+          created_at: 1100,
+          updated_at: 1100, ...fixtureSessionOwnership(database.db,"feishu","feishu-main")},
       ])
       .run();
     const message = new MessageStore(database.db).append({
@@ -2678,6 +2703,36 @@ describe("session inbound router", () => {
         sourceMessageId: message.id,
       }),
     ]);
+    expect(
+      database.db
+        .select()
+        .from(sessions)
+        .where(eq(sessions.id, "session_merge_child"))
+        .get()?.parent_session_id,
+    ).toBe("session_merge_canonical");
+  });
+
+  test("work thread sessions keep parent_session_id null even on subsequent resolves", () => {
+    const store = new SessionStore(database.db);
+    const work = store.createWorkSession({
+      channelType: "feishu",
+      channelId: "feishu-main",
+      groupId: "group-alpha",
+      threadId: "work-thread-1",
+      rootMessageId: "work-root-1",
+    });
+    expect(work.kind).toBe("work");
+    expect(work.parent_session_id).toBeNull();
+    const resolvedAgain = store.resolveByChannelSurface({
+      channelType: "feishu",
+      channelId: "feishu-main",
+      groupId: "group-alpha",
+      threadId: "work-thread-1",
+      rootMessageId: "work-root-1",
+    });
+    expect(resolvedAgain.id).toBe(work.id);
+    expect(resolvedAgain.kind).toBe("work");
+    expect(resolvedAgain.parent_session_id).toBeNull();
   });
 
   test("current runtime rejects task1 database without compatibility migration", async () => {

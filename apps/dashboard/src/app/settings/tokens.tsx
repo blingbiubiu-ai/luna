@@ -6,6 +6,7 @@ import { useState } from "react";
 
 import { CopyTextButton } from "@/components/copy-text-button";
 import { Button } from "@/components/ui/button";
+import { SelectField } from "@/components/ui/select-field";
 import {
   Dialog,
   DialogContent,
@@ -226,20 +227,21 @@ export function CreateAccessTokenDialog({
                   value={name}
                 />
               </label>
-              <label className="grid gap-2 text-sm font-medium">{t("Source")}<select
-                  className="h-10 rounded-md border border-input bg-background px-3 text-sm outline-none focus:border-ring"
-                  onChange={(event) => {
-                    const nextSource = eventValue(event.currentTarget) === "mcp"
-                      ? "mcp"
-                      : "cli";
+              <label className="grid gap-2 text-sm font-medium">{t("Source")}
+                <SelectField
+                  aria-label={t("Source")}
+                  fullWidth
+                  value={source}
+                  onValueChange={(nextValue) => {
+                    const nextSource = nextValue === "mcp" ? "mcp" : "cli";
                     setSource(nextSource);
                     setName(defaultTokenName(nextSource));
                   }}
-                  value={source}
-                >
-                  <option value="cli">CLI</option>
-                  <option value="mcp">MCP</option>
-                </select>
+                  options={[
+                    { value: "cli", label: "CLI" },
+                    { value: "mcp", label: "MCP" },
+                  ]}
+                />
               </label>
               <fieldset className="grid gap-2">
                 <legend className="text-sm font-medium">{t("Expires after")}</legend>

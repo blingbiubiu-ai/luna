@@ -1,4 +1,5 @@
 import {
+  index,
   integer,
   sqliteTable,
   text,
@@ -45,5 +46,6 @@ export const sessions = sqliteTable(
       table.root_message_key,
       table.thread_key,
     ),
+    index("sessions_parent_session_idx").on(table.parent_session_id),
   ],
 );

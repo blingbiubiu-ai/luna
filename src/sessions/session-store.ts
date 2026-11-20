@@ -272,6 +272,9 @@ export class SessionStore {
       }
     }
 
+    const kind = input.kind ?? "main";
+    const parentSessionId = this._ensureParentMainSessionId(db, input, kind);
+
     const session = {
       id,
       agent_id: binding.agentId, shadow_id: binding.shadowId, binding_id: binding.id,
@@ -282,11 +285,11 @@ export class SessionStore {
       thread_key: input.threadId ?? null,
       root_message_key:
         input.threadId !== undefined ? input.rootMessageId ?? null : null,
-      parent_session_id: null,
+      parent_session_id: parentSessionId,
       title: null,
       bot_user_id: shadow.replyUserId,
       status: "active",
-      kind: input.kind ?? "main",
+      kind,
       created_by_user_id: null,
       created_at: now,
       updated_at: now,
@@ -585,6 +588,25 @@ export class SessionStore {
       .set({ session_id: canonicalSessionId })
       .where(eq(sessionSurfaceAliases.session_id, sourceSessionId))
       .run();
+    if (
+      target.parent_session_id === null &&
+      source.parent_session_id !== null &&
+      source.parent_session_id !== canonicalSessionId
+    ) {
+      db.update(sessions)
+        .set({ parent_session_id: source.parent_session_id })
+        .where(eq(sessions.id, canonicalSessionId))
+        .run();
+    }
+    db.update(sessions)
+      .set({ parent_session_id: canonicalSessionId })
+      .where(
+        and(
+          eq(sessions.parent_session_id, sourceSessionId),
+          ne(sessions.id, canonicalSessionId),
+        ),
+      )
+      .run();
     db.delete(sessions)
       .where(eq(sessions.id, sourceSessionId))
       .run();
@@ -655,8 +677,34 @@ export class SessionStore {
       input.rootMessageId !== undefined
         ? input.rootMessageId
         : undefined;
+    const effectiveThreadId = nextThreadId ?? row.thread_key ?? undefined;
+    const candidateParentId =
+      row.kind === "main" &&
+      row.parent_session_id === null &&
+      row.group_id !== null &&
+      effectiveThreadId !== undefined
+        ? this._ensureParentMainSessionId(
+            db,
+            {
+              channelType: input.channelType,
+              channelId: input.channelId,
+              groupId: row.group_id,
+              threadId: effectiveThreadId,
+              kind: "main",
+            },
+            "main",
+          )
+        : null;
+    const nextParentSessionId =
+      candidateParentId !== null && candidateParentId !== row.id
+        ? candidateParentId
+        : undefined;
 
-    if (nextThreadId === undefined && nextRootMessageId === undefined) {
+    if (
+      nextThreadId === undefined &&
+      nextRootMessageId === undefined &&
+      nextParentSessionId === undefined
+    ) {
       return row;
     }
 
@@ -667,6 +715,9 @@ export class SessionStore {
         ...(nextThreadId !== undefined ? { thread_key: nextThreadId } : {}),
         ...(nextRootMessageId !== undefined
           ? { root_message_key: nextRootMessageId }
+          : {}),
+        ...(nextParentSessionId !== undefined
+          ? { parent_session_id: nextParentSessionId }
           : {}),
         updated_at: updatedAt,
       })
@@ -679,8 +730,36 @@ export class SessionStore {
       ...(nextRootMessageId !== undefined
         ? { root_message_key: nextRootMessageId }
         : {}),
+      ...(nextParentSessionId !== undefined
+        ? { parent_session_id: nextParentSessionId }
+        : {}),
       updated_at: updatedAt,
     };
+  }
+
+  private _ensureParentMainSessionId(
+    db: DrizzleDB,
+    input: ResolveSessionSurfaceInput,
+    kind: string,
+  ): string | null {
+    if (
+      kind !== "main" ||
+      input.groupId === undefined ||
+      input.threadId === undefined
+    ) {
+      return null;
+    }
+    const parentInput: ResolveSessionSurfaceInput = {
+      channelType: input.channelType,
+      channelId: input.channelId,
+      groupId: input.groupId,
+      kind: "main",
+    };
+    const parent = this._resolveByChannelSurface(db, parentInput);
+    if (input.channelType !== "dashboard") {
+      new SessionStore(db).saveChannelBinding(parent.id, parentInput);
+    }
+    return parent.id;
   }
 
   private _createSurfaceAliases(

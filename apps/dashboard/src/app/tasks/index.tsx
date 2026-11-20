@@ -21,6 +21,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { SelectField } from "@/components/ui/select-field";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
@@ -322,22 +323,23 @@ function FilterSelect({
   options: readonly string[];
   onChange: (value: string) => void;
 }) {
+  const { t } = useTranslation();
   return (
     <label className="min-w-28 text-xs text-muted-foreground">
       <span className="sr-only">{label}</span>
-      <select
-        value={value}
-        onChange={(event) => onChange(event.target.value)}
-        className="h-9 w-full rounded-md border bg-background px-2 text-sm text-foreground"
+      <SelectField
         aria-label={`${label} filter`}
-      >
-        <option value="all">{label}</option>
-        {options.map((option) => (
-          <option key={option} value={option}>
-            <UiText>{option}</UiText>
-          </option>
-        ))}
-      </select>
+        value={value}
+        onValueChange={onChange}
+        fullWidth
+        options={[
+          { value: "all", label },
+          ...options.map((option) => ({
+            value: option,
+            label: t(option),
+          })),
+        ]}
+      />
     </label>
   );
 }

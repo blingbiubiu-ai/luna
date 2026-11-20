@@ -16,6 +16,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel,
 import { useRouteAgent } from "@/lib/agent-route";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { SelectField } from "@/components/ui/select-field";
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from "@/components/ui/sheet";
 import { AlertDialog, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { useDashboardAuthSession, useRuntimeStatus } from "@/lib/api";
@@ -420,11 +421,20 @@ function AgentShadows({ agent }: { agent: DashboardAgentChoice }) {
             {canConfigureBot && configureBot && <fieldset disabled={busy} className="space-y-5">
               {!editing && availableBots.length > 0 && <label className="block space-y-2 text-sm">
                 <span>机器人配置</span>
-                <select className="block h-9 w-full rounded-md border bg-background px-3" value={savedBot?.id ?? ""}
-                  onChange={event => selectBot(availableBots.find(bot => bot.id === event.target.value))}>
-                  <option value="">使用新的飞书应用</option>
-                  {availableBots.map(bot => <option key={bot.id} value={bot.id}>{bot.botIdentity?.displayName ?? bot.name} · {bot.appId}</option>)}
-                </select>
+                <SelectField
+                  aria-label="机器人配置"
+                  disabled={busy}
+                  fullWidth
+                  value={savedBot?.id ?? ""}
+                  onValueChange={nextId => selectBot(availableBots.find(bot => bot.id === nextId))}
+                  options={[
+                    { value: "", label: "使用新的飞书应用" },
+                    ...availableBots.map(bot => ({
+                      value: bot.id,
+                      label: `${bot.botIdentity?.displayName ?? bot.name} · ${bot.appId}`,
+                    })),
+                  ]}
+                />
               </label>}
               <label className="block space-y-2 text-sm">App ID
                 <Input required disabled={Boolean(savedBot)} value={form.appId} onChange={event => setForm({ ...form, appId: event.target.value })} placeholder="cli_…" />

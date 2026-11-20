@@ -1,6 +1,7 @@
 import { and, eq, gt, sql } from "drizzle-orm";
 
 import { AgentSettingsStore } from "@/agents/agent-settings-store";
+import { resolveChannelSurfaceKind } from "@/dashboard-api/session-display-title";
 import type { DrizzleDB } from "@/data";
 import { channelSurfaces, chatListening, sessions, sessionTurns } from "@/data/schema";
 
@@ -62,9 +63,9 @@ export class ChatListeningStore {
   forSession(agentId: string, sessionId: string): { shadowId: string; chatId: string; listening: boolean } | undefined {
     const session = this.db.select().from(sessions).where(and(eq(sessions.id, sessionId), eq(sessions.agent_id, agentId))).get();
     if (!session?.group_id || session.kind !== "main") return undefined;
-    const surface = this.db.select({ kind: channelSurfaces.surfaceKind }).from(channelSurfaces)
+    const surface = this.db.select().from(channelSurfaces)
       .where(and(eq(channelSurfaces.channelId, session.channel_id), eq(channelSurfaces.externalId, session.group_id))).get();
-    if (surface?.kind !== "group") return undefined;
+    if (!surface || resolveChannelSurfaceKind(surface) !== "group") return undefined;
     return { shadowId: session.shadow_id, chatId: session.group_id, listening: this.enabled(session) };
   }
 

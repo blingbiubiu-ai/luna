@@ -1,8 +1,7 @@
 import { useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowUp, Loader2 } from "lucide-react";
+import { Loader2 } from "lucide-react";
 import { apiFetch } from "@/lib/api";
-import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { randomId } from "@/lib/random-id";
 
@@ -33,7 +32,15 @@ function executionFailure(error: string | null | undefined, status: string): str
   }
 }
 
-export function SessionComposer({ agentId, sessionId, disabled }: { agentId: string; sessionId: string; disabled: boolean }) {
+export function SessionComposer({
+  agentId,
+  sessionId,
+  disabled,
+}: {
+  agentId: string;
+  sessionId: string;
+  disabled: boolean;
+}) {
   const [text, setText] = useState("");
   const [messageId, setMessageId] = useState<string>();
   const request = useRef<{ text: string; key: string } | null>(null);
@@ -44,58 +51,129 @@ export function SessionComposer({ agentId, sessionId, disabled }: { agentId: str
   const agentQuery = `agentId=${encodeURIComponent(agentId)}`;
   const message = useQuery({
     queryKey: ["session-chat-message", agentId, sessionId, messageId],
-    queryFn: ({ signal }) => apiFetch<{ status: string; error: string | null }>(`${sessionPath}/messages/${encodeURIComponent(messageId!)}/status?${agentQuery}`, { signal }),
+    queryFn: ({ signal }) =>
+      apiFetch<{ status: string; error: string | null }>(
+        `${sessionPath}/messages/${encodeURIComponent(messageId!)}/status?${agentQuery}`,
+        { signal },
+      ),
     enabled: !!messageId,
-    refetchInterval: query => ["pending", "claimed"].includes(query.state.data?.status ?? "pending") ? 2000 : false,
+    refetchInterval: (query) =>
+      ["pending", "claimed"].includes(query.state.data?.status ?? "pending") ? 2000 : false,
   });
   const mutation = useMutation({
-    mutationFn: (value: { text: string; key: string }) => apiFetch<{ messageId: string | null }>(`${sessionPath}/messages?${agentQuery}`, {
-      method: "POST", headers: { "Idempotency-Key": value.key }, body: JSON.stringify({ text: value.text }),
-    }),
+    mutationFn: (value: { text: string; key: string }) =>
+      apiFetch<{ messageId: string | null }>(`${sessionPath}/messages?${agentQuery}`, {
+        method: "POST",
+        headers: { "Idempotency-Key": value.key },
+        body: JSON.stringify({ text: value.text }),
+      }),
   });
+
   async function send() {
     const value = text.trim();
     if (!value || disabled || sending.current) return;
     sending.current = true;
     try {
-      if (request.current?.text !== value) request.current = { text: value, key: randomId() };
+      if (request.current?.text !== value) {
+        request.current = { text: value, key: randomId() };
+      }
       const result = await mutation.mutateAsync(request.current!);
       setMessageId(result.messageId ?? undefined);
       setText("");
       request.current = null;
       void client.invalidateQueries({ queryKey: ["luna", "sessions", sessionId] });
-    } catch { /* Keep the draft and idempotency key for a safe retry. */ }
-    finally { sending.current = false; input.current?.focus(); }
+      void client.invalidateQueries({ queryKey: ["luna", "sessions", "list"] });
+    } catch {
+      /* Keep the draft and idempotency key for a safe retry. */
+    } finally {
+      sending.current = false;
+      input.current?.focus();
+    }
   }
+
   const status = message.data?.status;
   const failed = status && ["failed", "unknown", "skipped", "cancelled"].includes(status);
+
   return (
-    <form className="shrink-0 bg-background pt-3 pr-5 pb-4 pl-16" onSubmit={event => { event.preventDefault(); void send(); }}>
-      {/* Match message text: 16px timeline padding + 4px row padding + 32px avatar + 12px gap. */}
-      <div className="w-full max-w-[860px] space-y-2">
-        <div className="overflow-hidden rounded-[20px] border border-border/80 bg-muted/20 shadow-sm transition-[border-color,box-shadow] focus-within:border-ring/50 focus-within:ring-2 focus-within:ring-ring/10">
-          <Textarea ref={input} id="session-message" aria-label="发送给此会话的消息" aria-describedby="session-message-hint" placeholder={disabled ? "此会话不可发送消息" : "发送消息，继续这个话题…"}
-            className="max-h-48 min-h-20 resize-none rounded-none border-0 bg-transparent px-4 pt-4 pb-2 text-sm leading-6 shadow-none focus-visible:ring-0 disabled:opacity-60 dark:bg-transparent"
-            maxLength={20000} value={text} disabled={disabled || mutation.isPending}
-            onChange={event => setText(event.target.value)} onKeyDown={event => {
-              if (event.key === "Enter" && (event.metaKey || event.ctrlKey) && !event.nativeEvent.isComposing) {
-                event.preventDefault(); void send();
+    <form
+      className="shrink-0 border-t border-border bg-card px-[18px] pt-3 pb-3.5"
+      onSubmit={(event) => {
+        event.preventDefault();
+        void send();
+      }}
+    >
+      <div className="space-y-2">
+        <div className="grid gap-2 rounded-[10px] border border-border bg-background px-2.5 py-2 transition-colors focus-within:border-ring">
+          <Textarea
+            ref={input}
+            id="session-message"
+            aria-label="发送给此会话的消息"
+            aria-describedby="session-message-hint"
+            placeholder={disabled ? "此会话不可发送消息" : "以你的身份在这个会话里发消息…"}
+            rows={2}
+            className="max-h-40 min-h-[42px] resize-none rounded-none border-0 bg-transparent p-0 text-sm leading-6 shadow-none focus-visible:ring-0 disabled:opacity-60 dark:bg-transparent"
+            maxLength={20000}
+            value={text}
+            disabled={disabled || mutation.isPending}
+            onChange={(event) => setText(event.target.value)}
+            onKeyDown={(event) => {
+              if (
+                event.key === "Enter" &&
+                !event.shiftKey &&
+                !event.nativeEvent.isComposing
+              ) {
+                event.preventDefault();
+                void send();
               }
-            }} />
-          <div className="flex items-center justify-between gap-3 px-3 pb-3">
-            <p id="session-message-hint" aria-live="polite" className="flex min-w-0 items-center gap-1.5 pl-1 text-[11px] leading-4 text-muted-foreground/70">
-              {status === "pending" || status === "claimed" ? <><Loader2 aria-hidden="true" className="size-3.5 shrink-0 animate-spin" /><span>{status === "pending" ? "等待 AI 处理" : "AI 正在处理…"}</span></> : <span>Ctrl / ⌘ + Enter 发送 · Enter 换行</span>}
+            }}
+          />
+          <div className="flex flex-wrap items-center justify-between gap-2 text-[11.5px] text-muted-foreground">
+            <p
+              id="session-message-hint"
+              aria-live="polite"
+              className="flex min-w-0 items-center gap-1.5"
+            >
+              {status === "pending" || status === "claimed" ? (
+                <>
+                  <Loader2 aria-hidden="true" className="size-3.5 shrink-0 animate-spin" />
+                  <span>{status === "pending" ? "等待 AI 处理" : "AI 正在处理…"}</span>
+                </>
+              ) : (
+                <span>Enter 发送 · Shift+Enter 换行</span>
+              )}
             </p>
-            <Button type="submit" size="icon" aria-label={mutation.isPending ? "发送中" : "发送"} title="发送消息（Ctrl / ⌘ + Enter）"
-              className="size-9 rounded-full bg-foreground text-background shadow-none hover:bg-foreground/85 disabled:bg-muted disabled:text-muted-foreground/50 disabled:opacity-100"
-              disabled={disabled || mutation.isPending || !text.trim()}>
-              {mutation.isPending ? <Loader2 aria-hidden="true" className="size-4 animate-spin" /> : <ArrowUp aria-hidden="true" className="size-5" />}
-            </Button>
+            <button
+              type="submit"
+              aria-label={mutation.isPending ? "发送中" : "发送"}
+              disabled={disabled || mutation.isPending || !text.trim()}
+              className="inline-flex items-center gap-1.5 rounded-[7px] bg-primary px-3.5 py-1.5 text-[13px] font-medium text-primary-foreground transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-45"
+            >
+              {mutation.isPending ? (
+                <>
+                  <Loader2 aria-hidden="true" className="size-3.5 animate-spin" />
+                  <span>发送中</span>
+                </>
+              ) : (
+                "发送"
+              )}
+            </button>
           </div>
         </div>
-        {mutation.isError ? <p role="alert" className="px-1 text-sm text-destructive">发送失败：{mutation.error.message}。消息已保留，可重试。</p> : null}
-        {message.isError ? <p role="alert" className="px-1 text-sm text-destructive">无法查询消息处理状态：{message.error.message}</p> : null}
-        {failed ? <p role="alert" className="px-1 text-sm text-destructive">AI 处理未完成：{executionFailure(message.data?.error, status)}</p> : null}
+        {mutation.isError ? (
+          <p role="alert" className="px-1 text-xs text-destructive">
+            发送失败：{mutation.error.message}。消息已保留，可重试。
+          </p>
+        ) : null}
+        {message.isError ? (
+          <p role="alert" className="px-1 text-xs text-destructive">
+            无法查询消息处理状态：{message.error.message}
+          </p>
+        ) : null}
+        {failed ? (
+          <p role="alert" className="px-1 text-xs text-destructive">
+            AI 处理未完成：{executionFailure(message.data?.error, status)}
+          </p>
+        ) : null}
       </div>
     </form>
   );

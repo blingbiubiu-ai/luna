@@ -319,6 +319,8 @@ When Runtime creates a thread work session:
 
 Thread sessions are not limited to Luna-created threads. Any incoming or imported thread message can resolve or create a thread session for that thread id.
 
+Each `kind='main'` topic session (`thread_key` non-null inside a group surface) records `sessions.parent_session_id` pointing to the root Main session (`thread_key IS NULL`) of the same `binding_id`, `channel_id`, and `group_id`. If the root Main session does not exist yet when a topic arrives first, `SessionStore` provisions an empty root Main session and links the topic to it. `kind='work'` sessions keep `parent_session_id` null, and session canonicalization reparents any child topic rows when merging duplicate sessions. Runner directories remain flat (`runners/<session-id>`) so concurrent group and topic turns never collide on disk.
+
 `thread_launch` remains a selection record, not a copied thread cache:
 
 - Runtime first selects recent thread-visible messages.

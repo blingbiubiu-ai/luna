@@ -50,6 +50,13 @@
       "when": 1795651200000,
       "tag": "0007_platform_settings",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1795737600000,
+      "tag": "0008_thread_parent_session",
+      "breakpoints": true
     }
   ]
 }

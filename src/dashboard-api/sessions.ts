@@ -21,6 +21,7 @@ import {
   signDashboardArtifactReferencesInValue,
 } from "./local-paths";
 import {
+  p2pUserForSession,
   resolveChannelSurfaceKind,
   resolveSessionDisplayTitle,
 } from "./session-display-title";
@@ -64,6 +65,22 @@ export interface DashboardSurface {
   readonly kind: string;
   readonly displayName: string | null;
   readonly avatarUrl: string | null;
+  readonly memberCount?: number | null;
+}
+
+export type SessionAttentionState = "run" | "wait" | "fail" | "idle";
+
+export interface DashboardParentSessionSummary {
+  readonly id: string;
+  readonly displayTitle: string;
+  readonly avatarUrl: string | null;
+  readonly memberCount: number | null;
+}
+
+export interface DashboardSessionMessageQuote {
+  readonly messageId: string | null;
+  readonly senderName: string | null;
+  readonly preview: string;
 }
 
 export interface DashboardSessionMessageMention {
@@ -154,6 +171,9 @@ export type DashboardSessionMessagePresentation =
 
 export interface DashboardSession {
   readonly status?: string;
+  readonly kind?: string;
+  readonly shadowId?: string;
+  readonly shadowName?: string | null;
   readonly bindingStatus: "active" | "retired" | null;
   readonly id: string;
   readonly channel_type: string;
@@ -162,9 +182,15 @@ export interface DashboardSession {
   readonly group_id: string | null;
   readonly thread_id: string | null;
   readonly root_message_id: string | null;
+  readonly parent_session_id: string | null;
+  readonly parentSessionId: string | null;
+  readonly parentSession?: DashboardParentSessionSummary | null;
   readonly title: string | null;
   readonly display_title: string;
   readonly displayTitle: string;
+  readonly avatarUrl?: string | null;
+  readonly listening?: boolean | null;
+  readonly attentionState?: SessionAttentionState;
   readonly surface: DashboardSurface | null;
   readonly message_count: number;
   readonly thread_anchor_preview: string | null;
@@ -204,6 +230,7 @@ export interface DashboardSessionMessage {
   readonly mentions: readonly DashboardSessionMessageMention[];
   readonly ingest?: DashboardSessionMessageIngest;
   readonly thread?: DashboardSessionMessageThread;
+  readonly replyQuote?: DashboardSessionMessageQuote;
   readonly turnRoles: readonly string[];
   readonly turnStatus: string | null;
   readonly turnReason: string | null;
@@ -339,6 +366,11 @@ export function toDashboardSession(
   row: SessionRow,
   input: {
     readonly bindingStatus: DashboardSession["bindingStatus"];
+    readonly shadowName?: string | null;
+    readonly listening?: boolean | null;
+    readonly hasPendingWork?: boolean;
+    readonly hasClarification?: boolean;
+    readonly latestTurnFailed?: boolean;
     readonly sessionRows: readonly SessionRow[];
     readonly timelineRows: readonly DashboardMessageProjection[];
     readonly surfaceRows: readonly ChannelSurfaceRow[];
@@ -355,13 +387,48 @@ export function toDashboardSession(
 ): DashboardSession {
   const linkedTasks = taskBadgesForSession(row.id, input);
   const surface = channelSurfaceForSession(row, input.surfaceRows);
+  const displayTitleMessages = input.timelineRows.map((item) =>
+    toDisplayTitleMessage(item, input.identityRows),
+  );
   const displayTitle = resolveSessionDisplayTitle({
     row,
     surfaceRows: input.surfaceRows,
-    messageRows: input.timelineRows.map((item) =>
-      toDisplayTitleMessage(item, input.identityRows),
-    ),
+    messageRows: displayTitleMessages,
     identityRows: input.identityRows,
+  });
+  const avatarUrl = sessionAvatarUrlForRow(row, {
+    surface,
+    displayTitleMessages,
+    identityRows: input.identityRows,
+    channelUserBindingRows: input.channelUserBindingRows,
+    userRows: input.userRows,
+  });
+  const parentRow = row.parent_session_id === null
+    ? undefined
+    : input.sessionRows.find((candidate) => candidate.id === row.parent_session_id);
+  const parentSurface = parentRow === undefined
+    ? null
+    : channelSurfaceForSession(parentRow, input.surfaceRows);
+  const parentSession: DashboardParentSessionSummary | null = parentRow === undefined
+    ? null
+    : {
+        id: parentRow.id,
+        displayTitle: resolveSessionDisplayTitle({
+          row: parentRow,
+          surfaceRows: input.surfaceRows,
+          messageRows: displayTitleMessages,
+          identityRows: input.identityRows,
+        }),
+        avatarUrl: parentSurface?.avatarUrl ?? null,
+        memberCount: parentSurface?.memberCount ?? null,
+      };
+  const attentionState = sessionAttentionStateForRow(row.id, {
+    hasPendingWork: input.hasPendingWork ?? false,
+    hasClarification: input.hasClarification ?? false,
+    latestTurnFailed: input.latestTurnFailed ?? false,
+    taskRows: input.taskRows,
+    sourceContextItems: input.sourceContextItems,
+    subscriptionRows: input.subscriptionRows,
   });
   const latestMessage = latestDashboardMessageProjection(row.id, input);
   const latestMessagePreview = latestMessage === undefined
@@ -414,6 +481,9 @@ export function toDashboardSession(
   return {
     id: row.id,
     status: row.status,
+    kind: row.kind,
+    shadowId: row.shadow_id,
+    shadowName: input.shadowName ?? null,
     bindingStatus: input.bindingStatus,
     channel_type: row.channel_type,
     channelType: row.channel_type,
@@ -421,9 +491,15 @@ export function toDashboardSession(
     group_id: row.group_id,
     thread_id: row.thread_key,
     root_message_id: row.root_message_key,
+    parent_session_id: row.parent_session_id,
+    parentSessionId: row.parent_session_id,
+    parentSession,
     title: row.title,
     display_title: displayTitle,
     displayTitle,
+    avatarUrl,
+    listening: input.listening ?? null,
+    attentionState,
     surface,
     message_count: input.timelineRows.filter(
       (item) => item.entry.sessionId === row.id && !isInternalMessage(item.row),
@@ -471,7 +547,119 @@ function toDashboardSurface(row: ChannelSurfaceRow): DashboardSurface {
     kind: resolveChannelSurfaceKind(row),
     displayName: row.displayName,
     avatarUrl: row.avatarUrl,
+    memberCount: surfaceMemberCount(row.rawProfileJson),
   };
+}
+
+function surfaceMemberCount(rawProfileJson: string | null): number | null {
+  if (rawProfileJson === null) {
+    return null;
+  }
+  const parsed = parseJsonOrString(rawProfileJson);
+  if (!isRecord(parsed)) {
+    return null;
+  }
+  const userCount = positiveIntOrNull(parsed.user_count ?? parsed.userCount);
+  const botCount = positiveIntOrNull(parsed.bot_count ?? parsed.botCount);
+  if (userCount !== null) {
+    return userCount + (botCount ?? 0);
+  }
+  return positiveIntOrNull(parsed.member_count ?? parsed.memberCount);
+}
+
+function positiveIntOrNull(value: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value) && value >= 0) {
+    return Math.trunc(value);
+  }
+  if (typeof value === "string" && /^\d+$/.test(value.trim())) {
+    return Number.parseInt(value.trim(), 10);
+  }
+  return null;
+}
+
+function sessionAvatarUrlForRow(
+  row: SessionRow,
+  input: {
+    readonly surface: DashboardSurface | null;
+    readonly displayTitleMessages: ReturnType<typeof toDisplayTitleMessage>[];
+    readonly identityRows: readonly ChannelIdentityRow[];
+    readonly channelUserBindingRows: readonly ChannelUserBindingRow[];
+    readonly userRows: readonly UserRow[];
+  },
+): string | null {
+  if (row.channel_type === "dashboard") {
+    return null;
+  }
+  if (input.surface?.kind === "group") {
+    return input.surface.avatarUrl;
+  }
+  if (input.surface?.kind === "p2p") {
+    const peerIdentity = p2pUserForSession({
+      row,
+      messageRows: input.displayTitleMessages,
+      identityRows: input.identityRows,
+    });
+    if (peerIdentity !== null) {
+      const boundUserId = input.channelUserBindingRows.find(
+        (binding) => binding.channelIdentityId === peerIdentity.id,
+      )?.userId;
+      const canonicalAvatar = boundUserId === undefined
+        ? null
+        : input.userRows.find((user) => user.id === boundUserId)?.avatarUrl ?? null;
+      if (canonicalAvatar) {
+        return canonicalAvatar;
+      }
+      if (peerIdentity.avatarUrl) {
+        return peerIdentity.avatarUrl;
+      }
+    }
+  }
+  return input.surface?.avatarUrl ?? null;
+}
+
+function sessionAttentionStateForRow(
+  sessionId: string,
+  input: {
+    readonly hasPendingWork: boolean;
+    readonly hasClarification: boolean;
+    readonly latestTurnFailed: boolean;
+    readonly taskRows: readonly TaskRow[];
+    readonly sourceContextItems: readonly TaskSourceContextItem[];
+    readonly subscriptionRows: readonly TaskSubscriptionRow[];
+  },
+): SessionAttentionState {
+  const taskIds = new Set(
+    input.sourceContextItems
+      .filter((source) => source.sourceSessionId === sessionId)
+      .map((source) => source.taskId),
+  );
+  for (const subscription of input.subscriptionRows) {
+    if (subscription.session_id === sessionId) {
+      taskIds.add(subscription.task_id);
+    }
+  }
+  const linkedTasks = input.taskRows.filter(
+    (task) => task.primary_session_id === sessionId || taskIds.has(task.id),
+  );
+  if (
+    input.hasPendingWork ||
+    linkedTasks.some((task) => task.status === "running" || task.status === "new")
+  ) {
+    return "run";
+  }
+  if (
+    input.hasClarification ||
+    linkedTasks.some((task) => task.block_reason !== null)
+  ) {
+    return "wait";
+  }
+  if (
+    input.latestTurnFailed ||
+    linkedTasks.some((task) => task.status === "failed")
+  ) {
+    return "fail";
+  }
+  return "idle";
 }
 
 function messageSenderForRow(
@@ -609,6 +797,8 @@ export function toDashboardSessionMessage(
       readonly entry: SessionTurnEntryRow;
     }[];
     readonly replyTargetExternalIds: ReadonlySet<string>;
+    readonly sessionProjections?: readonly DashboardMessageProjection[];
+    readonly commandReplyToByCommandId?: ReadonlyMap<string, string>;
     readonly owningSessionIdForMessage: (messageId: string) => string | null;
     readonly artifactSigner: DashboardArtifactSigner;
   },
@@ -626,6 +816,7 @@ export function toDashboardSessionMessage(
   const firstTurn = turnEntries[0]?.turn;
   const ingest = ingestForMessage(row);
   const thread = threadForMessage(row, input.replyTargetExternalIds);
+  const replyQuote = replyQuoteForMessage(projection, thread, input);
   const owningSessionId = input.owningSessionIdForMessage(row.id)
     ?? projection.entry.sessionId;
   return signDashboardArtifactReferencesInValue({
@@ -645,6 +836,7 @@ export function toDashboardSessionMessage(
     mentions,
     ...(ingest === undefined ? {} : { ingest }),
     ...(thread === undefined ? {} : { thread }),
+    ...(replyQuote === undefined ? {} : { replyQuote }),
     turnRoles: turnEntries.map((item) => item.entry.role),
     turnStatus: firstTurn?.status ?? null,
     turnReason: firstTurn?.reason ?? null,
@@ -720,6 +912,75 @@ function threadForMessage(
     rootMessageExternalId,
     parentMessageExternalId,
     hasReplies,
+  };
+}
+
+function replyQuoteForMessage(
+  projection: DashboardMessageProjection,
+  thread: DashboardSessionMessageThread | undefined,
+  input: {
+    readonly userRows: readonly UserRow[];
+    readonly sessionRows: readonly SessionRow[];
+    readonly sessionProjections?: readonly DashboardMessageProjection[];
+    readonly commandReplyToByCommandId?: ReadonlyMap<string, string>;
+    readonly artifactSigner: DashboardArtifactSigner;
+  },
+): DashboardSessionMessageQuote | undefined {
+  const candidates = input.sessionProjections ?? [];
+  if (candidates.length === 0) {
+    return undefined;
+  }
+  const row = projection.row;
+  const payload = isRecord(row.rawPayloadJson) ? row.rawPayloadJson : null;
+  const commandId = stringField(payload, "commandId");
+  const explicitReplyTo =
+    stringField(payload, "replyTo") ??
+    (commandId ? input.commandReplyToByCommandId?.get(commandId) : undefined);
+
+  let target: DashboardMessageProjection | undefined;
+  if (explicitReplyTo !== undefined) {
+    target = candidates.find(
+      (candidate) =>
+        candidate.row.id === explicitReplyTo &&
+        candidate.row.id !== row.id &&
+        candidate.row.deletedAt === null &&
+        !isInternalMessage(candidate.row),
+    );
+  } else if (thread?.parentMessageExternalId) {
+    const currentSession = input.sessionRows.find(
+      (session) => session.id === projection.entry.sessionId,
+    );
+    const isThreadRootReply =
+      currentSession?.thread_key !== null &&
+      (thread.parentMessageExternalId === thread.rootMessageExternalId ||
+        thread.parentMessageExternalId === currentSession?.root_message_key);
+    if (!isThreadRootReply) {
+      target = candidates.find(
+        (candidate) =>
+          candidate.row.externalMessageId === thread.parentMessageExternalId &&
+          candidate.row.id !== row.id &&
+          candidate.row.deletedAt === null &&
+          !isInternalMessage(candidate.row),
+      );
+    }
+  }
+
+  if (target === undefined) {
+    return undefined;
+  }
+  const preview = previewMessageContent(target.row.contentJson, {
+    artifactSigner: input.artifactSigner,
+  });
+  if (preview.length === 0) {
+    return undefined;
+  }
+  const senderName = messageSenderForRow(target.row, {
+    userRows: input.userRows,
+  }).senderUser.displayName;
+  return {
+    messageId: target.row.id,
+    senderName: senderName.length > 0 ? senderName : null,
+    preview,
   };
 }
 
@@ -970,6 +1231,7 @@ function isMeaningfulTimelineTurnGroup(
   item: Extract<DashboardSessionTimelineItem, { readonly type: "turn" }>,
 ): boolean {
   return (
+    item.turn.reason === "ambient" ||
     item.turn.materializedPrompt !== null ||
     item.turn.runnerAttempts.length > 0 ||
     item.messages.length >= 2 ||

@@ -368,6 +368,14 @@ describe("session/task schema", () => {
       "INTEGER",
     );
 
+    expect(getIndexes(sqlite, "sessions")).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          name: "sessions_parent_session_idx",
+          unique: 0,
+        }),
+      ]),
+    );
     expect(getIndexes(sqlite, "messages")).toEqual(
       expect.arrayContaining([
         expect.objectContaining({

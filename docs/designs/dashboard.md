@@ -48,9 +48,10 @@ The service remains the source of truth for installation and restart semantics.
 
 ## Session View
 
-The session list defaults to current conversations and keeps sessions from retired bot bindings available under Historical Bindings. Both views use the selected Shadow and search filter. Feishu group conversations and topics have distinct labels.
+The session workspace is a two-column Feishu-style chat workbench (collapsing into separate list and detail screens below `760px`):
 
-Session views show the conversation timeline, referenced messages, context packs, Main Runner decisions, prompts, actions, and related artifacts.
+- **Left conversation list**: mixes group chats, direct chats, and local Dashboard sessions in one activity-ordered stream with filter tabs (`全部 / 群聊 / 私聊 / 旁听中`), search, and optional Historical Bindings toggle when retired bindings exist. Main topic sessions (`parentSessionId`) nest inline under their parent group chat: collapsed groups summarize topic and attention counts, while expanded groups rank active/waiting/failed topics ahead of idle ones (`3` shown initially, `+10` per expansion, keeping the currently open topic visible).
+- **Right conversation detail**: displays the group/peer avatar, member count, topic breadcrumb back to the parent group, Shadow/channel/Worker metadata, per-group ambient listening switch (`旁听` / `旁听整个群`), Open TUI link, and a `⋯` menu (`复制会话 ID`, `查看 Runner 上下文`, and secondary-confirmed `删除会话`). Messages render as Feishu-style bubbles with inline quote blocks (`replyQuote`), dashed ambient-listening batch cards, rich status/final-answer cards, hover timestamps, and hover debug copy controls for timeline entry/message IDs and turn Main Runner prompts. The composer sends on `Enter` and inserts a newline on `Shift+Enter`.
 
 The session timeline loads the newest page from Service on entry, then requests older pages with a cursor as the operator scrolls up. Pages preserve chronological order and keep turn groups intact. The dashboard preserves the visible position when prepending older entries.
 

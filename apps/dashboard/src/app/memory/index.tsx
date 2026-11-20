@@ -5,6 +5,7 @@ import { useAgentShadows } from "@/components/shadow-picker";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { SelectField } from "@/components/ui/select-field";
 import { Textarea } from "@/components/ui/textarea";
 import { useAgentBasePath, useRouteAgent } from "@/lib/agent-route";
 import { useAgentMemories, useAgentMemoryHistory } from "@/lib/api";
@@ -84,7 +85,6 @@ const byteSizeLabel = (text: string) => {
   return bytes < 1024 ? `${bytes} B / 8 KB` : `${(bytes / 1024).toFixed(1)} KB / 8 KB`;
 };
 
-const selectClass = "h-8 rounded-lg border border-input bg-card px-2 text-xs text-foreground focus:outline-none focus:border-ring";
 const sageCardClass = "relative overflow-hidden rounded-2xl border border-border bg-card shadow-[0_2px_5px_#00000004] before:absolute before:top-0 before:left-5 before:h-[3px] before:w-6 before:rounded-xs before:bg-[#a3b69e] dark:before:bg-[#8ea487]";
 const cardClass = "rounded-2xl border border-border bg-card shadow-[0_2px_5px_#00000004]";
 
@@ -453,35 +453,42 @@ function MemoryWorkspace({ agentId, agentName, defaultShadowId }: { agentId: str
 
                 {moreOpen && (
                   <div className="grid grid-cols-3 gap-1.5 border-t border-border pt-2.5 text-xs">
-                    <select
+                    <SelectField
                       aria-label="写入方式"
-                      className={selectClass}
+                      size="sm"
+                      fullWidth
                       value={originKind}
-                      onChange={event => { setOriginKind(event.target.value); setOffset(0); }}
-                    >
-                      <option value="">全部来源</option>
-                      {Object.entries(ORIGIN_LABEL).filter(([k]) => k !== "forgetting").map(([value, label]) => (
-                        <option key={value} value={value}>{label}</option>
-                      ))}
-                    </select>
-                    <select
+                      onValueChange={next => { setOriginKind(next); setOffset(0); }}
+                      options={[
+                        { value: "", label: "全部来源" },
+                        ...Object.entries(ORIGIN_LABEL)
+                          .filter(([k]) => k !== "forgetting")
+                          .map(([value, label]) => ({ value, label })),
+                      ]}
+                    />
+                    <SelectField
                       aria-label="来源分身"
-                      className={selectClass}
+                      size="sm"
+                      fullWidth
                       value={memShadowId}
-                      onChange={event => { setMemShadowId(event.target.value); setOffset(0); }}
-                    >
-                      <option value="">全部分身</option>
-                      {shadows.map(shadow => <option key={shadow.id} value={shadow.id}>{shadow.name}</option>)}
-                    </select>
-                    <select
+                      onValueChange={next => { setMemShadowId(next); setOffset(0); }}
+                      options={[
+                        { value: "", label: "全部分身" },
+                        ...shadows.map(shadow => ({ value: shadow.id, label: shadow.name })),
+                      ]}
+                    />
+                    <SelectField
                       aria-label="排序"
-                      className={selectClass}
+                      size="sm"
+                      fullWidth
+                      align="end"
                       value={sort}
-                      onChange={event => { setSort(event.target.value === "createdAt" ? "createdAt" : "updatedAt"); setOffset(0); }}
-                    >
-                      <option value="updatedAt">最近更新</option>
-                      <option value="createdAt">最近新增</option>
-                    </select>
+                      onValueChange={next => { setSort(next === "createdAt" ? "createdAt" : "updatedAt"); setOffset(0); }}
+                      options={[
+                        { value: "updatedAt", label: "最近更新" },
+                        { value: "createdAt", label: "最近新增" },
+                      ]}
+                    />
                   </div>
                 )}
               </>
@@ -711,16 +718,17 @@ function MemoryWorkspace({ agentId, agentName, defaultShadowId }: { agentId: str
                       {selected ? (
                         <Input value={selected.originShadowName ?? selected.originShadowId ?? ""} disabled className="h-9 text-xs" />
                       ) : (
-                        <select
+                        <SelectField
                           aria-label="所属分身"
-                          className="h-9 w-full rounded-lg border border-input bg-card px-3 text-xs text-foreground"
+                          fullWidth
                           value={newPersonaShadow}
                           disabled={pending}
-                          onChange={event => setNewPersonaShadow(event.target.value)}
-                        >
-                          <option value="">选择分身</option>
-                          {shadows.map(shadow => <option key={shadow.id} value={shadow.id}>{shadow.name}</option>)}
-                        </select>
+                          onValueChange={setNewPersonaShadow}
+                          options={[
+                            { value: "", label: "选择分身" },
+                            ...shadows.map(shadow => ({ value: shadow.id, label: shadow.name })),
+                          ]}
+                        />
                       )}
                     </label>
                   )}

@@ -6,6 +6,7 @@ import { BotIcon, CheckCircle2Icon, FlaskConicalIcon, Trash2Icon, PlusIcon, Penc
 import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from "@/components/ui/sheet";
 import { Input } from "@/components/ui/input";
+import { SelectField } from "@/components/ui/select-field";
 import type {
   CreateAgentProfileInput,
   DashboardAgentConfigStatus,
@@ -234,25 +235,45 @@ function ProfileEditor({
     <form className="space-y-5 px-6 pb-6" onSubmit={submit}>
       {saveError ? <p role="alert" className="text-sm text-destructive">{saveError}</p> : null}
       <div className="grid gap-4 sm:grid-cols-2">
-        <label className="space-y-1 text-sm">{t("Agent type")}<select className="block h-9 w-full rounded-md border bg-background px-3" disabled={editing !== null} onChange={(e) => setAgentType(e.target.value as DashboardAgentType)} value={agentType}>
-            {types.map((type) => <option key={type.type} value={type.type}><UiText>{type.label}</UiText></option>)}
-          </select>
+        <label className="space-y-1 text-sm"><span className="block">{t("Agent type")}</span>
+          <SelectField
+            aria-label={t("Agent type")}
+            disabled={editing !== null}
+            fullWidth
+            value={agentType}
+            onValueChange={(next) => setAgentType(next as DashboardAgentType)}
+            options={types.map((type) => ({ value: type.type, label: t(type.label) }))}
+          />
         </label>
-        <label className="space-y-1 text-sm">{t("Profile name")}<Input disabled={editing !== null} onChange={(e) => setName(e.target.value)} required value={name} />
+        <label className="space-y-1 text-sm"><span className="block">{t("Profile name")}</span><Input disabled={editing !== null} onChange={(e) => setName(e.target.value)} required value={name} />
         </label>
-        <label className="space-y-1 text-sm">{t("Model")}<Input onChange={(e) => setModel(e.target.value)} required value={model} />
+        <label className="space-y-1 text-sm"><span className="block">{t("Model")}</span><Input onChange={(e) => setModel(e.target.value)} required value={model} />
         </label>
-        <label className="space-y-1 text-sm">{t("Execution driver")}<select className="block h-9 w-full rounded-md border bg-background px-3" onChange={(e) => setExecutionDriver(e.target.value as DashboardExecutionDriver)} value={executionDriver}>
-            <option value="stdio">{t("Standard pipe (stdio)")}</option>
-            <option value="pty">{t("Interactive PTY (pty)")}</option>
-          </select>
+        <label className="space-y-1 text-sm"><span className="block">{t("Execution driver")}</span>
+          <SelectField
+            aria-label={t("Execution driver")}
+            fullWidth
+            value={executionDriver}
+            onValueChange={(next) => setExecutionDriver(next as DashboardExecutionDriver)}
+            options={[
+              { value: "stdio", label: t("Standard pipe (stdio)") },
+              { value: "pty", label: t("Interactive PTY (pty)") },
+            ]}
+          />
         </label>
       </div>
       {agentType === "codex" ? (
-        <label className="block space-y-1 text-sm">{t("Connection")}<select className="block h-9 w-full rounded-md border bg-background px-3" onChange={(e) => setGateway(e.target.value === "gateway")} value={gateway ? "gateway" : "default"}>
-            <option value="default">{t("Default OpenAI")}</option>
-            <option value="gateway">{t("Custom gateway")}</option>
-          </select>
+        <label className="block space-y-1 text-sm"><span className="block">{t("Connection")}</span>
+          <SelectField
+            aria-label={t("Connection")}
+            fullWidth
+            value={gateway ? "gateway" : "default"}
+            onValueChange={(next) => setGateway(next === "gateway")}
+            options={[
+              { value: "default", label: t("Default OpenAI") },
+              { value: "gateway", label: t("Custom gateway") },
+            ]}
+          />
           {gateway ? <span className="block text-xs text-muted-foreground">{t("Set OPENAI_BASE_URL in Environment variables and OPENAI_API_KEY in Secrets.")}</span> : null}
         </label>
       ) : null}

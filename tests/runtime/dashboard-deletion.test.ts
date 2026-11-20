@@ -40,13 +40,15 @@ function app(kind = "dashboard-cookie") {
 const surface = { channelType: "feishu", channelId: "test", groupId: "chat", threadId: "thread", rootMessageId: "root", createThreadLaunchContext: false };
 test("session deletion releases all routing keys, removes the session and starts a fresh session", async () => {
   const old = store.resolveByChannelSurface(surface);
+  expect(old.parent_session_id).toBeTruthy();
   expect((await app().request(`/sessions/${old.id}`, { method: "DELETE" })).status).toBe(200);
   expect(store.getById(old.id)).toBeUndefined();
-  expect(connection.db.select().from(schema.sessionSurfaceAliases).all()).toHaveLength(0);
-  expect(connection.db.select().from(schema.sessionChannelBindings).all()).toHaveLength(0);
+  expect(connection.db.select().from(schema.sessionSurfaceAliases).where(eq(schema.sessionSurfaceAliases.session_id, old.id)).all()).toHaveLength(0);
+  expect(connection.db.select().from(schema.sessionChannelBindings).where(eq(schema.sessionChannelBindings.sessionId, old.id)).all()).toHaveLength(0);
   expect(() => store.channelBindings(old.id)).toThrow("unavailable");
   const next = store.resolveByChannelSurface(surface);
   expect(next.id).not.toBe(old.id);
+  expect(next.parent_session_id).toBe(old.parent_session_id);
   expect(next.status).toBe("active");
   expect((await app().request(`/sessions/${old.id}/timeline`)).status).toBe(404);
   expect((await app().request(`/sessions/${old.id}`, { method: "DELETE" })).status).toBe(200);

@@ -80,7 +80,7 @@ function channelSurfaceForSession(
   );
 }
 
-function p2pUserForSession(input: {
+export function p2pUserForSession(input: {
   readonly row: SessionRow;
   readonly messageRows: readonly SessionDisplayTitleMessage[];
   readonly identityRows: readonly ChannelIdentityRow[];

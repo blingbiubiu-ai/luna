@@ -1,39 +1,66 @@
-import { useAgentBasePath } from "@/lib/agent-route";
-import { UiText } from "@/lib/i18n";
-import { useTranslation } from "@/lib/i18n";
-import { ArrowLeft, MessageSquare } from "lucide-react";
-import { useLayoutEffect, useRef, type CSSProperties, type ReactNode } from "react";
+import { ArrowLeft, Users } from "lucide-react";
+import {
+  Fragment,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type CSSProperties,
+  type ReactNode,
+} from "react";
 
 import { ContextPackList, SeedRecordList } from "@/components/context-pack-list";
+import { IdentityAvatar, IdentityLink } from "@/components/identity-link";
+import type { DashboardIdentity } from "@/components/identity-link";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
-import { IdentityAvatar, IdentityLink } from "@/components/identity-link";
-import type { DashboardIdentity } from "@/components/identity-link";
 import { Skeleton } from "@/components/ui/skeleton";
-import type { DashboardCanonicalUser, DashboardSession, DashboardSessionMessage, DashboardSessionRunnerAttempt, DashboardSessionTimelineItem } from "@/lib/api";
+import { useAgentBasePath } from "@/lib/agent-route";
+import type {
+  DashboardCanonicalUser,
+  DashboardSession,
+  DashboardSessionMessage,
+  DashboardSessionRunnerAttempt,
+  DashboardSessionTimelineItem,
+} from "@/lib/api";
 import { copyTextToClipboard } from "@/lib/clipboard";
+import { UiText, useTranslation } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
+
+import {
+  avatarColorForKey,
+  resolveSessionKindCategory,
+  resolveTopicTitle,
+  SessionAvatar,
+} from "./session-avatar";
 
 export function SessionDetailView({
   sessionId,
   session,
+  parentSessionOverride,
   timeline,
   messages,
   history,
   loading,
   error,
   showNotFound,
-
   composer,
   actions,
   focusEntryId,
   focusMissing = false,
+  contextOpenSignal = 0,
+  embeddedInSplit = false,
 }: {
   /** A timeline entry to open the session at, such as where a memory was written. */
   focusEntryId?: string | undefined;
   /** The entry to open at is not in this session any more. */
   focusMissing?: boolean;
+  /** Incremented when the operator clicks "查看 Runner 上下文" from the More menu. */
+  contextOpenSignal?: number;
+  /** When inside the two-column workspace, the back button is shown only on narrow screens. */
+  embeddedInSplit?: boolean;
+  parentSessionOverride?: DashboardSession | undefined;
   composer?: ReactNode;
   actions?: ReactNode;
   sessionId: string;
@@ -48,7 +75,8 @@ export function SessionDetailView({
 }) {
   const base = useAgentBasePath();
   const { t } = useTranslation();
-  const timelineItems = timeline ??
+  const timelineItems =
+    timeline ??
     (messages ?? []).map((message) => ({
       type: "message" as const,
       message,
@@ -57,11 +85,21 @@ export function SessionDetailView({
   const viewportRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
   const rowsRef = useRef<HTMLDivElement>(null);
+  const contextDetailsRef = useRef<HTMLDetailsElement>(null);
   const lastScrollTop = useRef(0);
   const followLatest = useRef(true);
   const previousFirstRow = useRef<{ element: HTMLElement; offset: number } | null>(null);
   const hasTimelineRows = !error && !showNotFound && !loading && timelineItems.length > 0;
   const focusedEntry = useRef<string | null>(null);
+  const [contextOpen, setContextOpen] = useState(false);
+
+  useEffect(() => {
+    if (contextOpenSignal <= 0) return;
+    setContextOpen(true);
+    requestAnimationFrame(() => {
+      contextDetailsRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    });
+  }, [contextOpenSignal]);
 
   useLayoutEffect(() => {
     const viewport = viewportRef.current;
@@ -99,7 +137,9 @@ export function SessionDetailView({
   useLayoutEffect(() => {
     const viewport = viewportRef.current;
     if (!focusEntryId || focusedEntry.current === focusEntryId || !viewport) return;
-    const target = viewport.querySelector<HTMLElement>(`[data-entry-id="${CSS.escape(focusEntryId)}"]`);
+    const target = viewport.querySelector<HTMLElement>(
+      `[data-entry-id="${CSS.escape(focusEntryId)}"]`,
+    );
     if (!target) return;
     focusedEntry.current = focusEntryId;
     followLatest.current = false;
@@ -108,48 +148,139 @@ export function SessionDetailView({
     lastScrollTop.current = viewport.scrollTop;
   });
 
+  const parentSummary = session?.parentSession ??
+    (parentSessionOverride
+      ? {
+          id: parentSessionOverride.id,
+          displayTitle:
+            parentSessionOverride.displayTitle ||
+            parentSessionOverride.display_title ||
+            parentSessionOverride.id,
+          avatarUrl:
+            parentSessionOverride.avatarUrl ??
+            parentSessionOverride.surface?.avatarUrl ??
+            null,
+          memberCount: parentSessionOverride.surface?.memberCount ?? null,
+        }
+      : null);
+
+  const isTopic = Boolean(
+    session &&
+      session.kind !== "work" &&
+      (parentSummary !== null ||
+        Boolean(session.parentSessionId ?? session.parent_session_id) ||
+        (Boolean(session.thread_id || session.root_message_id) &&
+          session.surface?.kind !== "p2p")),
+  );
+  const kindCategory = session ? resolveSessionKindCategory(session) : "group";
+  const headerName = session
+    ? isTopic
+      ? resolveTopicTitle(session, parentSummary?.displayTitle)
+      : session.displayTitle || session.title || sessionId
+    : sessionId;
+  const anchorPreview = session?.threadAnchorPreview ?? session?.thread_anchor_preview;
+  const showAnchorInline = Boolean(
+    anchorPreview && anchorPreview.trim() !== headerName.trim(),
+  );
+  const avatarTargetName = parentSummary?.displayTitle ?? headerName;
+  const avatarTargetUrl =
+    parentSummary?.avatarUrl ?? session?.avatarUrl ?? session?.surface?.avatarUrl ?? null;
+  const avatarColorKey =
+    parentSummary?.id ?? session?.group_id ?? session?.id ?? sessionId;
+  const memberCount =
+    parentSummary?.memberCount ?? session?.surface?.memberCount ?? null;
+
   return (
-    <div className="flex h-full min-h-0 flex-1 flex-col">
-      <header className="flex min-h-16 shrink-0 items-center gap-3 border-b px-4">
-        <Button variant="ghost" size="icon" asChild>
-          <a href={`${base}/sessions`}>
-            <ArrowLeft className="size-4" />
+    <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col bg-card">
+      <header className="shrink-0 border-b border-border px-[18px] py-3">
+        <div className="flex flex-wrap items-start gap-3">
+          <a
+            href={`${base}/sessions`}
+            aria-label="返回列表"
+            className={cn(
+              "mt-1 inline-grid size-8 shrink-0 place-items-center rounded-[7px] text-muted-foreground transition-colors hover:bg-accent hover:text-foreground",
+              embeddedInSplit && "@min-[681px]:hidden min-[761px]:hidden",
+            )}
+          >
+            <ArrowLeft className="size-[18px]" />
           </a>
-        </Button>
-        <MessageSquare className="size-4 text-muted-foreground" />
-        <div className="min-w-0">
-          <h1 className="truncate text-sm font-semibold">
-            {session?.displayTitle || session?.title || sessionId}
-            {session?.threadAnchorPreview ? (
-              <span className="text-xs font-normal text-muted-foreground">
-                {" "}
-                锚点：{session.threadAnchorPreview}
-              </span>
+
+          <div className="grid min-w-[200px] flex-1 grid-cols-[44px_minmax(0,1fr)] items-center gap-x-3 gap-y-0.5">
+            <SessionAvatar
+              name={avatarTargetName}
+              avatarUrl={avatarTargetUrl}
+              colorKey={avatarColorKey}
+              kind={parentSummary ? "group" : kindCategory}
+              size="lg"
+              className="row-span-3 self-center"
+            />
+
+            {parentSummary ? (
+              <div className="flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
+                <a
+                  href={`${base}/sessions/${encodeURIComponent(parentSummary.id)}`}
+                  className="truncate hover:text-foreground hover:underline"
+                >
+                  {parentSummary.displayTitle}
+                </a>
+                <span>›</span>
+                <span>话题</span>
+              </div>
+            ) : isTopic && session?.surface?.displayName ? (
+              <div className="flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
+                <span className="truncate">{session.surface.displayName}</span>
+                <span>›</span>
+                <span>话题</span>
+              </div>
             ) : null}
-          </h1>
-          <div className="truncate text-xs text-muted-foreground">
-            {session
-              ? session.channel_type === "dashboard"
-                ? "本地会话"
-                : `${session.channel_type}/${session.channel_id}`
-              : sessionId}
-            {session?.workerId !== undefined ? (
-              <span title={session.workerId ?? undefined}>
-                {" · "}{t("Worker binding")}{": "}{session.workerId ?? t("Unassigned Worker")}
+
+            <h1 className="m-0 flex min-w-0 items-center gap-2 text-[17px] font-semibold tracking-normal text-foreground">
+              <span className="min-w-0 truncate">
+                {isTopic && parentSummary ? "# " : ""}
+                {headerName}
+                {showAnchorInline ? (
+                  <span className="text-xs font-normal text-muted-foreground">
+                    {" "}
+                    锚点：{anchorPreview}
+                  </span>
+                ) : null}
               </span>
-            ) : null}
+              {memberCount !== null && (parentSummary || kindCategory === "group") ? (
+                <span
+                  className="inline-flex shrink-0 items-center gap-1 text-[13px] font-normal whitespace-nowrap text-muted-foreground"
+                  title={`${memberCount} 位成员`}
+                >
+                  <Users className="size-3.5" />
+                  {memberCount}
+                </span>
+              ) : null}
+            </h1>
+
+            <div className="mt-0.5 flex flex-wrap items-center gap-x-2.5 gap-y-1 text-xs text-muted-foreground">
+              {session?.shadowName ? (
+                <span>分身 {session.shadowName}</span>
+              ) : null}
+              <span>{sessionChannelLabel(session, sessionId, isTopic)}</span>
+              {session?.workerId !== undefined ? (
+                <span title={session.workerId ?? undefined}>
+                  {t("Worker binding")}: {session.workerId ?? t("Unassigned Worker")}
+                </span>
+              ) : null}
+              <code
+                className="font-mono text-[11px] text-muted-foreground"
+                title={sessionId}
+              >
+                {shortSessionHeaderId(sessionId)}
+              </code>
+            </div>
           </div>
+
+          {actions ? (
+            <div className="ml-auto flex flex-wrap items-center gap-2 self-center">
+              {actions}
+            </div>
+          ) : null}
         </div>
-        <div className="ml-auto flex flex-wrap justify-end gap-1">
-          {linkedTaskBadges(session).map((taskBadge) => (
-            <Badge key={taskBadge.id} variant="outline" asChild>
-              {taskBadge.status === "deleted" ? <span className="text-muted-foreground">该任务已删除</span> : <a href={`${base}/tasks/${encodeURIComponent(taskBadge.id)}`}>
-                  {taskBadge.title}
-                </a>}
-            </Badge>
-          ))}
-        </div>
-        {actions}
       </header>
 
       <div
@@ -166,61 +297,86 @@ export function SessionDetailView({
           }
           lastScrollTop.current = scrollTop;
           if (
-            history?.hasOlder && !history.loading && !history.failed &&
-            scrollingUp && scrollTop <= 80
+            history?.hasOlder &&
+            !history.loading &&
+            !history.failed &&
+            scrollingUp &&
+            scrollTop <= 80
           ) {
             history.load();
           }
         }}
       >
         {error ? (
-          <DashboardErrorState
-            title={t("Session failed to load")}
-            error={error}
-          />
+          <DashboardErrorState title={t("Session failed to load")} error={error} />
         ) : showNotFound ? (
-          <DashboardErrorState
-            title={t("Session not found")}
-            error={new Error(sessionId)}
-          />
+          <DashboardErrorState title={t("Session not found")} error={new Error(sessionId)} />
         ) : loading ? (
-          <div className="space-y-2 p-4">
-            {Array.from({ length: 8 }).map((_, index) => (
-              <Skeleton key={index} className="h-12 w-full" />
+          <div className="space-y-3 p-[18px]">
+            {Array.from({ length: 6 }).map((_, index) => (
+              <Skeleton key={index} className="h-14 w-full max-w-[680px] rounded-lg" />
             ))}
           </div>
         ) : (
-          <div ref={contentRef} className="space-y-3 p-4">
+          <div ref={contentRef} className="grid content-start gap-4 p-[18px]">
             {sessionHasContext(session) ? (
-              <SessionContextDetails session={session} />
+              <SessionContextDetails
+                detailsRef={contextDetailsRef}
+                open={contextOpen}
+                onToggle={setContextOpen}
+                session={session}
+              />
             ) : null}
             {history?.hasOlder ? (
               <div className="flex justify-center">
-                <Button variant="ghost" size="sm" disabled={history.loading} onClick={history.load}>
-                  {history.loading ? t("Loading history…") : history.failed ? t("Retry loading history") : t("Load older messages")}
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  disabled={history.loading}
+                  onClick={history.load}
+                >
+                  {history.loading
+                    ? t("Loading history…")
+                    : history.failed
+                      ? t("Retry loading history")
+                      : t("Load older messages")}
                 </Button>
               </div>
             ) : null}
             {focusMissing ? (
-              <div role="status" className="rounded-md border border-dashed p-3 text-xs text-muted-foreground">
+              <div
+                role="status"
+                className="rounded-md border border-dashed p-3 text-xs text-muted-foreground"
+              >
                 要定位的那条消息已不在这个会话里，可能已被删除。
               </div>
             ) : null}
             {timelineItems.length === 0 ? (
-              <div className="rounded-md border border-dashed p-4 text-sm text-muted-foreground">{t("No messages recorded.")}</div>
+              <div className="rounded-md border border-dashed p-4 text-sm text-muted-foreground">
+                {t("No messages recorded.")}
+              </div>
             ) : (
-              <div ref={rowsRef} className="space-y-3">
-                {timelineItems.map((item) => (
-                  <div key={timelineItemKey(item)}>
-                    {item.type === "turn" ? (
-                      <TurnTimelineGroup item={item} />
-                    ) : item.type === "event" ? (
-                      <ConversationControlTimelineItem event={item.event} />
-                    ) : (
-                      <MessageTimelineItem message={item.message} />
-                    )}
-                  </div>
-                ))}
+              <div ref={rowsRef} className="grid content-start gap-4">
+                {timelineItems.map((item, index) => {
+                  const currentDay = timelineItemDayLabel(item);
+                  const previousDay =
+                    index > 0 ? timelineItemDayLabel(timelineItems[index - 1]!) : null;
+                  const showDay = currentDay !== null && currentDay !== previousDay;
+                  return (
+                    <Fragment key={timelineItemKey(item)}>
+                      {showDay ? <DayDivider label={currentDay} /> : null}
+                      <div>
+                        {item.type === "turn" ? (
+                          <TurnTimelineGroup item={item} />
+                        ) : item.type === "event" ? (
+                          <ConversationControlTimelineItem event={item.event} />
+                        ) : (
+                          <MessageTimelineItem message={item.message} />
+                        )}
+                      </div>
+                    </Fragment>
+                  );
+                })}
               </div>
             )}
           </div>
@@ -229,6 +385,63 @@ export function SessionDetailView({
       {composer}
     </div>
   );
+}
+
+function sessionChannelLabel(
+  session: DashboardSession | undefined,
+  sessionId: string,
+  isTopic: boolean,
+): string {
+  if (!session) return sessionId;
+  if (session.channel_type === "dashboard") return "本地会话";
+  if (session.channel_type === "feishu") {
+    if (session.surface?.kind === "p2p") return `飞书私聊 · ${session.channel_id}`;
+    return isTopic
+      ? `飞书 · ${session.channel_id}`
+      : `飞书 · ${session.channel_id}`;
+  }
+  return `${session.channel_type}/${session.channel_id}`;
+}
+
+function shortSessionHeaderId(sessionId: string): string {
+  if (sessionId.length <= 16) return sessionId;
+  return `${sessionId.slice(0, 8)}…${sessionId.slice(-4)}`;
+}
+
+function DayDivider({ label }: { readonly label: string }) {
+  return (
+    <div className="flex items-center gap-2.5 py-0.5 text-[11.5px] text-muted-foreground">
+      <span className="h-px flex-1 bg-border" />
+      <span>{label}</span>
+      <span className="h-px flex-1 bg-border" />
+    </div>
+  );
+}
+
+function timelineItemTimestamp(item: DashboardSessionTimelineItem): number {
+  switch (item.type) {
+    case "message":
+      return item.message.created_at;
+    case "turn":
+      return item.messages[0]?.created_at ?? item.turn.startedAt;
+    case "event":
+      return item.event.createdAt;
+  }
+}
+
+function timelineItemDayLabel(item: DashboardSessionTimelineItem): string | null {
+  const ts = timelineItemTimestamp(item);
+  if (!Number.isFinite(ts) || ts <= 86_400_000) return null;
+  const date = new Date(ts);
+  const now = new Date();
+  const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+  const itemStart = new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
+  const diffDays = Math.round((todayStart - itemStart) / 86_400_000);
+  const monthDay = `${date.getMonth() + 1}月${date.getDate()}日`;
+  if (diffDays === 0) return `今天 · ${monthDay}`;
+  if (diffDays === 1) return `昨天 · ${monthDay}`;
+  if (date.getFullYear() === now.getFullYear()) return monthDay;
+  return `${date.getFullYear()}年${monthDay}`;
 }
 
 function timelineItemKey(item: DashboardSessionTimelineItem): string {
@@ -253,14 +466,16 @@ function ConversationControlTimelineItem({
   const { t } = useTranslation();
   return (
     <section
-      className="rounded-md border border-dashed bg-muted/20 px-3 py-2 text-xs text-muted-foreground"
+      className="ml-[52px] max-w-[768px] rounded-md border border-dashed bg-muted/20 px-3 py-1.5 text-xs text-muted-foreground"
       data-testid={`session-event-${event.entryId}`}
     >
-      <div className="font-medium text-foreground/80">{event.summary}</div>
-      <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 font-mono text-[10px]">
+      <div className="text-muted-foreground">{event.summary}</div>
+      <div className="mt-0.5 flex flex-wrap gap-x-3 gap-y-0.5 font-mono text-[10px] opacity-80">
         <span>{event.controlKind}</span>
         <span>{event.reasonKind}</span>
-        <span title={event.turnId}>{t("turn")}{" "}{shortEntityId(event.turnId)}</span>
+        <span title={event.turnId}>
+          {t("turn")} {shortEntityId(event.turnId)}
+        </span>
       </div>
     </section>
   );
@@ -268,8 +483,14 @@ function ConversationControlTimelineItem({
 
 function SessionContextDetails({
   session,
+  open,
+  onToggle,
+  detailsRef,
 }: {
   readonly session: DashboardSession;
+  readonly open: boolean;
+  readonly onToggle: (open: boolean) => void;
+  readonly detailsRef?: React.RefObject<HTMLDetailsElement | null>;
 }) {
   const { t } = useTranslation();
   const launchPackIds = new Set(
@@ -280,10 +501,19 @@ function SessionContextDetails({
   );
 
   return (
-    <details className="rounded-md border bg-muted/20 p-3 text-sm">
-      <summary className="cursor-pointer text-sm font-medium">{t("Context")}<span className="ml-2 text-xs font-normal text-muted-foreground">
-          {(session.contextPacks ?? []).length}{t("packs /")}{" "}
-          {(session.seedRecords ?? []).length}{t("seeds")}</span>
+    <details
+      ref={detailsRef}
+      open={open}
+      onToggle={(event) => onToggle(event.currentTarget.open)}
+      className="rounded-lg border bg-muted/20 p-3 text-sm"
+    >
+      <summary className="cursor-pointer text-sm font-medium">
+        {t("Context")}
+        <span className="ml-2 text-xs font-normal text-muted-foreground">
+          {(session.contextPacks ?? []).length}
+          {t("packs /")} {(session.seedRecords ?? []).length}
+          {t("seeds")}
+        </span>
       </summary>
       <div className="mt-3 space-y-4">
         <ContextPackList
@@ -305,7 +535,7 @@ function SessionContextDetails({
   );
 }
 
-function sessionHasContext(
+export function sessionHasContext(
   session: DashboardSession | undefined,
 ): session is DashboardSession {
   if (!session) {
@@ -324,6 +554,15 @@ function TurnTimelineGroup({
   readonly item: Extract<DashboardSessionTimelineItem, { type: "turn" }>;
 }) {
   const { t } = useTranslation();
+  const isAmbient = item.turn.reason === "ambient";
+
+  const overheardMessages = isAmbient
+    ? item.messages.filter((m) => m.role !== "assistant")
+    : [];
+  const assistantMessages = isAmbient
+    ? item.messages.filter((m) => m.role === "assistant")
+    : [];
+
   return (
     <section
       className="group/turn relative"
@@ -331,39 +570,133 @@ function TurnTimelineGroup({
     >
       <div
         aria-label={turnDetailsText(item)}
-        className="absolute -left-4 bottom-0 top-0 z-10 flex w-4 justify-start focus:outline-none"
+        className="absolute top-0 bottom-0 -left-3.5 z-10 flex w-3.5 justify-start focus:outline-none"
         data-testid="turn-hover-rail"
         tabIndex={0}
       >
-        <span className="h-full w-px bg-muted-foreground/20 transition-colors group-hover/turn:bg-muted-foreground/50 group-focus-within/turn:bg-muted-foreground/50" />
+        <span className="h-full w-px bg-muted-foreground/20 transition-colors group-focus-within/turn:bg-muted-foreground/50 group-hover/turn:bg-muted-foreground/50" />
         <div
-          className="pointer-events-none absolute -top-4 left-2 z-20 flex h-4 max-w-[calc(100vw-22rem)] items-center gap-x-2 overflow-hidden whitespace-nowrap rounded-sm border bg-popover px-1.5 text-[10px] text-muted-foreground opacity-0 shadow-sm transition-opacity group-hover/turn:pointer-events-auto group-hover/turn:opacity-100 group-focus-within/turn:pointer-events-auto group-focus-within/turn:opacity-100"
+          className="pointer-events-none absolute -top-4 left-2 z-20 flex h-4 max-w-[calc(100vw-22rem)] items-center gap-x-2 overflow-hidden rounded-sm border bg-popover px-1.5 text-[10px] whitespace-nowrap text-muted-foreground opacity-0 shadow-sm transition-opacity group-focus-within/turn:pointer-events-auto group-focus-within/turn:opacity-100 group-hover/turn:pointer-events-auto group-hover/turn:opacity-100"
           data-testid="turn-hover-details"
         >
-          <span className="font-mono text-foreground" title={item.turn.id}>{t("turn")}{" "}{shortEntityId(item.turn.id)}
+          <span className="font-mono text-foreground" title={item.turn.id}>
+            {t("turn")} {shortEntityId(item.turn.id)}
           </span>
-          <span><UiText>{item.turn.status}</UiText></span>
-          <span><UiText>{formatCount(item.turn.messageCount, "message")}</UiText></span>
+          <span>
+            <UiText>{item.turn.status}</UiText>
+          </span>
+          <span>
+            <UiText>{formatCount(item.turn.messageCount, "message")}</UiText>
+          </span>
           {item.turn.visibleMessageCount !== item.turn.messageCount ? (
-            <span>{item.turn.visibleMessageCount}{t("visible")}</span>
+            <span>
+              {item.turn.visibleMessageCount}
+              {t("visible")}
+            </span>
           ) : null}
-          <span title={item.turn.latestMessageId}>{t("latest")}{shortEntityId(item.turn.latestMessageId)}
+          <span title={item.turn.latestMessageId}>
+            {t("latest")}
+            {shortEntityId(item.turn.latestMessageId)}
           </span>
           <MessageHeaderTagList tags={turnHeaderTags(item)} />
         </div>
       </div>
-      <div className="space-y-2">
-        {item.messages.map((message) => (
-          <MessageTimelineItem
-            key={message.id}
-            message={message}
 
-            nested
-          />
-        ))}
-        <TurnRunnerAttempts attempts={item.turn.runnerAttempts ?? []} />
-      </div>
+      {isAmbient && overheardMessages.length > 0 ? (
+        <div className="space-y-3">
+          <div
+            className="ml-[52px] grid max-w-[768px] gap-2 rounded-[10px] border border-dashed border-border px-3 py-2.5"
+            data-testid="ambient-turn-batch"
+          >
+            <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground">
+              <span>
+                <strong className="font-medium text-foreground">
+                  旁听到 {overheardMessages.length} 条消息
+                </strong>{" "}
+                · 群里安静后交给 Luna
+              </span>
+              <span className="tabular-nums">
+                {formatShortClock(
+                  overheardMessages[overheardMessages.length - 1]!.created_at,
+                )}
+              </span>
+            </div>
+            <div className="grid gap-1.5">
+              {overheardMessages.map((msg) => (
+                <AmbientBatchMessageRow key={msg.id} message={msg} />
+              ))}
+            </div>
+            <div className="text-xs text-muted-foreground">
+              {assistantMessages.length > 0
+                ? assistantMessages[0]?.replyQuote
+                  ? "↳ Luna 引用消息主动回复"
+                  : "↳ Luna 主动回复"
+                : item.turn.status === "running"
+                  ? "↳ Luna 正在旁听判断…"
+                  : "↳ Luna 保持沉默"}
+            </div>
+          </div>
+
+          {assistantMessages.map((msg) => (
+            <MessageTimelineItem key={msg.id} message={msg} nested />
+          ))}
+          <TurnRunnerAttempts attempts={item.turn.runnerAttempts ?? []} />
+        </div>
+      ) : (
+        <div className="space-y-3">
+          {item.messages.map((message) => (
+            <MessageTimelineItem key={message.id} message={message} nested />
+          ))}
+          <TurnRunnerAttempts attempts={item.turn.runnerAttempts ?? []} />
+        </div>
+      )}
     </section>
+  );
+}
+
+function AmbientBatchMessageRow({
+  message,
+}: {
+  readonly message: DashboardSessionMessage;
+}) {
+  const base = useAgentBasePath();
+  const fallbackKind = messageIdentityFallbackKind(message);
+  const senderIdentity = messageDisplayIdentity(message);
+  const timelineEntryId = messageTimelineEntryId(message);
+
+  return (
+    <article
+      className="group/message grid grid-cols-[auto_minmax(0,1fr)] items-baseline gap-x-2.5 gap-y-0.5 rounded px-1 py-0.5 text-[13px] data-[focused=true]:bg-primary/5 data-[focused=true]:ring-2 data-[focused=true]:ring-primary/40"
+      data-message-role={message.role}
+      data-entry-id={timelineEntryId}
+      data-nested="true"
+      data-testid={`session-message-${message.id}`}
+    >
+      <div
+        className="flex items-baseline gap-1.5 whitespace-nowrap text-muted-foreground"
+        data-testid="message-header"
+      >
+        <span className="sr-only" data-testid="message-avatar">
+          {senderIdentity?.displayName ?? "U"}
+        </span>
+        <IdentityLink
+          className="text-xs text-muted-foreground hover:text-foreground"
+          fallbackKind={fallbackKind}
+          identity={senderIdentity}
+          showIcon={false}
+          showKind={false}
+        />
+        <span className="text-[11px] tabular-nums">
+          {formatShortClock(message.created_at)}
+        </span>
+        <MessageHeaderTagList
+          tags={messageHeaderTags(message, timelineEntryId, base)}
+        />
+      </div>
+      <div className="min-w-0 break-words text-foreground">
+        {renderMessageContent(message)}
+      </div>
+    </article>
   );
 }
 
@@ -378,10 +711,12 @@ function TurnRunnerAttempts({
   }
   return (
     <details
-      className="ml-4 rounded-md border border-border/70 bg-muted/20 px-3 py-2 text-xs"
+      className="ml-[52px] max-w-[768px] rounded-md border border-border/70 bg-muted/20 px-3 py-2 text-xs"
       data-testid="session-runner-attempts"
     >
-      <summary className="cursor-pointer text-muted-foreground">{t("Main Runner Attempts")}</summary>
+      <summary className="cursor-pointer text-muted-foreground">
+        {t("Main Runner Attempts")}
+      </summary>
       <div className="mt-2 space-y-3">
         {attempts
           .slice()
@@ -434,9 +769,7 @@ function AttemptCodeBlock({
 }) {
   return (
     <div>
-      <div className="mb-1 text-[10px] uppercase text-muted-foreground">
-        {title}
-      </div>
+      <div className="mb-1 text-[10px] uppercase text-muted-foreground">{title}</div>
       <pre className="max-h-48 overflow-auto rounded-sm bg-background/80 p-2 font-mono text-[11px] leading-relaxed text-muted-foreground">
         {value}
       </pre>
@@ -450,11 +783,9 @@ function formatAttemptJson(value: unknown): string {
 
 function MessageTimelineItem({
   message,
-
   nested = false,
 }: {
   readonly message: DashboardSessionMessage;
-
   readonly nested?: boolean;
 }) {
   const base = useAgentBasePath();
@@ -462,62 +793,158 @@ function MessageTimelineItem({
   const fallbackKind = messageIdentityFallbackKind(message);
   const senderIdentity = messageDisplayIdentity(message);
   const timelineEntryId = messageTimelineEntryId(message);
+  const isBot =
+    message.role === "assistant" ||
+    message.senderUser?.kind === "bot" ||
+    message.senderUser?.kind === "shadow";
+  const isAmbientReply =
+    message.role === "assistant" && message.turnReason === "ambient";
+  const isCardPresentation =
+    message.presentation?.kind === "task_final_answer" ||
+    message.presentation?.kind === "status_card" ||
+    message.presentation?.kind === "rich_markdown_card";
 
   return (
     <article
-      className="group/message grid grid-cols-[auto_minmax(0,1fr)] gap-3 rounded-md px-1 py-2 data-[focused=true]:bg-primary/5 data-[focused=true]:ring-2 data-[focused=true]:ring-primary/40"
+      className="group/message grid max-w-[820px] grid-cols-[auto_minmax(0,1fr)] gap-3 rounded-md py-0.5 data-[focused=true]:bg-primary/5 data-[focused=true]:ring-2 data-[focused=true]:ring-primary/40"
       data-message-role={message.role}
       data-entry-id={timelineEntryId}
       data-nested={nested ? "true" : undefined}
       data-testid={`session-message-${message.id}`}
     >
-      <div data-testid="message-avatar" className="pt-0.5">
-        <IdentityAvatar
-          className="size-8"
+      <div data-testid="message-avatar">
+        <MessageSenderAvatar
           fallbackKind={fallbackKind}
           identity={senderIdentity}
+          senderId={message.senderUserId}
         />
       </div>
-      <div className="min-w-0 max-w-[860px]">
+      <div className="min-w-0">
         <div
-          className="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-1"
+          className="flex min-h-5 min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-[13px] text-muted-foreground"
           data-testid="message-header"
         >
           <IdentityLink
-            className="max-w-64 text-sm text-foreground"
+            className="max-w-64 text-[13px] font-normal text-muted-foreground hover:text-foreground"
             fallbackKind={fallbackKind}
             identity={senderIdentity}
             showIcon={false}
             showKind={false}
           />
-          <span className="text-[11px] text-muted-foreground">
-            {formatTime(message.created_at)}
+          {isBot ? (
+            <span className="rounded-[4px] bg-[#b07d4f]/18 px-[5px] text-[10.5px] leading-[17px] font-medium text-[#b07d4f] dark:text-[#d1a273]">
+              机器人
+            </span>
+          ) : null}
+          {isAmbientReply ? (
+            <span className="text-xs text-muted-foreground">旁听后主动回复</span>
+          ) : null}
+          <span className="sr-only">
+            <UiText>{message.role}</UiText>
+            {t("message")}
           </span>
-          <span className="sr-only"><UiText>{message.role}</UiText>{t("message")}</span>
-          <MessageHeaderTagList tags={messageHeaderTags(message, timelineEntryId, base)} />
+          <MessageHeaderTagList
+            tags={messageHeaderTags(message, timelineEntryId, base)}
+          />
+          <time className="text-xs tabular-nums text-muted-foreground opacity-0 transition-opacity duration-120 group-focus-within/message:opacity-100 group-hover/message:opacity-100">
+            {formatTime(message.created_at)}
+          </time>
         </div>
-        <div className="mt-1 whitespace-pre-wrap break-words text-sm leading-6">
-          {message.presentation?.kind === "task_final_answer" ? (
-            <TaskFinalAnswerCard
-              message={message}
 
-            />
-          ) : message.presentation?.kind === "status_card" ? (
-            <StatusCard
-              message={message}
-
-            />
-          ) : message.presentation?.kind === "rich_markdown_card" ? (
-            <RichMarkdownMessageCard
-              message={message}
-
-            />
-          ) : (
-            renderMessageContent(message)
-          )}
-        </div>
+        {isCardPresentation ? (
+          <div className="mt-1.5 whitespace-pre-wrap break-words text-sm leading-6">
+            {message.presentation?.kind === "task_final_answer" ? (
+              <TaskFinalAnswerCard message={message} />
+            ) : message.presentation?.kind === "status_card" ? (
+              <StatusCard message={message} />
+            ) : (
+              <RichMarkdownMessageCard message={message} />
+            )}
+          </div>
+        ) : (
+          <div className="mt-1.5 w-fit max-w-full rounded-[8px] bg-accent px-3.5 py-2.5 text-[14.5px] leading-[1.6] whitespace-pre-wrap break-words text-foreground [overflow-wrap:anywhere]">
+            {message.replyQuote ? (
+              <MessageReplyQuoteBlock quote={message.replyQuote} />
+            ) : null}
+            {renderMessageContent(message)}
+          </div>
+        )}
       </div>
     </article>
+  );
+}
+
+function MessageSenderAvatar({
+  identity,
+  fallbackKind,
+  senderId,
+}: {
+  readonly identity: DashboardIdentity | null;
+  readonly fallbackKind: "user" | "bot" | "system" | "unknown";
+  readonly senderId: string;
+}) {
+  if (identity?.avatarUrl) {
+    return (
+      <IdentityAvatar
+        className="size-10"
+        fallbackKind={fallbackKind}
+        identity={identity}
+      />
+    );
+  }
+  const displayName = identity?.displayName?.trim() || "";
+  if (fallbackKind === "bot") {
+    const label = Array.from(displayName || "Bot").slice(0, 4).join("");
+    return (
+      <span className="inline-grid size-10 shrink-0 place-items-center rounded-full bg-primary text-[11px] font-semibold text-primary-foreground">
+        {label}
+      </span>
+    );
+  }
+  const initial = Array.from(displayName || "U").slice(0, 1).join("") || "U";
+  return (
+    <span
+      className="inline-grid size-10 shrink-0 place-items-center rounded-full text-[13px] font-semibold text-white"
+      style={{ backgroundColor: avatarColorForKey(senderId || displayName || "user") }}
+    >
+      {initial}
+    </span>
+  );
+}
+
+function MessageReplyQuoteBlock({
+  quote,
+}: {
+  readonly quote: NonNullable<DashboardSessionMessage["replyQuote"]>;
+}) {
+  const content = `${quote.senderName ? `${quote.senderName}：` : ""}${quote.preview}`;
+  if (!quote.messageId) {
+    return (
+      <div className="mb-1.5 rounded-[4px] bg-foreground/5 px-2 py-1 text-xs leading-5 text-muted-foreground">
+        {content}
+      </div>
+    );
+  }
+  return (
+    <button
+      type="button"
+      onClick={() => {
+        const target = document.querySelector<HTMLElement>(
+          `[data-testid="session-message-${CSS.escape(quote.messageId!)}"]`,
+        );
+        if (target) {
+          target.scrollIntoView({ behavior: "smooth", block: "center" });
+          target.dataset.focused = "true";
+          setTimeout(() => {
+            delete target.dataset.focused;
+          }, 1800);
+        }
+      }}
+      className="mb-1.5 block max-w-full truncate rounded-[4px] bg-foreground/5 px-2 py-1 text-left text-xs leading-5 text-muted-foreground transition-colors hover:bg-foreground/10 hover:text-foreground"
+      title={content}
+    >
+      {content}
+    </button>
   );
 }
 
@@ -542,8 +969,9 @@ function MessageHeaderTagList({
 }: {
   readonly tags: readonly MessageHeaderTag[];
 }) {
-  const sortedTags = [...tags].sort((left, right) =>
-    tagVisibilityOrder(left.visibility) - tagVisibilityOrder(right.visibility)
+  const sortedTags = [...tags].sort(
+    (left, right) =>
+      tagVisibilityOrder(left.visibility) - tagVisibilityOrder(right.visibility),
   );
   return (
     <>
@@ -603,7 +1031,7 @@ function messageHeaderTagClassName(tag: MessageHeaderTag): string {
   return cn(
     "inline-flex h-5 max-w-64 items-center overflow-hidden rounded-sm border px-1.5 text-[11px] font-normal shadow-none transition-opacity",
     tag.visibility === "hover" &&
-      "opacity-0 group-hover/message:opacity-100 group-focus-within/message:opacity-100",
+      "opacity-0 group-focus-within/message:opacity-100 group-hover/message:opacity-100",
     tag.tone === "secondary"
       ? "border-transparent bg-secondary text-secondary-foreground"
       : tag.tone === "muted"
@@ -636,41 +1064,50 @@ function visibleMessageHeaderTags(
   base: string,
 ): MessageHeaderTag[] {
   const projectionTags: MessageHeaderTag[] = message.projection
-    ? [{
-        id: "projection",
-        label: "引用",
-        visibility: "always",
-        title: projectionTitle(message),
-      }]
+    ? [
+        {
+          id: "projection",
+          label: "引用",
+          visibility: "always",
+          title: projectionTitle(message),
+        },
+      ]
     : [];
-  const ingestTags: MessageHeaderTag[] = message.ingest?.mode === "history_backfill"
-    ? [{
-        id: "history-import",
-        label: "History Import",
-        visibility: "always",
-        tone: "secondary",
-        title: historyImportTitle(message),
-      }]
-    : [];
+  const ingestTags: MessageHeaderTag[] =
+    message.ingest?.mode === "history_backfill"
+      ? [
+          {
+            id: "history-import",
+            label: "History Import",
+            visibility: "always",
+            tone: "secondary",
+            title: historyImportTitle(message),
+          },
+        ]
+      : [];
   const threadTags: MessageHeaderTag[] = message.thread
     ? [
         ...(message.thread.threadId
-          ? [{
-              id: "thread-message",
-              label: "Thread",
-              visibility: "always" as const,
-              tone: "muted" as const,
-              title: threadTitle(message),
-            }]
+          ? [
+              {
+                id: "thread-message",
+                label: "Thread",
+                visibility: "always" as const,
+                tone: "muted" as const,
+                title: threadTitle(message),
+              },
+            ]
           : []),
         ...(message.thread.hasReplies
-          ? [{
-              id: "thread-replies",
-              label: "Has Replies",
-              visibility: "always" as const,
-              tone: "muted" as const,
-              title: threadTitle(message),
-            }]
+          ? [
+              {
+                id: "thread-replies",
+                label: "Has Replies",
+                visibility: "always" as const,
+                tone: "muted" as const,
+                title: threadTitle(message),
+              },
+            ]
           : []),
       ]
     : [];
@@ -678,7 +1115,9 @@ function visibleMessageHeaderTags(
     id: `task:${taskBadge.id}`,
     label: taskBadge.title,
     visibility: "always" as const,
-    ...(taskBadge.status === "deleted" ? {} : { href: `${base}/tasks/${encodeURIComponent(taskBadge.id)}` }),
+    ...(taskBadge.status === "deleted"
+      ? {}
+      : { href: `${base}/tasks/${encodeURIComponent(taskBadge.id)}` }),
   }));
   return [...projectionTags, ...ingestTags, ...threadTags, ...taskTags];
 }
@@ -695,7 +1134,9 @@ function historyImportTitle(message: DashboardSessionMessage): string {
       ? `imported at: ${new Date(ingest.importedAt).toISOString()}`
       : null,
     ingest.joinEventId !== null ? `join event: ${ingest.joinEventId}` : null,
-  ].filter(Boolean).join("\n");
+  ]
+    .filter(Boolean)
+    .join("\n");
 }
 
 function threadTitle(message: DashboardSessionMessage): string {
@@ -712,7 +1153,9 @@ function threadTitle(message: DashboardSessionMessage): string {
       ? `parent message: ${thread.parentMessageExternalId}`
       : null,
     thread.hasReplies ? "has thread replies" : null,
-  ].filter(Boolean).join("\n");
+  ]
+    .filter(Boolean)
+    .join("\n");
 }
 
 function hoverMessageHeaderTags(
@@ -738,16 +1181,18 @@ function turnHeaderTags(
   item: Extract<DashboardSessionTimelineItem, { type: "turn" }>,
 ): MessageHeaderTag[] {
   const promptTag: MessageHeaderTag[] = item.turn.materializedPrompt
-    ? [{
-        id: `turn-prompt:${item.turn.id}`,
-        label: "prompt",
-        visibility: "always",
-        tone: "muted",
-        title: `Copy Main Runner prompt for turn ${item.turn.id}`,
-        copyText: item.turn.materializedPrompt,
-        copyLabel: `Copy Main Runner prompt ${item.turn.id}`,
-        testId: "turn-prompt-badge",
-      }]
+    ? [
+        {
+          id: `turn-prompt:${item.turn.id}`,
+          label: "prompt",
+          visibility: "always",
+          tone: "muted",
+          title: `Copy Main Runner prompt for turn ${item.turn.id}`,
+          copyText: item.turn.materializedPrompt,
+          copyLabel: `Copy Main Runner prompt ${item.turn.id}`,
+          testId: "turn-prompt-badge",
+        },
+      ]
     : [];
   return promptTag;
 }
@@ -759,11 +1204,11 @@ function StatusCard({
 }) {
   const base = useAgentBasePath();
   const { t } = useTranslation();
-  const presentation = message.presentation?.kind === "status_card"
-    ? message.presentation
-    : null;
+  const presentation =
+    message.presentation?.kind === "status_card" ? message.presentation : null;
   const content = statusCardContent(message);
-  const title = presentation?.title ?? content.title ?? presentation?.task?.title ?? "Task";
+  const title =
+    presentation?.title ?? content.title ?? presentation?.task?.title ?? "Task";
   const titleLines = splitTitleLines(title);
   const primaryTitle = titleLines[0] ?? title;
   const subtitle = titleLines.slice(1).join("\n");
@@ -774,66 +1219,75 @@ function StatusCard({
   const stepsOpenByDefault = !text;
 
   return (
-    <ChatRichCard
-      kind="status_card"
-      testId="status-card"
-      tone="task"
-    >
-      <div className="flex min-w-0 flex-wrap items-center gap-2">
-        <span className="min-w-0 break-words text-sm font-medium">
+    <ChatRichCard kind="status_card" testId="status-card" tone="task">
+      <div className="flex min-w-0 flex-wrap items-center justify-between gap-2 border-b border-border px-3 py-2">
+        <span className="min-w-0 break-words text-[13.5px] font-semibold">
           {primaryTitle}
         </span>
-        {status ? (
-          <Badge
-            className="h-5 rounded-sm px-1.5 text-[11px] font-normal"
-            variant="secondary"
-          >
-            <UiText>{status}</UiText>
-          </Badge>
+        <div className="flex flex-wrap items-center gap-1.5">
+          {status ? (
+            <Badge
+              className="h-5 rounded-sm px-1.5 text-[11px] font-normal"
+              variant="secondary"
+            >
+              <UiText>{status}</UiText>
+            </Badge>
+          ) : null}
+          {task ? (
+            <Badge
+              className="h-5 max-w-full rounded-sm px-1.5 text-[11px] font-normal"
+              variant="outline"
+              asChild
+            >
+              {task.status === "deleted" ? (
+                <span className="text-muted-foreground">该任务已删除</span>
+              ) : (
+                <a href={`${base}/tasks/${encodeURIComponent(task.id)}`}>
+                  <span className="truncate">{task.title}</span>
+                </a>
+              )}
+            </Badge>
+          ) : null}
+        </div>
+      </div>
+      <div className="p-3">
+        {subtitle ? (
+          <div className="mb-2 whitespace-pre-wrap text-xs leading-5 text-muted-foreground">
+            {subtitle}
+          </div>
         ) : null}
-        {task ? (
-          <Badge
-            className="h-5 max-w-full rounded-sm px-1.5 text-[11px] font-normal"
-            variant="outline"
-            asChild
+        {steps.length > 0 ? (
+          <details
+            className="rounded-[6px] border border-border/70 bg-muted/30 px-3 py-2"
+            data-testid="status-card-steps"
+            {...(stepsOpenByDefault ? { open: true } : {})}
           >
-            {task.status === "deleted" ? <span className="text-muted-foreground">该任务已删除</span> : <a href={`${base}/tasks/${encodeURIComponent(task.id)}`}>
-                <span className="truncate">{task.title}</span>
-              </a>}
-          </Badge>
+            <summary className="cursor-pointer select-none text-[11px] font-medium text-muted-foreground">
+              {steps.length === 1 ? t("1 step") : `${steps.length} steps`}
+            </summary>
+            <ul className="mt-2 space-y-1.5 text-xs leading-5 text-foreground">
+              {steps.map((step, index) => (
+                <li className="flex min-w-0 items-center gap-2" key={`${index}:${step}`}>
+                  <span className="size-2.5 shrink-0 rounded-full bg-[#5b8a72] dark:bg-[#7fb096]" />
+                  <span className="min-w-0 break-words">
+                    {renderMarkdownInlineText(step, message)}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </details>
+        ) : null}
+        {text ? (
+          <div
+            className={cn(
+              "rounded-[6px] bg-accent/60 px-3 py-2 text-sm leading-6",
+              steps.length > 0 && "mt-2",
+            )}
+          >
+            {renderMarkdownInlineText(text, message)}
+          </div>
         ) : null}
       </div>
-      {subtitle ? (
-        <div className="mt-1 whitespace-pre-wrap text-xs leading-5 text-muted-foreground">
-          {subtitle}
-        </div>
-      ) : null}
-      {steps.length > 0 ? (
-        <details
-          className="mt-2 rounded-[4px] border border-border/70 bg-background/50 px-3 py-2"
-          data-testid="status-card-steps"
-          {...(stepsOpenByDefault ? { open: true } : {})}
-        >
-          <summary className="cursor-pointer select-none text-[11px] font-medium text-muted-foreground">
-            {steps.length === 1 ? t("1 step") : `${steps.length} steps`}
-          </summary>
-          <ul className="mt-2 space-y-1 text-xs leading-5 text-muted-foreground">
-            {steps.map((step, index) => (
-              <li className="flex min-w-0 gap-2" key={`${index}:${step}`}>
-                <span className="shrink-0 text-primary">•</span>
-                <span className="min-w-0 break-words">
-                  {renderMarkdownInlineText(step, message)}
-                </span>
-              </li>
-            ))}
-          </ul>
-        </details>
-      ) : null}
-      {text ? (
-        <div className="mt-2 rounded-[4px] border border-border/70 bg-background/70 px-3 py-2 text-sm leading-6">
-          {renderMarkdownInlineText(text, message)}
-        </div>
-      ) : null}
     </ChatRichCard>
   );
 }
@@ -845,9 +1299,10 @@ function TaskFinalAnswerCard({
 }) {
   const base = useAgentBasePath();
   // Final answer notifications stay in the chat stream but get a task-aware surface.
-  const task = message.presentation?.kind === "task_final_answer"
-    ? message.presentation.task
-    : null;
+  const task =
+    message.presentation?.kind === "task_final_answer"
+      ? message.presentation.task
+      : null;
 
   return (
     <ChatRichCard
@@ -855,21 +1310,28 @@ function TaskFinalAnswerCard({
       testId="task-final-answer-card"
       tone="task"
     >
-      <div className="flex min-w-0 flex-wrap items-center gap-2">
-        <span className="text-xs font-medium text-primary">任务结论</span>
+      <div className="flex min-w-0 flex-wrap items-center justify-between gap-2 border-b border-border px-3 py-2">
+        <span className="text-xs font-semibold text-foreground">任务结论</span>
         {task ? (
           <Badge
             className="h-5 max-w-full rounded-sm px-1.5 text-[11px] font-normal"
             variant="outline"
             asChild
           >
-            {task.status === "deleted" ? <span className="text-muted-foreground">该任务已删除</span> : <a href={`${base}/tasks/${encodeURIComponent(task.id)}`}>
+            {task.status === "deleted" ? (
+              <span className="text-muted-foreground">该任务已删除</span>
+            ) : (
+              <a href={`${base}/tasks/${encodeURIComponent(task.id)}`}>
                 <span className="truncate">{task.title}</span>
-              </a>}
+              </a>
+            )}
           </Badge>
         ) : null}
       </div>
-      <div className="mt-2 whitespace-pre-wrap break-words text-sm leading-6">
+      <div className="p-3 whitespace-pre-wrap break-words text-sm leading-6">
+        {message.replyQuote ? (
+          <MessageReplyQuoteBlock quote={message.replyQuote} />
+        ) : null}
         {renderMessageContent(message)}
       </div>
     </ChatRichCard>
@@ -882,8 +1344,8 @@ function statusCardContent(message: DashboardSessionMessage): {
   readonly status: string | null;
   readonly steps: readonly string[];
 } {
-  const card = messageCardBlocks(message).find((block) =>
-    block.cardKind === "status_card"
+  const card = messageCardBlocks(message).find(
+    (block) => block.cardKind === "status_card",
   );
   const payload = isRecord(card?.payload) ? card.payload : {};
   return {
@@ -908,7 +1370,7 @@ function messageCardBlocks(
     return [];
   }
   return message.content.filter((part): part is Record<string, unknown> =>
-    isRecord(part) && part.type === "card"
+    isRecord(part) && part.type === "card",
   );
 }
 
@@ -919,6 +1381,9 @@ function RichMarkdownMessageCard({
 }) {
   return (
     <ChatRichCard kind="rich_markdown_card" tone="neutral">
+      {message.replyQuote ? (
+        <MessageReplyQuoteBlock quote={message.replyQuote} />
+      ) : null}
       <div
         className="space-y-2 text-sm leading-6"
         data-testid="rich-markdown-card-content"
@@ -944,8 +1409,8 @@ function ChatRichCard({
     <div
       className={
         tone === "task"
-          ? "max-w-[760px] rounded-md border border-primary/20 bg-primary/5 p-3 text-foreground"
-          : "relative max-w-[760px] overflow-hidden rounded-md border border-border/80 bg-card/90 py-3 pl-4 pr-3 text-foreground shadow-sm before:absolute before:inset-y-0 before:left-0 before:w-1 before:bg-primary/30"
+          ? "max-w-[560px] overflow-hidden rounded-[10px] border border-border bg-card text-foreground shadow-2xs"
+          : "relative max-w-[760px] overflow-hidden rounded-[8px] border border-border/80 bg-accent/70 py-3 pr-3 pl-4 text-foreground before:absolute before:inset-y-0 before:left-0 before:w-1 before:bg-primary/30"
       }
       data-card-kind={kind}
       {...(tone === "neutral" ? { "data-rich-card-layout": "layered" } : {})}
@@ -994,7 +1459,9 @@ function turnDetailsText(
       ? `${item.turn.visibleMessageCount} visible`
       : null,
     `latest ${item.turn.latestMessageId}`,
-  ].filter(Boolean).join(" · ");
+  ]
+    .filter(Boolean)
+    .join(" · ");
 }
 
 function messageDisplayIdentity(
@@ -1052,6 +1519,7 @@ function canonicalUserIdentityKind(kind: string): DashboardIdentity["identityKin
   switch (kind) {
     case "bot":
     case "service":
+    case "shadow":
       return "bot";
     case "system":
       return "system";
@@ -1061,9 +1529,7 @@ function canonicalUserIdentityKind(kind: string): DashboardIdentity["identityKin
   }
 }
 
-function renderMessageContent(
-  message: DashboardSessionMessage,
-): ReactNode {
+function renderMessageContent(message: DashboardSessionMessage): ReactNode {
   const text = messageText(message);
   const mentions = message.mentions ?? [];
   if (mentions.length === 0 || text.length === 0) {
@@ -1080,20 +1546,13 @@ function renderMessageContent(
             </span>
           );
         }
-        return (
-          <MentionLink
-            key={`${index}:${part.value}`}
-            mention={part.mention}
-          />
-        );
+        return <MentionLink key={`${index}:${part.value}`} mention={part.mention} />;
       })}
     </>
   );
 }
 
-function renderRichMarkdownContent(
-  message: DashboardSessionMessage,
-): ReactNode {
+function renderRichMarkdownContent(message: DashboardSessionMessage): ReactNode {
   const text = messageText(message);
   if (text.length === 0) {
     return "";
@@ -1103,7 +1562,7 @@ function renderRichMarkdownContent(
       block,
       index,
       message,
-    })
+    }),
   );
 }
 
@@ -1173,18 +1632,16 @@ function renderRichInlineText(
   text: string,
 ): ReactNode {
   const mentions = message.mentions ?? [];
-  const parts = mentions.length === 0
-    ? [{ type: "text" as const, value: text }]
-    : splitMentionText(text, mentions);
+  const parts =
+    mentions.length === 0
+      ? [{ type: "text" as const, value: text }]
+      : splitMentionText(text, mentions);
   return (
     <>
       {parts.map((part, index) => {
         if (part.type === "mention") {
           return (
-            <MentionLink
-              key={`${index}:${part.value}`}
-              mention={part.mention}
-            />
+            <MentionLink key={`${index}:${part.value}`} mention={part.mention} />
           );
         }
         return (
@@ -1200,12 +1657,21 @@ function renderRichInlineText(
 function isDeletedTaskHref(href: string, message?: DashboardSessionMessage): boolean {
   if (!message) return false;
   try {
-    const origin = (typeof window !== "undefined" && window.location?.origin) || "http://localhost";
+    const origin =
+      (typeof window !== "undefined" && window.location?.origin) ||
+      "http://localhost";
     const url = new URL(href, origin);
     if (url.origin !== origin) return false;
     const match = /^\/(?:agent\/(?:[^/]+\/)?)?tasks\/([^/]+)\/?$/.exec(url.pathname);
-    return !!match && linkedMessageTaskBadges(message).some(task => task.status === "deleted" && task.id === decodeURIComponent(match[1]!));
-  } catch { return false; }
+    return (
+      !!match &&
+      linkedMessageTaskBadges(message).some(
+        (task) => task.status === "deleted" && task.id === decodeURIComponent(match[1]!),
+      )
+    );
+  } catch {
+    return false;
+  }
 }
 
 function renderMarkdownInlineText(
@@ -1214,7 +1680,8 @@ function renderMarkdownInlineText(
 ): ReactNode {
   const nodes: ReactNode[] = [];
   let offset = 0;
-  const tokenPattern = /(!\[([^\]]*)\]\(([^)\s]+)\))|(\*\*([^*]+)\*\*)|(\[([^\]]+)\]\(((?:https?:\/\/|\/|#)[^)\s]+)\))/g;
+  const tokenPattern =
+    /(!\[([^\]]*)\]\(([^)\s]+)\))|(\*\*([^*]+)\*\*)|(\[([^\]]+)\]\(((?:https?:\/\/|\/|#)[^)\s]+)\))/g;
   for (const match of text.matchAll(tokenPattern)) {
     if (match.index === undefined) {
       continue;
@@ -1227,25 +1694,33 @@ function renderMarkdownInlineText(
       const dimensions = imageDimensionsForUrl(message?.content, match[3]);
       const frameStyle = dimensions && {
         aspectRatio: `${dimensions.width} / ${dimensions.height}`,
-        maxWidth: Math.min(dimensions.width, 426, 320 * dimensions.width / dimensions.height),
+        maxWidth: Math.min(
+          dimensions.width,
+          426,
+          (320 * dimensions.width) / dimensions.height,
+        ),
       };
       nodes.push(
-        imageSrc === undefined
-          ? match[0]
-          : (
-              <SessionImagePreview
-                alt={match[2] || "image"}
-                key={`image:${match.index}`}
-                src={imageSrc}
-                style={frameStyle}
-              />
-            ),
+        imageSrc === undefined ? (
+          match[0]
+        ) : (
+          <SessionImagePreview
+            alt={match[2] || "image"}
+            key={`image:${match.index}`}
+            src={imageSrc}
+            style={frameStyle}
+          />
+        ),
       );
     } else if (match[5] !== undefined) {
       nodes.push(<strong key={`strong:${match.index}`}>{match[5]}</strong>);
     } else if (match[7] !== undefined && match[8] !== undefined) {
       if (isDeletedTaskHref(match[8], message)) {
-        nodes.push(<span key={`link:${match.index}`} className="text-muted-foreground">该任务已删除</span>);
+        nodes.push(
+          <span key={`link:${match.index}`} className="text-muted-foreground">
+            该任务已删除
+          </span>,
+        );
         offset = match.index + match[0].length;
         continue;
       }
@@ -1284,7 +1759,7 @@ function SessionImagePreview({
         <button
           type="button"
           aria-label={`Enlarge image: ${alt}`}
-          className="relative my-2 block aspect-[4/3] w-full max-w-[26.625rem] cursor-zoom-in overflow-hidden rounded-[4px] border border-border bg-muted/30 focus-visible:ring-2 focus-visible:ring-ring"
+          className="relative my-2 block aspect-[4/3] w-full max-w-[26.625rem] cursor-zoom-in overflow-hidden rounded-[6px] border border-border bg-muted/30 focus-visible:ring-2 focus-visible:ring-ring"
           style={style}
         >
           <img
@@ -1300,7 +1775,11 @@ function SessionImagePreview({
         className="w-fit gap-0 px-3 pt-12 pb-3 sm:max-w-[calc(100%-2rem)]"
       >
         <DialogTitle className="sr-only">{alt}</DialogTitle>
-        <img alt={alt} className="max-h-[calc(100dvh-6rem)] max-w-full object-contain" src={src} />
+        <img
+          alt={alt}
+          className="max-h-[calc(100dvh-6rem)] max-w-full object-contain"
+          src={src}
+        />
       </DialogContent>
     </Dialog>
   );
@@ -1314,8 +1793,12 @@ function imageDimensionsForUrl(
   for (const part of content) {
     if (!part || part.type !== "image" || part.url !== url) continue;
     const { width, height } = part;
-    if (Number.isSafeInteger(width) && width > 0 &&
-        Number.isSafeInteger(height) && height > 0) {
+    if (
+      Number.isSafeInteger(width) &&
+      width > 0 &&
+      Number.isSafeInteger(height) &&
+      height > 0
+    ) {
       return { width, height };
     }
   }
@@ -1344,13 +1827,16 @@ function MentionLink({
   const identityDisplayName = mention.targetIdentity?.displayName?.trim();
   const canonicalUser = mention.targetUser;
   const canonicalName = canonicalUser?.displayName?.trim();
-  const label = canonicalName && canonicalUser?.displayNameSource !== "id" && !/^(ou_|on_|unknown)/i.test(canonicalName)
-    ? identityMentionLabel(canonicalName)
-    : identityDisplayName
-    ? identityMentionLabel(identityDisplayName)
-    : mention.label || mention.targetExternalId || mention.key;
+  const label =
+    canonicalName &&
+    canonicalUser?.displayNameSource !== "id" &&
+    !/^(ou_|on_|unknown)/i.test(canonicalName)
+      ? identityMentionLabel(canonicalName)
+      : identityDisplayName
+        ? identityMentionLabel(identityDisplayName)
+        : mention.label || mention.targetExternalId || mention.key;
   const targetUserId = canonicalUser?.id ?? mention.targetUserId ?? null;
-  const className = "font-medium text-primary hover:underline";
+  const className = "font-medium text-[#5c7c99] hover:underline dark:text-[#86a3be]";
   if (canonicalUser) {
     return (
       <IdentityLink
@@ -1366,13 +1852,16 @@ function MentionLink({
     return <span className={className}>{label}</span>;
   }
   if (targetUserId === null) {
-    return <span className="font-medium text-primary">{label}</span>;
+    return <span className={className}>{label}</span>;
   }
-  return <a href={`${base}/users/${encodeURIComponent(targetUserId)}`}
+  return (
+    <a
+      href={`${base}/users/${encodeURIComponent(targetUserId)}`}
       className={className}
     >
       {label}
-    </a>;
+    </a>
+  );
 }
 
 function identityMentionLabel(displayName: string): string {
@@ -1392,8 +1881,9 @@ function messageText(message: DashboardSessionMessage): string {
         return part.text;
       }
       if (part.type === "image") {
-        const src = messageContentStringField(part, "url")
-          ?? messageContentStringField(part, "fileId");
+        const src =
+          messageContentStringField(part, "url") ??
+          messageContentStringField(part, "fileId");
         if (!src) {
           return "[image]";
         }
@@ -1409,10 +1899,7 @@ function messageText(message: DashboardSessionMessage): string {
     .join("\n");
 }
 
-function messageContentStringField(
-  part: object,
-  field: string,
-): string | undefined {
+function messageContentStringField(part: object, field: string): string | undefined {
   if (!(field in part)) {
     return undefined;
   }
@@ -1493,12 +1980,6 @@ function splitMentionText(
   return parts;
 }
 
-function linkedTaskBadges(
-  session: DashboardSession | undefined,
-): DashboardSession["linked_tasks"] {
-  return session?.linkedTasks ?? session?.linked_tasks ?? [];
-}
-
 function linkedMessageTaskBadges(
   message: DashboardSessionMessage,
 ): DashboardSessionMessage["linked_tasks"] {
@@ -1534,6 +2015,14 @@ function messageDebugCopyText(
   timelineEntryId: string,
 ): string {
   return `timeline entry id: ${timelineEntryId}\nmessage id: ${message.id}`;
+}
+
+function formatShortClock(timestamp: number): string {
+  return new Intl.DateTimeFormat("zh-CN", {
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).format(new Date(timestamp));
 }
 
 function formatTime(timestamp: number): string {

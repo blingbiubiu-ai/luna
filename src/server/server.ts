@@ -336,7 +336,10 @@ export class HonoServer {
       const artifactPreviewShellPath = join(webRoot, "artifact-preview.html");
       const serveAgentShell = () =>
         new Response(Bun.file(agentShellPath), {
-          headers: { "content-type": "text/html; charset=utf-8" },
+          headers: {
+            "content-type": "text/html; charset=utf-8",
+            "cache-control": "no-cache",
+          },
         });
       const serveArtifactPreviewShell = () =>
         new Response(
@@ -369,7 +372,11 @@ export class HonoServer {
         ) {
           return serveAgentShell();
         }
-        return serveAgentAsset(c, next);
+        const res = await serveAgentAsset(c, next);
+        if (res) {
+          res.headers.set("cache-control", "no-cache");
+        }
+        return res;
       });
     }
   }

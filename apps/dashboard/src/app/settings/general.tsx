@@ -3,6 +3,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { createFileRoute } from "@tanstack/react-router";
 
 import { Input } from "@/components/ui/input";
+import { SelectField } from "@/components/ui/select-field";
 import { Switch } from "@/components/ui/switch";
 import { useRouteAgent } from "@/lib/agent-route";
 import { apiFetch } from "@/lib/api/client";
@@ -286,16 +287,17 @@ export function AgentSettingsForm({
         {numberRow("followupWindowMs")}
         {numberRow("followupMaxMessages")}
         <Row label="谁的消息算追问">
-          <select
+          <SelectField
             aria-label="谁的消息算追问"
-            className="h-9 rounded-md border bg-background px-3 text-sm"
+            align="end"
             value={messages.followupSenders ?? ""}
-            onChange={event => setMessage("followupSenders", (event.target.value || undefined) as FollowupSenders | undefined)}
-          >
-            <option value="">默认（{SENDER_LABEL[messageDefaults.followupSenders]}）</option>
-            <option value="requester_only">{SENDER_LABEL.requester_only}</option>
-            <option value="requester_and_reporters">{SENDER_LABEL.requester_and_reporters}</option>
-          </select>
+            onValueChange={next => setMessage("followupSenders", (next || undefined) as FollowupSenders | undefined)}
+            options={[
+              { value: "", label: `默认（${SENDER_LABEL[messageDefaults.followupSenders]}）` },
+              { value: "requester_only", label: SENDER_LABEL.requester_only },
+              { value: "requester_and_reporters", label: SENDER_LABEL.requester_and_reporters },
+            ]}
+          />
         </Row>
         <Row label="别人插话时结束追问" hint="开启后，追问期间有其他人说话，就要重新 @ 分身。">
           <Switch
@@ -349,26 +351,24 @@ export function AgentSettingsForm({
           label="空闲保活时长"
           hint="每轮对话结束或手动接管输入后重新计时；设为「常驻不自动休眠」时进程一直保留到容器重启。"
         >
-          <select
+          <SelectField
             aria-label="TUI 空闲保活时长"
-            className="h-9 rounded-md border bg-background px-3 text-sm"
+            align="end"
             value={String(ptyMinutes)}
-            onChange={e => {
-              const minutes = Number(e.target.value);
+            onValueChange={next => {
+              const minutes = Number(next);
               if (Number.isInteger(minutes) && minutes >= 0) {
                 update({ ...value, pty: { idleTimeoutMinutes: minutes } });
               }
             }}
-          >
-            {!hasPreset && (
-              <option value={String(ptyMinutes)}>{ptyMinutes} 分钟</option>
-            )}
-            {PTY_TIMEOUT_PRESETS.map(item => (
-              <option key={item.minutes} value={String(item.minutes)}>
-                {item.label}
-              </option>
-            ))}
-          </select>
+            options={[
+              ...(!hasPreset ? [{ value: String(ptyMinutes), label: `${ptyMinutes} 分钟` }] : []),
+              ...PTY_TIMEOUT_PRESETS.map(item => ({
+                value: String(item.minutes),
+                label: item.label,
+              })),
+            ]}
+          />
         </Row>
       </section>
 

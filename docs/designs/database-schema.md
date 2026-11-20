@@ -3,12 +3,13 @@
 Service stores its business database at `$LUNA_HOME/data/luna.db`.
 `src/data/schema/` contains domain-specific TypeScript ORM definitions.
 `src/data/drizzle/0001_luna_baseline.sql` defines the initial SQLite baseline, with
-incremental Drizzle migrations (`0002`–`0007`, including `agent_settings`,
+incremental Drizzle migrations (`0002`–`0008`, including `agent_settings`,
 `agent_profile_revisions.execution_driver`, `platform_auth_settings` for
 AES-256-GCM encrypted platform-wide Feishu OAuth login credentials, ambient
 listening state, channel-agnostic `account_identity_claims` for automatic
-Agent owner recognition, and `platform_settings` for Dashboard-managed
-platform runtime configuration) applied on open.
+Agent owner recognition, `platform_settings` for Dashboard-managed platform
+runtime configuration, and `sessions.parent_session_id` backfill plus index
+for Main topic sessions) applied on open.
 Databases created before platform accounts and per-Agent users
 are refused (`database_baseline_mismatch`); a new database takes their configuration
 with `luna service admin import-config` ([accounts and users](accounts-and-agent-users.md)).

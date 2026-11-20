@@ -176,7 +176,7 @@ export class SessionCommandService {
                     throw new GatewayError("recipient_unresolved", "Resolve this recipient before sending", 409);
                 }
                 messageId = new MessageStore(tx as unknown as DrizzleDB).appendOnce({ sessionId: targetId, channelMessageKey: `command:${id}`, role: "assistant", content: [{ type: "text", text: payload.content }], ...(reply?.presentation === "card" ? { presentationKind: "rich_markdown" as const } : {}),
-                    channel: { type: target.channel_type, id: target.channel_id }, senderUserId: new SessionStore(tx as unknown as DrizzleDB).requireReplyUserId(targetId), rawPayload: { commandId: id, sourceSessionId: actor.sourceSessionId, deliveryStatus: "pending" } }).row.id;
+                    channel: { type: target.channel_type, id: target.channel_id }, senderUserId: new SessionStore(tx as unknown as DrizzleDB).requireReplyUserId(targetId), rawPayload: { commandId: id, sourceSessionId: actor.sourceSessionId, deliveryStatus: "pending", ...(reply?.replyTo ? { replyTo: reply.replyTo } : {}) } }).row.id;
             }
             let contextPackId: string | undefined;
             if (kind === "session.invoke") {
@@ -201,8 +201,10 @@ export class SessionCommandService {
                 const recoverable = command.kind === "session.invoke" && new InvocationStore(this.options.db).findActive({ runnerKind: "main", originId: command.id, sessionId: command.sessionId });
                 tx.update(sessionCommands).set({ status: recoverable ? "pending" : "unknown", error: recoverable ? null : "Runtime interrupted execution", claim: null, updatedAt: Date.now() }).where(eq(sessionCommands.id, command.id)).run();
                 if (recoverable) continue;
-                if (command.messageId)
-                    tx.update(messages).set({ rawPayloadJson: { commandId: command.id, sourceSessionId: command.sourceSessionId, deliveryStatus: "unknown" } }).where(eq(messages.id, command.messageId)).run();
+                if (command.messageId) {
+                    const replyTo = command.payload.reply && typeof command.payload.reply === "object" && "replyTo" in command.payload.reply && typeof command.payload.reply.replyTo === "string" ? command.payload.reply.replyTo : undefined;
+                    tx.update(messages).set({ rawPayloadJson: { commandId: command.id, sourceSessionId: command.sourceSessionId, deliveryStatus: "unknown", ...(replyTo ? { replyTo } : {}) } }).where(eq(messages.id, command.messageId)).run();
+                }
                 tx.update(scheduleOccurrences).set({ status: "unknown", reason: "Runtime interrupted execution" }).where(eq(scheduleOccurrences.commandId, command.id)).run();
             }
         });
@@ -257,8 +259,10 @@ export class SessionCommandService {
                     // A Work session runs its trigger on the Work Runner, so its invocation is not Main's.
                     if (command.kind === "session.invoke") new InvocationStore(db).finishOrigin({ originId: command.id, sessionId: command.sessionId }, () => {});
                     tx.update(sessionCommands).set({ status, error, claim: null, updatedAt: Date.now(), ...(providerMessageId ? { providerMessageId } : {}) }).where(and(eq(sessionCommands.id, command.id), eq(sessionCommands.claim, claim))).run();
-                    if (command.messageId)
-                        tx.update(messages).set({ rawPayloadJson: { commandId: command.id, sourceSessionId: command.sourceSessionId, deliveryStatus: status, providerMessageId } }).where(eq(messages.id, command.messageId)).run();
+                    if (command.messageId) {
+                        const replyTo = command.payload.reply && typeof command.payload.reply === "object" && "replyTo" in command.payload.reply && typeof command.payload.reply.replyTo === "string" ? command.payload.reply.replyTo : undefined;
+                        tx.update(messages).set({ rawPayloadJson: { commandId: command.id, sourceSessionId: command.sourceSessionId, deliveryStatus: status, providerMessageId, ...(replyTo ? { replyTo } : {}) } }).where(eq(messages.id, command.messageId)).run();
+                    }
                     tx.update(scheduleOccurrences).set({ status, reason: error }).where(eq(scheduleOccurrences.commandId, command.id)).run();
                 });
             };

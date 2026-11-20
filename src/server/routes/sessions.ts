@@ -11,10 +11,12 @@ import { HTTPException } from "hono/http-exception";
 import { scanArtifactRefs } from "@luna/service-client/artifact-ref";
 import { ContextPackStore } from "@/context";
 import type { DrizzleDB } from "@/data";
-import { channelIdentities, channelSurfaces, messageMentions, messages, runnerContexts, sessionRunnerAttempts, sessionTimelineEntries, sessionTimelineEvents, sessionTurnEntries, sessionTurns, sessions, shadowBotBindings, taskSubscriptions, tasks, channelUserBindings, users } from "@/data/schema";
+import { agentShadows, channelIdentities, channelSurfaces, messageMentions, messages, runnerContexts, sessionCommands, sessionInbox, sessionRunnerAttempts, sessionStates, sessionTimelineEntries, sessionTimelineEvents, sessionTurnEntries, sessionTurns, sessions, shadowBotBindings, taskSubscriptions, tasks, channelUserBindings, users } from "@/data/schema";
+import { resolveChannelSurfaceKind } from "@/dashboard-api/session-display-title";
 import { dashboardTimelineItemCursor, isInternalMessage, toDashboardSession, toDashboardSessionConversationControlEvent, toDashboardSessionMessage, toDashboardSessionTimeline, toDashboardSessionTurn, type DashboardMessageProjection, type DashboardSessionTurn, type MessageRow, type SessionRunnerAttemptRow, type SessionRow, type SessionTurnRow } from "@/dashboard-api/sessions";
 import { createDashboardArtifactSigner } from "@/dashboard-api/local-paths";
 import { SessionTimelineTools } from "@/main-runner/session-timeline-tools";
+import { ChatListeningStore } from "@/sessions/chat-listening-store";
 import {
   requesterAccountIdFromContext,
   lunaAccessTokenClaimsFromContext,
@@ -104,6 +106,7 @@ export function createSessionsRoutes(options: SessionsRouteOptions = {}) {
       .where(eq(sessionTurnEntries.session_id, sessionId))
       .all();
     const replyTargetExternalIds = dashboardReplyTargetExternalIds(messageRows);
+    const commandReplyToByCommandId = selectCommandReplyToMap(db, sessionId);
 
     return c.json(
       messageRows.map((projection) =>
@@ -118,6 +121,8 @@ export function createSessionsRoutes(options: SessionsRouteOptions = {}) {
           sourceContextItems,
           turnEntryRows,
           replyTargetExternalIds,
+          sessionProjections: messageRows,
+          commandReplyToByCommandId,
           owningSessionIdForMessage: (messageId) =>
             owningSessionIdForMessage(db, messageId),
           artifactSigner,
@@ -205,6 +210,7 @@ export function createSessionsRoutes(options: SessionsRouteOptions = {}) {
       .where(eq(sessionTurnEntries.session_id, sessionId))
       .all();
     const replyTargetExternalIds = dashboardReplyTargetExternalIds(messageRows);
+    const commandReplyToByCommandId = selectCommandReplyToMap(db, sessionId);
     const sessionMessageDtos = messageRows.map((projection) =>
       toDashboardSessionMessage(projection, {
         identityRows,
@@ -217,6 +223,8 @@ export function createSessionsRoutes(options: SessionsRouteOptions = {}) {
         sourceContextItems,
         turnEntryRows,
         replyTargetExternalIds,
+        sessionProjections: messageRows,
+        commandReplyToByCommandId,
         owningSessionIdForMessage: (messageId) =>
           owningSessionIdForMessage(db, messageId),
         artifactSigner,
@@ -312,7 +320,51 @@ function stringRecordField(
   return typeof field === "string" && field.length > 0 ? field : null;
 }
 
+function selectCommandReplyToMap(
+  db: DrizzleDB,
+  sessionId: string,
+): ReadonlyMap<string, string> {
+  const map = new Map<string, string>();
+  const rows = db
+    .select({ id: sessionCommands.id, payload: sessionCommands.payload })
+    .from(sessionCommands)
+    .where(and(eq(sessionCommands.sessionId, sessionId), eq(sessionCommands.kind, "message.send")))
+    .all();
+  for (const row of rows) {
+    const reply =
+      row.payload &&
+      typeof row.payload === "object" &&
+      "reply" in row.payload &&
+      typeof row.payload.reply === "object" &&
+      row.payload.reply !== null
+        ? (row.payload.reply as Record<string, unknown>)
+        : null;
+    if (reply && typeof reply.replyTo === "string" && reply.replyTo.length > 0) {
+      map.set(row.id, reply.replyTo);
+    }
+  }
+  return map;
+}
+
 function dashboardSessionRows(db: DrizzleDB, sessionRows: SessionRow[], artifactSigner: ReturnType<typeof dashboardArtifactSignerForContext>) {
+  if (sessionRows.length === 0) return [];
+  const sessionIdSet = new Set(sessionRows.map((row) => row.id));
+  const missingParentIds = [...new Set(
+    sessionRows
+      .map((row) => row.parent_session_id)
+      .filter((parentId): parentId is string => parentId !== null && !sessionIdSet.has(parentId)),
+  )];
+  const extraParentRows = missingParentIds.length
+    ? db.select().from(sessions).where(and(inArray(sessions.id, missingParentIds), ne(sessions.status, "deleted"))).all()
+    : [];
+  const allSessionRows = [...sessionRows, ...extraParentRows];
+  const sessionIds = sessionRows.map((row) => row.id);
+  const shadowIds = [...new Set(sessionRows.map((row) => row.shadow_id))];
+  const shadowNames = new Map(
+    shadowIds.length
+      ? db.select({ id: agentShadows.id, name: agentShadows.name }).from(agentShadows).where(inArray(agentShadows.id, shadowIds)).all().map((row) => [row.id, row.name])
+      : [],
+  );
   const bindingIds = [...new Set(sessionRows.flatMap(row => row.binding_id ? [row.binding_id] : []))];
   const bindingStatuses = new Map(bindingIds.length ? db.select({
     id: shadowBotBindings.id, status: shadowBotBindings.status,
@@ -330,26 +382,84 @@ function dashboardSessionRows(db: DrizzleDB, sessionRows: SessionRow[], artifact
   const contextBundleRows = selectDashboardContextBundleRows(
     db,
     "session",
-    sessionRows.map((row) => row.id),
+    sessionIds,
   );
+  const listeningStore = new ChatListeningStore(db);
+  const clarificationSessionIds = new Set(
+    db.select({ sessionId: sessionStates.session_id, clarification: sessionStates.clarification_json })
+      .from(sessionStates)
+      .where(inArray(sessionStates.session_id, sessionIds))
+      .all()
+      .filter((row) => row.clarification !== null)
+      .map((row) => row.sessionId),
+  );
+  const activeInboxSessionIds = new Set(
+    db.select({ sessionId: sessionInbox.session_id })
+      .from(sessionInbox)
+      .where(and(
+        inArray(sessionInbox.session_id, sessionIds),
+        eq(sessionInbox.lane, "direct"),
+        inArray(sessionInbox.status, ["pending", "claimed"]),
+      ))
+      .all()
+      .map((row) => row.sessionId),
+  );
+  const turnStatusRows = db.select({
+    sessionId: sessionTurns.session_id,
+    status: sessionTurns.status,
+    reason: sessionTurns.reason,
+    startedAt: sessionTurns.started_at,
+  })
+    .from(sessionTurns)
+    .where(inArray(sessionTurns.session_id, sessionIds))
+    .orderBy(desc(sessionTurns.started_at))
+    .all();
+  const runningTurnSessionIds = new Set<string>();
+  const latestNonAmbientTurnStatus = new Map<string, string>();
+  for (const turn of turnStatusRows) {
+    if (turn.status === "running" && turn.reason !== "ambient") {
+      runningTurnSessionIds.add(turn.sessionId);
+    }
+    if (turn.reason !== "ambient" && !latestNonAmbientTurnStatus.has(turn.sessionId)) {
+      latestNonAmbientTurnStatus.set(turn.sessionId, turn.status);
+    }
+  }
 
-  return sessionRows.map((row) =>
-      toDashboardSession(row, {
-        bindingStatus: row.binding_id ? bindingStatuses.get(row.binding_id) ?? null : null,
-        sessionRows,
-        timelineRows,
-        surfaceRows,
-        identityRows,
-        userRows,
-        channelUserBindingRows,
-        taskRows,
-        deletedTaskRefs,
-        sourceContextItems,
-        subscriptionRows,
-        contextBundleRows,
-        artifactSigner,
-      }),
-    );
+  return sessionRows.map((row) => {
+    const surface = row.group_id === null
+      ? undefined
+      : surfaceRows.find(
+          (candidate) =>
+            candidate.channelType === row.channel_type &&
+            candidate.channelId === row.channel_id &&
+            candidate.externalId === row.group_id,
+        );
+    const isGroupMain =
+      row.kind === "main" &&
+      row.group_id !== null &&
+      surface !== undefined &&
+      resolveChannelSurfaceKind(surface) === "group";
+    return toDashboardSession(row, {
+      bindingStatus: row.binding_id ? bindingStatuses.get(row.binding_id) ?? null : null,
+      shadowName: shadowNames.get(row.shadow_id) ?? null,
+      listening: isGroupMain ? listeningStore.enabled(row) : null,
+      hasPendingWork: activeInboxSessionIds.has(row.id) || runningTurnSessionIds.has(row.id),
+      hasClarification: clarificationSessionIds.has(row.id),
+      latestTurnFailed: latestNonAmbientTurnStatus.get(row.id) === "failed",
+      sessionRows: allSessionRows,
+      timelineRows,
+      surfaceRows,
+      identityRows,
+      userRows,
+      channelUserBindingRows,
+      taskRows,
+      deletedTaskRefs,
+      sourceContextItems,
+      subscriptionRows,
+      contextBundleRows,
+      artifactSigner,
+    });
+  });
 }
 
 function requireSession(db: DrizzleDB, sessionId: string): SessionRow {

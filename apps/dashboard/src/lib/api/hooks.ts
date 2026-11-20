@@ -85,6 +85,22 @@ export interface DashboardSurface {
   kind: string;
   displayName: string | null;
   avatarUrl: string | null;
+  memberCount?: number | null;
+}
+
+export type SessionAttentionState = "run" | "wait" | "fail" | "idle";
+
+export interface DashboardParentSessionSummary {
+  id: string;
+  displayTitle: string;
+  avatarUrl: string | null;
+  memberCount: number | null;
+}
+
+export interface DashboardSessionMessageQuote {
+  messageId: string | null;
+  senderName: string | null;
+  preview: string;
 }
 
 export interface AgentMessageMention {
@@ -261,6 +277,9 @@ export interface DashboardSessionRunnerAttempt {
 
 export interface DashboardSession {
   status?: string;
+  kind?: string;
+  shadowId?: string;
+  shadowName?: string | null;
   workerId?: string | null;
   bindingStatus?: "active" | "retired" | null;
   id: string;
@@ -270,9 +289,15 @@ export interface DashboardSession {
   group_id: string | null;
   thread_id: string | null;
   root_message_id: string | null;
+  parent_session_id?: string | null;
+  parentSessionId?: string | null;
+  parentSession?: DashboardParentSessionSummary | null;
   title: string | null;
   display_title: string;
   displayTitle: string;
+  avatarUrl?: string | null;
+  listening?: boolean | null;
+  attentionState?: SessionAttentionState;
   surface: DashboardSurface | null;
   message_count: number;
   thread_anchor_preview: string | null;
@@ -309,6 +334,7 @@ export interface DashboardSessionMessage {
   mentions: DashboardSessionMessageMention[];
   ingest?: DashboardSessionMessageIngest;
   thread?: DashboardSessionMessageThread;
+  replyQuote?: DashboardSessionMessageQuote;
   turnRoles?: string[];
   turnStatus?: string | null;
   turnReason?: string | null;
