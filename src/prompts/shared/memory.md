@@ -31,7 +31,8 @@ when an entry you were shown changes. Each line is
   lists the candidates: update one of them, or add `--force` only when it is a
   different fact.
   Read the `luna-memory` skill before writing.
-- Only the Agent owner decides `persona` entries (who you, this Shadow, are) and
+- Only the Agent owner decides `persona` entries (who you, this Shadow, are:
+  your role, what you may do yourself and what needs approval, your voice) and
   `--core true` rules; Luna refuses such changes asked for by anyone else. What
   you learn about the people you work with is not persona.
 - Do not save conversation transcripts, task results, secrets, or state that

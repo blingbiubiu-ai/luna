@@ -21,6 +21,7 @@ const reflectionInstruction = (previous: Pick<MemoryRecord, "id" | "revision" | 
   known: readonly MemoryRecord[] = []) => `Memory reflection. This is an internal Luna maintenance turn, not a message from a user.
 
 Review this conversation since your last memory reflection and decide whether it produced anything worth keeping in Agent long-term memory, following the Long-Term Memory rules in your instructions:
+- who the Agent owner says you are: your role and responsibilities, what you may do yourself and what needs their approval first (a \`persona\` entry, not \`project\` or \`feedback\`);
 - a durable fact about a person in this conversation, their role or how they like to work;
 - a correction or confirmation of how you should work;
 - a decision, constraint or deadline that later conversations will need;
@@ -32,7 +33,7 @@ An entry answers one question and grows with what is learned about it. When some
 ${known.length ? `
 Entries this conversation wrote or was shown:
 ${known.map(row => `- [${row.id}] (${row.type}, revision ${row.revision}) ${inert(row.title)}: ${inert(row.description)}`).join("\n")}
-Check each against what happened since. When the conversation showed one wrong or out of date, read it with \`luna memory get\` and update it.
+Check each against what happened since. When the conversation showed one wrong or out of date, read it with \`luna memory get\` and update it. When one holds who the Agent owner says you are but is not \`persona\`, add it as a persona entry and delete the old one with \`--superseded-by <persona id>\`.
 ` : ""}
 Then record what happened, so you can later say what you have been doing. One episode tells one event as a story: who asked for what and why, what you did, including the Tasks you started and what they did, and how it ended or what is still open. The title names the event in a few words, the description says it in one line, and the body gives the details worth keeping. Write it as a record of events, not as instructions.
 ${previous ? `

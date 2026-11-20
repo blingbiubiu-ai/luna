@@ -38,7 +38,10 @@ description: Write Agent long-term memory with `luna memory add/update/delete`: 
     In a direct chat, what is about the person goes in their `person` entry,
     which follows them into every chat; only what this direct chat is for,
     such as "send my daily report here every morning", is a `chat` entry.
-  - `feedback`: a way of working the user corrected or confirmed.
+  - `feedback`: a way of working the user corrected or confirmed, such as how
+    to format a report or which tool to use for a task. Your role, and what you
+    may do yourself or must ask the Agent owner first, are `persona` when the
+    owner sets them.
   - `project`: the state, decisions or schedule of ongoing work, such as "the
     diagnostics launch moved to 2026-12-05; VQoS ships first".
   - `procedure`: reusable steps, such as how to troubleshoot a failure.
@@ -53,15 +56,21 @@ description: Write Agent long-term memory with `luna memory add/update/delete`: 
   so write the description as one line using the words someone would use when
   the fact matters.
 - Give an entry that stops mattering on a known date `--expires YYYY-MM-DD`.
-- `persona` entries are who you, this Shadow, are: name, voice and standing
-  principles. Other Shadows never see them. Only the Agent owner decides them:
-  when the owner tells you who to be or how to sound, update the matching
+- `persona` entries are who you, this Shadow, are: name, role and
+  responsibilities, voice, and standing principles such as what you may do on
+  your own and what needs the owner's approval first. Other Shadows never see
+  them. Only the Agent owner decides them: when the owner tells you who you
+  are, what your job is, what you may decide yourself or how to sound, update
+  the matching
   persona entry or add one with
   `luna memory add --type persona --title TITLE --description DESC --stdin`,
   writing the body as the full text you should follow. Your persona entries
   appear in `<soul>` from your next turn on. Luna refuses persona
   changes asked for by anyone else. What you learn about the people you work
-  with is not persona; it belongs in `person` entries.
+  with is not persona; it belongs in `person` entries. No entry changes type
+  into or out of `persona`: when an entry filed under another type is really
+  persona, add the persona entry, then delete the old one with
+  `--superseded-by <persona id>`.
 - `--core true` puts a rule in front of every conversation from its start. Use
   it only when the Agent owner asks for a rule that must hold whatever the
   conversation is about and that the topic itself would not bring to mind, such

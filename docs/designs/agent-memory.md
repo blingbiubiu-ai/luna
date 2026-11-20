@@ -76,8 +76,10 @@ forgetting records whether the entry expired, went unused or aged out.
 
 ### Persona entries
 
-A `persona` entry says who one Shadow is: its name, voice and standing
-principles. It replaces the per-Shadow USER and SOUL documents.
+A `persona` entry says who one Shadow is: its name, role and
+responsibilities, voice, and standing principles such as what it may do on its
+own and what needs the owner's approval first. It replaces the per-Shadow USER
+and SOUL documents.
 
 - It is always `visibility=shadow`: only its Shadow, the Agent owner and
   consolidation ever see it.
