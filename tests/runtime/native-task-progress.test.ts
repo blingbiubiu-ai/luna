@@ -19,6 +19,22 @@ const operation: Omit<OutboundChannelOperation,"id"|"channelId"> = {replyMode:"r
 const request = async (req: CotRequest) => {calls.push(req);return {code:0,data:{cot_id:"cot",message_id:"om_progress"}};};
 const adapter = () => new NativeTaskProgress(connection.db,"test",request);
 const events = () => calls.flatMap(call => (call.data?.events ?? []) as {event_type:string;content:string}[]);
+test("large Native histories are batched and bounded while terminal delivery retains room", async () => {
+  const entries = Array.from({length: 1_000}, (_, i) => ({id:`large-${i}`,text:`步骤 ${i}：${"正文".repeat(200)}`}));
+  await adapter().send(inbound,{...operation,nativeProgress:entries});
+  const before = calls.length;
+  expect(events().filter(e => e.content.includes("详细进度已合并"))).toHaveLength(1);
+  expect(events().filter(e => e.event_type === "REASONING_MESSAGE_CONTENT").length).toBeLessThan(100);
+  for (const req of calls.filter(c => c.method === "PUT")) expect(Buffer.byteLength(JSON.stringify(req.data))).toBeLessThanOrEqual(8 * 1024);
+  await adapter().send(inbound,{...operation,replyMode:"update_status_card",targetMessageId:"om_progress",nativeProgress:entries});
+  expect(calls.length).toBe(before);
+  await adapter().send(inbound,{...operation,replyMode:"update_status_card",targetMessageId:"om_progress",nativeProgress:entries,
+    statusCardState:"terminal",statusCard:{taskId:"task",status:"completed"},content:"最终结果正常完成"});
+  expect(events().some(e => e.content.includes("最终结果正常完成"))).toBe(true);
+  expect(events().filter(e => e.event_type === "RUN_FINISHED")).toHaveLength(1);
+  const total = calls.filter(c => c.method === "PUT").reduce((n,c) => n + Buffer.byteLength(JSON.stringify(c.data!.events)),0);
+  expect(total).toBeLessThanOrEqual(32 * 1024);
+});
 test("native thread snapshots append only new public entries across adapter restart and complete once",async()=>{
   const first = await adapter().send(inbound,operation);
   expect(first).toMatchObject({id:"om_progress",threadId:"om_anchor",rootMessageId:"om_anchor"});

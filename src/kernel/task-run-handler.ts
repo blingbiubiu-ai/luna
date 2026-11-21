@@ -5,6 +5,10 @@ import type {AgentExecutionSnapshot} from "@/agent-config";
 import {TaskScopeResolver} from "@/agents/task-scope";
 import { prepareRunnerFiles } from "@/runners/prepare-runner-files";
 import { randomUUID } from "node:crypto";
+import { BufferedProgress } from "@/messaging/notifications/buffered-progress";
+import type { TaskStatusCardStepEvent } from "@/messaging/notifications/task-status-card-updater";
+import { createLogger } from "@/shared";
+const progressLogger = createLogger("task-progress");
 import { InvocationStore } from "@/runners/invocation-store";
 import { taskInvocations, requireTaskReportCompletion } from "@/tasks/task-report-store";
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
@@ -70,7 +74,7 @@ export interface ExecuteTaskRunInput {
   readonly runIndex?: number;
   readonly sourceMessageId?: string;
   readonly signal?: AbortSignal;
-  readonly onProgress?: () => Promise<void> | void;
+  readonly onProgress?: (events?: readonly TaskStatusCardStepEvent[]) => Promise<void> | void;
 }
 
 /**
@@ -344,7 +348,7 @@ async function _runFakeTask(input: {
   readonly artifacts: ArtifactStore;
   readonly runMetadata: Record<string, unknown>;
   readonly signal?: AbortSignal;
-  readonly onProgress?: () => Promise<void> | void;
+  readonly onProgress?: (events?: readonly TaskStatusCardStepEvent[]) => Promise<void> | void;
 }): Promise<ExecuteTaskRunResult> {
   _throwIfAborted(input.signal);
   const sandbox = new FakeSandboxRuntime({
@@ -408,7 +412,7 @@ async function _runAgentTask(input: {
   readonly inputSnapshot: unknown;
   readonly materializedPrompt: string;
   readonly signal?: AbortSignal;
-  readonly onProgress?: () => Promise<void> | void;
+  readonly onProgress?: (events?: readonly TaskStatusCardStepEvent[]) => Promise<void> | void;
 }): Promise<ExecuteTaskRunResult> {
   _throwIfAborted(input.signal);
   if (!["claude", "codex"].includes(input.runnerType)) {
@@ -459,6 +463,12 @@ async function _runAgentTask(input: {
   const invocationId = new InvocationStore(input.db).findActive({ runnerKind: "task", taskRunId: input.taskRunId })?.id ?? randomUUID();
   taskInvocations(input.db).set(invocationId, {taskId: input.taskId, taskRunId: input.taskRunId,
     runnerContextId: runnerContext.id, ...(input.signal ? {signal: input.signal} : {})});
+  const progress = new BufferedProgress({
+    persist: (summary: string) => input.timeline.append({taskId: input.taskId, type: "runner.step", summary,
+      data: {...input.runMetadata, publicProgress: true, reason: input.reason}}),
+    send: async entries => { await input.onProgress?.(entries); },
+    onError: error => progressLogger.warn({err: error, taskId: input.taskId}, "task progress update failed"),
+  });
   try {
   const serviceEnv=buildLunaServiceRunnerEnv({
     runnerKind:"task",agentConfig:snapshot,invocationId,runnerContextId:runnerContext.id,
@@ -502,36 +512,15 @@ async function _runAgentTask(input: {
       _persistRunnerSessionId(input.db, runnerContext.id, event.id);
     }
     if (event.role === "tool") {
-      for (const block of event.content) {
-        input.timeline.append({taskId: input.taskId, type: "runner.step", summary: block.content === "工具执行失败" ? "工具执行失败" : "工具调用已结束",
-          data: {...input.runMetadata, publicProgress: true, toolPhase: "result", toolCallId: block.tool_use_id}});
-        await input.onProgress?.();
-      }
+      for (const block of event.content) progress.toolResult(block.tool_use_id, block.content === "工具执行失败");
     }
-    if (event.role !== "assistant") {
-      continue;
-    }
+    if (event.role !== "assistant") continue;
     const publicText = extractTextContent(event, {includeThinking: false, includeToolUse: false});
     for (const block of event.content) {
-      if (block.type !== "tool_use") continue;
-      input.timeline.append({taskId: input.taskId, type: "runner.step", summary: block.displayTitle ?? `调用工具：${block.name}`,
-        data: {...input.runMetadata, reason: input.reason, publicProgress: true, toolName: block.name, toolTitle: block.displayTitle ?? block.name, toolPhase: "start", toolCallId: block.id}});
-      await input.onProgress?.();
+      if (block.type === "tool_use") progress.toolStart(block.id, block.name);
     }
     const stepSummary = publicText.trim() ? runnerProgressStepFromAssistant({...event, content: [{type: "text", text: publicText}]}) : undefined;
-    if (stepSummary !== undefined && stepSummary.trim() !== "LUNA_NOTHING_TO_SEND") {
-      input.timeline.append({
-        taskId: input.taskId,
-        type: "runner.step",
-        summary: stepSummary,
-        data: {
-          ...input.runMetadata,
-          publicProgress: true,
-          reason: input.reason,
-        },
-      });
-      await input.onProgress?.();
-    }
+    if (stepSummary?.trim() && stepSummary.trim() !== "LUNA_NOTHING_TO_SEND") progress.summary(stepSummary);
     const text = extractTextContent(event, {
       includeThinking: false,
       includeToolUse: false,
@@ -545,6 +534,7 @@ async function _runAgentTask(input: {
   _throwIfAborted(input.signal);
   return requireTaskReportCompletion(input.db, input.taskRunId, finalText);
   } finally {
+    void progress.close();
     taskInvocations(input.db).delete(invocationId);
   }
 }

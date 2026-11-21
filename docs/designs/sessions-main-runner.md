@@ -240,6 +240,11 @@ above that seam. Both accept successful final replies through the same message
 command service. Work also updates its operational status card; reply validation
 failures mark its attempt failed and the status card blocked.
 
+Work public progress uses the shared [Progress notifications](progress-notifications.md)
+module: tool observations aggregate in memory, public text flushes immediately,
+and ongoing delivery does not block provider event consumption. Card display
+keeps the existing configurable step limit; Native has a cumulative budget.
+
 ```mermaid
 sequenceDiagram
   participant User

@@ -551,10 +551,11 @@ describe("TaskRunNotificationService", () => {
     const { TaskRunNotificationService } = await import(
       "../../src/tasks/task-run-notification-service"
     );
-    await new TaskRunNotificationService({
+    const progressService = new TaskRunNotificationService({
       db: database.db,
       channelForNotification: () => channel as never,
-    }).onRunProgress({
+    });
+    await progressService.onRunProgress({
       taskRunId: "task_run_progress_update_1",
     });
 
@@ -576,6 +577,14 @@ describe("TaskRunNotificationService", () => {
       ],
     });
     expect(notificationStore.requireById(notification.id).state).toBe("active");
+    operations.length = 0;
+    // No corresponding timeline row: the hot path must use the supplied delta.
+    await progressService.onRunProgress({taskRunId:"task_run_progress_update_1",events:[{
+      id:"new-delta",type:"runner.step",summary:"工具进度：调用 10000 次。\n已找到原因。",
+      data:{taskRunId:"task_run_progress_update_1",runIndex:1,publicProgress:true},
+    }]});
+    expect(operations).toHaveLength(1);
+    expect(operations[0]).toMatchObject({nativeProgress:[{id:"new-delta",text:"工具进度：调用 10000 次。\n已找到原因。"}]});
   });
 });
 

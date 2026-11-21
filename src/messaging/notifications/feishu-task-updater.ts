@@ -3,6 +3,7 @@ import type { OutboundChannelOperation, ReplyChannel } from "@/channels/outbound
 import { WAITING_FOR_INPUT, type TaskSubscription, type TaskView } from "@/tasks/types";
 
 export interface TaskStatusCardStepEvent {
+  readonly id?: string;
   readonly type: string;
   readonly summary: string;
   readonly data?: unknown;

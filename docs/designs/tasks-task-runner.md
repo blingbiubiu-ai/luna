@@ -368,6 +368,11 @@ including a resend, returns that receipt without sending another card.
 
 ### Task progress presentation
 
+Current aggregation, bounded projections and Native delivery budgets are defined
+in [Progress notifications](progress-notifications.md). Ordinary tool events are
+counted in memory instead of written individually to the business timeline;
+public text flushes preceding tool progress immediately and in order.
+
 Task creation accepts `sendStatusCard` (true by default) and
 `statusCardStyle: "card" | "native"` (default native for new tasks; existing subscriptions retain their style). `tasks status-card` accepts
 `--style card|native` / JSON `style`. Omitting style retains the current choice;

@@ -5,6 +5,7 @@ import {
   type AgentRunner,
   type AssistantMessage,
   type UserMessage,
+  type ToolMessage,
 } from "@/shared";
 
 export interface SessionAgentInvocationInput {
@@ -22,6 +23,7 @@ export interface SessionAgentInvocationInput {
   readonly onAssistantEvent?: (
     event: AssistantMessage,
   ) => Promise<void> | void;
+  readonly onToolEvent?: (event: ToolMessage) => Promise<void> | void;
   readonly onRunnerSessionInvalidated?: () => void;
 }
 
@@ -72,6 +74,7 @@ export async function invokeSessionAgent(
       );
       continue;
     }
+    if (event.role === "tool") await input.onToolEvent?.(event);
     if (event.role !== "assistant") {
       continue;
     }

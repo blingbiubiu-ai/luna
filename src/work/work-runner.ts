@@ -44,8 +44,10 @@ import {
   type TaskStatusCardStepEvent,
 } from "@/messaging/notifications/task-status-card-updater";
 import { getKernel } from "@/server/routes/kernel";
+import { BufferedProgress, RECENT_PROGRESS_STEPS } from "@/messaging/notifications/buffered-progress";
 import {
   createLogger,
+  extractTextContent,
   type AgentRunner,
 } from "@/shared";
 import { eq, and } from "drizzle-orm";
@@ -207,41 +209,38 @@ export class WorkRunner {
     // The Agent decides whether its Work progress card shows and in which style; a failed or
     // cancelled turn is still reported, so it never ends silently.
     const display = new AgentSettingsStore(this._options.db).get(session.agent_id).work.progressCard;
-    const cardOptions = () => ({
+    const cardOptions = (entries: readonly TaskStatusCardStepEvent[] = progressEvents) => ({
+      progressKey: input.turn.id,
       ...(statusCard !== undefined ? { targetMessageId: statusCard.providerMessageId } : {}),
       style: display.style,
-      nativeProgress: progressEvents.map((event, index) => ({ id: `step-${index}`, text: event.summary.slice(0, 800) })),
+      nativeProgress: entries.map(event => ({ id: event.id!, text: event.summary.slice(0, 800) })),
+    });
+    const progress = new BufferedProgress<TaskStatusCardStepEvent>({
+      persist: summary => {
+        const entry = {id: randomUUID(), type: "runner.step", summary};
+        progressEvents.push(entry);
+        if (progressEvents.length > RECENT_PROGRESS_STEPS) progressEvents.shift();
+        return entry;
+      },
+      send: async entries => {
+        if (!display.show) return;
+        const stepNames = buildTaskStatusCardSteps({timelineEvents: progressEvents}) ?? [];
+        const sentCard = await this._sendStatusCard(channel, inbound, {
+          title: "工作会话", status: "in_progress",
+          steps: stepNames.map((name, index) => ({name, status: index === stepNames.length - 1 ? "active" : "done"})),
+          summary: "",
+        }, latestMessageRow, session.id, cardOptions(entries));
+        if (statusCard === undefined) statusCard = sentCard;
+        this._attachStatusCardToTurn(input.turn.id, sentCard);
+      },
+      onError: error => logger.warn({err: error, sessionId: session.id}, "failed to update work status card progress"),
     });
     const reportProgress = async (summary: string): Promise<void> => {
       const stepName = normalizeRunnerProgressStep(summary);
-      if (stepName === undefined || progressEvents.at(-1)?.summary === stepName) {
-        return;
-      }
-      progressEvents.push({
-        type: "runner.step",
-        summary: stepName,
-      });
-      if (!display.show) return;
-      const stepNames = buildTaskStatusCardSteps({ timelineEvents: progressEvents }) ?? [];
-      try {
-        const sentCard = await this._sendStatusCard(channel, inbound, {
-          title: "工作会话",
-          status: "in_progress",
-          steps: stepNames.map((name, index) => ({
-            name,
-            status: index === stepNames.length - 1 ? "active" : "done",
-          })),
-          summary: "",
-        }, latestMessageRow, session.id, cardOptions());
-        if (statusCard === undefined) {
-          statusCard = sentCard;
-        }
-        this._attachStatusCardToTurn(input.turn.id, sentCard);
-      } catch (err) {
-        logger.warn({ err, sessionId: session.id }, "failed to update work status card progress");
-      }
+      if (stepName) progress.summary(stepName);
     };
     await reportProgress("工作会话执行已开始。");
+    await progress.waitForCurrentSend();
     try {
       if (this._options.runAgent !== undefined) {
         attempt = this._attemptStore.createRunning({
@@ -272,7 +271,6 @@ export class WorkRunner {
           turnMessages.map(message => message.text).join("\n"));
         const turnPrompt = joinBlocks([dataBlock("memory", { text: memory?.text ?? "" }), prompt]);
         if (turnPrompt !== prompt) this._attemptStore.updateInputPrompt(attempt.id, turnPrompt);
-        let pendingAssistantStep: string | undefined;
         const invocation = await invokeSessionAgent({
           runner: launch.runner,
           runnerContext,
@@ -282,15 +280,14 @@ export class WorkRunner {
           prompt: turnPrompt,
           env: launch.env,
           ...(signal !== undefined ? { signal } : {}),
-          onAssistantEvent: async (event) => {
-            if (pendingAssistantStep !== undefined) {
-              await reportProgress(pendingAssistantStep);
-              pendingAssistantStep = undefined;
-            }
-            const stepSummary = runnerProgressStepFromAssistant(event);
-            if (stepSummary !== undefined) {
-              pendingAssistantStep = stepSummary;
-            }
+          onAssistantEvent: event => {
+            for (const block of event.content) if (block.type === "tool_use") progress.toolStart(block.id, block.name);
+            const text = extractTextContent(event, {includeThinking: false, includeToolUse: false});
+            const step = text.trim() ? runnerProgressStepFromAssistant({...event, content: [{type: "text", text}]}) : undefined;
+            if (step) progress.summary(step);
+          },
+          onToolEvent: event => {
+            for (const block of event.content) progress.toolResult(block.tool_use_id, block.content === "工具执行失败");
           },
         });
         memory?.commit();
@@ -305,6 +302,7 @@ export class WorkRunner {
       });
       }
     } catch (err) {
+      await progress.close();
       if (err instanceof RuntimeDetachedError) throw err;
       if (attempt !== undefined) {
         this._attemptStore.markRunnerFailed(attempt.id, {
@@ -332,6 +330,7 @@ export class WorkRunner {
       this._attachStatusCardToTurn(input.turn.id, sentCard);
       return;
     } finally {
+      await progress.close();
       workInvocations(this._options.db).delete(invocationId);
     }
 
@@ -511,7 +510,7 @@ export class WorkRunner {
     card: StatusCardOutput,
     messageRow: MessageRow,
     sessionId: string,
-    options: { readonly targetMessageId?: string; readonly style?: "card" | "native"; readonly nativeProgress?: readonly NativeProgressEntry[] } = {},
+    options: { readonly targetMessageId?: string; readonly style?: "card" | "native"; readonly nativeProgress?: readonly NativeProgressEntry[]; readonly progressKey?: string } = {},
   ): Promise<SentStatusCard> {
     if (sessionId) new SessionStore(this._options.db).requireReplyUserId(sessionId);
     const steps = card.steps.map((s) => `${s.name}${s.note ? ` — ${s.note}` : ""}`);
@@ -547,7 +546,7 @@ export class WorkRunner {
           ? { targetMessageId: options.targetMessageId }
           : { targetMessageId: createTargetMessageId }
         ),
-        idempotencyKey: [
+        idempotencyKey: options.style === "native" && isCreate ? ["work-progress",inbound.channel.id,options.progressKey ?? messageRow.id,"create"].join(":") : [
           options.style === "native" ? "work-progress" : "work-card",
           inbound.channel.id,
           messageRow.id,

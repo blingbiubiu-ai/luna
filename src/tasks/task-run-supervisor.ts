@@ -1,3 +1,4 @@
+import type { TaskStatusCardStepEvent } from "@/messaging/notifications/task-status-card-updater";
 import { InvocationService } from "@/runners/invocation-service";
 import { RuntimeDetachedError } from "@/runners/runtime-detach";
 import { InvocationStore } from "@/runners/invocation-store";
@@ -63,6 +64,7 @@ export interface TaskRunNotificationLifecycle {
   }) => Promise<void> | void;
   readonly onRunProgress?: (input: {
     readonly taskRunId: string;
+    readonly events?: readonly TaskStatusCardStepEvent[];
   }) => Promise<void> | void;
   readonly onRunFailed?: (input: {
     readonly taskRunId: string;
@@ -344,7 +346,7 @@ export class TaskRunSupervisor {
           ? { sourceMessageId: input.run.sourceMessageId }
           : {}),
         signal: input.signal,
-        onProgress: () => this._notifyRunProgress(input.run),
+        onProgress: events => this._notifyRunProgress(input.run, events),
       });
 
       if (input.signal.aborted || !this._isActiveRun(input.run)) {
@@ -547,10 +549,11 @@ export class TaskRunSupervisor {
     }
   }
 
-  private async _notifyRunProgress(run: TaskRun): Promise<void> {
+  private async _notifyRunProgress(run: TaskRun, events?: readonly TaskStatusCardStepEvent[]): Promise<void> {
     try {
       await this._options.runNotifications?.onRunProgress?.({
         taskRunId: run.id,
+        ...(events ? { events } : {}),
       });
     } catch (err) {
       logger.warn(

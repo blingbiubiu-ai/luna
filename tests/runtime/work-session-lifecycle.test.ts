@@ -115,8 +115,10 @@ describe("work session lifecycle", () => {
     expect(cards.length).toBeGreaterThan(1);
     expect(cards.every(card => card.statusCardStyle === "native")).toBe(true);
     expect(cards.at(-1)!.statusCard?.status).toBe("completed");
-    expect(cards.at(-1)!.nativeProgress).toEqual([{ id: "step-0", text: "工作会话执行已开始。" }, { id: "step-1", text: "读取需求" }]);
-    expect(cards[0]!.nativeProgress).toEqual([{ id: "step-0", text: "工作会话执行已开始。" }]);
+    const entries = cards.at(-1)!.nativeProgress!;
+    expect(entries.map(entry => entry.text)).toEqual(["工作会话执行已开始。", "读取需求"]);
+    expect(new Set(entries.map(entry => entry.id)).size).toBe(2);
+    expect(cards[0]!.nativeProgress).toEqual([entries[0]!]);
   });
 
   test("#work creates session that stays active (no explicit close)", async () => {
@@ -489,7 +491,7 @@ describe("work session lifecycle", () => {
     );
     expect(progressCards.every((outbound) => outbound.statusCard !== undefined)).toBe(true);
     expect(progressCards.every((outbound) => outbound.statusCard?.hideHeader === true)).toBe(true);
-    expect(progressCards.length).toBeGreaterThanOrEqual(2);
+    expect(progressCards.length).toBeGreaterThanOrEqual(1);
     expect(progressCards.at(0)!.replyMode).toBe("reply_in_thread");
     expect(progressCards.at(0)!.targetMessageId).toBe("t-progress");
     expect(progressCards.at(0)!.threadId).toBe("t-progress");
@@ -497,13 +499,8 @@ describe("work session lifecycle", () => {
     expect(progressCards.at(0)!.statusCardSteps).toEqual([
       "工作会话执行已开始。",
     ]);
-    expect(progressCards.at(-1)!.replyMode).toBe("update_status_card");
-    expect(progressCards.at(-1)!.content).toBe("");
-    expect(progressCards.at(-1)!.statusCardSteps).toEqual([
-      "工作会话执行已开始。",
-      "Read file \"src/main.cpp\"",
-      "<Bash> g++ hello_work.cpp -o hello_work",
-    ]);
+    // A very short run can finish before its queued active updates reach the channel.
+    // The terminal projection below must still include every reported public step.
     const finalUpdate = channel.outbound.at(-1)!;
     expect(finalUpdate.statusCardState).toBe("terminal");
     expect(finalUpdate.content).toBe("执行完成，答复已提交投递。");
@@ -547,6 +544,7 @@ describe("work session lifecycle", () => {
             id: "assistant-final",
             session_id: session.id,
             role: "assistant",
+            final: true,
             content: [{
               type: "text",
               text: "完成",

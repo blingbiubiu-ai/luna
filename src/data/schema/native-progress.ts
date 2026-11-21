@@ -14,6 +14,7 @@ export const nativeProgressDeliveries = sqliteTable("native_progress_deliveries"
     sentEntries: string[];
     terminal?: boolean;
     pending?: "create" | "append" | undefined;
+    progressBudget?: { entries: number; bytes: number; exhausted: boolean };
   }>().notNull(),
   updatedAt: integer("updated_at").notNull(),
 }, table => [uniqueIndex("native_progress_channel_message").on(table.channelId, table.messageId)]);

@@ -3,7 +3,9 @@ import { SessionDispatcher } from "@/sessions/session-dispatcher";
 import { GatewayError } from "@/server/gateway-error";
 import type { OperationResult } from "@/runners/operation-contract";
 import { SessionStore } from "@/sessions/session-store";
-import { asc, eq } from "drizzle-orm";
+import { and, desc, eq, inArray, sql } from "drizzle-orm";
+import { RECENT_PROGRESS_STEPS } from "@/messaging/notifications/buffered-progress";
+import type { TaskStatusCardStepEvent } from "@/messaging/notifications/task-status-card-updater";
 
 import type { NormalizedInboundMessage } from "@/channels";
 import type { DrizzleDB } from "@/data";
@@ -59,6 +61,7 @@ export interface OnTaskRunCompletedInput {
 
 export interface OnTaskRunProgressInput {
   readonly taskRunId: string;
+  readonly events?: readonly TaskStatusCardStepEvent[];
 }
 
 export interface OnTaskRunFailedInput {
@@ -78,6 +81,7 @@ const cardLanes = new WeakMap<DrizzleDB, SessionDispatcher>();
 export class TaskRunNotificationService {
   private readonly _notifications: TaskRunNotificationStore;
   private readonly _attempts: NotificationAttemptStore;
+  private readonly _recentProgress = new Map<string, readonly TaskStatusCardStepEvent[]>();
 
   constructor(private readonly _options: TaskRunNotificationServiceOptions) {
     this._notifications = new TaskRunNotificationStore(_options.db);
@@ -192,7 +196,11 @@ export class TaskRunNotificationService {
   private async _onRunProgress(input: OnTaskRunProgressInput): Promise<void> {
     const run = this._requireRun(input.taskRunId);
     const task = this._requireTask(run.task_id);
-    const timelineEventsForRun = this._timelineEventsForRun(run);
+    const delta = input.events?.map(event => ({ ...event, id: event.id ?? createHash("sha256").update(event.summary).digest("hex") }));
+    const timelineEventsForRun = delta
+      ? [...(this._recentProgress.get(run.id) ?? []), ...delta].slice(-RECENT_PROGRESS_STEPS)
+      : this._timelineEventsForRun(run);
+    this._recentProgress.set(run.id, timelineEventsForRun);
     const latestProgressEvent = _latestProgressEvent(timelineEventsForRun);
     if (latestProgressEvent === undefined) {
       return;
@@ -227,11 +235,11 @@ export class TaskRunNotificationService {
           notification.subscriptionId,
           "update_status_card_progress",
           notification.statusMessageId,
-          latestProgressEvent.id,
+          latestProgressEvent.id!,
         ]),
         taskId: run.task_id,
         subscriptionId: notification.subscriptionId,
-        messageId: latestProgressEvent.id,
+        messageId: latestProgressEvent.id!,
         action: "update_status_card_progress",
       });
       if (attempt.status === "sent") {
@@ -245,7 +253,7 @@ export class TaskRunNotificationService {
         sessionId: notification.sessionId,
         idempotencyKey: attempt.idempotency_key,
         statusCardStyle: notification.statusCardStyle,
-        nativeProgress: nativeProgressEntries(timelineEventsForRun),
+        nativeProgress: nativeProgressEntries(delta ?? timelineEventsForRun),
         statusCardState: "active",
         statusCard: {
           taskId: run.task_id,
@@ -298,7 +306,8 @@ export class TaskRunNotificationService {
     readonly content: string;
     readonly result?: TaskRunNotificationResult;
   }): Promise<void> {
-    return this._serialize(input.taskRunId, () => this._updateTerminalCardsUnlocked(input));
+    try { await this._serialize(input.taskRunId, () => this._updateTerminalCardsUnlocked(input)); }
+    finally { this._recentProgress.delete(input.taskRunId); }
   }
 
   private async _updateTerminalCardsUnlocked(input: {
@@ -570,11 +579,16 @@ export class TaskRunNotificationService {
     return this._options.db
       .select()
       .from(timelineEvents)
-      .where(eq(timelineEvents.task_id, run.task_id))
-      .orderBy(asc(timelineEvents.created_at), asc(timelineEvents.id))
+      .where(and(eq(timelineEvents.task_id, run.task_id), inArray(timelineEvents.type,["runner.step","runner.cancelled","runner.failed"]), sql`json_extract(
+        CASE WHEN json_valid(${timelineEvents.data}) THEN
+          CASE WHEN json_type(${timelineEvents.data}) = 'text' AND json_valid(json_extract(${timelineEvents.data}, '$'))
+            THEN json_extract(${timelineEvents.data}, '$') ELSE ${timelineEvents.data} END
+          ELSE '{}' END, '$.taskRunId') = ${run.id}`))
+      .orderBy(desc(timelineEvents.created_at), desc(timelineEvents.id))
+      .limit(RECENT_PROGRESS_STEPS)
       .all()
       .map((row) => ({ ...row, data: _normalizedTimelineData(row.data) }))
-      .filter((row) => _timelineEventBelongsToRun(row.data, run.id));
+      .reverse();
   }
 }
 
@@ -589,16 +603,9 @@ function _normalizedTimelineData(data: unknown): unknown {
   }
 }
 
-function _timelineEventBelongsToRun(data: unknown, taskRunId: string): boolean {
-  if (data === null || typeof data !== "object" || Array.isArray(data)) {
-    return false;
-  }
-  return (data as Record<string, unknown>).taskRunId === taskRunId;
-}
-
 function _latestProgressEvent(
-  events: readonly (typeof timelineEvents.$inferSelect)[],
-): typeof timelineEvents.$inferSelect | undefined {
+  events: readonly TaskStatusCardStepEvent[],
+): TaskStatusCardStepEvent | undefined {
   return events
     .filter((event) => event.type === "runner.step")
     .at(-1);

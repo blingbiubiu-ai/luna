@@ -16,6 +16,10 @@ export interface CotResponse {code?: number; msg?: string; data?: {cot_id?: stri
 type Request = (request: CotRequest) => Promise<CotResponse>;
 type State = typeof nativeProgressDeliveries.$inferSelect.state;
 const event = (event_type: string, content: object) => ({event_type, content: JSON.stringify(content), timestamp: Date.now()});
+const MAX_ENTRIES = 100;
+const MAX_BYTES = 32 * 1024;
+const TERMINAL_RESERVE_BYTES = 4 * 1024;
+const eventBytes = (events: ReturnType<typeof event>[]) => Buffer.byteLength(JSON.stringify(events));
 
 /** A snapshot-to-append stream adapter. Checkpoints survive adapter/service restarts.
  * The provider has no documented idempotency key for create/append: an unknown
@@ -33,7 +37,7 @@ export class NativeTaskProgress {
       : eq(nativeProgressDeliveries.id, key)).get();
     if (!row && updating) throw new Error("Native progress receipt unavailable; use status-card --resend");
     if (!row) {
-      this.db.insert(nativeProgressDeliveries).values({id:key, channelId:this.channelId, state:{sentEntries:[]}, updatedAt:Date.now()}).run();
+      this.db.insert(nativeProgressDeliveries).values({id:key, channelId:this.channelId, state:{sentEntries:[],progressBudget:{entries:0,bytes:0,exhausted:false}}, updatedAt:Date.now()}).run();
       row = this.db.select().from(nativeProgressDeliveries).where(eq(nativeProgressDeliveries.id,key)).get()!;
     }
     const id = row.id;
@@ -73,6 +77,8 @@ export class NativeTaskProgress {
     }
     if (!state.terminal) {
       const append = async (events: ReturnType<typeof event>[], next: State) => {
+        const budget = state.progressBudget ?? {entries:state.sentEntries.length,bytes:0,exhausted:false};
+        next = {...next, progressBudget:{...(next.progressBudget ?? budget),bytes:budget.bytes + eventBytes(events)}};
         save({...state,pending:"append"});
         await call({method:"PUT",url:"/open-apis/im/v1/message_cot",data:{cot_id:state.cotId,message_id:messageId,events}});
         save({...next,pending:undefined});
@@ -84,18 +90,32 @@ export class NativeTaskProgress {
           event("REASONING_START",{messageId:`reason-${messageId}`}),
         ], {...state,started:true});
         const seen = new Set(state.sentEntries);
+        let draft = state;
+        let batch: ReturnType<typeof event>[] = [];
+        const flush = async () => {
+          if (!batch.length) return;
+          await append(batch,draft); batch = []; draft = state;
+        };
+        const queue = async (events: ReturnType<typeof event>[], next: State) => {
+          const requestBytes = (items: ReturnType<typeof event>[]) => Buffer.byteLength(JSON.stringify({cot_id:state.cotId,message_id:messageId,events:items}));
+          if (requestBytes(events) > 8 * 1024) throw new Error("Native progress entry exceeds request budget");
+          if (batch.length && requestBytes([...batch,...events]) > 8 * 1024) await flush();
+          batch.push(...events); draft = next;
+        };
         const entries: NativeProgressEntry[] = [{id: "task-title", text: operation.statusCard?.title ?? "任务进度"}, ...(operation.nativeProgress ?? []),
           ...(terminal ? [{id: "terminal-note", text: operation.content || (operation.statusCard?.status === "completed" ? "任务已完成，结果由主会话汇报。" : "本轮执行已结束。")}] : [])];
         for (const entry of entries) {
           if (seen.has(entry.id)) continue;
           const nodeId = `${messageId}-${entry.id}`;
-          let next = {...state, sentEntries:[...state.sentEntries,entry.id]};
+          const budget = draft.progressBudget ?? {entries:draft.sentEntries.length,bytes:0,exhausted:false};
+          if (entry.id !== "terminal-note" && budget.exhausted) continue;
+          let next = {...draft, sentEntries:[...draft.sentEntries,entry.id]};
           const events: ReturnType<typeof event>[] = [];
           if (entry.toolName || entry.toolPhase === "result") {
             const callId = entry.toolCallId ?? entry.id;
             const toolNodeId = `${messageId}-tool-${callId}`;
-            const tools = {...state.openTools};
-            const parent = state.lastReasoningId ?? `reason-${messageId}`;
+            const tools = {...draft.openTools};
+            const parent = draft.lastReasoningId ?? `reason-${messageId}`;
             if (entry.toolPhase !== "result" || !tools[callId]) {
               events.push(event("TOOL_CALL_START", {toolCallId:toolNodeId, toolCallName:entry.toolName ?? "tool",
                 title:entry.toolTitle ?? toolLabel(entry.toolName ?? "tool"), icon:toolIcon(entry.toolName ?? "tool"), parentMessageId:parent}),
@@ -113,16 +133,30 @@ export class NativeTaskProgress {
               event("REASONING_MESSAGE_END",{messageId:nodeId}));
             next = {...next, lastReasoningId:nodeId};
           }
-          await append(events,next);
+          if (entry.id !== "terminal-note" && (budget.entries >= MAX_ENTRIES - 6 || budget.bytes + eventBytes(events) > MAX_BYTES - TERMINAL_RESERVE_BYTES)) {
+            const noticeId = `${messageId}-progress-limit`;
+            const notice = [event("REASONING_MESSAGE_START",{messageId:noticeId,role:"reasoning"}),
+              event("REASONING_MESSAGE_CONTENT",{messageId:noticeId,delta:"详细进度已合并，后续仅汇报最终状态。可在 Dashboard 查看任务状态和结果。"}),
+              event("REASONING_MESSAGE_END",{messageId:noticeId})];
+            await queue(notice,{...draft,lastReasoningId:noticeId,sentEntries:[...draft.sentEntries,"progress-limit"],
+              progressBudget:{...budget,bytes:budget.bytes+eventBytes(notice),exhausted:true}});
+            seen.add("progress-limit");
+            continue;
+          }
+          next = {...next,progressBudget:{...budget,entries:budget.entries+(entry.id === "terminal-note" ? 0 : 1),bytes:budget.bytes+eventBytes(events)}};
+          await queue(events,next);
           seen.add(entry.id);
         }
+        await flush();
       }
       if (terminal) {
         if (!state.pending && !state.ended) {
           // Close unfinished nodes honestly; a missing result does not imply success.
           for (const [callId, toolNodeId] of Object.entries(state.openTools ?? {})) {
             const remaining = {...state.openTools}; delete remaining[callId];
-            await append([toolResult(toolNodeId, "本轮已结束，未收到工具结果")], {...state, openTools:remaining});
+            const events = [toolResult(toolNodeId, "本轮已结束，未收到工具结果")];
+            if ((state.progressBudget?.bytes ?? 0) + eventBytes(events) > MAX_BYTES - 512) break;
+            await append(events, {...state, openTools:remaining});
           }
           const successful = operation.statusCard?.status === "completed";
           await append([
