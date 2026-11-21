@@ -80,6 +80,29 @@ describe("workspace routes", () => {
     rmSync(repoRoot, { recursive: true, force: true });
   });
 
+  test("directory API returns immediate children and applies read authorization before discovery", async () => {
+    const path = `/api/workspaces/knowledge/directory?agentId=${agentId}`;
+    const response = await app.request(path);
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ path: "", entries: [
+      { type: "directory", path: "archive", name: "archive" },
+      { type: "directory", path: "wiki", name: "wiki" },
+    ] });
+    const child = await app.request(path + "&path=wiki");
+    expect(await child.json()).toMatchObject({ entries: [{ type: "directory", path: "wiki/domains" }] });
+    expect((await app.request(path + "&path=../")).status).toBe(400);
+    expect((await app.request(path + "&path=wiki/missing")).status).toBe(404);
+    expect((await app.request(path + "&path=wiki/domains/playback.md")).status).toBe(404);
+    grant("workspace.knowledge.read", "deny");
+    expect((await app.request(path)).status).toBe(403);
+  });
+
+  test("search returns filename hits from unopened folders separately from content matches", async () => {
+    const response = await app.request(`/api/workspaces/knowledge/grep?agentId=${agentId}&query=playback&includeFileNames=true`);
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ fileMatches: [expect.objectContaining({ path: "wiki/domains/playback.md" })] });
+  });
+
   test("an explicit read denial applies to the Agent owner", async () => {
     grant("workspace.knowledge.read", "deny");
     const denied = await app.request(`/api/workspaces/knowledge/file?path=wiki/domains/playback.md&agentId=${agentId}`);

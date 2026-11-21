@@ -6,11 +6,10 @@ import {
   CopyIcon,
   FileCodeIcon,
   FileTextIcon,
-  FolderIcon,
   GitCommitIcon,
   SearchIcon,
 } from "lucide-react";
-import { useMemo } from "react";
+import type { ReactNode } from "react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -23,7 +22,9 @@ import type {
 } from "@/lib/api";
 
 interface KnowledgeDashboardProps {
-  readonly entries: readonly WorkspaceFileEntry[];
+  readonly entries?: readonly WorkspaceFileEntry[];
+  readonly fileBrowser?: ReactNode;
+  readonly fileMatchesTruncated?: boolean;
   readonly grepMatches: readonly WorkspaceGrepMatch[];
   readonly selectedFile?: WorkspaceReadFile | undefined;
   readonly gitStatus?: WorkspaceGitStatus | undefined;
@@ -43,15 +44,10 @@ interface KnowledgeDashboardProps {
   readonly onCopy?: (text: string) => void;
 }
 
-interface DirectoryNode {
-  readonly name: string;
-  readonly path: string;
-  readonly children: Map<string, DirectoryNode>;
-  file?: WorkspaceFileEntry;
-}
-
 export function KnowledgeDashboard({
-  entries,
+  entries = [],
+  fileBrowser,
+  fileMatchesTruncated = false,
   grepMatches,
   selectedFile,
   gitStatus,
@@ -71,7 +67,7 @@ export function KnowledgeDashboard({
   onCopy,
 }: KnowledgeDashboardProps) {
   const { t } = useTranslation();
-  const tree = useMemo(() => buildDirectoryTree(searchQuery ? entries.filter(entry => entry.path.toLocaleLowerCase().includes(searchQuery.toLocaleLowerCase())) : entries), [entries, searchQuery]);
+  const files = searchQuery ? entries.filter(entry => entry.path.toLocaleLowerCase().includes(searchQuery.toLocaleLowerCase())) : entries;
   const breadcrumb = selectedFile?.path.split("/") ?? [];
   const selectedContent = selectedFile?.content ?? "";
 
@@ -96,8 +92,8 @@ export function KnowledgeDashboard({
           </div>
         </div>
       </header>
-      <section className="grid min-h-0 flex-1 gap-4 p-5 xl:grid-cols-[22rem_1fr]">
-        <aside className="flex min-h-0 flex-col gap-4">
+      <section className="grid min-h-0 flex-1 content-start items-start gap-4 overflow-auto p-5 xl:grid-cols-[22rem_1fr]">
+        <aside className="grid min-w-0 content-start gap-4">
           <form className="flex gap-2" onSubmit={(event) => { event.preventDefault(); onSearch?.(); }}>
             <Input
               aria-label={t("Search knowledge workspace")}
@@ -116,19 +112,19 @@ export function KnowledgeDashboard({
           <section className="min-h-0 rounded-md border">
             <h2 className="border-b px-3 py-2 text-sm font-medium">{t("Files")}</h2>
             <div className="max-h-[28rem] overflow-auto p-2">
-              {loading ? <p className="p-2 text-sm">{t("Loading")}</p> : null}
-              {loadError ? <p role="alert" className="p-2 text-sm text-destructive">{t("Failed to load files")}: {loadError}</p> : null}
-              {tree.children.size === 0 && !loading && !loadError ? (
-                <p className="p-2 text-sm text-muted-foreground">{t("No files found.")}</p>
-              ) : null}
-              {Array.from(tree.children.values()).map((node) => (
-                <DirectoryTreeItem
-                  key={node.path}
-                  node={node}
-                  onSelectPath={onSelectPath}
-                  selectedPath={selectedFile?.path}
-                />
-              ))}
+              {!searchQuery && fileBrowser ? fileBrowser : <>
+                {loading || (searchQuery && searching) ? <p role="status" className="p-2 text-sm">{t("Loading")}</p> : null}
+                {loadError || (searchQuery && searchError) ? <p role="alert" className="p-2 text-sm text-destructive">{t("Failed to load files")}: {loadError || searchError}</p> : null}
+                {files.length === 0 && !loading && !searching && !loadError && !searchError ? <p className="p-2 text-sm text-muted-foreground">{t("No files found.")}</p> : null}
+                {fileMatchesTruncated ? <p className="p-2 text-xs text-muted-foreground">{t("Showing the first 500 matches. Narrow your search.")}</p> : null}
+                {files.map(file => <button key={file.path} type="button" title={file.path}
+                  className={`flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm hover:bg-accent ${selectedFile?.path === file.path ? "bg-accent" : ""}`}
+                  onClick={() => onSelectPath?.(file.path)}>
+                  <FileTextIcon className="size-4 shrink-0 text-muted-foreground" />
+                  <span className="min-w-0 flex-1 truncate">{searchQuery ? file.path : file.path.split("/").at(-1)}</span>
+                  <span className="shrink-0 text-xs text-muted-foreground">{formatBytes(file.sizeBytes)}</span>
+                </button>)}
+              </>}
             </div>
           </section>
           <section className="rounded-md border">
@@ -241,55 +237,6 @@ export function KnowledgeDashboardForTest(props: KnowledgeDashboardProps) {
   return <KnowledgeDashboard {...props} />;
 }
 
-function DirectoryTreeItem({
-  node,
-  selectedPath,
-  onSelectPath,
-}: {
-  readonly node: DirectoryNode;
-  readonly selectedPath?: string | undefined;
-  readonly onSelectPath?: ((path: string) => void) | undefined;
-}) {
-  if (node.file !== undefined) {
-    return (
-      <button
-        className={
-          "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm hover:bg-accent " +
-          (selectedPath === node.file.path ? "bg-accent" : "")
-        }
-        onClick={() => onSelectPath?.(node.file?.path ?? "")}
-        title={node.file.path}
-        type="button"
-      >
-        <FileTextIcon className="size-4 shrink-0 text-muted-foreground" />
-        <span className="min-w-0 flex-1 truncate">{node.name}</span>
-        <span className="shrink-0 text-xs text-muted-foreground">
-          {formatBytes(node.file.sizeBytes)}
-        </span>
-      </button>
-    );
-  }
-  return (
-    <div className="py-1">
-      <div className="flex items-center gap-2 px-2 py-1 text-sm font-medium">
-        <ChevronRightIcon className="size-3 text-muted-foreground" />
-        <FolderIcon className="size-4 text-muted-foreground" />
-        <span>{node.name}</span>
-      </div>
-      <div className="ml-4 border-l pl-2">
-        {Array.from(node.children.values()).map((child) => (
-          <DirectoryTreeItem
-            key={child.path}
-            node={child}
-            onSelectPath={onSelectPath}
-            selectedPath={selectedPath}
-          />
-        ))}
-      </div>
-    </div>
-  );
-}
-
 function Breadcrumb({ parts }: { readonly parts: readonly string[] }) {
   return (
     <div className="flex flex-wrap items-center gap-1">
@@ -301,31 +248,6 @@ function Breadcrumb({ parts }: { readonly parts: readonly string[] }) {
       ))}
     </div>
   );
-}
-
-function buildDirectoryTree(entries: readonly WorkspaceFileEntry[]): DirectoryNode {
-  const root: DirectoryNode = {
-    name: "knowledge",
-    path: "",
-    children: new Map(),
-  };
-  for (const entry of [...entries].sort((left, right) => left.path.localeCompare(right.path))) {
-    const parts = entry.path.split("/").filter((part) => part.length > 0);
-    let current = root;
-    for (const [index, part] of parts.entries()) {
-      const path = parts.slice(0, index + 1).join("/");
-      const existing = current.children.get(part);
-      const child = existing ?? {
-        name: part,
-        path,
-        children: new Map(),
-      };
-      current.children.set(part, child);
-      current = child;
-    }
-    current.file = entry;
-  }
-  return root;
 }
 
 function copyText(onCopy: ((text: string) => void) | undefined, text: string): void {

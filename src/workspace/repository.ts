@@ -2,7 +2,9 @@ import { spawnSync } from "node:child_process";
 import {
   existsSync,
   mkdirSync,
+  lstatSync,
   readFileSync,
+  readdirSync,
   realpathSync,
   statSync,
   writeFileSync,
@@ -16,6 +18,20 @@ export interface WorkspaceFileEntry {
   readonly sizeBytes: number;
   readonly modifiedAt: string;
   readonly kind: WorkspaceFileKind;
+}
+
+export type WorkspaceDirectoryEntry =
+  | { readonly type: "directory"; readonly path: string; readonly name: string }
+  | (WorkspaceFileEntry & { readonly type: "file"; readonly name: string });
+
+export interface WorkspaceDirectoryResult {
+  readonly workspaceId: string;
+  readonly path: string;
+  readonly entries: readonly WorkspaceDirectoryEntry[];
+}
+
+export class WorkspaceDirectoryError extends Error {
+  constructor(readonly code: "invalid_directory_path" | "directory_not_found" | "not_a_directory") { super(code); }
 }
 
 export interface WorkspaceGlobResult {
@@ -35,6 +51,8 @@ export interface WorkspaceGrepResult {
   readonly matches: readonly WorkspaceGrepMatch[];
   readonly skippedFiles?: number;
   readonly truncated?: boolean;
+  readonly fileMatches?: readonly WorkspaceFileEntry[];
+  readonly fileMatchesTruncated?: boolean;
 }
 
 export type WorkspaceGrepMode = "literal" | "regex";
@@ -120,6 +138,39 @@ export class WorkspaceRepository {
     return absolutePath;
   }
 
+  /** Enumerates just one directory. Root discovery exposes permitted roots only. */
+  directory(path = ""): WorkspaceDirectoryResult {
+    let normalized: string, directory: string;
+    try {
+      normalized = path === "" || path === "." ? "" : normalizeWorkspacePath(path);
+      directory = normalized ? this.resolvePath(normalized) : this.root;
+      if (existsSync(directory) && realpathSync(directory) !== directory) throw new Error("Directory symlinks are not browseable");
+    } catch { throw new WorkspaceDirectoryError("invalid_directory_path"); }
+    let children: string[];
+    try {
+      if (!statSync(directory).isDirectory()) throw new WorkspaceDirectoryError("not_a_directory");
+      children = readdirSync(directory);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") throw new WorkspaceDirectoryError("directory_not_found");
+      throw error;
+    }
+    const entries: WorkspaceDirectoryEntry[] = [];
+    for (const name of children) {
+      if (name.startsWith(".") || (!normalized && !this._allowedReadRoots.has(name))) continue;
+      const childPath = normalized ? `${normalized}/${name}` : name;
+      // Broken/outside symlinks and non-regular entries are not browseable.
+      let absolute: string;
+      try { absolute = this.resolvePath(childPath); } catch { continue; }
+      let stat;
+      try { stat = lstatSync(absolute); } catch { continue; }
+      if (stat.isSymbolicLink()) continue;
+      if (stat.isDirectory()) entries.push({ type: "directory", name, path: childPath });
+      else if (stat.isFile()) entries.push({ type: "file", name, ...this._fileEntry(childPath) });
+    }
+    entries.sort((a, b) => a.type === b.type ? a.name.localeCompare(b.name) : a.type === "directory" ? -1 : 1);
+    return { workspaceId: this.workspaceId, path: normalized, entries };
+  }
+
   glob(pattern: string): WorkspaceGlobResult {
     const normalizedPattern = normalizeGlobPattern(pattern);
     const entries = [...new Bun.Glob(normalizedPattern).scanSync({ cwd: this.root })]
@@ -130,7 +181,7 @@ export class WorkspaceRepository {
     return { workspaceId: this.workspaceId, entries };
   }
 
-  grep(input: string | WorkspaceGrepRequest, globPattern = "**/*"): WorkspaceGrepResult {
+  grep(input: string | WorkspaceGrepRequest, globPattern = "**/*", options: { includeFileNames?: boolean } = {}): WorkspaceGrepResult {
     const request = normalizeGrepRequest(input, globPattern);
     if (request.queries.length === 0) {
       return { workspaceId: this.workspaceId, matches: [] };
@@ -140,12 +191,21 @@ export class WorkspaceRepository {
         ? regexLineMatcher(query)
         : literalLineMatcher(query)
     );
+    const entries = this.glob(request.globPattern).entries;
+    const fileMatches = options.includeFileNames ? entries.filter(entry => {
+      const found = matchers.filter(matcher => matcher(entry.path) >= 0).length;
+      return request.match === "all" ? found === matchers.length : found > 0;
+    }) : [];
+    const filenameResult = options.includeFileNames ? {
+      fileMatches: fileMatches.slice(0, 500),
+      ...(fileMatches.length > 500 ? { fileMatchesTruncated: true } : {}),
+    } : {};
     const matches: WorkspaceGrepMatch[] = [];
     let skippedFiles = 0;
     let scannedBytes = 0;
     const maxFileBytes = 2 * 1024 * 1024;
     const maxTotalBytes = 32 * 1024 * 1024;
-    for (const entry of this.glob(request.globPattern).entries) {
+    for (const entry of entries) {
       if (entry.sizeBytes > maxFileBytes || scannedBytes + entry.sizeBytes > maxTotalBytes || /\.(?:png|jpe?g|gif|webp|ico|pdf|mp[34]|mov|wav|zip|gz|7z|woff2?|ttf)$/i.test(entry.path)) {
         skippedFiles++;
         continue;
@@ -168,11 +228,11 @@ export class WorkspaceRepository {
             column: Math.min(...matchingColumns) + 1,
             text: line.slice(0, 2000),
           });
-          if (matches.length >= 500) return { workspaceId: this.workspaceId, matches, skippedFiles, truncated: true };
+          if (matches.length >= 500) return { workspaceId: this.workspaceId, matches, skippedFiles, truncated: true, ...filenameResult };
         }
       }
     }
-    return { workspaceId: this.workspaceId, matches, ...(skippedFiles ? { skippedFiles } : {}) };
+    return { workspaceId: this.workspaceId, matches, ...(skippedFiles ? { skippedFiles } : {}), ...filenameResult };
   }
 
   readFile(path: string): WorkspaceReadResult {

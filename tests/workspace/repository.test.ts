@@ -80,6 +80,44 @@ describe("workspace repository", () => {
     });
   });
 
+  test("directory lists one level and exposes only allowed roots", () => {
+    mkdirSync(join(root, "knowledge/other"));
+    writeFileSync(join(root, "knowledge/secret.md"), "hidden from discovery");
+    // A shallow listing must not invoke recursive glob enumeration.
+    repo.glob = () => { throw new Error("recursive enumeration"); };
+    expect(repo.directory().entries.map(entry => entry.path)).toEqual(["archive", "wiki"]);
+    expect(repo.directory("wiki").entries.map(entry => [entry.type, entry.path])).toEqual([
+      ["directory", "wiki/_state"], ["directory", "wiki/domains"],
+    ]);
+    expect(repo.directory("wiki/domains").entries).toEqual([
+      expect.objectContaining({ type: "file", name: "playback.md", path: "wiki/domains/playback.md", kind: "markdown" }),
+    ]);
+    expect(repo.directory("archive").entries).toEqual([]);
+    for (const path of ["../", "/tmp", "other", "wiki/../../", "wiki/../archive"]) expect(() => repo.directory(path)).toThrow("invalid_directory_path");
+    expect(() => repo.directory("wiki/missing")).toThrow("directory_not_found");
+    expect(() => repo.directory("wiki/domains/playback.md")).toThrow("not_a_directory");
+  });
+
+  test("directory discovery excludes symlinks, hidden metadata and cycles", () => {
+    symlinkSync(join(root, "knowledge/wiki"), join(root, "knowledge/wiki/cycle"));
+    symlinkSync(join(root, "README.md"), join(root, "knowledge/wiki/external.md"));
+    mkdirSync(join(root, "knowledge/wiki/.private"));
+    expect(repo.directory("wiki").entries.map(entry => entry.name)).toEqual(["_state", "domains"]);
+    expect(() => repo.directory("wiki/cycle")).toThrow("invalid_directory_path");
+  });
+
+  test("optional filename search covers unopened directories without returning the whole catalog", () => {
+    writeFileSync(join(root, "knowledge/wiki/domains/独立页方案.md"), "unrelated body");
+    expect(repo.grep("独立页", "**/*", { includeFileNames: true })).toMatchObject({
+      matches: [], fileMatches: [expect.objectContaining({ path: "wiki/domains/独立页方案.md" })],
+    });
+    expect(repo.grep("独立页", "**/*").fileMatches).toBeUndefined();
+    for (let i = 0; i < 501; i++) writeFileSync(join(root, `knowledge/wiki/unique-${i}.md`), "");
+    const limited = repo.grep("unique", "**/*", { includeFileNames: true });
+    expect(limited.fileMatches).toHaveLength(500);
+    expect(limited.fileMatchesTruncated).toBe(true);
+  });
+
   test("grep skips binary and oversized archives and bounds large result sets", () => {
     writeFileSync(join(root, "knowledge/archive/media.png"), "首帧");
     writeFileSync(join(root, "knowledge/archive/binary.bin"), Buffer.from([0, 1, 2]));

@@ -62,3 +62,29 @@ Primary code paths: `src/agents/agent-knowledge-source.ts`,
 `src/server/routes/agent-knowledge-source.ts`,
 `extensions/workspace/knowledge/definition.ts`, and
 `apps/dashboard/src/app/settings/knowledge-source.tsx`.
+
+## Directory browsing and search
+
+Dashboard discovers the knowledge root with
+`GET /api/workspaces/knowledge/directory?agentId=<id>&path=`. Each response lists
+only immediate children, with a `type` discriminator for files and directories.
+Root discovery exposes existing permitted roots; hidden metadata, special files,
+all symlinks are excluded from directory listings. Traversal/disallowed directory
+paths fail with 400; nonexistent/non-directory paths fail with 404. The existing
+Agent ownership / business read-grant boundary applies before enumeration.
+
+The directory tree requests a child's listing only when its folder is expanded.
+Each directory has an Agent/path-scoped query cache, loading/error feedback and
+retry. Closing a branch unmounts its descendants and cancels outstanding requests.
+Initial browsing does not request a recursive glob or any file body. Files are
+read after selection. A large individual directory is still returned in one
+response; this change does not add pagination.
+
+Search remains independent of expanded directories. Once a nonempty search is
+submitted/debounced, Dashboard asks the existing grep API to include filename
+matches (`includeFileNames=true`). Filename results and content results are
+separate and each capped at 500. Search results open files directly without
+loading their parent directories. The existing content scan bounds and skip /
+truncation reporting remain. The browser never downloads a complete glob to
+perform filename search; recursive enumeration happens on Service only for an
+explicit search. CLI/MCP glob and grep contracts retain their default behavior.

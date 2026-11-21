@@ -982,6 +982,15 @@ export interface WorkspaceFileEntry {
   kind: WorkspaceFileKind;
 }
 
+export type WorkspaceDirectoryEntry =
+  | { type: "directory"; path: string; name: string }
+  | (WorkspaceFileEntry & { type: "file"; name: string });
+export interface WorkspaceDirectoryResult {
+  workspaceId: string;
+  path: string;
+  entries: WorkspaceDirectoryEntry[];
+}
+
 export interface WorkspaceGlobResult {
   workspaceId: string;
   entries: WorkspaceFileEntry[];
@@ -997,6 +1006,8 @@ export interface WorkspaceGrepMatch {
 export interface WorkspaceGrepResult {
   workspaceId: string;
   matches: WorkspaceGrepMatch[];
+  fileMatches?: WorkspaceFileEntry[];
+  fileMatchesTruncated?: boolean;
   skippedFiles?: number;
   truncated?: boolean;
 }
@@ -1042,12 +1053,16 @@ function useWorkspaceQuery<T>(agentId: string, workspaceId: string, operation: s
   });
 }
 
+export function useWorkspaceDirectory(agentId: string, workspaceId: string, path = "") {
+  return useWorkspaceQuery<WorkspaceDirectoryResult>(agentId, workspaceId, "directory", { path });
+}
+
 export function useWorkspaceGlob(agentId: string, workspaceId: string, pattern = "**/*") {
   return useWorkspaceQuery<WorkspaceGlobResult>(agentId, workspaceId, "glob", { pattern });
 }
 
-export function useWorkspaceGrep(agentId: string, workspaceId: string, query: string, glob = "**/*") {
-  return useWorkspaceQuery<WorkspaceGrepResult>(agentId, workspaceId, "grep", { query, glob }, query.trim().length > 0);
+export function useWorkspaceGrep(agentId: string, workspaceId: string, query: string, glob = "**/*", includeFileNames = false) {
+  return useWorkspaceQuery<WorkspaceGrepResult>(agentId, workspaceId, "grep", { query, glob, ...(includeFileNames ? { includeFileNames: "true" } : {}) }, query.trim().length > 0);
 }
 
 export function useWorkspaceFile(agentId: string, workspaceId: string, path: string | null) {

@@ -12,7 +12,7 @@ import {
   type KnowledgeWorkspaceOperation,
 } from "../../../extensions/workspace/knowledge/definition";
 import { GatewayError } from "../gateway-error";
-import { WorkspaceRepository } from "../../workspace/repository";
+import { WorkspaceDirectoryError, WorkspaceRepository } from "../../workspace/repository";
 import { getKernel } from "./kernel";
 
 export interface WorkspaceRouteOptions {
@@ -25,6 +25,10 @@ export function createWorkspaceRoutes(options: WorkspaceRouteOptions = {}) {
   const getDb = () => options.db ?? getKernel().database.db;
 
   return new Hono()
+    .get("/:workspaceId/directory", c => handleWorkspace(c, () => {
+      const context = workspaceContext(c, getDb(), getHome(), "read");
+      return c.json(context.repository.directory(c.req.query("path") ?? ""));
+    }))
     .get("/:workspaceId/glob", (c) =>
       handleWorkspace(c, () => {
         const context = workspaceContext(c, getDb(), getHome(), "read");
@@ -38,6 +42,7 @@ export function createWorkspaceRoutes(options: WorkspaceRouteOptions = {}) {
           context.repository.grep(
             grepRequestFromQuery(c),
             c.req.query("glob") ?? "**/*",
+            { includeFileNames: optionalBoolean(c.req.query("includeFileNames")) },
           ),
         );
       })
@@ -110,6 +115,7 @@ async function handleWorkspace(
   try {
     return await fn();
   } catch (error) {
+    if (error instanceof WorkspaceDirectoryError) return c.json({ status: "error", code: error.code, message: error.message }, error.code === "invalid_directory_path" ? 400 : 404);
     if(error instanceof AgentError) return c.json({status:"error",code:error.code},error.status);
     if (error instanceof GatewayError) {
       return c.json(workspaceErrorBody(error), error.status as 400 | 401 | 403 | 404 | 500);
@@ -217,4 +223,10 @@ async function readBody(request: Request): Promise<Record<string, unknown>> {
   return typeof body === "object" && body !== null && !Array.isArray(body)
     ? (body as Record<string, unknown>)
     : {};
+}
+
+function optionalBoolean(value: string | undefined): boolean {
+  if (value === undefined || value === "false") return false;
+  if (value === "true") return true;
+  throw new GatewayError("400_bad_request", "includeFileNames must be true or false", 400);
 }

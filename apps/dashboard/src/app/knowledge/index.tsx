@@ -1,12 +1,12 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 
+import { KnowledgeDirectoryBrowser } from "./directory-browser";
 import { KnowledgeDashboard } from "@/app/knowledge/knowledge-dashboard";
 import {
   useWorkspaceFile,
   useWorkspaceGitDiff,
   useWorkspaceGitStatus,
-  useWorkspaceGlob,
   useWorkspaceGrep,
 } from "@/lib/api";
 
@@ -29,27 +29,18 @@ function AgentKnowledge({ agentId }: { agentId: string }) {
     return () => clearTimeout(timer);
   }, [query, composing]);
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
-  const glob = useWorkspaceGlob(agentId, "knowledge", "**/*");
-  const grep = useWorkspaceGrep(agentId, "knowledge", searchQuery, "**/*");
+  const grep = useWorkspaceGrep(agentId, "knowledge", searchQuery, "**/*", true);
   const file = useWorkspaceFile(agentId, "knowledge", selectedPath);
   const gitStatus = useWorkspaceGitStatus(agentId, "knowledge");
   const gitDiff = useWorkspaceGitDiff(agentId, "knowledge");
-  const entries = glob.data?.entries ?? [];
-
-  useEffect(() => {
-    if (selectedPath === null && entries.length > 0) {
-      setSelectedPath(entries[0]?.path ?? null);
-    }
-  }, [entries, selectedPath]);
-
   return (
     <KnowledgeDashboard
-      entries={entries}
+      entries={grep.data?.fileMatches ?? []}
+      fileMatchesTruncated={grep.data?.fileMatchesTruncated ?? false}
+      fileBrowser={<KnowledgeDirectoryBrowser agentId={agentId} selectedPath={selectedPath} onSelectPath={setSelectedPath} />}
       gitDiff={gitDiff.data?.diff}
       gitStatus={gitStatus.data}
       grepMatches={grep.data?.matches ?? []}
-      loading={glob.isLoading}
-      loadError={glob.error?.message}
       onQueryChange={setQuery}
       onCompositionChange={setComposing}
       onSearch={() => {

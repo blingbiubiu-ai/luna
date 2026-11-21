@@ -137,8 +137,10 @@ lookup and macOS Keychain credential reader have been removed. Runner token
 accounting and shared model-context UI components are independent of this page.
 
 Knowledge search debounces input for 300 ms and waits for IME composition to finish.
-The search form supports Enter and the search button, with filename filtering and
-workspace content grep results presented separately. Pending, empty, and failed
+The search form supports Enter and the search button. File browsing loads one
+directory at a time on expansion. Filename and content search run on Service,
+independent of expanded directories, and return bounded results separately; the
+browser no longer downloads a recursive glob to filter filenames. Pending, empty, and failed
 requests have explicit feedback; failed queries can be retried by submitting again.
 
 The dashboard pages, shared forms and dialogs, and standalone artifact preview use a React locale context with
