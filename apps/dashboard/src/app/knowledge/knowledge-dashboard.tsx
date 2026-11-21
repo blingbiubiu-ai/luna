@@ -93,9 +93,10 @@ export function KnowledgeDashboard({
         </div>
       </header>
       <section className="grid min-h-0 flex-1 content-start items-start gap-4 overflow-auto p-5 xl:grid-cols-[22rem_1fr]">
-        <aside className="grid min-w-0 content-start gap-4">
-          <form className="flex gap-2" onSubmit={(event) => { event.preventDefault(); onSearch?.(); }}>
+        <aside className="grid min-w-0 grid-cols-[minmax(0,1fr)] content-start gap-4">
+          <form className="flex min-w-0 gap-2" onSubmit={(event) => { event.preventDefault(); onSearch?.(); }}>
             <Input
+              className="min-w-0 flex-1"
               aria-label={t("Search knowledge workspace")}
               onChange={(event) =>
                 onQueryChange?.(readInputValue(event.currentTarget))
