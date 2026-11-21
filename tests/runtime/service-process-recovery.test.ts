@@ -14,7 +14,7 @@ import { drizzle } from "drizzle-orm/bun-sqlite";
 import { eq } from "drizzle-orm";
 import { closeExecutionServer, TokenAuthority } from "@luna/execution-transport";
 import { openPlatformExecutionDatabase, writePrivateJson, contentHash } from "@luna/execution-store";
-import { runnerContexts, runnerContextOrigins,  sessionTurns, tasks, taskRuns } from "../../src/data/schema";
+import { runnerContexts, runnerContextOrigins,  sessionTurns, tasks, taskRuns, timelineEvents } from "../../src/data/schema";
 import { ActiveAgentConfigService } from "../../src/agent-config/active-agent-config-service";
 import { AgentProfileStore } from "../../src/agent-config/agent-profile-store";
 import { AgentSecretCipher } from "../../src/agent-config/secret-cipher";
@@ -199,12 +199,16 @@ test("Service process restart settles a cancelled intent and reattaches an activ
     executor.transition(taskJob.jobId, "starting");
     executor.transition(taskJob.jobId, "running");
     executor.output(taskJob.jobId, { status: "init", sessionId: "provider-session" });
+    const savedProgress = "Checked the build; waiting for the next result.";
+    executor.output(taskJob.jobId, { status: "stream", text: savedProgress });
     const publish = () => scheduler.events.ingest(taskJob.jobId, assignment.instanceId, {
       version: 1, assignmentId: assignment.assignmentId, instanceId: assignment.instanceId,
       streamId: executor.snapshot(taskJob.jobId).streamId, events: executor.takeLiveEvents().get(taskJob.jobId),
     });
     publish();
     for (const event of scheduler.events.list(taskJob.jobId)) invocations.store.consume(event, () => {});
+    db.insert(timelineEvents).values({id: "saved-progress", task_id: taskId, type: "runner.step",
+      summary: savedProgress, data: {taskRunId, publicProgress: true}, visibility: "full", created_at: Date.now()}).run();
     const priorCursor = invocations.store.job(taskJob.jobId)!.cursor;
     let reissuedToken: string | undefined;
     await stop();
@@ -245,6 +249,7 @@ test("Service process restart settles a cancelled intent and reattaches an activ
     expect(invocations.store.jobsFor(invocationId)).toHaveLength(1);
     expect(invocations.store.job(taskJob.jobId)).toMatchObject({ state: "settled" });
     expect(scheduler.jobs.require(taskJob.jobId).assignmentId).toBe(assignment.assignmentId);
+    expect(db.select().from(timelineEvents).where(eq(timelineEvents.summary, savedProgress)).all()).toHaveLength(1);
 
   } finally {
     await stop();

@@ -26,6 +26,12 @@ timer, persists the last window and discards pending active sends; terminal
 notification follows the existing serialization path. Hard process termination
 can lose recent noncritical progress.
 
+On Service reconnect, Runtime transport restores saved provider text into its
+internal output bookkeeping without emitting it as fresh Assistant progress.
+Only events after the persisted Job cursor and confirmed terminal output are
+emitted. This avoids duplicate timeline rows and notifications from snapshot
+replay; fresh events may still contain the same text as earlier events.
+
 ## Card and Native
 
 Ordinary Card still replaces the current message. Its existing

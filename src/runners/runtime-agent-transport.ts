@@ -164,7 +164,9 @@ export class RuntimeAgentTransport implements AgentAttemptTransport {
       const prior = this.canProjectInvocation(invocationId) ? job.providerState : undefined;
       if (prior?.sessionId) yield* output.accept("init", { sessionId: prior.sessionId });
       if (prior?.checkpoint) output.accept("checkpoint", {});
-      if (prior?.text) yield* output.accept("stream", { text: prior.text });
+      // Restore output bookkeeping without publishing the saved text as fresh progress.
+      // Only events after the persisted cursor and confirmed terminal output are emitted.
+      if (prior?.text) output.accept("stream", { text: prior.text });
       let failure: unknown = prior?.error ? _containerProtocolError(prior.error) : undefined;
       let terminal: JobSnapshot | undefined;
       for await (const event of this.client.events(id, job.cursor, this.detached.signal)) {

@@ -92,7 +92,7 @@ test("Work session reset commits with the event cursor and replay cannot erase a
   }
 });
 
-for (const delivery of ["live", "reattach", "snapshot", "partial", "partial-success", "empty", "missing-final"] as const) {
+for (const delivery of ["live", "reattach", "reattach-live", "snapshot", "partial", "partial-success", "empty", "missing-final"] as const) {
   test(`Main completion survives a missing success event with ${delivery} output`, async () => {
     const root = mkdtempSync(join(tmpdir(), "luna-terminal-output-"));
     const sqlite = new Database(":memory:");
@@ -104,7 +104,10 @@ for (const delivery of ["live", "reattach", "snapshot", "partial", "partial-succ
     const trace = "<Bash> luna messages send --text answer";
     const stream = [trace, marker].map((text, index) => ({ jobId: "job", seq: index + 1, kind: "execution" as const,
       data: { event: { seq: index + 1, at: index + 1, kind: "provider", data: { status: "stream", text } } } }));
-    const terminal = { jobId: "job", seq: delivery === "snapshot" ? 1 : ["partial", "empty", "missing-final"].includes(delivery) ? 2 : 3, kind: "execution" as const,
+    const freshText = [marker, "New phase", marker];
+    const freshStream = freshText.map((text, index) => ({ jobId: "job", seq: index + 3, kind: "execution" as const,
+      data: { event: { seq: index + 3, at: index + 3, kind: "provider", data: { status: "stream", text } } } }));
+    const terminal = { jobId: "job", seq: delivery === "reattach-live" ? 6 : delivery === "snapshot" ? 1 : ["partial", "empty", "missing-final"].includes(delivery) ? 2 : 3, kind: "execution" as const,
       data: { event: { seq: 4, at: 4, kind: "terminal", data: {
         jobId: "job", assignmentId: "assignment", instanceId: "instance", bootId: "boot", streamId: "stream",
         requestHash: "hash", state: "succeeded", lastSeq: 4, createdAt: 1,
@@ -113,7 +116,7 @@ for (const delivery of ["live", "reattach", "snapshot", "partial", "partial-succ
       } } } };
     const success = { jobId: "job", seq: 2, kind: "execution" as const,
       data: { event: { seq: 3, at: 3, kind: "provider", data: { status: "success", result: trace + "\n" + marker } } } };
-    const events = delivery === "live" ? [...stream, terminal]
+    const events = delivery === "reattach-live" ? [...stream, ...freshStream, terminal] : delivery === "live" ? [...stream, terminal]
       : ["partial", "empty", "missing-final"].includes(delivery) ? [stream[0]!, terminal]
       : delivery === "partial-success" ? [stream[0]!, success, terminal] : [terminal];
     const client = runtimeStub({
@@ -128,7 +131,7 @@ for (const delivery of ["live", "reattach", "snapshot", "partial", "partial-succ
       transport.store.createJob("runtime", { version: 2, ...fixtureInvocationJobScope(db, transport.store, "inv", root), jobId: "job", invocationId: "inv", environmentId: "luna",
         runnerContextId: "context", scopeKey: "session:context", runnerKind: "main", sessionId: "session",
         input: { runnerType: "codex", prompt: "test" }, credentialsRevision: 1, timeoutMs: 1000 });
-      if (delivery === "reattach") for (const event of stream) transport.store.consume(event, () => {});
+      if (delivery === "reattach" || delivery === "reattach-live") for (const event of stream) transport.store.consume(event, () => {});
       const text: string[] = [];
       const collect = async () => {
         for await (const event of transport.stream({ id: "message", role: "user", session_id: "session", content: [{ type: "text", text: "test" }] },
@@ -141,6 +144,8 @@ for (const delivery of ["live", "reattach", "snapshot", "partial", "partial-succ
         await collect();
         expect(text.at(-1)).toBe(delivery === "empty" ? "" : marker);
         expect(text).not.toContain(trace + "\n" + marker);
+        if (delivery === "reattach") expect(text).toEqual([marker]);
+        if (delivery === "reattach-live") expect(text).toEqual([...freshText, marker]);
       }
       expect(transport.store.job("job")!.state).toBe("terminal");
     } finally {
