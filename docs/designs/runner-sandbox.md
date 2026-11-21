@@ -88,6 +88,13 @@ directories, the snapshot version or resource limits:
 Persistent host directories and the Executor data volume survive replacement;
 `/tmp` is a tmpfs and is cleared whenever the container stops.
 
+Worker explicitly mounts `/tmp` with `rw,exec,nosuid,nodev,mode=1777`. Development
+tools and tests can create and directly execute temporary programs there without
+redirecting `TMPDIR` into persistent Shadow HOME. `nosuid` and `nodev` remain in
+effect. This mount setting is part of the container launch hash: upgrading a
+container created with the earlier implicit `noexec` setting replaces its system
+disk after active work settles, while preserving HOME and the Executor data volume.
+
 ## Dashboard container access
 
 The Dashboard Containers page lists an Agent's Shadow containers on its assigned

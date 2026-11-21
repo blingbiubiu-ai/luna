@@ -111,7 +111,7 @@ export class DockerEnvironmentDriver {
     const args = ["run", "--detach", "--init", "--name", this.name(environment), "--label", `luna.worker=${this.config.workerId}`, "--label", `luna.instance=${environment.instanceId}`,
       "--label", `luna.agent=${environment.spec.scope.agentId}`, "--label", `luna.shadow=${environment.spec.scope.shadowId}`, "--label", `luna.placement=${environment.spec.scope.placementGeneration}`,
       "--user", "0:0", "--cap-drop", "ALL", ...["CHOWN", "DAC_OVERRIDE", "KILL", "SETUID", "SETGID", "SETPCAP"].flatMap((cap) => ["--cap-add", cap]),
-      ...(this.rootAllowed(environment) ? [] : ["--security-opt", "no-new-privileges"]), "--tmpfs", "/tmp:rw,nosuid,nodev,mode=1777", "--network", this.config.network,
+      ...(this.rootAllowed(environment) ? [] : ["--security-opt", "no-new-privileges"]), "--tmpfs", "/tmp:rw,exec,nosuid,nodev,mode=1777", "--network", this.config.network,
       "--add-host", "host.docker.internal:host-gateway", "--publish", `${this.config.publishHost}:${deployment.port}:8080`,
       "--mount", `type=volume,src=${volume},dst=/data`, "--mount", `type=bind,src=${configFile},dst=/run/luna/executor.json,readonly`,
     ];
