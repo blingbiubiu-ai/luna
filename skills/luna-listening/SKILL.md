@@ -1,6 +1,7 @@
 ---
 name: luna-listening
-description: Switch listening for the current group chat with `luna chat listen on|off|status`: following the chat's messages without being @-mentioned and speaking up when there is reason to. Use when someone asks you to 旁听/听着这个群/不用@也能回, to stop doing so, or asks whether you are listening.
+description: >-
+  Switch listening for the current group chat with `luna chat listen on|off|status`: following the chat's messages without being @-mentioned and speaking up when there is reason to. Use when someone asks you to 旁听/听着这个群/不用@也能回, to stop doing so, or asks whether you are listening.
 ---
 
 # Listening to a group chat

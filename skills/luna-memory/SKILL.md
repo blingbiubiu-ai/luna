@@ -1,6 +1,7 @@
 ---
 name: luna-memory
-description: Write Agent long-term memory with `luna memory add/update/delete`: choose the entry type (person, chat, feedback, project, procedure, reference, persona), make a rule core or Shadow-only, set an expiry, or change who this Shadow is (persona). Use before saving, correcting or forgetting a memory.
+description: >-
+  Write Agent long-term memory with `luna memory add/update/delete`: choose the entry type (person, chat, feedback, project, procedure, reference, persona), make a rule core or Shadow-only, set an expiry, or change who this Shadow is (persona). Use before saving, correcting or forgetting a memory.
 ---
 
 # Writing Agent memory

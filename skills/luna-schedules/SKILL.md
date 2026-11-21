@@ -1,6 +1,7 @@
 ---
 name: luna-schedules
-description: Create, list or change scheduled reminders and recurring work with `luna schedules`. Use when someone asks for a reminder or for something to happen later or repeatedly: "每天X点", "每周X", "每月X号", "N分钟后", "明天X点", "提醒我", "定时", "周期", recurring, reminder.
+description: >-
+  Create, list or change scheduled reminders and recurring work with `luna schedules`. Use when someone asks for a reminder or for something to happen later or repeatedly: "每天X点", "每周X", "每月X号", "N分钟后", "明天X点", "提醒我", "定时", "周期", recurring, reminder.
 ---
 
 # Luna schedules

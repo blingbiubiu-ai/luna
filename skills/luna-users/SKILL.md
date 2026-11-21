@@ -1,6 +1,7 @@
 ---
 name: luna-users
-description: Find people and bots and message them with `luna users` and `luna messages send`: look someone up by name or Feishu ID, send a first private message, or @-mention a person or bot in a group (including handing work to another bot). Use before mentioning anyone or messaging someone outside the current conversation.
+description: >-
+  Find people and bots and message them with `luna users` and `luna messages send`: look someone up by name or Feishu ID, send a first private message, or @-mention a person or bot in a group (including handing work to another bot). Use before mentioning anyone or messaging someone outside the current conversation.
 ---
 
 # Luna people and mentions
