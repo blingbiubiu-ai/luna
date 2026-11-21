@@ -5,7 +5,7 @@ import type {AgentExecutionSnapshot} from "@/agent-config";
 import {TaskScopeResolver} from "@/agents/task-scope";
 import { prepareRunnerFiles } from "@/runners/prepare-runner-files";
 import { randomUUID } from "node:crypto";
-import { BufferedProgress } from "@/messaging/notifications/buffered-progress";
+import { LiveProgress } from "@/messaging/notifications/live-progress";
 import type { TaskStatusCardStepEvent } from "@/messaging/notifications/task-status-card-updater";
 import type { NativeProgressEntry } from "@/channels/outbound";
 import { createLogger } from "@/shared";
@@ -464,10 +464,12 @@ async function _runAgentTask(input: {
   const invocationId = new InvocationStore(input.db).findActive({ runnerKind: "task", taskRunId: input.taskRunId })?.id ?? randomUUID();
   taskInvocations(input.db).set(invocationId, {taskId: input.taskId, taskRunId: input.taskRunId,
     runnerContextId: runnerContext.id, ...(input.signal ? {signal: input.signal} : {})});
-  const progress = new BufferedProgress({
-    persist: (summary: string, nativeText: string) => input.timeline.append({taskId: input.taskId, type: "runner.step", summary,
-      data: {...input.runMetadata, publicProgress: true, reason: input.reason, nativeText}}),
-    entryId: entry => entry.id,
+  const progress = new LiveProgress<TaskStatusCardStepEvent>({
+    persist: summary => input.timeline.append({taskId: input.taskId, type: "runner.step", summary,
+      data: {...input.runMetadata, publicProgress: true, reason: input.reason, nativeText: summary}}),
+    transient: event => ({id:event.id,type:"runner.step",summary:event.toolTitle ?? event.text,
+      data:{...input.runMetadata,publicProgress:true,nativeText:"",toolCallId:event.toolCallId,toolPhase:event.toolPhase}}),
+    entryId: entry => entry.id!,
     send: async (entries, nativeProgress) => { await input.onProgress?.(entries, nativeProgress); },
     onError: error => progressLogger.warn({err: error, taskId: input.taskId}, "task progress update failed"),
   });

@@ -6,7 +6,7 @@ import { GatewayError } from "@/server/gateway-error";
 import type { OperationResult } from "@/runners/operation-contract";
 import { SessionStore } from "@/sessions/session-store";
 import { and, desc, eq, inArray, sql } from "drizzle-orm";
-import { RECENT_PROGRESS_STEPS } from "@/messaging/notifications/buffered-progress";
+import { RECENT_PROGRESS_STEPS } from "@/messaging/notifications/live-progress";
 import type { TaskStatusCardStepEvent } from "@/messaging/notifications/task-status-card-updater";
 
 import type { NormalizedInboundMessage } from "@/channels";
@@ -27,7 +27,7 @@ import {
   TaskStatusCardUpdater,
 } from "@/messaging/notifications/task-status-card-updater";
 import type { TaskResultForMainRunner } from "@/main-runner/types";
-import { nativeProgressEntries } from "@/messaging/notifications/feishu-task-updater";
+import { nativeProgressEntries, updateProgressProjection } from "@/messaging/notifications/feishu-task-updater";
 import type { ReplyChannel } from "@/channels/outbound";
 
 import {
@@ -201,7 +201,7 @@ export class TaskRunNotificationService {
     const task = this._requireTask(run.task_id);
     const delta = input.events?.map(event => ({ ...event, id: event.id ?? createHash("sha256").update(event.summary).digest("hex") }));
     const timelineEventsForRun = delta
-      ? [...(this._recentProgress.get(run.id) ?? []), ...delta].slice(-RECENT_PROGRESS_STEPS)
+      ? updateProgressProjection(this._recentProgress.get(run.id) ?? [], delta)
       : this._timelineEventsForRun(run);
     this._recentProgress.set(run.id, timelineEventsForRun);
     const latestProgressEvent = _latestProgressEvent(timelineEventsForRun);

@@ -7,7 +7,7 @@ import * as schema from "../../src/data/schema";
 import {setLunaHome} from "../../src/shared";
 import {NativeTaskProgress, type CotRequest} from "../../extensions/channels/feishu/messaging/native-task-progress";
 import {nativeProgressEntries} from "../../src/messaging/notifications/feishu-task-updater";
-import {BufferedProgress} from "../../src/messaging/notifications/buffered-progress";
+import {LiveProgress} from "../../src/messaging/notifications/live-progress";
 import type {NormalizedInboundMessage} from "../../src/channels";
 import type {OutboundChannelOperation} from "../../src/channels/outbound";
 let home: string;
@@ -20,15 +20,18 @@ const operation: Omit<OutboundChannelOperation,"id"|"channelId"> = {replyMode:"r
 const request = async (req: CotRequest) => {calls.push(req);return {code:0,data:{cot_id:"cot",message_id:"om_progress"}};};
 const adapter = () => new NativeTaskProgress(connection.db,"test",request);
 const events = () => calls.flatMap(call => (call.data?.events ?? []) as {event_type:string;content:string}[]);
-test("buffered tools render individual native nodes before public text with one summary write", async () => {
+test("live tools render individual native nodes before public text without tool summary writes", async () => {
   const summaries: string[] = [];
-  const progress = new BufferedProgress({persist: summary => {summaries.push(summary);return summary;},
-    send: async (_,nativeProgress) => {await adapter().send(inbound,{...operation,nativeProgress:[...nativeProgress]});},
+  let created=false;
+  const progress = new LiveProgress({persist: summary => {summaries.push(summary);return summary;},transient:event=>event.text,
+    send: async (_,nativeProgress) => {await adapter().send(inbound,{...operation,
+      ...(created?{replyMode:"update_status_card",targetMessageId:"om_progress"}:{}),nativeProgress:[...nativeProgress]});created=true;},
     onError: error => {throw error;}});
   progress.toolStart("read", "Read", "读取配置"); progress.toolResult("read", false);
   progress.toolStart("bash", "Bash", "检查远程编译"); progress.toolResult("bash", false);
   progress.summary("已确认编译通过。"); await progress.close();
   expect(summaries).toHaveLength(1);
+  expect(summaries[0]).toBe("已确认编译通过。");
   const starts=events().filter(e=>e.event_type==="TOOL_CALL_START");
   expect(starts).toHaveLength(2);
   expect(JSON.parse(starts[0]!.content)).toMatchObject({title:"读取配置",icon:"read"});

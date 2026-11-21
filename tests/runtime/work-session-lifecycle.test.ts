@@ -71,6 +71,21 @@ afterEach(() => {
 });
 
 describe("work session lifecycle", () => {
+  test("Native tool result update has its own request key even when card steps stay the same", async () => {
+    const {WorkRunner}=await import("../../src/work/work-runner");
+    const sent: {idempotencyKey:string}[]=[];
+    const channel={send:async (_:unknown,operation:any)=>{sent.push(operation);return {...operation,id:"om_progress",channelId:"feishu-main"};}};
+    const runner=new WorkRunner({db:database.db,runnerType:"mock",channelForMessage:()=>channel as never});
+    const card={title:"工作",status:"in_progress",summary:"",steps:[{name:"检查编译",status:"active"}]};
+    const native={id:"call:start",toolCallId:"call",toolName:"Bash",toolTitle:"检查编译",toolPhase:"start",text:"检查编译"};
+    const send=(entry:unknown)=>(runner as any)._sendStatusCard(channel,{channel:{id:"feishu-main"}},card,{id:"message"},"",
+      {style:"native",targetMessageId:"om_progress",nativeProgress:[entry]});
+    await send(native);
+    const result={...native,id:"call:result",toolPhase:"result",text:"工具调用已结束"};
+    await send(result);await send(result);
+    expect(sent[0]!.idempotencyKey).not.toBe(sent[1]!.idempotencyKey);
+    expect(sent[1]!.idempotencyKey).toBe(sent[2]!.idempotencyKey);
+  });
   /** One Work turn for `session`, with the Agent's Work progress card set to `progressCard`. */
   async function workTurnWithCard(progressCard: { show: boolean; style: "card" | "native" }, runAgent: () => Promise<string>) {
     const { WorkRunner } = await import("../../src/work/work-runner");

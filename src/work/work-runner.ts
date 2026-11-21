@@ -6,7 +6,7 @@ import type {AgentExecutionSnapshot} from "@/agent-config";
 import { contextFileSurface, prepareRunnerDirectory, syncAgentCompatibility, turnAttempt } from "@/runners/session-runner-turn";
 import { RuntimeDetachedError } from "@/runners/runtime-detach";
 import { InvocationStore } from "@/runners/invocation-store";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { workInvocations } from "@/runners/main-invocation-registry";
 import { runnerAnswers, finalizeRunnerReply } from "@/messaging/runner-answer";
 import { SessionStore } from "@/sessions/session-store";
@@ -43,9 +43,9 @@ import {
   buildTaskStatusCardSteps,
   type TaskStatusCardStepEvent,
 } from "@/messaging/notifications/task-status-card-updater";
-import {nativeProgressEntries} from "@/messaging/notifications/feishu-task-updater";
+import {nativeProgressEntries, updateProgressProjection} from "@/messaging/notifications/feishu-task-updater";
 import { getKernel } from "@/server/routes/kernel";
-import { BufferedProgress, RECENT_PROGRESS_STEPS } from "@/messaging/notifications/buffered-progress";
+import { LiveProgress } from "@/messaging/notifications/live-progress";
 import {
   createLogger,
   extractTextContent,
@@ -216,13 +216,19 @@ export class WorkRunner {
       style: display.style,
       nativeProgress: nativeProgress ?? nativeProgressEntries(entries),
     });
-    const progress = new BufferedProgress<TaskStatusCardStepEvent>({
-      persist: (summary, nativeText) => {
-        const entry = {id: randomUUID(), type: "runner.step", summary, data: {publicProgress: true, nativeText}};
-        progressEvents.push(entry);
-        if (progressEvents.length > RECENT_PROGRESS_STEPS) progressEvents.shift();
+    const rememberProgress = (entry: TaskStatusCardStepEvent) => {
+      const recent = updateProgressProjection(progressEvents,[entry]);
+      progressEvents.splice(0,progressEvents.length,...recent);
+      return entry;
+    };
+    const progress = new LiveProgress<TaskStatusCardStepEvent>({
+      persist: summary => {
+        const entry = {id: randomUUID(), type: "runner.step", summary, data: {publicProgress: true, nativeText:summary}};
+        rememberProgress(entry);
         return entry;
       },
+      transient: event => rememberProgress({id:event.id,type:"runner.step",summary:event.toolTitle ?? event.text,
+        data:{publicProgress:true,nativeText:"",toolCallId:event.toolCallId,toolPhase:event.toolPhase}}),
       entryId: entry => entry.id!,
       send: async (entries, nativeProgress) => {
         if (!display.show) return;
@@ -555,6 +561,7 @@ export class WorkRunner {
           card.status,
           options.targetMessageId ?? "create",
           statusCardFingerprint(card, steps),
+          ...(options.style === "native" ? [createHash("sha256").update(JSON.stringify(options.nativeProgress ?? [])).digest("hex")] : []),
         ].join(":"),
       });
     } catch (err) {

@@ -238,11 +238,11 @@ test("Service process restart settles a cancelled intent and reattaches an activ
     const progressDeadline = Date.now() + 15000;
     while (!db.select().from(timelineEvents).all().some(row => row.data && typeof row.data === "object" && "nativeText" in row.data && row.data.nativeText === liveProgress)
       && Date.now() < progressDeadline) await delay(100);
-    const batchRows = db.select().from(timelineEvents).all().filter(row => row.summary.includes(liveProgress));
-    expect(batchRows).toHaveLength(1);
-    expect(batchRows[0]!.summary).toContain("调用 2 次");
-    expect(batchRows[0]!.data).toMatchObject({nativeText:liveProgress,publicProgress:true});
-    expect(JSON.stringify(batchRows[0]!.data)).not.toContain("toolCallId");
+    const progressRows = db.select().from(timelineEvents).all().filter(row => row.summary.includes(liveProgress));
+    expect(progressRows).toHaveLength(1);
+    expect(progressRows[0]!.summary).toBe(liveProgress);
+    expect(progressRows[0]!.data).toMatchObject({nativeText:liveProgress,publicProgress:true});
+    expect(db.select().from(timelineEvents).all().some(row=>JSON.stringify(row.data).includes('"toolCallId"'))).toBe(false);
     const report = () => fetch(url + "/api/runner/task-reports", {
       method: "POST",
       headers: { Authorization: "Bearer " + reissuedToken, "Content-Type": "application/json", "Idempotency-Key": "final" },

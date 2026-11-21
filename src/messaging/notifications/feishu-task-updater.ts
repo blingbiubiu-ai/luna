@@ -1,4 +1,5 @@
 import type { NormalizedInboundMessage } from "@/channels";
+import {RECENT_PROGRESS_STEPS} from "./live-progress";
 import type { OutboundChannelOperation, ReplyChannel } from "@/channels/outbound";
 import { WAITING_FOR_INPUT, type TaskSubscription, type TaskView } from "@/tasks/types";
 
@@ -7,6 +8,17 @@ export interface TaskStatusCardStepEvent {
   readonly type: string;
   readonly summary: string;
   readonly data?: unknown;
+}
+
+/** Tool results replace the existing in-memory step; public text remains chronological. */
+export function updateProgressProjection(previous: readonly TaskStatusCardStepEvent[], incoming: readonly TaskStatusCardStepEvent[]): TaskStatusCardStepEvent[] {
+  let result = [...previous];
+  for (const event of incoming) {
+    const callId = (event.data as {toolCallId?: string} | undefined)?.toolCallId;
+    result = result.filter(old => (!event.id || event.id !== old.id) && (!callId || (old.data as {toolCallId?: string} | undefined)?.toolCallId !== callId));
+    result.push(event);
+  }
+  return result.slice(-RECENT_PROGRESS_STEPS);
 }
 
 export function buildTaskStatusCardSteps(input: {

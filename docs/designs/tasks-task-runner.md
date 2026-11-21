@@ -401,7 +401,9 @@ complete with `error`, successful runs with `done`. The dashboard retains its
 common status-card projection and records the provider presentation style.
 
 Tool progress is preserved structurally from the CLI provider through the
-Executor/Runtime stream, `RunnerOutputState`, and Task timeline. Provider adapters
+Executor/Runtime stream, `RunnerOutputState`, and the transient progress sender.
+Only public Assistant text is written to the Task timeline; tool events remain
+in the in-memory card projection and existing delivery records. Provider adapters
 emit ordered public text, tool-start (call ID, name, display title), and tool-result
 (call ID, outcome) events. Results also emit the existing retry checkpoint;
 progress is never appended to the Runner's final answer. Claude mixed content

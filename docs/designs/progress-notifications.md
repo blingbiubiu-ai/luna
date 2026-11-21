@@ -1,84 +1,77 @@
 # Progress notifications
 
-Task and Work use `BufferedProgress` to aggregate public execution progress in
-Service memory. Ordinary tool starts/results update bounded counters and a
-separate bounded Native presentation buffer; they do
-not create individual Task timeline rows. There is no new tool journal. Existing
-Runner/provider logs and Executor state ownership remain unchanged.
+Task and Work use `LiveProgress` to dispatch each tool start, tool result and
+complete public Assistant text event immediately. There is no timer, tool-count
+aggregation or batching window. Thinking, full arguments and raw tool outputs
+remain excluded. Progress handling does not change prompts or generate extra
+LLM narration.
 
-Tool-only windows flush every five seconds. A complete public Assistant text
-event flushes immediately, with the preceding tool events before the text.
-Thinking and tool arguments are excluded. Counts describe observations in that
-window; results can arrive in a later window than their starts. A tool failure
-does not imply Task failure.
+## Memory, persistence and ordering
 
-Task persists one summary row per flush and passes new rows directly to its
-notification lifecycle. Hot updates do not reread the full task timeline. Each
-run's card projection retains at most 200 recent summaries. Recovery, terminal
-updates and explicit resend query at most the current run's recent 200 rows,
-including legacy JSON-string run metadata. Work keeps the same bounded projection
-and persists its status message through the existing path. The persisted row's
-`nativeText` contains only public Assistant text (possibly empty). Raw tool
-events travel separately to Native delivery; they are not individual timeline
-rows. Existing durable delivery payloads and Native acknowledgement checkpoints
-remain responsible for delivery recovery, rather than a new tool journal.
+Tools produce transient steps for the ordinary card's in-memory projection and
+individual Native entries with stable call IDs, bounded titles and category
+icons. Tool results replace their existing in-memory step. They do not produce
+Task timeline rows or tool-count summaries. Task persists only public text as
+`runner.step`; existing lifecycle events, reports and results remain durable.
+Work keeps recent progress in memory and persists its status-card snapshot
+through the existing path.
 
-The buffer permits one send in flight and retains at most 200 pending summaries.
-Batches retain order; under backpressure the oldest noncritical pending summaries
-can be omitted. Native presentation retains at most 600 pending events and at
-most 600 events in the current window, separately from the summary projection.
-Producer callbacks do not await ongoing notification requests.
-Initial status-message creation may await its receipt once. Closing stops the
-timer and drains the last tool/result window before terminal notification, so
-queued active sends cannot follow terminal state. Hard process termination
-can lose recent noncritical progress.
+Each observation enters a single serial sender immediately. One observation is
+passed per send; slow network requests do not block provider consumption, but
+following observations wait in order. At most 600 observations wait in the
+queue, with older noncritical progress dropped under backpressure. The sender
+keeps at most 300 active tool identities and card projections retain at most
+200 recent steps. Closing rejects new observations and drains accepted updates
+before terminal delivery.
 
-On Service reconnect, Runtime transport restores saved provider text into its
-internal output bookkeeping without emitting it as fresh Assistant progress.
-Only events after the persisted Job cursor and confirmed terminal output are
-emitted. This avoids duplicate timeline rows and notifications from snapshot
-replay; fresh events may still contain the same text as earlier events.
+Existing session delivery payloads, attempts, receipts and Native checkpoints
+still persist for delivery recovery. These can contain the public tool delivery
+payload; they are not a new tool journal or individual business timeline rows.
+Hard termination can lose queued noncritical progress; there is no added tool
+recovery log.
 
-## Card and Native
+On Service reconnect, Runtime transport restores saved provider text without
+emitting it as new progress. Only events after the persisted cursor and confirmed
+terminal output are emitted. Existing Native messages retain their displayed
+nodes. Recovery, terminal updates and explicit resend query at most the current
+run's 200 recent timeline rows, now containing public text and lifecycle events.
+Historical individual tools are not reconstructed from business history.
+Legacy JSON-string metadata and `nativeText` fields remain compatible.
 
-Ordinary Card still replaces the current message. Its existing
-`platform.messaging.maxVisibleSteps` setting controls the rendered tail, with
-range 1–200 and default 32. The internal ceiling supports that maximum and is not
-a new fixed display setting.
+## Ordinary Card and Native
 
-Native appends events to one provider message, batching requests up to 8 KiB of
-serialized request data. A checkpoint tracks cumulative serialized event bytes
-and ordinary display node count. Tools render as individual Native nodes with
-their original bounded title and category icon. Results update their existing
-tool node rather than creating a statistics paragraph or consuming another node
-slot. Already displayed tools can receive results after the node limit, within
-the ordinary byte budget. Ordinary progress uses at most 300 nodes (including
-the task title) and 252 KiB;
-a further six nodes / 4 KiB are reserved for the one-time budget notice and
-terminal delivery. Total event budget is 256 KiB. Existing exhausted checkpoints
-remain exhausted when the limits increase; they require an explicit resend to
-start a new progress message. These are Luna limits, not a
-verified Feishu client capacity guarantee. Task and Work final answers remain
-independent of these display budgets.
+Ordinary Card replaces its message with the current complete card. It renders
+the tail of the in-memory projection according to
+`platform.messaging.maxVisibleSteps`, range 1–200 and default 32. Normal hot
+updates do not reread timeline history. Tools and their updated results can
+appear while running; a recovered or terminal projection reflects persisted
+public text and lifecycle state rather than a permanent tool trace.
 
-On recovery or explicit resend, recent summary rows reconstruct only public
-Assistant text; individual historical tool nodes are not reconstructed from
-timeline summaries. Existing Native messages retain their already appended
-nodes. New messages receive subsequent live tool events normally.
+Native appends each observation to one provider message. A tool result updates
+its existing tool node rather than adding another statistics paragraph. Each
+request contains protocol events for that observation and stays within 8 KiB;
+there is no deliberate wait to gather multiple observations.
 
-Existing `native_progress_deliveries` JSON gains optional `progressBudget`
-metadata; no new table or migration is required. A batch marks pending before
-the request and saves acknowledged IDs/state after confirmation. Unknown outcomes
-remain quarantined across restart. Known rejection clears pending as before.
-Acknowledged IDs are not pruned. Legacy rows count old IDs but cannot reconstruct
-old message byte size; byte accounting starts with new events.
+Ordinary display budget is 300 nodes (including the title) and 252 KiB. Six
+additional nodes / 4 KiB reserve room for one limit notice and terminal delivery,
+for a total 256 KiB budget. Results for already displayed tools may update after
+the node limit within the ordinary byte budget. Exhausted checkpoints remain
+exhausted until explicit resend starts a new message. These are Luna budgets,
+not a verified Feishu client capacity guarantee. Final answers remain independent
+of these display budgets.
 
-Work uses a stable Native create key per Turn. An ambiguous create cannot be
-bypassed by changing the following progress text.
+`native_progress_deliveries` JSON tracks the optional `progressBudget`, pending
+request state, acknowledged IDs and open tools. Pending is saved before sending;
+acknowledgement is saved on confirmation. Unknown outcomes remain quarantined
+across restart; known rejection clears pending. IDs are not pruned. Legacy byte
+accounting starts with newly sent events. Work's Native create key stays fixed
+per Turn. There is no new table, column or migration.
+Work Native update request keys also include the event payload fingerprint, so
+a result is delivered even when its ordinary card step text matches its start.
 
 ## Code paths
 
-- `src/messaging/notifications/buffered-progress.ts`
+- `src/messaging/notifications/live-progress.ts`
 - `src/kernel/task-run-handler.ts`
 - `src/tasks/task-run-supervisor.ts`
 - `src/tasks/task-run-notification-service.ts`
