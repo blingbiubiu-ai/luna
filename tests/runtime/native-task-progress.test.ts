@@ -24,7 +24,9 @@ test("large Native histories are batched and bounded while terminal delivery ret
   await adapter().send(inbound,{...operation,nativeProgress:entries});
   const before = calls.length;
   expect(events().filter(e => e.content.includes("详细进度已合并"))).toHaveLength(1);
-  expect(events().filter(e => e.event_type === "REASONING_MESSAGE_CONTENT").length).toBeLessThan(100);
+  const visible = events().filter(e => e.event_type === "REASONING_MESSAGE_CONTENT").length;
+  expect(visible).toBeGreaterThan(94);
+  expect(visible).toBeLessThan(300);
   for (const req of calls.filter(c => c.method === "PUT")) expect(Buffer.byteLength(JSON.stringify(req.data))).toBeLessThanOrEqual(8 * 1024);
   await adapter().send(inbound,{...operation,replyMode:"update_status_card",targetMessageId:"om_progress",nativeProgress:entries});
   expect(calls.length).toBe(before);
@@ -33,7 +35,14 @@ test("large Native histories are batched and bounded while terminal delivery ret
   expect(events().some(e => e.content.includes("最终结果正常完成"))).toBe(true);
   expect(events().filter(e => e.event_type === "RUN_FINISHED")).toHaveLength(1);
   const total = calls.filter(c => c.method === "PUT").reduce((n,c) => n + Buffer.byteLength(JSON.stringify(c.data!.events)),0);
-  expect(total).toBeLessThanOrEqual(32 * 1024);
+  expect(total).toBeLessThanOrEqual(256 * 1024);
+});
+test("short Native progress retains 300 ordinary entries and one budget notice", async () => {
+  await adapter().send(inbound,{...operation,nativeProgress:Array.from({length:400},(_,i)=>({id:`short-${i}`,text:`步骤 ${i}`}))});
+  expect(events().filter(e=>e.event_type === "REASONING_MESSAGE_CONTENT")).toHaveLength(301);
+  expect(events().filter(e=>e.content.includes("详细进度已合并"))).toHaveLength(1);
+  const checkpoint = connection.db.select().from(schema.nativeProgressDeliveries).get()!;
+  expect(checkpoint.state.progressBudget).toMatchObject({entries:300,exhausted:true});
 });
 test("native thread snapshots append only new public entries across adapter restart and complete once",async()=>{
   const first = await adapter().send(inbound,operation);

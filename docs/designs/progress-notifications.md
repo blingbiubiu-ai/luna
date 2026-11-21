@@ -41,9 +41,12 @@ a new fixed display setting.
 
 Native appends events to one provider message, batching requests up to 8 KiB of
 serialized request data. A checkpoint tracks cumulative serialized event bytes
-and ordinary entry count. Ordinary progress uses at most 94 entries and 28 KiB;
+and ordinary entry count. Ordinary progress uses at most 300 entries (including
+the task title) and 252 KiB;
 a further six nodes / 4 KiB are reserved for the one-time budget notice and
-terminal delivery. Total event budget is 32 KiB. These are Luna limits, not a
+terminal delivery. Total event budget is 256 KiB. Existing exhausted checkpoints
+remain exhausted when the limits increase; they require an explicit resend to
+start a new progress message. These are Luna limits, not a
 verified Feishu client capacity guarantee. Task and Work final answers remain
 independent of these display budgets.
 

@@ -16,8 +16,8 @@ export interface CotResponse {code?: number; msg?: string; data?: {cot_id?: stri
 type Request = (request: CotRequest) => Promise<CotResponse>;
 type State = typeof nativeProgressDeliveries.$inferSelect.state;
 const event = (event_type: string, content: object) => ({event_type, content: JSON.stringify(content), timestamp: Date.now()});
-const MAX_ENTRIES = 100;
-const MAX_BYTES = 32 * 1024;
+const MAX_ENTRIES = 306;
+const MAX_BYTES = 256 * 1024;
 const TERMINAL_RESERVE_BYTES = 4 * 1024;
 const eventBytes = (events: ReturnType<typeof event>[]) => Buffer.byteLength(JSON.stringify(events));
 
