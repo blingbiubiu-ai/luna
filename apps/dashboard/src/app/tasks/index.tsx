@@ -1,59 +1,140 @@
-import { useAgentBasePath } from "@/lib/agent-route";
-import { UiText } from "@/lib/i18n";
-import { useTranslation } from "@/lib/i18n";
 import { createFileRoute } from "@tanstack/react-router";
 import {
   ArrowRight,
-  BriefcaseBusiness,
+  ArrowUpRight,
   CircleCheck,
+  FileText,
+  MessageSquare,
+  Play,
   Search,
+  TerminalSquareIcon,
+  User,
+  X,
 } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useMemo, useState, type MouseEvent } from "react";
 
-import { Badge } from "@/components/ui/badge";
-import type { DashboardIdentity } from "@/components/identity-link";
+import { avatarColorForKey } from "@/app/sessions/session-avatar";
+import { CopyTextButton } from "@/components/copy-text-button";
 import { IdentityLink, identitySearchText } from "@/components/identity-link";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
-import { SelectField } from "@/components/ui/select-field";
-import { ScrollArea } from "@/components/ui/scroll-area";
-import { Skeleton } from "@/components/ui/skeleton";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
-import type { DashboardCanonicalUser, DashboardTask } from "@/lib/api";
 import { ShadowPicker, useShadowScope } from "@/components/shadow-picker";
-import { useTasks } from "@/lib/api";
+import { SelectField } from "@/components/ui/select-field";
+import { Skeleton } from "@/components/ui/skeleton";
+import { useAgentBasePath } from "@/lib/agent-route";
+import { useTasks, type DashboardTask, type DashboardTaskRun, type DashboardTaskSession } from "@/lib/api";
+import { appHistory } from "@/lib/app-history";
+import { UiText, useTranslation } from "@/lib/i18n";
 import { isActiveTaskStatus } from "@/lib/tasks";
 import { cn } from "@/lib/utils";
+
+import {
+  formatRunDuration,
+  formatTaskFullTime,
+  formatTaskRelativeTime,
+  identityForCanonicalUser,
+  MiniUserBadgeAvatar,
+  parseTaskContext,
+  resolveTaskEffectiveState,
+  TaskPriorityPill,
+  taskStateClasses,
+  TaskStateIcon,
+  TaskStatusPill,
+  TaskTypePill,
+  type TaskEffectiveState,
+} from "./task-visuals";
 
 export const Route = createFileRoute("/$agentId/tasks/")({
   component: TasksPage,
 });
 
+export type TaskStatusTab = "all" | "running" | "waiting" | "completed" | "attention";
+export type TaskLayoutMode = "grouped" | "stream";
+
+function shouldInterceptNavigation(event: MouseEvent<HTMLAnchorElement>): boolean {
+  return (
+    event.button === 0 &&
+    !event.metaKey &&
+    !event.ctrlKey &&
+    !event.shiftKey &&
+    !event.altKey
+  );
+}
+
+function navigateClient(event: MouseEvent<HTMLAnchorElement>, href: string) {
+  if (!shouldInterceptNavigation(event)) {
+    return;
+  }
+  event.preventDefault();
+  appHistory.push(href);
+}
+
 function TasksPage() {
-  const base = useAgentBasePath();
-  const { t } = useTranslation();
   const selection = useShadowScope();
   const { data: tasks, error, isLoading } = useTasks(selection.scope);
+
+  return (
+    <TasksWorkspaceView
+      tasks={tasks ?? []}
+      loading={isLoading || selection.loading}
+      error={error ?? selection.error}
+      shadowControl={
+        selection.availableShadows.length > 1 ? (
+          <ShadowPicker selection={selection} />
+        ) : null
+      }
+    />
+  );
+}
+
+export function TasksWorkspaceView({
+  tasks,
+  loading,
+  error,
+  shadowControl,
+}: {
+  readonly tasks: readonly DashboardTask[];
+  readonly loading: boolean;
+  readonly error: unknown;
+  readonly shadowControl?: React.ReactNode;
+}) {
+  const base = useAgentBasePath();
+  const { locale, t } = useTranslation();
+  const [layoutMode, setLayoutMode] = useState<TaskLayoutMode>("grouped");
   const [query, setQuery] = useState("");
   const [typeFilter, setTypeFilter] = useState("all");
-  const [statusFilter, setStatusFilter] = useState("all");
+  const [statusFilter, setStatusFilter] = useState<TaskStatusTab>("all");
   const [priorityFilter, setPriorityFilter] = useState("all");
+  const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
+
+  const counts = useMemo(() => {
+    let running = 0;
+    let waiting = 0;
+    let completed = 0;
+    let attention = 0;
+    for (const item of tasks) {
+      const eff = resolveTaskEffectiveState(item);
+      if (eff === "running") {
+        running += 1;
+      } else if (eff === "waiting" || eff === "new") {
+        waiting += 1;
+      } else if (eff === "failed" || eff === "cancelled") {
+        attention += 1;
+      } else {
+        completed += 1;
+      }
+    }
+    return {
+      total: tasks.length,
+      running,
+      waiting,
+      completed,
+      attention,
+    };
+  }, [tasks]);
+
+  const filterOptions = useMemo(() => buildFilterOptions(tasks), [tasks]);
   const filtered = useMemo(
     () =>
-      filterTasks(tasks ?? [], {
+      filterTasks(tasks, {
         query,
         typeFilter,
         statusFilter,
@@ -61,236 +142,1033 @@ function TasksPage() {
       }),
     [tasks, priorityFilter, query, statusFilter, typeFilter],
   );
-  const filterOptions = useMemo(() => buildFilterOptions(tasks ?? []), [tasks]);
-  const activeCount = (tasks ?? []).filter((item) =>
-    isActiveTaskStatus(item.status),
-  ).length;
-  const finishedCount = (tasks ?? []).filter((item) =>
-    ["completed", "failed", "cancelled"].includes(item.status),
-  ).length;
+
+  const focusTasks = useMemo(
+    () =>
+      filtered.filter((item) => {
+        const eff = resolveTaskEffectiveState(item);
+        return eff === "running" || eff === "waiting" || eff === "new" || eff === "failed";
+      }),
+    [filtered],
+  );
+
+  const archiveTasks = useMemo(
+    () =>
+      filtered.filter((item) => {
+        const eff = resolveTaskEffectiveState(item);
+        return eff === "completed" || eff === "cancelled";
+      }),
+    [filtered],
+  );
+
+  const selectedTask = useMemo(
+    () => (selectedTaskId ? tasks.find((item) => item.id === selectedTaskId) ?? null : null),
+    [selectedTaskId, tasks],
+  );
+
+  const hasActiveFilters =
+    statusFilter !== "all" ||
+    typeFilter !== "all" ||
+    priorityFilter !== "all" ||
+    query.trim().length > 0;
+
+  const resetFilters = () => {
+    setStatusFilter("all");
+    setTypeFilter("all");
+    setPriorityFilter("all");
+    setQuery("");
+  };
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col bg-background">
-      <div className="border-b bg-card/70 px-5 py-4">
-        <div className="flex flex-col gap-4 xl:flex-row xl:items-end xl:justify-between">
-          <div className="min-w-0">
-            <div className="flex items-center gap-2 text-xs font-medium uppertask tracking-wide text-muted-foreground">
-              <BriefcaseBusiness className="size-3.5" />{t("Task Queue")}</div>
-            <h1 className="mt-2 text-2xl font-semibold tracking-tight">{t("Tasks")}</h1>
-            <p className="mt-1 max-w-2xl text-sm text-muted-foreground">{t("Durable work contexts, channel subscriptions, and runner state.")}</p>
+    <div
+      className="flex h-full min-h-0 flex-1 overflow-hidden border-t border-border bg-background"
+      data-testid="tasks-workspace"
+    >
+      <div className="@container min-h-0 min-w-0 flex-1 overflow-y-auto px-5 py-5 md:px-7">
+        <div className="mx-auto max-w-[1400px] space-y-4 pb-6">
+          {/* Page Header + Live Queue Pulse + Metric Cards */}
+          <div className="flex flex-col gap-3.5 @[860px]:flex-row @[860px]:items-start @[860px]:justify-between">
+            <div className="min-w-0 space-y-1">
+              <div className="flex flex-wrap items-center gap-2.5">
+                <h1 className="m-0 text-[22px] font-semibold tracking-tight text-foreground">
+                  {t("Tasks")}
+                </h1>
+                <span className="rounded-full bg-muted px-2.5 py-0.5 text-xs font-medium tabular-nums text-muted-foreground">
+                  <UiText>{`${counts.total} ${counts.total === 1 ? "task" : "tasks"}`}</UiText>
+                </span>
+                <LiveQueuePulse
+                  runningCount={counts.running}
+                  waitingCount={counts.waiting}
+                  onSelectRunning={() =>
+                    setStatusFilter((prev) => (prev === "running" ? "all" : "running"))
+                  }
+                  onSelectWaiting={() =>
+                    setStatusFilter((prev) => (prev === "waiting" ? "all" : "waiting"))
+                  }
+                />
+              </div>
+              <p className="m-0 max-w-2xl text-[13px] text-muted-foreground">
+                {t("Durable work contexts, channel subscriptions, and runner state.")}
+              </p>
+            </div>
+
+            <div className="grid grid-cols-2 gap-2 @[520px]:grid-cols-4 @[860px]:min-w-[26rem] @[860px]:shrink-0">
+              <MetricTile
+                label={t("Running")}
+                value={counts.running}
+                tone="ochre"
+                withSageBar={counts.running > 0 || statusFilter === "running"}
+                active={statusFilter === "running"}
+                onClick={() =>
+                  setStatusFilter((prev) => (prev === "running" ? "all" : "running"))
+                }
+              />
+              <MetricTile
+                label={t("Waiting")}
+                value={counts.waiting}
+                tone="slate"
+                withSageBar={statusFilter === "waiting"}
+                active={statusFilter === "waiting"}
+                onClick={() =>
+                  setStatusFilter((prev) => (prev === "waiting" ? "all" : "waiting"))
+                }
+              />
+              <MetricTile
+                label={t("Completed")}
+                value={counts.completed}
+                tone="sage"
+                withSageBar={statusFilter === "completed"}
+                active={statusFilter === "completed"}
+                onClick={() =>
+                  setStatusFilter((prev) => (prev === "completed" ? "all" : "completed"))
+                }
+              />
+              <MetricTile
+                label={t("Failed / Cancelled")}
+                value={counts.attention}
+                tone="terra"
+                withSageBar={statusFilter === "attention"}
+                active={statusFilter === "attention"}
+                onClick={() =>
+                  setStatusFilter((prev) => (prev === "attention" ? "all" : "attention"))
+                }
+              />
+            </div>
           </div>
-          <div className="grid grid-cols-3 gap-2 sm:min-w-[28rem]">
-            <HeaderStat label={t("Total")} value={tasks?.length ?? 0} />
-            <HeaderStat label={t("Running")} value={activeCount} />
-            <HeaderStat label={t("Finished")} value={finishedCount} />
+
+          {/* Two-Row Clean Toolbar: Row 1 = Status Tabs + View Mode, Row 2 = Search + Scope/Type/Priority */}
+          <div className="space-y-2.5">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div
+                role="tablist"
+                aria-label={t("Status")}
+                className="inline-flex flex-wrap items-center gap-0.5 rounded-[8px] bg-muted p-0.5 text-xs"
+              >
+                {(
+                  [
+                    { key: "all", label: t("All"), count: counts.total, dot: null },
+                    {
+                      key: "running",
+                      label: t("Running"),
+                      count: counts.running,
+                      dot: "bg-[#b07d4f] dark:bg-[#d1a273]",
+                    },
+                    {
+                      key: "waiting",
+                      label: t("Waiting"),
+                      count: counts.waiting,
+                      dot: "bg-[#5c7c99] dark:bg-[#86a3be]",
+                    },
+                    {
+                      key: "completed",
+                      label: t("Completed"),
+                      count: counts.completed,
+                      dot: null,
+                    },
+                    {
+                      key: "attention",
+                      label: t("Failed / Cancelled"),
+                      count: counts.attention,
+                      dot: counts.attention > 0 ? "bg-[#b5544a] dark:bg-[#dc7a70]" : null,
+                    },
+                  ] as const
+                ).map((tab) => {
+                  const isCurrent = statusFilter === tab.key;
+                  return (
+                    <button
+                      key={tab.key}
+                      type="button"
+                      role="tab"
+                      aria-selected={isCurrent}
+                      onClick={() => setStatusFilter(tab.key)}
+                      className={cn(
+                        "inline-flex items-center gap-1.5 rounded-[6px] px-2.5 py-1.5 transition-colors",
+                        isCurrent
+                          ? "bg-card font-semibold text-foreground shadow-xs"
+                          : "text-muted-foreground hover:text-foreground",
+                      )}
+                    >
+                      {tab.dot ? (
+                        <span className={cn("size-1.5 shrink-0 rounded-full", tab.dot)} />
+                      ) : null}
+                      <span>{tab.label}</span>
+                      <span className="tabular-nums opacity-65">{tab.count}</span>
+                    </button>
+                  );
+                })}
+              </div>
+
+              {statusFilter === "all" ? (
+                <div
+                  role="group"
+                  aria-label={t("Task inventory")}
+                  className="inline-flex items-center gap-0.5 rounded-[8px] bg-muted p-0.5 text-xs"
+                >
+                  <button
+                    type="button"
+                    aria-pressed={layoutMode === "grouped"}
+                    onClick={() => setLayoutMode("grouped")}
+                    className={cn(
+                      "rounded-[6px] px-2.5 py-1.5 transition-colors",
+                      layoutMode === "grouped"
+                        ? "bg-card font-medium text-foreground shadow-xs"
+                        : "text-muted-foreground hover:text-foreground",
+                    )}
+                  >
+                    {t("Grouped view")}
+                  </button>
+                  <button
+                    type="button"
+                    aria-pressed={layoutMode === "stream"}
+                    onClick={() => setLayoutMode("stream")}
+                    className={cn(
+                      "rounded-[6px] px-2.5 py-1.5 transition-colors",
+                      layoutMode === "stream"
+                        ? "bg-card font-medium text-foreground shadow-xs"
+                        : "text-muted-foreground hover:text-foreground",
+                    )}
+                  >
+                    {t("Stream view")}
+                  </button>
+                </div>
+              ) : null}
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2">
+              {shadowControl}
+
+              <label className="flex h-8 min-w-[200px] flex-1 items-center gap-2 rounded-[8px] border border-border bg-card px-2.5 text-muted-foreground focus-within:border-ring">
+                <Search className="size-3.5 shrink-0" />
+                <input
+                  type="search"
+                  value={query}
+                  onChange={(event) => setQuery(event.target.value)}
+                  placeholder={t("Search title, id, status, priority")}
+                  aria-label={t("Search title, id, status, priority")}
+                  className="min-w-0 flex-1 border-0 bg-transparent text-xs text-foreground outline-none placeholder:text-muted-foreground"
+                />
+              </label>
+
+              {filterOptions.types.length > 0 ? (
+                <FilterSelect
+                  label={t("Type")}
+                  allLabel={t("All types")}
+                  value={typeFilter}
+                  options={filterOptions.types}
+                  onChange={setTypeFilter}
+                />
+              ) : null}
+
+              {filterOptions.priorities.length > 0 ? (
+                <FilterSelect
+                  label={t("Priority")}
+                  allLabel={t("All priorities")}
+                  value={priorityFilter}
+                  options={filterOptions.priorities}
+                  onChange={setPriorityFilter}
+                />
+              ) : null}
+
+              {hasActiveFilters ? (
+                <button
+                  type="button"
+                  onClick={resetFilters}
+                  className="h-8 px-2 text-xs text-muted-foreground transition-colors hover:text-foreground hover:underline"
+                >
+                  {t("Reset filters")}
+                </button>
+              ) : null}
+            </div>
           </div>
+
+          {/* Task List Body */}
+          {error ? (
+            <DashboardErrorState title={t("Tasks failed to load")} error={error} />
+          ) : loading ? (
+            <LoadingRows />
+          ) : filtered.length === 0 ? (
+            <TaskEmptyState
+              hasFilters={hasActiveFilters}
+              onReset={hasActiveFilters ? resetFilters : undefined}
+            />
+          ) : layoutMode === "grouped" && statusFilter === "all" ? (
+            <div className="space-y-5">
+              {focusTasks.length > 0 ? (
+                <section className="space-y-2" data-testid="tasks-group-focus">
+                  <div className="flex flex-wrap items-center justify-between gap-2 px-1">
+                    <div className="flex items-center gap-2 text-xs font-semibold text-foreground">
+                      <span className="size-2 rounded-full bg-[#b07d4f] dark:bg-[#d1a273]" />
+                      <span>{t("Active & needs attention")}</span>
+                      <span className="font-normal tabular-nums text-muted-foreground">
+                        {focusTasks.length}
+                      </span>
+                    </div>
+                    <span className="text-xs text-muted-foreground">
+                      {t("Running, waiting for input, and failed tasks appear first")}
+                    </span>
+                  </div>
+                  <div className="overflow-hidden rounded-2xl border border-border bg-card shadow-[0_2px_6px_#00000006]">
+                    {focusTasks.map((item) => (
+                      <TaskRowItem
+                        key={item.id}
+                        base={base}
+                        locale={locale}
+                        task={item}
+                        selected={selectedTask?.id === item.id}
+                        onToggleSelect={() =>
+                          setSelectedTaskId((prev) => (prev === item.id ? null : item.id))
+                        }
+                      />
+                    ))}
+                  </div>
+                </section>
+              ) : null}
+
+              {archiveTasks.length > 0 ? (
+                <section className="space-y-2" data-testid="tasks-group-archive">
+                  <div className="flex items-center gap-2 px-1 text-xs font-semibold text-muted-foreground">
+                    <span>{t("Recently finished")}</span>
+                    <span className="font-normal tabular-nums">{archiveTasks.length}</span>
+                  </div>
+                  <div className="overflow-hidden rounded-2xl border border-border bg-card shadow-[0_2px_6px_#00000006]">
+                    {archiveTasks.map((item) => (
+                      <TaskRowItem
+                        key={item.id}
+                        base={base}
+                        locale={locale}
+                        task={item}
+                        selected={selectedTask?.id === item.id}
+                        onToggleSelect={() =>
+                          setSelectedTaskId((prev) => (prev === item.id ? null : item.id))
+                        }
+                      />
+                    ))}
+                  </div>
+                </section>
+              ) : null}
+            </div>
+          ) : (
+            <div
+              className="overflow-hidden rounded-2xl border border-border bg-card shadow-[0_2px_6px_#00000006]"
+              data-testid="tasks-stream-list"
+            >
+              {filtered.map((item) => (
+                <TaskRowItem
+                  key={item.id}
+                  base={base}
+                  locale={locale}
+                  task={item}
+                  selected={selectedTask?.id === item.id}
+                  onToggleSelect={() =>
+                    setSelectedTaskId((prev) => (prev === item.id ? null : item.id))
+                  }
+                />
+              ))}
+            </div>
+          )}
         </div>
       </div>
 
-      <div className="flex min-h-0 flex-1 flex-col gap-4 p-5">
-        <Card className="rounded-lg py-0">
-          <CardContent className="flex flex-wrap gap-3 p-3 lg:items-center">
-            <ShadowPicker selection={selection} />
-            <div className="relative min-w-0 flex-1">
-              <Search className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
-              <Input
-                value={query}
-                onChange={(event) => setQuery(event.target.value)}
-                placeholder={t("Search title, id, status, priority")}
-                className="h-9 bg-background pl-9"
-              />
-            </div>
-            <div className="grid shrink-0 grid-cols-3 gap-2">
-              <FilterSelect
-                label={t("Type")}
-                value={typeFilter}
-                options={filterOptions.types}
-                onChange={setTypeFilter}
-              />
-              <FilterSelect
-                label={t("Status")}
-                value={statusFilter}
-                options={filterOptions.statuses}
-                onChange={setStatusFilter}
-              />
-              <FilterSelect
-                label={t("Priority")}
-                value={priorityFilter}
-                options={filterOptions.priorities}
-                onChange={setPriorityFilter}
-              />
-            </div>
-          </CardContent>
-        </Card>
+      {/* Right Quick-Peek Inspector Drawer */}
+      {selectedTask ? (
+        <TaskQuickPeekDrawer
+          base={base}
+          locale={locale}
+          task={selectedTask}
+          onClose={() => setSelectedTaskId(null)}
+        />
+      ) : null}
+    </div>
+  );
+}
 
-        <Card className="min-h-0 flex-1 overflow-hidden rounded-lg py-0">
-          <CardHeader className="border-b px-4 py-3">
-            <div className="flex items-center justify-between gap-3">
-              <div>
-                <CardTitle className="text-sm">{t("Task inventory")}</CardTitle>
-                <CardDescription>
-                  {filtered.length}{t("visible of")}{tasks?.length ?? 0}
-                </CardDescription>
-              </div>
-              <Badge variant="outline" className="gap-1.5">
-                <span className="size-2 rounded-full bg-green-500" />{t("Queue idle")}</Badge>
-            </div>
-          </CardHeader>
+function LiveQueuePulse({
+  runningCount,
+  waitingCount,
+  onSelectRunning,
+  onSelectWaiting,
+}: {
+  readonly runningCount: number;
+  readonly waitingCount: number;
+  readonly onSelectRunning: () => void;
+  readonly onSelectWaiting: () => void;
+}) {
+  const { locale, t } = useTranslation();
 
-          <ScrollArea className="min-h-0 flex-1">
-            {error || selection.error ? (
-              <DashboardErrorState title={t("Tasks failed to load")} error={error ?? selection.error} />
-            ) : isLoading || selection.loading ? (
-              <LoadingRows />
-            ) : filtered.length === 0 ? (
-              <TaskEmptyState hasQuery={query.trim().length > 0} />
-            ) : (
-              <Table>
-                <TableHeader className="sticky top-0 z-10 bg-card">
-                  <TableRow>
-                    <TableHead className="pl-4">{t("Task")}</TableHead>
-                    <TableHead>{t("Status")}</TableHead>
-                    <TableHead>{t("Type")}</TableHead>
-                    <TableHead>{t("Priority")}</TableHead>
-                    <TableHead>{t("Participants")}</TableHead>
-                    <TableHead>{t("Surfaces")}</TableHead>
-                    <TableHead>{t("Last activity")}</TableHead>
-                    <TableHead className="pr-4 text-right">{t("Open")}</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {filtered.map((item) => (
-                    <TableRow key={item.id} className="h-14">
-                      <TableCell className="max-w-[32rem] pl-4">
-                        <a href={`${base}/tasks/${encodeURIComponent(item.id)}`}
-                          className="block truncate font-medium hover:underline"
-                        >
-                          {item.title}
-                        </a>
-                        <div className="mt-0.5 truncate text-xs text-muted-foreground">
-                          {item.summary ?? item.id}
-                        </div>
-                      </TableCell>
-                      <TableCell>
-                        <StatusBadge status={item.status} />
-                      </TableCell>
-                      <TableCell className="text-muted-foreground">
-                        <UiText>{item.type}</UiText>
-                      </TableCell>
-                      <TableCell>
-                        {item.priority ? (
-                          <Badge variant="outline"><UiText>{item.priority}</UiText></Badge>
-                        ) : (
-                          <span className="text-muted-foreground">-</span>
-                        )}
-                      </TableCell>
-                      <TableCell className="max-w-64">
-                        <div className="flex flex-wrap gap-1">
-                          {item.participants.slice(0, 3).map((participant) => (
-                            <Badge
-                              key={`${participant.userId}:${participant.role}`}
-                              variant="outline"
-                              className="max-w-44 rounded-md"
-                            >
-                              <span className="mr-1 text-muted-foreground">
-                                <UiText>{participant.role}</UiText>
-                              </span>
-                              <IdentityLink
-                                className="max-w-28 text-xs"
-                                fallbackKind={
-                                  participant.role === "agent" ? "bot" : "user"
-                                }
-                                identity={identityForCanonicalUser(participant.user)}
-                                showKind={false}
-                              />
-                            </Badge>
-                          ))}
-                          {item.participants.length > 3 && (
-                            <Badge variant="secondary">
-                              +{item.participants.length - 3}
-                            </Badge>
-                          )}
-                        </div>
-                      </TableCell>
-                      <TableCell>
-                        {item.linkedSessions?.length ??
-                          item.linked_session_count}
-                      </TableCell>
-                      <TableCell className="text-xs text-muted-foreground">
-                        {formatTime(item.last_activity_at)}
-                      </TableCell>
-                      <TableCell className="pr-4 text-right">
-                        <a href={`${base}/tasks/${encodeURIComponent(item.id)}`}
-                          className="inline-flex size-8 items-center justify-center rounded-md hover:bg-muted"
-                        >
-                          <ArrowRight className="size-4" />
-                        </a>
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            )}
-          </ScrollArea>
-        </Card>
+  if (runningCount > 0) {
+    const label =
+      locale === "zh-CN"
+        ? `${runningCount} 个运行中${waitingCount > 0 ? ` · ${waitingCount} 个待反馈` : ""}`
+        : `${runningCount} running${waitingCount > 0 ? ` · ${waitingCount} waiting` : ""}`;
+    return (
+      <button
+        type="button"
+        onClick={onSelectRunning}
+        className="inline-flex items-center gap-2 rounded-full bg-[#b07d4f]/14 px-2.5 py-0.5 text-xs font-medium text-[#b07d4f] transition-opacity hover:opacity-85 dark:bg-[#d1a273]/16 dark:text-[#d1a273]"
+      >
+        <span className="relative flex size-2">
+          <span className="absolute inline-flex size-full animate-ping rounded-full bg-[#b07d4f] opacity-60 dark:bg-[#d1a273]" />
+          <span className="relative inline-flex size-2 rounded-full bg-[#b07d4f] dark:bg-[#d1a273]" />
+        </span>
+        <span>{label}</span>
+      </button>
+    );
+  }
+
+  if (waitingCount > 0) {
+    const label =
+      locale === "zh-CN" ? `${waitingCount} 个待反馈` : `${waitingCount} waiting`;
+    return (
+      <button
+        type="button"
+        onClick={onSelectWaiting}
+        className="inline-flex items-center gap-1.5 rounded-full bg-[#5c7c99]/14 px-2.5 py-0.5 text-xs font-medium text-[#5c7c99] transition-opacity hover:opacity-85 dark:bg-[#86a3be]/16 dark:text-[#86a3be]"
+      >
+        <span className="size-2 rounded-full bg-[#5c7c99] dark:bg-[#86a3be]" />
+        <span>{label}</span>
+      </button>
+    );
+  }
+
+  return (
+    <span className="inline-flex items-center gap-1.5 rounded-full bg-[#5b8a72]/13 px-2.5 py-0.5 text-xs font-medium text-[#5b8a72] dark:bg-[#7fb096]/16 dark:text-[#7fb096]">
+      <span className="size-2 rounded-full bg-[#5b8a72] dark:bg-[#7fb096]" />
+      <span>{t("Queue idle")}</span>
+    </span>
+  );
+}
+
+function MetricTile({
+  label,
+  value,
+  tone,
+  withSageBar = false,
+  active = false,
+  onClick,
+}: {
+  readonly label: string;
+  readonly value: number;
+  readonly tone: "ochre" | "slate" | "sage" | "terra";
+  readonly withSageBar?: boolean;
+  readonly active?: boolean;
+  readonly onClick?: () => void;
+}) {
+  const dotClass =
+    tone === "ochre"
+      ? "bg-[#b07d4f] dark:bg-[#d1a273]"
+      : tone === "slate"
+        ? "bg-[#5c7c99] dark:bg-[#86a3be]"
+        : tone === "terra"
+          ? "bg-[#b5544a] dark:bg-[#dc7a70]"
+          : "bg-[#5b8a72] dark:bg-[#7fb096]";
+  const valueClass =
+    value === 0
+      ? "text-foreground"
+      : tone === "ochre"
+        ? "text-[#b07d4f] dark:text-[#d1a273]"
+        : tone === "slate"
+          ? "text-[#5c7c99] dark:text-[#86a3be]"
+          : tone === "terra"
+            ? "text-[#b5544a] dark:text-[#dc7a70]"
+            : "text-foreground";
+
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-pressed={active}
+      className={cn(
+        "relative overflow-hidden rounded-xl border bg-card px-3 py-2 text-left shadow-[0_2px_5px_#00000004] transition-colors hover:bg-accent/40",
+        active ? "border-ring ring-1 ring-ring/40" : "border-border",
+        withSageBar &&
+          "before:absolute before:top-0 before:left-4 before:h-[3px] before:w-6 before:rounded-xs before:bg-[#a3b69e] dark:before:bg-[#8ea487]",
+      )}
+    >
+      <div className="flex items-center justify-between gap-1.5 text-xs text-muted-foreground">
+        <span className="truncate">{label}</span>
+        <span className={cn("size-1.5 shrink-0 rounded-full", dotClass)} />
+      </div>
+      <div className={cn("mt-0.5 text-lg font-semibold tabular-nums", valueClass)}>
+        {value}
+      </div>
+    </button>
+  );
+}
+
+function TaskRowItem({
+  base,
+  locale,
+  task,
+  selected,
+  onToggleSelect,
+}: {
+  readonly base: string;
+  readonly locale: "en" | "zh-CN";
+  readonly task: DashboardTask;
+  readonly selected: boolean;
+  readonly onToggleSelect: () => void;
+}) {
+  const { t } = useTranslation();
+  const detailHref = `${base}/tasks/${encodeURIComponent(task.id)}`;
+  const tuiHref = `${base}/terminals?taskId=${encodeURIComponent(task.id)}`;
+  const effectiveState = resolveTaskEffectiveState(task);
+  const parsedContext = parseTaskContext(task.taskContext);
+  const latestRun = latestTaskRun(task.runs ?? []);
+  const latestEvent = (task.timeline ?? []).at(-1);
+  const sessions = resolveTaskSessions(task);
+  const primarySession = sessions[0];
+  const extraSessions = Math.max(0, sessions.length - 1);
+  const runDuration = latestRun
+    ? formatRunDuration(latestRun.startedAt ?? latestRun.started_at, latestRun.finishedAt ?? latestRun.finished_at)
+    : null;
+  const artifactCount = task.artifacts?.length ?? 0;
+  const humanParticipants = task.participants.filter(
+    (p) => p.role !== "agent" && p.user?.kind !== "bot" && p.user?.kind !== "system",
+  );
+  const botParticipant = task.participants.find(
+    (p) => p.role === "agent" || p.user?.kind === "bot" || p.user?.kind === "system",
+  );
+
+  return (
+    <div
+      data-testid={`task-row-${task.id}`}
+      onClick={(event) => {
+        const target = event.target as HTMLElement | null;
+        if (target?.closest("a,button")) {
+          return;
+        }
+        onToggleSelect();
+      }}
+      onDoubleClick={(event) => {
+        const target = event.target as HTMLElement | null;
+        if (target?.closest("a,button")) {
+          return;
+        }
+        appHistory.push(detailHref);
+      }}
+      className={cn(
+        "group relative grid cursor-pointer grid-cols-[26px_minmax(0,1fr)_auto] items-start gap-3.5 border-b border-border/60 px-4 py-3.5 transition-colors last:border-b-0",
+        selected ? "bg-accent/55" : "hover:bg-muted/45",
+      )}
+    >
+      {selected ? (
+        <span
+          aria-hidden="true"
+          className="absolute top-3 bottom-3 left-0 w-[3px] rounded-r bg-[#a3b69e] dark:bg-[#8ea487]"
+        />
+      ) : null}
+
+      <div className="pt-0.5">
+        <TaskStateIcon state={effectiveState} />
+      </div>
+
+      <div className="min-w-0 space-y-1.5">
+        {/* Line 1: Title + Semantic Pills */}
+        <div className="flex min-w-0 flex-wrap items-center gap-1.5">
+          <a
+            href={detailHref}
+            onClick={(event) => navigateClient(event, detailHref)}
+            className="max-w-full truncate text-[14px] leading-snug font-semibold text-foreground hover:underline"
+          >
+            {task.title}
+          </a>
+          <TaskStatusPill status={task.status} effectiveState={effectiveState} />
+          <TaskPriorityPill priority={task.priority} />
+          <TaskTypePill type={task.type} />
+        </div>
+
+        {/* Line 2: Contextual Signal (Error / Waiting Question / Active Step / Summary) */}
+        <TaskRowSecondaryLine
+          task={task}
+          effectiveState={effectiveState}
+          latestRun={latestRun}
+          latestEventSummary={latestEvent?.summary}
+          waitingQuestion={parsedContext.pendingQuestions[0]}
+        />
+
+        {/* Line 3: Provenance Chips */}
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 pt-0.5 text-xs text-muted-foreground">
+          {primarySession ? (
+            <a
+              href={`${base}/sessions/${encodeURIComponent(primarySession.id)}`}
+              onClick={(event) =>
+                navigateClient(event, `${base}/sessions/${encodeURIComponent(primarySession.id)}`)
+              }
+              className="inline-flex max-w-[18rem] min-w-0 items-center gap-1 text-sidebar-foreground hover:text-foreground hover:underline"
+            >
+              {primarySession.channel_type === "p2p" ? (
+                <User className="size-3 shrink-0 opacity-75" />
+              ) : (
+                <MessageSquare className="size-3 shrink-0 opacity-75" />
+              )}
+              <span className="truncate">{formatSessionChipLabel(primarySession)}</span>
+              {extraSessions > 0 ? (
+                <span className="shrink-0 rounded bg-muted px-1 text-[11px] text-muted-foreground">
+                  +{extraSessions}
+                </span>
+              ) : null}
+            </a>
+          ) : null}
+
+          {latestRun ? (
+            <span className="inline-flex items-center gap-1 tabular-nums">
+              <Play className="size-3 shrink-0 opacity-70" />
+              <span>
+                #{latestRun.runIndex ?? latestRun.run_index} · {latestRun.runnerType || latestRun.runner_type}
+              </span>
+              {runDuration ? <span className="opacity-65">({runDuration})</span> : null}
+            </span>
+          ) : null}
+
+          {artifactCount > 0 ? (
+            <span className="inline-flex items-center gap-1 text-[#5b8a72] dark:text-[#7fb096]">
+              <FileText className="size-3 shrink-0" />
+              <span>
+                {locale === "zh-CN"
+                  ? `${artifactCount} 个产物`
+                  : `${artifactCount} ${artifactCount === 1 ? "artifact" : "artifacts"}`}
+              </span>
+            </span>
+          ) : null}
+
+          <span className="hidden font-mono text-[11px] opacity-60 md:inline">
+            {shortTaskId(task.id)}
+          </span>
+        </div>
+      </div>
+
+      {/* Right Column: Avatars + Time + Quick Hover Actions */}
+      <div className="flex shrink-0 flex-col items-end justify-between gap-2 self-stretch">
+        <div className="flex items-center gap-2.5">
+          {task.participants.length > 0 ? (
+            <div
+              className="hidden items-center -space-x-1.5 sm:flex"
+              title={task.participants
+                .map((p) => p.user?.displayName || p.userId)
+                .join(", ")}
+            >
+              {humanParticipants.slice(0, 2).map((participant) => (
+                <MiniUserBadgeAvatar
+                  key={`${participant.userId}:${participant.role}`}
+                  name={participant.user?.displayName || participant.userId}
+                  avatarUrl={participant.user?.avatarUrl}
+                  kind={participant.user?.kind}
+                  colorKey={participant.userId}
+                />
+              ))}
+              {humanParticipants.length > 2 ? (
+                <span className="inline-grid size-6 place-items-center rounded-full bg-muted text-[10px] font-medium text-muted-foreground ring-2 ring-card">
+                  +{humanParticipants.length - 2}
+                </span>
+              ) : null}
+              {botParticipant ? (
+                <MiniUserBadgeAvatar
+                  name={botParticipant.user?.displayName || "Agent"}
+                  avatarUrl={botParticipant.user?.avatarUrl}
+                  kind="bot"
+                  colorKey={botParticipant.userId}
+                />
+              ) : null}
+            </div>
+          ) : null}
+
+          <time
+            dateTime={new Date(task.last_activity_at).toISOString()}
+            title={formatTaskFullTime(task.last_activity_at)}
+            className="min-w-[3.25rem] text-right text-xs whitespace-nowrap tabular-nums text-muted-foreground"
+          >
+            {formatTaskRelativeTime(task.last_activity_at, locale)}
+          </time>
+        </div>
+
+        <div className="flex items-center gap-1 opacity-0 transition-opacity group-focus-within:opacity-100 group-hover:opacity-100">
+          <a
+            href={tuiHref}
+            onClick={(event) => navigateClient(event, tuiHref)}
+            className="inline-flex h-6 items-center gap-1 rounded-[6px] border border-border bg-card px-2 text-[11px] font-medium text-foreground transition-colors hover:bg-accent hover:no-underline"
+            title={t("Open TUI")}
+          >
+            <TerminalSquareIcon className="size-3" />
+            <span>TUI</span>
+          </a>
+          <a
+            href={detailHref}
+            onClick={(event) => navigateClient(event, detailHref)}
+            className="inline-flex h-6 items-center gap-0.5 rounded-[6px] bg-primary px-2 text-[11px] font-medium text-primary-foreground transition-opacity hover:opacity-90 hover:no-underline"
+          >
+            <span>{t("Full details")}</span>
+            <ArrowRight className="size-3" />
+          </a>
+        </div>
       </div>
     </div>
   );
 }
 
-function HeaderStat({ label, value }: { label: string; value: number }) {
+function TaskRowSecondaryLine({
+  task,
+  effectiveState,
+  latestRun,
+  latestEventSummary,
+  waitingQuestion,
+}: {
+  readonly task: DashboardTask;
+  readonly effectiveState: TaskEffectiveState;
+  readonly latestRun: DashboardTaskRun | undefined;
+  readonly latestEventSummary: string | undefined;
+  readonly waitingQuestion: string | undefined;
+}) {
+  const { t } = useTranslation();
+
+  if (effectiveState === "failed" && latestRun?.error) {
+    const styles = taskStateClasses("failed");
+    return (
+      <div
+        className={cn(
+          "flex items-center gap-1.5 truncate rounded-md border px-2 py-1 font-mono text-xs",
+          styles.calloutClass,
+        )}
+      >
+        <span className="truncate">{latestRun.error}</span>
+      </div>
+    );
+  }
+
+  if (effectiveState === "waiting" && waitingQuestion) {
+    const styles = taskStateClasses("waiting");
+    return (
+      <div
+        className={cn(
+          "flex items-center gap-1.5 truncate rounded-md border px-2 py-1 text-xs",
+          styles.calloutClass,
+        )}
+      >
+        <span className="shrink-0 font-medium">{t("Waiting for confirmation")}:</span>
+        <span className="truncate">{waitingQuestion}</span>
+      </div>
+    );
+  }
+
+  if (effectiveState === "running" && latestEventSummary) {
+    return (
+      <div className="flex items-center gap-1.5 truncate text-[12.5px] text-[#b07d4f] dark:text-[#d1a273]">
+        <span className="truncate">{latestEventSummary}</span>
+        {task.summary && task.summary !== latestEventSummary ? (
+          <span className="truncate text-muted-foreground">· {task.summary}</span>
+        ) : null}
+      </div>
+    );
+  }
+
   return (
-    <div className="rounded-md border bg-background px-3 py-2">
-      <div className="text-xs text-muted-foreground">{label}</div>
-      <div className="mt-1 text-lg font-semibold">{value}</div>
-    </div>
+    <p className="m-0 truncate text-[12.5px] text-muted-foreground">
+      {task.summary || latestEventSummary || task.id}
+    </p>
+  );
+}
+
+function TaskQuickPeekDrawer({
+  base,
+  locale,
+  task,
+  onClose,
+}: {
+  readonly base: string;
+  readonly locale: "en" | "zh-CN";
+  readonly task: DashboardTask;
+  readonly onClose: () => void;
+}) {
+  const { t } = useTranslation();
+  const detailHref = `${base}/tasks/${encodeURIComponent(task.id)}`;
+  const tuiHref = `${base}/terminals?taskId=${encodeURIComponent(task.id)}`;
+  const effectiveState = resolveTaskEffectiveState(task);
+  const parsedContext = parseTaskContext(task.taskContext);
+  const latestRun = latestTaskRun(task.runs ?? []);
+  const runDuration = latestRun
+    ? formatRunDuration(latestRun.startedAt ?? latestRun.started_at, latestRun.finishedAt ?? latestRun.finished_at)
+    : null;
+  const sessions = resolveTaskSessions(task);
+  const artifacts = task.artifacts ?? [];
+
+  return (
+    <aside
+      aria-label={task.title}
+      data-testid="task-quick-peek"
+      className="hidden w-[380px] shrink-0 flex-col overflow-hidden border-l border-border bg-card lg:flex xl:w-[420px]"
+    >
+      <div className="flex items-center justify-between gap-2 border-b border-border px-4 py-3">
+        <div className="flex min-w-0 items-center gap-2">
+          <TaskStatusPill status={task.status} effectiveState={effectiveState} showDot />
+          <CopyTextButton
+            className="h-6 max-w-36 truncate px-2 font-mono text-xs text-muted-foreground"
+            label={t("Copy task ID")}
+            text={task.id}
+          >
+            {shortTaskId(task.id)}
+          </CopyTextButton>
+        </div>
+        <div className="flex shrink-0 items-center gap-1.5">
+          <a
+            href={detailHref}
+            onClick={(event) => navigateClient(event, detailHref)}
+            className="inline-flex h-7 items-center gap-1 rounded-[7px] bg-primary px-2.5 text-xs font-medium text-primary-foreground transition-opacity hover:opacity-90 hover:no-underline"
+          >
+            <span>{t("Full details")}</span>
+            <ArrowUpRight className="size-3.5" />
+          </a>
+          <button
+            type="button"
+            aria-label={t("Close preview")}
+            onClick={onClose}
+            className="inline-grid size-7 place-items-center rounded-[7px] text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+          >
+            <X className="size-4" />
+          </button>
+        </div>
+      </div>
+
+      <div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-4">
+        <div className="space-y-2">
+          <h2 className="m-0 text-base leading-snug font-semibold break-words text-foreground">
+            {task.title}
+          </h2>
+          <div className="flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
+            <TaskTypePill type={task.type} />
+            <TaskPriorityPill priority={task.priority} alwaysShow />
+            <span>· {formatTaskRelativeTime(task.last_activity_at, locale)}</span>
+          </div>
+        </div>
+
+        {parsedContext.pendingQuestions.length > 0 ? (
+          <div
+            className={cn(
+              "space-y-1 rounded-xl border p-3 text-xs",
+              taskStateClasses("waiting").calloutClass,
+            )}
+          >
+            <div className="font-semibold">{t("Waiting for confirmation")}</div>
+            {parsedContext.pendingQuestions.map((question, idx) => (
+              <div key={idx} className="leading-relaxed break-words">
+                {question}
+              </div>
+            ))}
+          </div>
+        ) : null}
+
+        {latestRun?.error ? (
+          <div
+            className={cn(
+              "space-y-1 rounded-xl border p-3 text-xs",
+              taskStateClasses("failed").calloutClass,
+            )}
+          >
+            <div className="font-semibold">{t("Latest run error")}</div>
+            <div className="font-mono leading-relaxed break-all">{latestRun.error}</div>
+          </div>
+        ) : null}
+
+        <div className="space-y-1.5 rounded-xl border border-border bg-muted/45 p-3.5">
+          <div className="text-xs font-medium text-muted-foreground">
+            {t("Progress & summary")}
+          </div>
+          <p className="m-0 text-[13px] leading-relaxed break-words text-foreground">
+            {task.summary || t("No report summary is available.")}
+          </p>
+        </div>
+
+        {latestRun ? (
+          <section className="space-y-2">
+            <h3 className="m-0 text-xs font-semibold tracking-wider uppercase text-muted-foreground">
+              {t("Runner state")}
+            </h3>
+            <div className="flex items-center justify-between gap-2 rounded-xl border border-border p-3 text-xs">
+              <div className="min-w-0 space-y-0.5">
+                <div className="font-semibold text-foreground">
+                  Run #{latestRun.runIndex ?? latestRun.run_index} ·{" "}
+                  {latestRun.runnerType || latestRun.runner_type}
+                </div>
+                <div className="text-muted-foreground">
+                  <UiText>{latestRun.status}</UiText>
+                  {runDuration ? ` · ${runDuration}` : ""}
+                </div>
+              </div>
+              <a
+                href={tuiHref}
+                onClick={(event) => navigateClient(event, tuiHref)}
+                className="inline-flex h-7 shrink-0 items-center gap-1.5 rounded-[7px] border border-border bg-background px-2.5 text-xs font-medium text-foreground transition-colors hover:bg-accent hover:no-underline"
+              >
+                <TerminalSquareIcon className="size-3.5" />
+                <span>{t("Open TUI")}</span>
+              </a>
+            </div>
+          </section>
+        ) : null}
+
+        {sessions.length > 0 ? (
+          <section className="space-y-2">
+            <h3 className="m-0 text-xs font-semibold tracking-wider uppercase text-muted-foreground">
+              {t("Linked Sessions")} ({sessions.length})
+            </h3>
+            <div className="grid gap-1.5">
+              {sessions.map((session) => {
+                const label = session.displayTitle || session.title || session.id;
+                const sessionHref = `${base}/sessions/${encodeURIComponent(session.id)}`;
+                return (
+                  <a
+                    key={session.id}
+                    href={sessionHref}
+                    onClick={(event) => navigateClient(event, sessionHref)}
+                    className="flex items-center gap-2.5 rounded-xl border border-border px-3 py-2 text-xs transition-colors hover:bg-muted/50 hover:no-underline"
+                  >
+                    <span
+                      className="inline-grid size-7 shrink-0 place-items-center rounded-full text-[11px] font-semibold text-white"
+                      style={{ backgroundColor: avatarColorForKey(session.group_id ?? session.id) }}
+                    >
+                      {Array.from(label.trim() || "?").slice(0, 2).join("")}
+                    </span>
+                    <div className="min-w-0 flex-1">
+                      <div className="truncate font-medium text-foreground">{label}</div>
+                      <div className="mt-0.5 truncate text-muted-foreground">
+                        {session.thread_id
+                          ? `${session.channel_type} · # ${session.thread_id}`
+                          : session.channel_type}
+                      </div>
+                    </div>
+                  </a>
+                );
+              })}
+            </div>
+          </section>
+        ) : null}
+
+        <section className="space-y-2">
+          <h3 className="m-0 text-xs font-semibold tracking-wider uppercase text-muted-foreground">
+            {t("Artifacts")} ({artifacts.length})
+          </h3>
+          {artifacts.length === 0 ? (
+            <div className="rounded-xl border border-dashed border-border px-3 py-3 text-xs text-muted-foreground">
+              {t("No artifacts recorded.")}
+            </div>
+          ) : (
+            <div className="grid gap-1.5">
+              {artifacts.slice(0, 5).map((artifact) => (
+                <div
+                  key={artifact.id}
+                  className="flex items-center justify-between gap-2 rounded-xl border border-border px-3 py-2 text-xs"
+                >
+                  {artifact.href ? (
+                    <a
+                      href={artifact.href}
+                      className="min-w-0 flex-1 truncate font-mono text-foreground hover:underline"
+                    >
+                      {artifact.name}
+                    </a>
+                  ) : (
+                    <span className="min-w-0 flex-1 truncate font-mono text-foreground">
+                      {artifact.name}
+                    </span>
+                  )}
+                  <span className="shrink-0 rounded bg-[#5b8a72]/14 px-1.5 py-0.5 text-[11px] font-medium text-[#5b8a72] dark:bg-[#7fb096]/16 dark:text-[#7fb096]">
+                    {artifact.type}
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
+        </section>
+
+        {task.participants.length > 0 ? (
+          <section className="space-y-2">
+            <h3 className="m-0 text-xs font-semibold tracking-wider uppercase text-muted-foreground">
+              {t("Participants")}
+            </h3>
+            <div className="flex flex-wrap gap-1.5">
+              {task.participants.map((participant) => (
+                <span
+                  key={`${participant.userId}:${participant.role}`}
+                  className="inline-flex items-center gap-1.5 rounded-full bg-secondary px-2.5 py-1 text-xs text-secondary-foreground"
+                >
+                  <IdentityLink
+                    className="max-w-32 text-xs"
+                    fallbackKind={participant.role === "agent" ? "bot" : "user"}
+                    identity={identityForCanonicalUser(participant.user)}
+                    showAvatar
+                    showKind={false}
+                  />
+                  <span className="text-[11px] text-muted-foreground">
+                    <UiText>{participant.role}</UiText>
+                  </span>
+                </span>
+              ))}
+            </div>
+          </section>
+        ) : null}
+      </div>
+    </aside>
   );
 }
 
 function LoadingRows() {
   return (
-    <div className="space-y-2 p-4">
-      {Array.from({ length: 8 }).map((_, index) => (
-        <Skeleton key={index} className="h-12 w-full" />
+    <div className="space-y-2 rounded-2xl border border-border bg-card p-4">
+      {Array.from({ length: 6 }).map((_, index) => (
+        <Skeleton key={index} className="h-16 w-full rounded-xl" />
       ))}
     </div>
   );
 }
 
-function TaskEmptyState({ hasQuery }: { hasQuery: boolean }) {
+function TaskEmptyState({
+  hasFilters,
+  onReset,
+}: {
+  readonly hasFilters: boolean;
+  readonly onReset?: () => void;
+}) {
   const { t } = useTranslation();
   return (
-    <div className="flex min-h-[24rem] items-center justify-center p-6">
-      <div className="w-full max-w-lg rounded-lg border border-dashed bg-muted/20 p-6 text-center">
-        <div className="mx-auto flex size-11 items-center justify-center rounded-md border bg-background">
-          <CircleCheck className="size-5 text-green-500" />
+    <div className="flex min-h-[20rem] items-center justify-center rounded-2xl border border-dashed border-border bg-card/60 p-6">
+      <div className="max-w-md text-center">
+        <div className="mx-auto inline-grid size-11 place-items-center rounded-xl bg-[#5b8a72]/14 text-[#5b8a72] dark:bg-[#7fb096]/16 dark:text-[#7fb096]">
+          <CircleCheck className="size-5" />
         </div>
-        <h2 className="mt-4 text-base font-semibold">
-          {hasQuery ? t("No matching tasks") : t("No active tasks")}
+        <h2 className="mt-3.5 text-sm font-semibold text-foreground">
+          {hasFilters ? t("No matching tasks") : t("No active tasks")}
         </h2>
-        <p className="mt-2 text-sm text-muted-foreground">
-          {hasQuery ? t("Try a different filter.") : t("Queue idle.")}
+        <p className="mt-1.5 text-xs text-muted-foreground">
+          {hasFilters ? t("Try a different filter.") : t("Queue idle.")}
         </p>
+        {hasFilters && onReset ? (
+          <button
+            type="button"
+            onClick={onReset}
+            className="mt-4 inline-flex h-7 items-center rounded-[7px] border border-border bg-background px-3 text-xs font-medium text-foreground transition-colors hover:bg-accent"
+          >
+            {t("Reset filters")}
+          </button>
+        ) : null}
       </div>
     </div>
-  );
-}
-
-function StatusBadge({ status }: { status: string }) {
-  const tone = statusTone(status);
-  return (
-    <Badge
-      variant="outline"
-      className={cn(
-        "rounded-md",
-        tone === "green" && "border-green-500/30 text-green-700 dark:text-green-400",
-        tone === "blue" && "border-blue-500/30 text-blue-700 dark:text-blue-400",
-        tone === "amber" &&
-          "border-yellow-500/40 text-yellow-700 dark:text-yellow-400",
-      )}
-    >
-      <UiText>{status}</UiText>
-    </Badge>
   );
 }
 
@@ -298,14 +1176,14 @@ function DashboardErrorState({
   title,
   error,
 }: {
-  title: string;
-  error: unknown;
+  readonly title: string;
+  readonly error: unknown;
 }) {
   const { t } = useTranslation();
   return (
-    <div className="m-4 rounded-md border border-destructive/30 bg-destructive/10 p-4">
+    <div className="rounded-xl border border-destructive/30 bg-destructive/10 p-4">
       <h2 className="text-sm font-semibold">{title}</h2>
-      <p className="mt-1 text-sm text-muted-foreground">
+      <p className="mt-1 text-xs text-muted-foreground">
         {error instanceof Error ? error.message : t("Unknown error")}
       </p>
     </div>
@@ -314,14 +1192,16 @@ function DashboardErrorState({
 
 function FilterSelect({
   label,
+  allLabel,
   value,
   options,
   onChange,
 }: {
-  label: string;
-  value: string;
-  options: readonly string[];
-  onChange: (value: string) => void;
+  readonly label: string;
+  readonly allLabel: string;
+  readonly value: string;
+  readonly options: readonly string[];
+  readonly onChange: (value: string) => void;
 }) {
   const { t } = useTranslation();
   return (
@@ -331,9 +1211,10 @@ function FilterSelect({
         aria-label={`${label} filter`}
         value={value}
         onValueChange={onChange}
+        size="sm"
         fullWidth
         options={[
-          { value: "all", label },
+          { value: "all", label: allLabel },
           ...options.map((option) => ({
             value: option,
             label: t(option),
@@ -345,13 +1226,11 @@ function FilterSelect({
 }
 
 function buildFilterOptions(tasks: readonly DashboardTask[]): {
-  types: string[];
-  statuses: string[];
-  priorities: string[];
+  readonly types: string[];
+  readonly priorities: string[];
 } {
   return {
     types: uniqueSorted(tasks.map((item) => item.type)),
-    statuses: uniqueSorted(tasks.map((item) => item.status)),
     priorities: uniqueSorted(
       tasks
         .map((item) => item.priority)
@@ -364,13 +1243,13 @@ function uniqueSorted(values: readonly string[]): string[] {
   return Array.from(new Set(values)).sort((a, b) => a.localeCompare(b));
 }
 
-function filterTasks(
+export function filterTasks(
   tasks: readonly DashboardTask[],
   filters: {
-    query: string;
-    typeFilter: string;
-    statusFilter: string;
-    priorityFilter: string;
+    readonly query: string;
+    readonly typeFilter: string;
+    readonly statusFilter: TaskStatusTab | string;
+    readonly priorityFilter: string;
   },
 ): DashboardTask[] {
   const { priorityFilter, query, statusFilter, typeFilter } = filters;
@@ -380,8 +1259,26 @@ function filterTasks(
       if (typeFilter !== "all" && item.type !== typeFilter) {
         return false;
       }
-      if (statusFilter !== "all" && item.status !== statusFilter) {
-        return false;
+      if (statusFilter !== "all") {
+        const eff = resolveTaskEffectiveState(item);
+        if (statusFilter === "running" && !isActiveTaskStatus(item.status)) {
+          return false;
+        }
+        if (statusFilter === "waiting" && eff !== "waiting" && eff !== "new") {
+          return false;
+        }
+        if (statusFilter === "completed" && eff !== "completed") {
+          return false;
+        }
+        if (statusFilter === "attention" && eff !== "failed" && eff !== "cancelled") {
+          return false;
+        }
+        if (
+          !["running", "waiting", "completed", "attention"].includes(statusFilter) &&
+          item.status !== statusFilter
+        ) {
+          return false;
+        }
       }
       if (priorityFilter !== "all" && item.priority !== priorityFilter) {
         return false;
@@ -404,8 +1301,9 @@ function filterTasks(
               identityForCanonicalUser(participant.user),
             )}`,
         ),
-        ...(item.linkedSessions ?? item.linked_sessions).map(
-          (session) => `${session.id} ${session.title ?? ""}`,
+        ...resolveTaskSessions(item).map(
+          (session) =>
+            `${session.id} ${session.displayTitle ?? ""} ${session.title ?? ""}`,
         ),
       ]
         .join(" ")
@@ -415,55 +1313,44 @@ function filterTasks(
     .sort((a, b) => b.last_activity_at - a.last_activity_at);
 }
 
-function identityForCanonicalUser(
-  user: DashboardCanonicalUser | null | undefined,
-): DashboardIdentity | null {
-  if (!user) {
-    return null;
+function resolveTaskSessions(task: DashboardTask): DashboardTaskSession[] {
+  if (task.linked_sessions && task.linked_sessions.length > 0) {
+    return [...task.linked_sessions];
   }
-  return {
-    id: user.id,
-    channel: { type: "luna", id: "canonical" },
-    externalId: user.id,
-    identityKind: canonicalUserIdentityKind(user.kind),
-    displayName: user.displayName,
-    status: user.status,
-    avatarUrl: user.avatarUrl,
-    providerIds: {},
-  };
+  if (task.linkedSessions && task.linkedSessions.length > 0) {
+    return task.linkedSessions.map((session) => ({
+      id: session.id,
+      title: session.title,
+      display_title: session.displayTitle,
+      displayTitle: session.displayTitle,
+      channel_type: session.channelType,
+      channelType: session.channelType,
+      channel_id: "",
+      group_id: null,
+      thread_id: null,
+    }));
+  }
+  return [];
 }
 
-function canonicalUserIdentityKind(kind: string): DashboardIdentity["identityKind"] {
-  switch (kind) {
-    case "bot":
-      return "bot";
-    case "system":
-      return "system";
-    case "human":
-    case "service":
-    default:
-      return "user";
+function formatSessionChipLabel(session: DashboardTaskSession): string {
+  const baseTitle = session.displayTitle || session.display_title || session.title || session.id;
+  if (session.title && session.displayTitle && session.title !== session.displayTitle) {
+    return `${session.displayTitle} · # ${session.title}`;
   }
+  return baseTitle;
 }
 
-function statusTone(status: string): "green" | "blue" | "amber" | "neutral" {
-  if (status === "completed") {
-    return "green";
-  }
-  if (status === "running") {
-    return "blue";
-  }
-  if (status === "failed" || status === "cancelled") {
-    return "amber";
-  }
-  return "neutral";
+function latestTaskRun(runs: readonly DashboardTaskRun[]): DashboardTaskRun | undefined {
+  return runs.reduce<DashboardTaskRun | undefined>(
+    (latest, run) =>
+      latest === undefined || (run.runIndex ?? run.run_index) > (latest.runIndex ?? latest.run_index)
+        ? run
+        : latest,
+    undefined,
+  );
 }
 
-function formatTime(timestamp: number): string {
-  return new Intl.DateTimeFormat(undefined, {
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-  }).format(new Date(timestamp));
+function shortTaskId(id: string): string {
+  return id.length > 16 ? `${id.slice(0, 14)}…` : id;
 }

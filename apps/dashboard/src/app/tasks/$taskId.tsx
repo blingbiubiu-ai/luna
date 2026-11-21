@@ -1,23 +1,38 @@
-import { useAgentBasePath } from "@/lib/agent-route";
-import { DeleteRecordButton } from "@/components/delete-record-button";
-import { useTranslation } from "@/lib/i18n";
 import { createFileRoute } from "@tanstack/react-router";
 import { ArrowLeft, TerminalSquareIcon } from "lucide-react";
+import type { MouseEvent } from "react";
 
-import { Button } from "@/components/ui/button";
+import { CopyTextButton } from "@/components/copy-text-button";
+import { DeleteRecordButton } from "@/components/delete-record-button";
+import { useAgentBasePath } from "@/lib/agent-route";
 import {
   useTask,
   useTaskArtifacts,
   useTaskRuns,
   useTaskTimeline,
+  type DashboardTaskArtifact,
 } from "@/lib/api";
-import type { DashboardTaskArtifact } from "@/lib/api";
+import { appHistory } from "@/lib/app-history";
+import { useTranslation } from "@/lib/i18n";
 
 import { TaskDetailView } from "./task-detail-view";
 
 export const Route = createFileRoute("/$agentId/tasks/$taskId")({
   component: TaskDetailPage,
 });
+
+function navigateClient(event: MouseEvent<HTMLAnchorElement>, href: string) {
+  if (
+    event.button === 0 &&
+    !event.metaKey &&
+    !event.ctrlKey &&
+    !event.shiftKey &&
+    !event.altKey
+  ) {
+    event.preventDefault();
+    appHistory.push(href);
+  }
+}
 
 function TaskDetailPage() {
   const { t } = useTranslation();
@@ -48,26 +63,51 @@ function TaskDetailPage() {
     isLoading: runsLoading,
   } = useTaskRuns(taskId, agentId);
   const displayArtifacts = artifacts?.map(formatTaskArtifactForDisplay);
+  const tasksHref = `${base}/tasks`;
+  const tuiHref = `${base}/terminals?taskId=${encodeURIComponent(taskId)}`;
 
   return (
-    <div className="flex h-full flex-1 flex-col">
-      <div className="flex items-center justify-between border-b px-4 py-2">
-        <Button variant="ghost" size="sm" asChild>
-          <a href={`${base}/tasks`}>
-            <ArrowLeft className="size-4" />{t("Tasks")}</a>
-        </Button>
+    <div className="flex h-full min-h-0 flex-1 flex-col overflow-hidden border-t border-border bg-background">
+      <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-b border-border bg-card px-5 py-2.5 md:px-6">
+        <a
+          href={tasksHref}
+          onClick={(event) => navigateClient(event, tasksHref)}
+          className="inline-flex h-[30px] items-center gap-1.5 rounded-[7px] border border-border bg-background px-2.5 text-xs font-medium text-foreground transition-colors hover:bg-accent hover:no-underline"
+        >
+          <ArrowLeft className="size-3.5" />
+          <span>{t("Back to tasks")}</span>
+        </a>
+
         {taskDetail ? (
           <div className="flex items-center gap-1.5">
-            <Button size="sm" variant="outline" asChild>
-              <a href={`${base}/terminals?taskId=${encodeURIComponent(taskId)}`}>
-                <TerminalSquareIcon className="size-3.5" />
-                {t("Open TUI")}
-              </a>
-            </Button>
-            <DeleteRecordButton kind="tasks" id={taskId} path={`/tasks/${encodeURIComponent(taskId)}?agentId=${encodeURIComponent(agentId)}`} name={taskDetail.title} onDeleted={() => { window.location.assign(`${base}/tasks`); }} />
+            <CopyTextButton
+              className="h-[30px] max-w-44 truncate rounded-[7px] border border-border bg-background px-2.5 font-mono text-xs text-muted-foreground hover:text-foreground"
+              label={t("Copy task ID")}
+              text={taskId}
+            >
+              {taskId.length > 20 ? `${taskId.slice(0, 18)}…` : taskId}
+            </CopyTextButton>
+            <a
+              href={tuiHref}
+              onClick={(event) => navigateClient(event, tuiHref)}
+              className="inline-flex h-[30px] items-center gap-1.5 rounded-[7px] border border-border bg-background px-2.5 text-xs font-medium text-foreground transition-colors hover:bg-accent hover:no-underline"
+            >
+              <TerminalSquareIcon className="size-3.5" />
+              <span>{t("Open TUI")}</span>
+            </a>
+            <DeleteRecordButton
+              kind="tasks"
+              id={taskId}
+              path={`/tasks/${encodeURIComponent(taskId)}?agentId=${encodeURIComponent(agentId)}`}
+              name={taskDetail.title}
+              onDeleted={() => {
+                appHistory.push(tasksHref);
+              }}
+            />
           </div>
         ) : null}
       </div>
+
       <TaskDetailView
         taskDetail={taskDetail}
         runs={runs}

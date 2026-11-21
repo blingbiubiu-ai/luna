@@ -72,12 +72,14 @@ These distinctions matter for debugging because they explain why a message was v
 
 ## Task View
 
-Task views show durable work state:
+Task views show durable work state across two coordinated screens:
 
-- task status, title, summary, context, and subscriptions.
-- task runs, materialized prompts, runner status, and terminal state.
-- source context packs and task timeline events.
-- artifact outputs, including reports, images, files, and previews.
+- **Task list (`/agent/:agentId/tasks`)**: displays live queue pulse status, clickable status summary tiles, segmented status tabs (`All / Running / Waiting / Completed / Failed / Cancelled`, deriving `Waiting` when `taskContext.pendingQuestions` is non-empty while idle), type/priority/Shadow filters, and a toggle between grouped focus/archive view (`Active & needs attention` ahead of `Recently finished`) and flat activity-stream view. Each row surfaces linked session provenance, latest run/runner/duration, artifact counts, participant avatars, and `Open TUI` / detail shortcuts; selecting a row on wide screens opens a right-hand quick-peek inspector without leaving the list.
+- **Task detail (`/agent/:agentId/tasks/:taskId`)**: organizes durable state into localized tabs (`Timeline`, `Report`, `Runs`, `Artifacts`, and `Context`) with top-level `Open TUI`, copyable Task ID, contextual waiting/error callouts, and `Operation Trace` summaries:
+  - task status, title, summary, context, and subscriptions.
+  - task runs, materialized prompts, runner status, and terminal state.
+  - source context packs and task timeline events.
+  - artifact outputs, including reports, patches, logs, images, files, and previews.
 
 Task artifacts should be listed independently from the LLM text body. Status cards may include direct LLM output, but complete report links should come from recorded task artifacts when they exist.
 
@@ -127,6 +129,8 @@ Rules:
 - `src/dashboard-api/tasks.ts`
 - `src/dashboard-api/local-paths.ts`
 - `apps/dashboard/src/app/sessions/session-detail-view.tsx`
+- `apps/dashboard/src/app/tasks/index.tsx`
+- `apps/dashboard/src/app/tasks/task-detail-view.tsx`
 - `apps/dashboard/src/artifact-preview-main.tsx`
 
 ## Removed usage dashboard

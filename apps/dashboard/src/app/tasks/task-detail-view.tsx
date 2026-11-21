@@ -1,10 +1,15 @@
-import { useAgentBasePath } from "@/lib/agent-route";
-import { UiText } from "@/lib/i18n";
-import { useTranslation } from "@/lib/i18n";
-import { CircleDot } from "lucide-react";
-import { useState, type ReactNode } from "react";
+import {
+  ArrowUpRight,
+  FileCode2,
+  FileJson,
+  FileText,
+  MessageSquare,
+  ScrollText,
+} from "lucide-react";
+import { useState, type MouseEvent, type ReactNode } from "react";
 import { Streamdown } from "streamdown";
 
+import { avatarColorForKey } from "@/app/sessions/session-avatar";
 import {
   ContextPackList,
   RunContextSummaryInline,
@@ -13,9 +18,30 @@ import {
 } from "@/components/context-pack-list";
 import { CopyTextButton } from "@/components/copy-text-button";
 import { IdentityLink } from "@/components/identity-link";
-import type { DashboardIdentity } from "@/components/identity-link";
 import { InspectableText } from "@/components/inspectable-text";
-import type { DashboardCanonicalUser, DashboardContextPack, DashboardRunnerContextSeedRecord, DashboardTaskRunContextSummary } from "@/lib/api";
+import { useAgentBasePath } from "@/lib/agent-route";
+import type {
+  DashboardCanonicalUser,
+  DashboardContextPack,
+  DashboardRunnerContextSeedRecord,
+  DashboardTaskRunContextSummary,
+} from "@/lib/api";
+import { appHistory } from "@/lib/app-history";
+import { UiText, useTranslation } from "@/lib/i18n";
+import { cn } from "@/lib/utils";
+
+import {
+  formatRunDuration,
+  formatTaskFullTime,
+  identityForCanonicalUser,
+  parseTaskContext,
+  resolveTaskEffectiveState,
+  TaskPriorityPill,
+  taskStateClasses,
+  TaskStateIcon,
+  TaskStatusPill,
+  TaskTypePill,
+} from "./task-visuals";
 
 export interface TaskDetailData {
   id: string;
@@ -202,10 +228,28 @@ export interface TaskDetailViewProps {
   };
 }
 
-const tabs = ["Runs", "Timeline", "Report", "Artifacts", "Context"] as const;
+const tabs = ["Timeline", "Report", "Runs", "Artifacts", "Context"] as const;
 type TaskDetailTab = (typeof tabs)[number];
 const artifactGroupOrder = ["report", "patch", "log", "json", "text"] as const;
 type ArtifactGroup = (typeof artifactGroupOrder)[number];
+
+const cardSurfaceClass =
+  "rounded-2xl border border-border bg-card shadow-[0_2px_6px_#00000006]";
+const sageCardSurfaceClass =
+  "relative overflow-hidden rounded-2xl border border-border bg-card shadow-[0_2px_6px_#00000006] before:absolute before:top-0 before:left-5 before:h-[3px] before:w-6 before:rounded-xs before:bg-[#a3b69e] dark:before:bg-[#8ea487]";
+
+function navigateClient(event: MouseEvent<HTMLAnchorElement>, href: string) {
+  if (
+    event.button === 0 &&
+    !event.metaKey &&
+    !event.ctrlKey &&
+    !event.shiftKey &&
+    !event.altKey
+  ) {
+    event.preventDefault();
+    appHistory.push(href);
+  }
+}
 
 export function TaskDetailView({
   taskDetail,
@@ -219,7 +263,11 @@ export function TaskDetailView({
   const { t } = useTranslation();
   const [activeTab, setActiveTab] = useState<TaskDetailTab>("Timeline");
   const displayRuns = runs ?? taskDetail?.runs ?? [];
+  const orderedRuns = [...displayRuns].sort((a, b) => b.runIndex - a.runIndex);
   const displayTimeline = timeline ?? taskDetail?.timeline ?? [];
+  const orderedTimeline = [...displayTimeline].sort(
+    (a, b) => b.created_at - a.created_at,
+  );
   const displayArtifacts = artifacts ?? taskDetail?.artifacts ?? [];
   const latestRun = latestTaskRun(displayRuns);
   const currentReportArtifactId =
@@ -234,7 +282,11 @@ export function TaskDetailView({
         );
   const groupedArtifacts = groupArtifacts(displayArtifacts);
   const operationTraces = displayTimeline.flatMap(toOperationTrace);
-  const taskContext = taskContextView(taskDetail?.taskContext);
+  const taskContext = parseTaskContext(taskDetail?.taskContext);
+  const effectiveState = resolveTaskEffectiveState({
+    status: taskDetail?.status ?? "new",
+    taskContext: taskDetail?.taskContext,
+  });
   const sourceMessages = taskDetail?.sourceMessages ?? [];
   const sourceTurnMessages = taskDetail?.sourceTurnMessages ?? [];
   const sourceSessionIds = new Set(sourceMessages.map((item) => item.sessionId));
@@ -265,7 +317,7 @@ export function TaskDetailView({
   if (errors?.taskDetail && !loading.taskDetail) {
     return (
       <article
-        className="flex h-full flex-1 flex-col"
+        className="flex h-full flex-1 flex-col p-5"
         data-testid="task-detail"
       >
         <DashboardErrorState
@@ -276,206 +328,382 @@ export function TaskDetailView({
     );
   }
 
+  const tabCounts: Record<TaskDetailTab, number | null> = {
+    Timeline: displayTimeline.length,
+    Report: reportArtifacts.length > 0 ? reportArtifacts.length : null,
+    Runs: displayRuns.length,
+    Artifacts: displayArtifacts.length,
+    Context: linkedSessionDetails.length,
+  };
+
   return (
-    <article className="flex h-full flex-1 flex-col" data-testid="task-detail">
-      <header className="border-b px-4 py-3" data-testid="task-header">
-        <div className="flex items-start gap-3">
-          <div className="min-w-0 flex-1">
-            <h1
-              className="truncate text-sm font-semibold"
-              title={taskDetail?.title ?? "Loading task"}
-            >
-              {taskDetail?.title ?? "Loading task"}
-            </h1>
-            <div className="mt-1 flex flex-wrap gap-1 text-xs text-muted-foreground">
-              <span>{taskDetail?.id ?? "task"}</span>
-              <span>{taskDetail?.status ?? "loading"}</span>
-              <span>{taskDetail?.type ?? "type"}</span>
-              {taskDetail?.priority ? <span><UiText>{taskDetail.priority}</UiText></span> : null}
-              {taskDetail?.severity ? <span>{taskDetail.severity}</span> : null}
+    <article
+      className="flex h-full min-h-0 flex-1 flex-col overflow-y-auto bg-background"
+      data-testid="task-detail"
+    >
+      {/* Identity Hero Header */}
+      <header
+        className="border-b border-border bg-card px-5 pt-5 pb-0 md:px-6"
+        data-testid="task-header"
+      >
+        <div className="mx-auto max-w-6xl space-y-3.5">
+          {/* Status, Type, Priority & Timestamps Row */}
+          <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
+            <div className="flex flex-wrap items-center gap-2">
+              <TaskStatusPill
+                status={taskDetail?.status ?? "loading"}
+                effectiveState={
+                  effectiveState === "waiting" ? "completed" : effectiveState
+                }
+                showDot
+                className="rounded-full px-2.5 py-0.5 text-xs font-semibold"
+              />
+              {effectiveState === "waiting" ? (
+                <TaskStatusPill
+                  status="Waiting"
+                  effectiveState="waiting"
+                  showDot
+                  className="rounded-full px-2.5 py-0.5 text-xs font-semibold"
+                />
+              ) : null}
+              <TaskTypePill
+                type={taskDetail?.type ?? "type"}
+                className="px-2.5 py-0.5 text-xs"
+              />
+              {taskDetail?.priority ? (
+                <TaskPriorityPill
+                  priority={taskDetail.priority}
+                  alwaysShow
+                  className="rounded-full px-2.5 py-0.5 text-xs"
+                />
+              ) : null}
+              {taskDetail?.severity ? (
+                <span className="rounded-full bg-muted px-2 py-0.5 font-mono text-xs text-muted-foreground">
+                  {taskDetail.severity}
+                </span>
+              ) : null}
+              <span className="font-mono text-muted-foreground">
+                {taskDetail?.id ?? "task"}
+              </span>
             </div>
-            {taskDetail ? (
-              <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-                <span className="inline-flex items-center gap-1">{t("Creator")}{" "}
-                  <IdentityLink
-                    className="text-xs"
-                    identity={identityForCanonicalUser(taskDetail.creatorUser)}
-                    showKind={false}
-                  />
-                </span>
-                <span className="inline-flex flex-wrap items-center gap-1">{t("Participants")}{taskDetail.participants.length === 0 ? (
-                    <span>-</span>
-                  ) : (
-                    taskDetail.participants.map((participant) => (
-                      <span
-                        className="inline-flex items-center gap-1"
-                        key={`${participant.userId}:${participant.role}`}
-                      >
-                        <span><UiText>{participant.role}</UiText></span>
-                        <IdentityLink
-                          className="text-xs"
-                          fallbackKind={
-                            participant.role === "agent" ? "bot" : "user"
-                          }
-                          identity={identityForCanonicalUser(participant.user)}
-                          showKind={false}
-                        />
+
+            <div className="text-xs tabular-nums text-muted-foreground">
+              {t("Last activity")}{" "}
+              {taskDetail ? formatTaskFullTime(taskDetail.last_activity_at) : "-"}
+            </div>
+          </div>
+
+          {/* Full Readable Task Title */}
+          <h1
+            className="m-0 text-[20px] leading-snug font-semibold tracking-tight break-words text-foreground"
+            title={taskDetail?.title ?? "Loading task"}
+          >
+            {taskDetail?.title ?? t("Loading task")}
+          </h1>
+
+          {/* Creator, Participants & Linked Session Chips */}
+          {taskDetail ? (
+            <div className="flex flex-wrap items-center gap-x-4 gap-y-2 pb-1 text-xs text-muted-foreground">
+              <span className="inline-flex items-center gap-1.5">
+                <span>{t("Creator")}:</span>
+                <IdentityLink
+                  className="text-xs"
+                  identity={identityForCanonicalUser(taskDetail.creatorUser)}
+                  showAvatar
+                  showKind={false}
+                />
+              </span>
+
+              <span className="inline-flex flex-wrap items-center gap-1.5">
+                <span>{t("Participants")}:</span>
+                {taskDetail.participants.length === 0 ? (
+                  <span>-</span>
+                ) : (
+                  taskDetail.participants.map((participant) => (
+                    <span
+                      className="inline-flex items-center gap-1 rounded-full bg-secondary px-2 py-0.5 text-secondary-foreground"
+                      key={`${participant.userId}:${participant.role}`}
+                    >
+                      <span className="text-muted-foreground">
+                        <UiText>{participant.role}</UiText>
                       </span>
-                    ))
-                  )}
+                      <IdentityLink
+                        className="text-xs"
+                        fallbackKind={
+                          participant.role === "agent" ? "bot" : "user"
+                        }
+                        identity={identityForCanonicalUser(participant.user)}
+                        showIcon={false}
+                        showKind={false}
+                      />
+                    </span>
+                  ))
+                )}
+              </span>
+
+              {linkedSessionDetails.length > 0 ? (
+                <span className="inline-flex flex-wrap items-center gap-1.5">
+                  {linkedSessionDetails.slice(0, 3).map((session) => {
+                    const sessionHref = `${base}/sessions/${encodeURIComponent(session.id)}`;
+                    const label =
+                      session.displayTitle ?? session.title ?? "Untitled session";
+                    return (
+                      <a
+                        key={session.id}
+                        href={sessionHref}
+                        onClick={(event) => navigateClient(event, sessionHref)}
+                        className="inline-flex max-w-60 items-center gap-1 rounded-[6px] bg-muted px-2 py-0.5 font-medium text-foreground transition-colors hover:bg-accent hover:no-underline"
+                      >
+                        <MessageSquare className="size-3 shrink-0 text-muted-foreground" />
+                        <span className="truncate">{label}</span>
+                      </a>
+                    );
+                  })}
                 </span>
-              </div>
-            ) : null}
-            {operationTraces.length > 0 ? (
-              <section
-                className="mt-3 grid gap-2 rounded-md border bg-muted/20 p-3 text-xs"
-                data-testid="task-operation-trace"
-              >
-                <h2 className="text-sm font-medium">{t("Operation Trace")}</h2>
-                {operationTraces.map((trace) => (
-                  <div
-                    className="grid gap-1 sm:grid-cols-[14rem_1fr]"
-                    key={`${trace.requestId}:${trace.operation}`}
-                  >
-                    <div className="font-mono text-muted-foreground">
-                      {trace.requestId}
-                    </div>
-                    <div className="min-w-0">
-                      <div className="break-all font-mono">
-                        {trace.operation}
-                      </div>
-                      <div className="mt-1 flex flex-wrap gap-2 text-muted-foreground">
-                        <span><UiText>{trace.status}</UiText></span>
-                        {trace.artifactIds.map((artifactId) => (
-                          <a
-                            className="text-primary hover:underline"
-                            href={`#artifact-${artifactId}`}
-                            key={artifactId}
-                          >
-                            {artifactId}
-                          </a>
-                        ))}
-                      </div>
-                    </div>
+              ) : null}
+            </div>
+          ) : null}
+
+          {/* Contextual Callout Banners */}
+          {taskContext.pendingQuestions.length > 0 ? (
+            <div
+              className={cn(
+                "rounded-xl border px-4 py-3 text-xs",
+                taskStateClasses("waiting").calloutClass,
+              )}
+            >
+              <div className="font-semibold">{t("Waiting for confirmation")}</div>
+              <div className="mt-1 space-y-1 text-[13px] leading-relaxed">
+                {taskContext.pendingQuestions.map((question, idx) => (
+                  <div key={idx} className="break-words">
+                    {question}
                   </div>
                 ))}
-              </section>
-            ) : null}
-          </div>
-          <div className="text-right text-xs text-muted-foreground">{t("Last activity")}{" "}
-            {taskDetail ? formatTime(taskDetail.last_activity_at) : "-"}
-          </div>
+              </div>
+            </div>
+          ) : null}
+
+          {latestRun?.status === "failed" && latestRun.error ? (
+            <div
+              className={cn(
+                "rounded-xl border px-4 py-3 text-xs",
+                taskStateClasses("failed").calloutClass,
+              )}
+            >
+              <div className="font-semibold">{t("Latest run error")}</div>
+              <div className="mt-1 font-mono leading-relaxed break-all">
+                {latestRun.error}
+              </div>
+            </div>
+          ) : null}
+
+          {/* Operation Trace Banner */}
+          {operationTraces.length > 0 ? (
+            <section
+              className="grid gap-2 rounded-xl border border-border bg-muted/40 p-3.5 text-xs"
+              data-testid="task-operation-trace"
+            >
+              <h2 className="m-0 text-xs font-semibold tracking-wider uppercase text-muted-foreground">
+                {t("Operation Trace")}
+              </h2>
+              {operationTraces.map((trace) => (
+                <div
+                  className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-border/70 bg-card px-3 py-2"
+                  key={`${trace.requestId}:${trace.operation}`}
+                >
+                  <div className="min-w-0 space-y-0.5">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="font-mono font-semibold text-foreground break-all">
+                        {trace.operation}
+                      </span>
+                      <span className="rounded bg-[#5b8a72]/14 px-1.5 py-0.5 text-[11px] font-medium text-[#5b8a72] dark:bg-[#7fb096]/16 dark:text-[#7fb096]">
+                        <UiText>{trace.status}</UiText>
+                      </span>
+                    </div>
+                    <div className="font-mono text-[11px] text-muted-foreground">
+                      {trace.requestId}
+                    </div>
+                  </div>
+                  {trace.artifactIds.length > 0 ? (
+                    <div className="flex flex-wrap gap-1.5">
+                      {trace.artifactIds.map((artifactId) => (
+                        <a
+                          className="inline-flex items-center gap-1 rounded-[6px] border border-border bg-background px-2 py-0.5 font-mono text-foreground transition-colors hover:bg-accent hover:no-underline"
+                          href={`#artifact-${artifactId}`}
+                          key={artifactId}
+                          onClick={() => setActiveTab("Artifacts")}
+                        >
+                          <FileText className="size-3 text-muted-foreground" />
+                          <span>{artifactId}</span>
+                        </a>
+                      ))}
+                    </div>
+                  ) : null}
+                </div>
+              ))}
+            </section>
+          ) : null}
+
+          {/* Underline Tab Navigation */}
+          <nav
+            aria-label={t("Task detail sections")}
+            className="flex items-center gap-1 overflow-x-auto pt-1"
+            role="tablist"
+          >
+            {tabs.map((tab) => {
+              const isSelected = activeTab === tab;
+              const count = tabCounts[tab];
+              return (
+                <div
+                  key={tab}
+                  className={cn(
+                    "inline-flex items-center gap-1.5 border-b-2 px-3 py-2.5 text-[13px] whitespace-nowrap transition-colors",
+                    isSelected
+                      ? "border-[#a3b69e] text-foreground dark:border-[#8ea487]"
+                      : "border-transparent text-muted-foreground hover:text-foreground",
+                  )}
+                >
+                  <button
+                    aria-controls={tab.toLowerCase()}
+                    aria-selected={isSelected}
+                    className={cn(
+                      "cursor-pointer text-left outline-none",
+                      isSelected ? "font-semibold text-foreground" : "font-normal",
+                    )}
+                    onClick={() => setActiveTab(tab)}
+                    role="tab"
+                    type="button"
+                  >
+                    {t(tab)}
+                  </button>
+                  {count !== null && count > 0 ? (
+                    <span
+                      aria-hidden="true"
+                      onClick={() => setActiveTab(tab)}
+                      className="cursor-pointer rounded-full bg-muted px-1.5 py-0.5 text-[11px] leading-none font-normal tabular-nums text-muted-foreground"
+                    >
+                      {count}
+                    </span>
+                  ) : null}
+                </div>
+              );
+            })}
+          </nav>
         </div>
       </header>
 
-      <nav
-        aria-label={t("Task detail sections")}
-        className="flex gap-2 border-b px-4 py-2 text-sm"
-        role="tablist"
-      >
-        {tabs.map((tab) => (
-          <button
-            key={tab}
-            aria-controls={tab.toLowerCase()}
-            aria-selected={activeTab === tab}
-            className="rounded-md px-2 py-1 text-left hover:bg-accent aria-selected:bg-accent aria-selected:text-accent-foreground"
-            onClick={() => setActiveTab(tab)}
-            role="tab"
-            type="button"
-          >
-            {tab}
-          </button>
-        ))}
-      </nav>
-
-      <div className="min-h-0 flex-1 overflow-auto p-4">
+      {/* Active Tab Panel Body */}
+      <div className="mx-auto w-full max-w-6xl flex-1 px-5 py-5 md:px-6">
         {activeTab === "Runs" ? (
           <section
             id="runs"
-            className="mb-6"
+            className="mb-6 max-w-4xl space-y-3"
             data-testid="task-runs"
             role="tabpanel"
           >
-            <h2 className="mb-2 text-sm font-semibold">{t("Runs")}</h2>
+            <h2 className="sr-only">{t("Runs")}</h2>
             {loading.runs ? (
-              <p>{t("Loading runs")}</p>
+              <p className="text-sm text-muted-foreground">{t("Loading runs")}</p>
             ) : errors?.runs ? (
               <DashboardErrorState
                 title={t("Runs failed to load")}
                 error={errors.runs}
               />
+            ) : orderedRuns.length === 0 ? (
+              <div className={cn(cardSurfaceClass, "p-6 text-sm text-muted-foreground")}>
+                -
+              </div>
             ) : (
-              <table className="w-full table-fixed text-sm">
-                <thead>
-                  <tr>
-                    <th className="w-16 text-left">{t("Run")}</th>
-                    <th className="w-28 text-left">{t("Status")}</th>
-                    <th className="w-28 text-left">{t("Reason")}</th>
-                    <th className="w-36 text-left">{t("Runner")}</th>
-                    <th className="w-36 text-left">{t("Started")}</th>
-                    <th className="w-36 text-left">{t("Finished")}</th>
-                    <th className="text-left">{t("Input")}</th>
-                    <th className="w-40 text-left">{t("Report")}</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {displayRuns.map((run) => (
-                    <tr key={run.id}>
-                      <td className="align-top">#{run.runIndex}</td>
-                      <td className="align-top"><UiText>{run.status}</UiText></td>
-                      <td className="align-top">{run.reason}</td>
-                      <td className="align-top">{run.runnerType}</td>
-                      <td className="align-top text-xs text-muted-foreground">
-                        {formatTime(run.startedAt)}
-                      </td>
-                      <td className="align-top text-xs text-muted-foreground">
-                        {run.finishedAt ? formatTime(run.finishedAt) : "-"}
-                      </td>
-                      <td
-                        className="whitespace-normal break-words align-top font-mono text-xs"
-                        data-testid={`task-run-input-${run.id}`}
-                      >
+              orderedRuns.map((run) => {
+                const runState = resolveTaskEffectiveState({ status: run.status });
+                const duration = formatRunDuration(run.startedAt, run.finishedAt);
+                return (
+                  <div
+                    key={run.id}
+                    className={cn(cardSurfaceClass, "space-y-3.5 p-5")}
+                  >
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <TaskStateIcon state={runState} />
+                        <span className="text-[15px] font-semibold text-foreground">
+                          #{run.runIndex}
+                        </span>
+                        <TaskStatusPill status={run.status} effectiveState={runState} />
+                        <span className="rounded-full bg-secondary px-2 py-0.5 font-mono text-xs text-secondary-foreground">
+                          {run.runnerType}
+                        </span>
+                        <span className="text-xs text-muted-foreground">
+                          {t("Reason")}: <UiText>{run.reason}</UiText>
+                        </span>
+                      </div>
+
+                      <div className="flex flex-wrap items-center gap-2 text-xs tabular-nums text-muted-foreground">
+                        <span>
+                          {formatTaskFullTime(run.startedAt)}
+                          {run.finishedAt
+                            ? ` → ${formatTaskFullTime(run.finishedAt)}`
+                            : ""}
+                          {duration ? ` · ${duration}` : ""}
+                        </span>
                         {runMaterializedPromptText(run) ? (
-                          <div className="mb-2 font-sans">
-                            <CopyTextButton
-                              className="h-6 px-2 text-xs"
-                              label={`Copy LLM prompt for run #${run.runIndex}`}
-                              text={runMaterializedPromptText(run) ?? ""}
-                            >{t("Copy LLM prompt")}</CopyTextButton>
-                          </div>
-                        ) : null}
-                        <InspectableText
-                          label={t("Input")}
-                          previewLength={180}
-                          previewClassName="font-mono"
-                          text={formatInspectableValue(run.inputSnapshot)}
-                        />
-                        <RunContextSummaryInline run={run} />
-                        {run.cancelReason ? (
-                          <div className="mt-1 text-muted-foreground">{t("Cancelled:")}{" "}{run.cancelReason}
-                          </div>
-                        ) : null}
-                        {run.error ? (
-                          <div className="mt-1 text-destructive">{t("Error:")}{" "}{run.error}
-                          </div>
-                        ) : null}
-                      </td>
-                      <td className="align-top">
-                        {run.finalReportArtifactId ? (
-                          <a
-                            className="text-primary hover:underline"
-                            href={`#artifact-${run.finalReportArtifactId}`}
+                          <CopyTextButton
+                            className="h-7 rounded-[7px] px-2.5 font-sans text-xs"
+                            label={`Copy LLM prompt for run #${run.runIndex}`}
+                            text={runMaterializedPromptText(run) ?? ""}
                           >
-                            {run.finalReportArtifactId}
-                          </a>
-                        ) : (
-                          "-"
+                            {t("Copy LLM prompt")}
+                          </CopyTextButton>
+                        ) : null}
+                      </div>
+                    </div>
+
+                    {run.error ? (
+                      <div
+                        className={cn(
+                          "rounded-xl border p-3 font-mono text-xs break-all",
+                          taskStateClasses("failed").calloutClass,
                         )}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+                      >
+                        {t("Error:")} {run.error}
+                      </div>
+                    ) : null}
+
+                    {run.cancelReason ? (
+                      <div className="rounded-xl border border-border bg-muted/50 p-3 text-xs text-muted-foreground">
+                        {t("Cancelled:")} {run.cancelReason}
+                      </div>
+                    ) : null}
+
+                    <div
+                      className="space-y-2 rounded-xl border border-border bg-muted/35 p-3.5 font-mono text-xs break-words whitespace-normal"
+                      data-testid={`task-run-input-${run.id}`}
+                    >
+                      <InspectableText
+                        label={t("Input")}
+                        previewLength={180}
+                        previewClassName="font-mono"
+                        text={formatInspectableValue(run.inputSnapshot)}
+                      />
+                      <div className="font-sans">
+                        <RunContextSummaryInline run={run} />
+                      </div>
+                    </div>
+
+                    {run.finalReportArtifactId ? (
+                      <div className="flex items-center justify-end text-xs">
+                        <a
+                          className="inline-flex items-center gap-1 font-medium text-[#5b8a72] hover:underline dark:text-[#7fb096]"
+                          href={`#artifact-${run.finalReportArtifactId}`}
+                          onClick={() => setActiveTab("Artifacts")}
+                        >
+                          <FileText className="size-3.5" />
+                          <span>{run.finalReportArtifactId}</span>
+                        </a>
+                      </div>
+                    ) : null}
+                  </div>
+                );
+              })
             )}
           </section>
         ) : null}
@@ -483,66 +711,95 @@ export function TaskDetailView({
         {activeTab === "Timeline" ? (
           <section
             id="timeline"
-            className="mb-6"
+            className="mb-6 max-w-4xl"
             data-testid="task-timeline"
             role="tabpanel"
           >
-            <h2 className="mb-2 text-sm font-semibold">{t("Timeline")}</h2>
             {loading.timeline ? (
-              <p>{t("Loading timeline")}</p>
+              <p className="text-sm text-muted-foreground">{t("Loading timeline")}</p>
             ) : errors?.timeline ? (
               <DashboardErrorState
                 title={t("Timeline failed to load")}
                 error={errors.timeline}
               />
             ) : (
-              <table className="w-full table-fixed text-sm">
-                <thead>
-                  <tr>
-                    <th className="w-10 text-left">{t("Icon")}</th>
-                    <th className="w-36 text-left">{t("Time")}</th>
-                    <th className="w-40 text-left">{t("Type")}</th>
-                    <th className="w-20 text-left">{t("Run")}</th>
-                    <th className="text-left">{t("Summary")}</th>
-                    <th className="w-40 text-left">{t("Actor")}</th>
-                    <th className="w-24 text-left">{t("Visibility")}</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {displayTimeline.map((event) => (
-                    <tr key={event.id}>
-                      <td className="align-top text-muted-foreground">
-                        <CircleDot className="size-4" aria-hidden="true" />
-                      </td>
-                      <td className="align-top text-xs text-muted-foreground">
-                        {formatTime(event.created_at)}
-                      </td>
-                      <td className="align-top">{event.type}</td>
-                      <td className="align-top">
-                        {event.runIndex ? `#${event.runIndex}` : "-"}
-                      </td>
-                      <td
-                        className="whitespace-normal break-words align-top"
-                        data-testid={`task-timeline-summary-${event.id}`}
-                      >
-                        <InspectableText
-                          label={t("Summary")}
-                          previewLength={180}
-                          text={event.summary}
-                        />
-                      </td>
-                      <td className="align-top text-xs text-muted-foreground">
-                        <IdentityLink
-                          className="max-w-36 text-xs"
-                          fallbackKind="user"
-                          identity={identityForCanonicalUser(event.actorUser)}
-                        />
-                      </td>
-                      <td className="align-top">{event.visibility}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+              <div className={cn(cardSurfaceClass, "p-5")}>
+                <div className="mb-4 flex items-center justify-between gap-2">
+                  <h2 className="m-0 text-sm font-semibold text-foreground">
+                    {t("Timeline")}
+                  </h2>
+                  <span className="text-xs tabular-nums text-muted-foreground">
+                    {orderedTimeline.length}
+                  </span>
+                </div>
+
+                {orderedTimeline.length === 0 ? (
+                  <p className="m-0 text-sm text-muted-foreground">-</p>
+                ) : (
+                  <div className="relative space-y-5 pl-6">
+                    <span
+                      aria-hidden="true"
+                      className="absolute top-2 bottom-2 left-[11px] w-px bg-border"
+                    />
+                    {orderedTimeline.map((event) => (
+                      <div key={event.id} className="relative space-y-1.5">
+                        <span
+                          aria-hidden="true"
+                          className="absolute top-1 -left-6 inline-grid size-[22px] place-items-center rounded-full bg-card ring-4 ring-card"
+                        >
+                          <span
+                            className={cn(
+                              "size-2.5 rounded-full",
+                              timelineEventDotClass(event.type),
+                            )}
+                          />
+                        </span>
+
+                        <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span className="rounded bg-muted px-1.5 py-0.5 font-mono text-[11px] text-foreground">
+                              {event.type}
+                            </span>
+                            {event.runIndex ? (
+                              <button
+                                type="button"
+                                onClick={() => setActiveTab("Runs")}
+                                className="cursor-pointer rounded bg-secondary px-1.5 py-0.5 text-[11px] font-medium text-secondary-foreground transition-opacity hover:opacity-80"
+                              >
+                                #{event.runIndex}
+                              </button>
+                            ) : null}
+                            <IdentityLink
+                              className="max-w-44 text-xs"
+                              fallbackKind="user"
+                              identity={identityForCanonicalUser(event.actorUser)}
+                              showAvatar
+                              showKind={false}
+                            />
+                            <span className="text-muted-foreground">
+                              · <UiText>{event.visibility}</UiText>
+                            </span>
+                          </div>
+                          <span className="tabular-nums text-muted-foreground">
+                            {formatTaskFullTime(event.created_at)}
+                          </span>
+                        </div>
+
+                        <div
+                          className="text-[13.5px] leading-relaxed break-words whitespace-normal text-foreground"
+                          data-testid={`task-timeline-summary-${event.id}`}
+                        >
+                          <InspectableText
+                            label={t("Summary")}
+                            previewLength={180}
+                            text={event.summary}
+                          />
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
             )}
           </section>
         ) : null}
@@ -550,19 +807,54 @@ export function TaskDetailView({
         {activeTab === "Report" ? (
           <section
             id="report"
-            className="mb-6"
+            className="mb-6 max-w-4xl space-y-4"
             data-testid="task-report"
             role="tabpanel"
           >
-            <h2 className="mb-2 text-sm font-semibold">{t("Report")}</h2>
-            <p className="mb-4 whitespace-pre-wrap break-words text-sm leading-6 text-muted-foreground">
-              {taskDetail?.summary ?? "No report summary is available."}
-            </p>
+            <div className={cn(sageCardSurfaceClass, "space-y-2 p-5")}>
+              <div className="flex items-center justify-between gap-2">
+                <h2 className="m-0 text-xs font-semibold tracking-wider uppercase text-muted-foreground">
+                  {t("Summary")}
+                </h2>
+                {taskDetail?.summary ? (
+                  <CopyTextButton
+                    className="h-7 rounded-[7px] px-2.5 text-xs"
+                    label={t("Copy")}
+                    text={taskDetail.summary}
+                  >
+                    {t("Copy")}
+                  </CopyTextButton>
+                ) : null}
+              </div>
+              <p className="m-0 text-sm leading-6 break-words whitespace-pre-wrap text-foreground">
+                {taskDetail?.summary ?? t("No report summary is available.")}
+              </p>
+            </div>
+
             {reportArtifacts.map((artifact) => (
-              <div key={artifact.id} className="space-y-2">
-                <h3 className="text-sm font-medium">{artifact.name}</h3>
+              <div
+                key={artifact.id}
+                className={cn(cardSurfaceClass, "overflow-hidden")}
+              >
+                <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border bg-muted/50 px-5 py-3">
+                  <div className="flex items-center gap-2 text-xs">
+                    <FileText className="size-4 text-[#5b8a72] dark:text-[#7fb096]" />
+                    <h3 className="m-0 font-mono text-sm font-medium text-foreground">
+                      {artifact.name}
+                    </h3>
+                  </div>
+                  {artifact.href ? (
+                    <a
+                      href={artifact.href}
+                      className="inline-flex h-7 items-center gap-1 rounded-[7px] border border-border bg-card px-2.5 text-xs font-medium text-foreground transition-colors hover:bg-accent hover:no-underline"
+                    >
+                      <span>{t("Open preview")}</span>
+                      <ArrowUpRight className="size-3.5" />
+                    </a>
+                  ) : null}
+                </div>
                 <div
-                  className="max-w-full overflow-hidden whitespace-pre-wrap break-words rounded-md border bg-muted/30 p-3 text-sm leading-6"
+                  className="max-w-full overflow-hidden p-5 text-sm leading-7 break-words whitespace-pre-wrap"
                   data-testid="task-report-content"
                 >
                   <Streamdown className="break-words">
@@ -577,71 +869,97 @@ export function TaskDetailView({
         {activeTab === "Artifacts" ? (
           <section
             id="artifacts"
-            className="mb-6"
+            className="mb-6 max-w-4xl"
             data-testid="task-artifacts"
             role="tabpanel"
           >
-            <h2 className="mb-2 text-sm font-semibold">{t("Artifacts")}</h2>
+            <h2 className="sr-only">{t("Artifacts")}</h2>
             {loading.artifacts ? (
-              <p>{t("Loading artifacts")}</p>
+              <p className="text-sm text-muted-foreground">
+                {t("Loading artifacts")}
+              </p>
             ) : errors?.artifacts ? (
               <DashboardErrorState
                 title={t("Artifacts failed to load")}
                 error={errors.artifacts}
               />
+            ) : displayArtifacts.length === 0 ? (
+              <div className="rounded-2xl border border-dashed border-border bg-card/60 py-14 px-6 text-center text-sm text-muted-foreground">
+                {t("No artifacts recorded.")}
+              </div>
             ) : (
               <div className="space-y-5">
                 {artifactGroupOrder.map((group) => {
-                  const groupArtifacts = groupedArtifacts[group];
-                  if (groupArtifacts.length === 0) {
+                  const items = groupedArtifacts[group];
+                  if (items.length === 0) {
                     return null;
                   }
                   return (
-                    <section key={group}>
-                      <h3 className="mb-2 text-xs font-semibold uppertask text-muted-foreground">
-                        {group}
+                    <section key={group} className="space-y-2">
+                      <h3 className="m-0 px-1 text-xs font-semibold tracking-wider uppercase text-muted-foreground">
+                        <UiText>{group}</UiText>
                       </h3>
-                      <table className="w-full table-fixed text-sm">
-                        <thead>
-                          <tr>
-                            <th className="text-left">{t("Name")}</th>
-                            <th className="w-40 text-left">{t("Type")}</th>
-                            <th className="w-36 text-left">{t("Status")}</th>
-                            <th className="w-48 text-left">{t("Link")}</th>
-                            <th className="w-36 text-left">{t("Created")}</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {groupArtifacts.map((artifact) => {
-                            const artifactHref = artifact.href;
-                            return (
-                              <tr key={artifact.id}>
-                                <td className="whitespace-normal break-words">
-                                  {artifact.name}
-                                </td>
-                                <td>{artifact.type}</td>
-                                <td>{artifact.status ?? "active"}</td>
-                                <td>
-                                  {artifactHref ? (
-                                    <a
-                                      className="text-primary hover:underline"
-                                      data-testid="task-artifact-link"
-                                      href={artifactHref}
-                                    >
-                                      {artifact.name}
-                                    </a>
-                                  ) : (
-                                    "-"
+                      <div className={cn(cardSurfaceClass, "overflow-hidden")}>
+                        {items.map((artifact) => {
+                          const artifactHref = artifact.href;
+                          const Icon = artifactGroupIcon(group);
+                          return (
+                            <div
+                              id={`artifact-${artifact.id}`}
+                              key={artifact.id}
+                              className="flex flex-wrap items-center justify-between gap-3 border-b border-border/60 px-4 py-3.5 last:border-b-0"
+                            >
+                              <div className="flex min-w-0 items-center gap-3">
+                                <span
+                                  aria-hidden="true"
+                                  className={cn(
+                                    "inline-grid size-9 shrink-0 place-items-center rounded-xl",
+                                    artifactGroupBadgeClass(group),
                                   )}
-                                </td>
-                                <td className="text-xs text-muted-foreground">
-                                  {formatTime(artifact.created_at)}
-                                </td>
-                              </tr>
-                            );
-                          })}
-                        </tbody>
-                      </table>
+                                >
+                                  <Icon className="size-4" />
+                                </span>
+                                <div className="min-w-0">
+                                  <div className="font-mono text-[13.5px] font-medium break-words whitespace-normal text-foreground">
+                                    {artifactHref ? (
+                                      <a
+                                        className="text-foreground hover:underline"
+                                        data-testid="task-artifact-link"
+                                        href={artifactHref}
+                                      >
+                                        {artifact.name}
+                                      </a>
+                                    ) : (
+                                      artifact.name
+                                    )}
+                                  </div>
+                                  <div className="mt-0.5 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+                                    <span>{artifact.type}</span>
+                                    <span>·</span>
+                                    <span>
+                                      <UiText>{artifact.status ?? "active"}</UiText>
+                                    </span>
+                                    <span>·</span>
+                                    <span>
+                                      {formatTaskFullTime(artifact.created_at)}
+                                    </span>
+                                  </div>
+                                </div>
+                              </div>
+
+                              {artifactHref ? (
+                                <a
+                                  href={artifactHref}
+                                  className="inline-flex h-7 shrink-0 items-center gap-1 rounded-[7px] border border-border bg-background px-2.5 text-xs font-medium text-foreground transition-colors hover:bg-accent hover:no-underline"
+                                >
+                                  <span>{t("Open preview")}</span>
+                                  <ArrowUpRight className="size-3.5" />
+                                </a>
+                              ) : null}
+                            </div>
+                          );
+                        })}
+                      </div>
                     </section>
                   );
                 })}
@@ -653,163 +971,236 @@ export function TaskDetailView({
         {activeTab === "Context" ? (
           <section
             id="context"
-            className="space-y-6"
+            className="grid items-start gap-5 pb-6 lg:grid-cols-[1.35fr_1fr]"
             data-testid="task-context"
             role="tabpanel"
           >
-            <h2 className="text-sm font-semibold">{t("Context")}</h2>
-            <section className="space-y-2">
-              <h3 className="text-xs font-semibold uppercase text-muted-foreground">{t("Participants")}</h3>
-              <div className="grid gap-2 text-sm">
-                {(taskDetail?.participants ?? []).map((participant) => (
-                  <div
-                    className="grid gap-1 rounded-md border bg-muted/20 p-3 sm:grid-cols-[8rem_1fr]"
-                    key={`${participant.userId}:${participant.role}`}
-                  >
-                    <div className="text-muted-foreground">
-                      <UiText>{participant.role}</UiText>
-                    </div>
-                    <IdentityLink
-                      fallbackKind={
-                        participant.role === "agent" ? "bot" : "user"
-                      }
-                      identity={identityForCanonicalUser(participant.user)}
-                      showKind
+            <h2 className="sr-only">{t("Context")}</h2>
+
+            {/* Left Column: Task Context, Source Messages & Context Packs */}
+            <div className="min-w-0 space-y-5">
+              <section className={cn(cardSurfaceClass, "space-y-3 p-5")}>
+                <h3 className="m-0 text-xs font-semibold tracking-wider uppercase text-muted-foreground">
+                  {t("Task Context")}
+                </h3>
+                <div className="text-sm">
+                  {taskContext.latestUserMessage ? (
+                    <ContextField
+                      label={t("Latest user message")}
+                      value={taskContext.latestUserMessage}
                     />
-                  </div>
-                ))}
-              </div>
-            </section>
-
-            <section className="space-y-2">
-              <h3 className="text-xs font-semibold uppercase text-muted-foreground">{t("Linked Sessions")}</h3>
-              <div className="grid gap-2 text-sm">
-                {linkedSessionDetails.map((session) => (
-                  <div
-                    className="rounded-md border bg-muted/20 p-3"
-                    key={session.id}
-                  >
-                    <a
-                      className="font-medium text-primary hover:underline"
-                      href={`${base}/sessions/${session.id}`}
-                    >
-                      {session.displayTitle ??
-                        session.title ??
-                        "Untitled session"}
-                    </a>
-                    <div className="mt-2 flex flex-wrap gap-1 text-xs">
-                      {sourceSessionIds.has(session.id) ? (
-                        <span className="rounded-[4px] border bg-background px-1.5 py-0.5 text-muted-foreground">{t("Source session")}</span>
-                      ) : null}
-                      {notificationSessionIds.has(session.id) ? (
-                        <span className="rounded-[4px] border bg-background px-1.5 py-0.5 text-muted-foreground">{t("Notification thread")}</span>
-                      ) : null}
-                    </div>
-                    <div className="mt-1 flex flex-wrap gap-2 text-xs text-muted-foreground">
-                      <span>{session.channel_type}</span>
-                      <span>{session.channel_id}</span>
-                      {session.group_id ? (
-                        <span>{t("Group")}{" "}{session.group_id}</span>
-                      ) : null}
-                      {session.thread_id ? (
-                        <span>{t("Thread")}{" "}{session.thread_id}</span>
-                      ) : null}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </section>
-
-            <section className="space-y-2">
-              <h3 className="text-xs font-semibold uppercase text-muted-foreground">{t("Task Context")}</h3>
-              <div className="rounded-md border bg-muted/20 p-3 text-sm">
-                {taskContext.latestUserMessage ? (
-                  <ContextField
-                    label={t("Latest user message")}
-                    value={taskContext.latestUserMessage}
+                  ) : null}
+                  <ContextList
+                    label={t("Known facts")}
+                    values={taskContext.knownFacts}
                   />
-                ) : null}
-                <ContextList label={t("Known facts")} values={taskContext.knownFacts} />
-                <ContextList label={t("Assumptions")} values={taskContext.assumptions} />
-                <ContextList
-                  label={t("Pending questions")}
-                  values={taskContext.pendingQuestions}
-                />
-                {!taskContext.hasContent ? (
-                  <div className="text-sm text-muted-foreground">{t("No task-level context was recorded.")}</div>
-                ) : null}
-              </div>
-            </section>
-
-            <ContextPackList packs={taskDetail?.contextPacks ?? []} />
-
-            <SeedRecordList records={taskDetail?.seedRecords ?? []} />
-
-            <RunContextSummaryList
-              summaries={taskDetail?.runContextSummaries ?? []}
-            />
-
-            {taskDetail ? <WorkSessionSummary task={taskDetail} /> : null}
-
-            <section className="space-y-2">
-              <h3 className="text-xs font-semibold uppercase text-muted-foreground">{t("Source Messages")}</h3>
-              <div className="grid gap-2 text-sm">
-                {sourceMessages.length === 0 ? (
-                  <div className="rounded-md border bg-muted/20 p-3 text-muted-foreground">{t("No source messages recorded.")}</div>
-                ) : (
-                  sourceMessages.map((source) => (
-                    <TaskContextMessageRow
-                      key={`${source.sourceId}:${source.message.id}`}
-                      label={t("source")}
-                      message={source.message}
-                    />
-                  ))
-                )}
-              </div>
-            </section>
-
-            <section className="space-y-2">
-              <h3 className="text-xs font-semibold uppercase text-muted-foreground">{t("Source Turn Context")}</h3>
-              <div className="grid gap-2 text-sm">
-                {sourceTurnMessages.length === 0 ? (
-                  <div className="rounded-md border bg-muted/20 p-3 text-muted-foreground">{t("No source turn context recorded.")}</div>
-                ) : (
-                  sourceTurnMessages.map((item) => (
-                    <TaskContextMessageRow
-                      key={`${item.turnId}:${item.turnRole}:${item.message.entryId}`}
-                      label={item.turnRole}
-                      message={item.message}
-                    />
-                  ))
-                )}
-              </div>
-            </section>
-
-            <section className="space-y-2">
-              <h3 className="text-xs font-semibold uppercase text-muted-foreground">{t("Notifications")}</h3>
-              <div className="grid gap-2 text-sm">
-                {(taskDetail?.subscriptions ?? []).map((subscription) => (
-                  <div
-                    className="rounded-md border bg-muted/20 p-3"
-                    key={subscription.id}
-                  >
-                    <div className="font-medium">
-                      {subscription.visibility}{t("updates")}</div>
-                    <div className="mt-1 flex flex-wrap gap-2 text-xs text-muted-foreground">
-                      <span>{subscription.channel_type}</span>
-                      <span>{subscription.channel_id}</span>
-                      {subscription.group_id ? (
-                        <span>{t("Group")}{" "}{subscription.group_id}</span>
-                      ) : null}
-                      {subscriptionThreadKey(subscription) ? (
-                        <span>{t("Thread")}{" "}{subscriptionThreadKey(subscription)}</span>
-                      ) : null}
+                  <ContextList
+                    label={t("Assumptions")}
+                    values={taskContext.assumptions}
+                  />
+                  <ContextList
+                    label={t("Pending questions")}
+                    values={taskContext.pendingQuestions}
+                  />
+                  {!taskContext.hasContent ? (
+                    <div className="text-sm text-muted-foreground">
+                      {t("No task-level context was recorded.")}
                     </div>
-                  </div>
-                ))}
-              </div>
-            </section>
+                  ) : null}
+                </div>
+              </section>
 
+              <section className={cn(cardSurfaceClass, "space-y-3 p-5")}>
+                <h3 className="m-0 text-xs font-semibold tracking-wider uppercase text-muted-foreground">
+                  {t("Source Messages")}
+                </h3>
+                <div className="grid gap-2.5 text-sm">
+                  {sourceMessages.length === 0 ? (
+                    <div className="rounded-xl border border-dashed border-border p-3 text-xs text-muted-foreground">
+                      {t("No source messages recorded.")}
+                    </div>
+                  ) : (
+                    sourceMessages.map((source) => (
+                      <TaskContextMessageRow
+                        key={`${source.sourceId}:${source.message.id}`}
+                        label={t("source")}
+                        message={source.message}
+                      />
+                    ))
+                  )}
+                </div>
+              </section>
+
+              <section className={cn(cardSurfaceClass, "space-y-3 p-5")}>
+                <h3 className="m-0 text-xs font-semibold tracking-wider uppercase text-muted-foreground">
+                  {t("Source Turn Context")}
+                </h3>
+                <div className="grid gap-2.5 text-sm">
+                  {sourceTurnMessages.length === 0 ? (
+                    <div className="rounded-xl border border-dashed border-border p-3 text-xs text-muted-foreground">
+                      {t("No source turn context recorded.")}
+                    </div>
+                  ) : (
+                    sourceTurnMessages.map((item) => (
+                      <TaskContextMessageRow
+                        key={`${item.turnId}:${item.turnRole}:${item.message.entryId}`}
+                        label={item.turnRole}
+                        message={item.message}
+                      />
+                    ))
+                  )}
+                </div>
+              </section>
+
+              <ContextPackList packs={taskDetail?.contextPacks ?? []} />
+              <SeedRecordList records={taskDetail?.seedRecords ?? []} />
+              <RunContextSummaryList
+                summaries={taskDetail?.runContextSummaries ?? []}
+              />
+            </div>
+
+            {/* Right Column: Linked Sessions, Work Session, Subscriptions & Participants */}
+            <div className="min-w-0 space-y-5">
+              <section className={cn(cardSurfaceClass, "space-y-3 p-5")}>
+                <h3 className="m-0 text-xs font-semibold tracking-wider uppercase text-muted-foreground">
+                  {t("Linked Sessions")}
+                </h3>
+                <div className="grid gap-2.5 text-sm">
+                  {linkedSessionDetails.map((session) => {
+                    const label =
+                      session.displayTitle ??
+                      session.title ??
+                      t("Untitled session");
+                    const sessionHref = `${base}/sessions/${session.id}`;
+                    return (
+                      <div
+                        className="space-y-2 rounded-xl border border-border p-3"
+                        key={session.id}
+                      >
+                        <div className="flex items-center gap-2.5">
+                          <span
+                            aria-hidden="true"
+                            className="inline-grid size-8 shrink-0 place-items-center rounded-full text-xs font-semibold text-white"
+                            style={{
+                              backgroundColor: avatarColorForKey(
+                                session.group_id ?? session.id,
+                              ),
+                            }}
+                          >
+                            {Array.from(label.trim() || "?").slice(0, 2).join("")}
+                          </span>
+                          <div className="min-w-0 flex-1">
+                            <a
+                              className="block truncate font-medium text-foreground hover:underline"
+                              href={sessionHref}
+                              onClick={(event) => navigateClient(event, sessionHref)}
+                            >
+                              {label}
+                            </a>
+                            <div className="mt-0.5 flex flex-wrap gap-2 text-xs text-muted-foreground">
+                              <span>{session.channel_type}</span>
+                              <span>{session.channel_id}</span>
+                              {session.group_id ? (
+                                <span>
+                                  {t("Group")} {session.group_id}
+                                </span>
+                              ) : null}
+                              {session.thread_id ? (
+                                <span>
+                                  {t("Thread")} {session.thread_id}
+                                </span>
+                              ) : null}
+                            </div>
+                          </div>
+                        </div>
+
+                        {sourceSessionIds.has(session.id) ||
+                        notificationSessionIds.has(session.id) ? (
+                          <div className="flex flex-wrap gap-1.5 border-t border-border/60 pt-2 text-xs">
+                            {sourceSessionIds.has(session.id) ? (
+                              <span className="rounded bg-secondary px-2 py-0.5 text-secondary-foreground">
+                                {t("Source session")}
+                              </span>
+                            ) : null}
+                            {notificationSessionIds.has(session.id) ? (
+                              <span className="rounded bg-[#5b8a72]/14 px-2 py-0.5 font-medium text-[#5b8a72] dark:bg-[#7fb096]/16 dark:text-[#7fb096]">
+                                {t("Notification thread")}
+                              </span>
+                            ) : null}
+                          </div>
+                        ) : null}
+                      </div>
+                    );
+                  })}
+                </div>
+              </section>
+
+              {taskDetail ? <WorkSessionSummary task={taskDetail} /> : null}
+
+              <section className={cn(cardSurfaceClass, "space-y-3 p-5")}>
+                <h3 className="m-0 text-xs font-semibold tracking-wider uppercase text-muted-foreground">
+                  {t("Notifications")}
+                </h3>
+                <div className="grid gap-2 text-sm">
+                  {(taskDetail?.subscriptions ?? []).map((subscription) => (
+                    <div
+                      className="rounded-xl border border-border p-3"
+                      key={subscription.id}
+                    >
+                      <div className="text-xs font-medium text-foreground">
+                        <UiText>
+                          {subscription.visibility === "full"
+                            ? "Full updates"
+                            : subscription.visibility === "summary"
+                              ? "Summary updates"
+                              : `${subscription.visibility} updates`}
+                        </UiText>
+                      </div>
+                      <div className="mt-1 flex flex-wrap gap-2 text-xs text-muted-foreground">
+                        <span>{subscription.channel_type}</span>
+                        <span>{subscription.channel_id}</span>
+                        {subscription.group_id ? (
+                          <span>
+                            {t("Group")} {subscription.group_id}
+                          </span>
+                        ) : null}
+                        {subscriptionThreadKey(subscription) ? (
+                          <span>
+                            {t("Thread")} {subscriptionThreadKey(subscription)}
+                          </span>
+                        ) : null}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </section>
+
+              <section className={cn(cardSurfaceClass, "space-y-3 p-5")}>
+                <h3 className="m-0 text-xs font-semibold tracking-wider uppercase text-muted-foreground">
+                  {t("Participants")}
+                </h3>
+                <div className="grid gap-2 text-sm">
+                  {(taskDetail?.participants ?? []).map((participant) => (
+                    <div
+                      className="flex items-center justify-between gap-2 rounded-xl border border-border px-3 py-2"
+                      key={`${participant.userId}:${participant.role}`}
+                    >
+                      <IdentityLink
+                        fallbackKind={
+                          participant.role === "agent" ? "bot" : "user"
+                        }
+                        identity={identityForCanonicalUser(participant.user)}
+                        showAvatar
+                        showKind
+                      />
+                      <span className="shrink-0 rounded-full bg-muted px-2.5 py-0.5 text-xs text-muted-foreground">
+                        <UiText>{participant.role}</UiText>
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </section>
+            </div>
           </section>
         ) : null}
       </div>
@@ -825,7 +1216,7 @@ function DashboardErrorState({
   error: unknown;
 }) {
   return (
-    <div className="m-4 rounded-md border border-destructive/30 bg-destructive/10 p-4">
+    <div className="rounded-xl border border-destructive/30 bg-destructive/10 p-4">
       <h2 className="text-sm font-semibold">{title}</h2>
       <p className="mt-1 text-sm text-muted-foreground">
         <UiText>{errorMessage(error)}</UiText>
@@ -838,12 +1229,19 @@ function WorkSessionSummary({ task }: { task: TaskDetailData }) {
   const { t } = useTranslation();
   const session = task.workSession;
   if (!session) return null;
-  return <section className="space-y-2">
-    <h3 className="text-xs font-semibold uppercase text-muted-foreground">{t("Work session")}</h3>
-    <div className="rounded-md border bg-muted/20 p-3 text-sm">
-      <ContextField label={t("Work session")} value={`${session.displayTitle ?? session.title ?? session.id} (${session.id})`} />
-    </div>
-  </section>;
+  return (
+    <section className={cn(cardSurfaceClass, "space-y-2 p-5")}>
+      <h3 className="m-0 text-xs font-semibold tracking-wider uppercase text-muted-foreground">
+        {t("Work session")}
+      </h3>
+      <div className="text-sm">
+        <ContextField
+          label={t("Work session")}
+          value={`${session.displayTitle ?? session.title ?? session.id} (${session.id})`}
+        />
+      </div>
+    </section>
+  );
 }
 
 function ContextField({
@@ -854,11 +1252,11 @@ function ContextField({
   value: string;
 }) {
   return (
-    <div className="grid gap-1 border-b py-2 last:border-b-0 sm:grid-cols-[10rem_1fr]">
-      <div className="text-xs font-medium uppercase text-muted-foreground">
-        {label}
+    <div className="grid gap-1 border-b border-border/60 py-2.5 first:pt-0 last:border-b-0 last:pb-0 sm:grid-cols-[9rem_1fr]">
+      <div className="text-xs font-medium text-muted-foreground">{label}</div>
+      <div className="min-w-0 break-words text-[13px] leading-relaxed">
+        {renderMarkdownInlineText(value)}
       </div>
-      <div className="min-w-0 break-words">{renderMarkdownInlineText(value)}</div>
     </div>
   );
 }
@@ -874,11 +1272,9 @@ function ContextList({
     return null;
   }
   return (
-    <div className="grid gap-1 border-b py-2 last:border-b-0 sm:grid-cols-[10rem_1fr]">
-      <div className="text-xs font-medium uppercase text-muted-foreground">
-        {label}
-      </div>
-      <ul className="min-w-0 space-y-1">
+    <div className="grid gap-1 border-b border-border/60 py-2.5 first:pt-0 last:border-b-0 last:pb-0 sm:grid-cols-[9rem_1fr]">
+      <div className="text-xs font-medium text-muted-foreground">{label}</div>
+      <ul className="m-0 min-w-0 list-disc space-y-1 pl-4 text-[13px] leading-relaxed">
         {values.map((value, index) => (
           <li className="break-words" key={`${index}:${value}`}>
             {renderMarkdownInlineText(value)}
@@ -898,11 +1294,11 @@ function TaskContextMessageRow({
 }) {
   return (
     <div
-      className="rounded-md border bg-muted/20 p-3"
+      className="rounded-xl border border-border bg-muted/40 border-l-[3px] border-l-[#a3b69e] p-3.5 dark:border-l-[#8ea487]"
       data-testid={`task-context-message-${message.id}`}
     >
       <div className="mb-2 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-        <span className="rounded-[4px] border bg-background px-1.5 py-0.5">
+        <span className="rounded bg-card px-1.5 py-0.5 font-medium text-foreground">
           {label}
         </span>
         <IdentityLink
@@ -911,45 +1307,14 @@ function TaskContextMessageRow({
           identity={identityForCanonicalUser(message.senderUser)}
           showKind={false}
         />
-        <span>{formatTime(message.createdAt ?? message.created_at)}</span>
+        <span>{formatTaskFullTime(message.createdAt ?? message.created_at)}</span>
         {message.entryKind !== "message" ? <span>{message.entryKind}</span> : null}
       </div>
-      <div className="min-w-0 break-words leading-6">
+      <div className="min-w-0 text-[13px] leading-6 break-words">
         {renderTaskContextMessageContent(message)}
       </div>
     </div>
   );
-}
-
-function identityForCanonicalUser(
-  user: DashboardCanonicalUser | null | undefined,
-): DashboardIdentity | null {
-  if (!user) {
-    return null;
-  }
-  return {
-    id: user.id,
-    channel: { type: "luna", id: "canonical" },
-    externalId: user.id,
-    identityKind: canonicalUserIdentityKind(user.kind),
-    displayName: user.displayName,
-    status: user.status,
-    avatarUrl: user.avatarUrl,
-    providerIds: {},
-  };
-}
-
-function canonicalUserIdentityKind(kind: string): DashboardIdentity["identityKind"] {
-  switch (kind) {
-    case "bot":
-      return "bot";
-    case "system":
-      return "system";
-    case "human":
-    case "service":
-    default:
-      return "user";
-  }
 }
 
 function renderTaskContextMessageContent(message: TaskContextMessageData) {
@@ -959,7 +1324,9 @@ function renderTaskContextMessageContent(message: TaskContextMessageData) {
       renderContentBlock(part, `${message.id}:${index}`),
     );
     return nodes.length === 0 ? (
-      <span className="text-muted-foreground"><UiText>Empty message</UiText></span>
+      <span className="text-muted-foreground">
+        <UiText>Empty message</UiText>
+      </span>
     ) : (
       nodes
     );
@@ -997,7 +1364,7 @@ function renderContentBlock(part: unknown, key: string) {
     return [
       <img
         alt={readString(part.alt) || "image"}
-        className="my-2 max-h-80 max-w-full rounded-[4px] border border-border object-contain"
+        className="my-2 max-h-80 max-w-full rounded-lg border border-border object-contain"
         key={key}
         loading="lazy"
         src={imageSrc}
@@ -1077,6 +1444,50 @@ function artifactGroup(artifact: TaskArtifactData): ArtifactGroup {
   return "text";
 }
 
+function artifactGroupIcon(group: ArtifactGroup) {
+  switch (group) {
+    case "patch":
+      return FileCode2;
+    case "log":
+      return ScrollText;
+    case "json":
+      return FileJson;
+    case "report":
+    case "text":
+    default:
+      return FileText;
+  }
+}
+
+function artifactGroupBadgeClass(group: ArtifactGroup): string {
+  switch (group) {
+    case "report":
+      return "bg-[#5b8a72]/14 text-[#5b8a72] dark:bg-[#7fb096]/16 dark:text-[#7fb096]";
+    case "patch":
+      return "bg-[#b07d4f]/14 text-[#b07d4f] dark:bg-[#d1a273]/16 dark:text-[#d1a273]";
+    case "log":
+    case "json":
+      return "bg-[#5c7c99]/14 text-[#5c7c99] dark:bg-[#86a3be]/16 dark:text-[#86a3be]";
+    case "text":
+    default:
+      return "bg-muted text-muted-foreground";
+  }
+}
+
+function timelineEventDotClass(type: string): string {
+  const lower = type.toLowerCase();
+  if (lower.includes("fail") || lower.includes("error")) {
+    return "bg-[#b5544a] dark:bg-[#dc7a70]";
+  }
+  if (lower.includes("wait") || lower.includes("question")) {
+    return "bg-[#5c7c99] dark:bg-[#86a3be]";
+  }
+  if (lower.includes("start") || lower.includes("progress") || lower.includes("run")) {
+    return "bg-[#b07d4f] dark:bg-[#d1a273]";
+  }
+  return "bg-[#5b8a72] dark:bg-[#7fb096]";
+}
+
 function formatInspectableValue(value: unknown): string {
   if (value === null || value === undefined) {
     return "-";
@@ -1095,35 +1506,11 @@ function runMaterializedPromptText(run: TaskRunData): string | null {
   return materializedPrompt;
 }
 
-function taskContextView(value: unknown): {
-  latestUserMessage: string;
-  knownFacts: string[];
-  assumptions: string[];
-  pendingQuestions: string[];
-  hasContent: boolean;
-} {
-  const record = isRecord(value) ? value : {};
-  const latestUserMessage = readString(record.latestUserMessage);
-  const knownFacts = readStringList(record.knownFacts);
-  const assumptions = readStringList(record.assumptions);
-  const pendingQuestions = readStringList(record.pendingQuestions);
-  return {
-    latestUserMessage,
-    knownFacts,
-    assumptions,
-    pendingQuestions,
-    hasContent:
-      latestUserMessage.length > 0 ||
-      knownFacts.length > 0 ||
-      assumptions.length > 0 ||
-      pendingQuestions.length > 0,
-  };
-}
-
 function renderMarkdownInlineText(text: string) {
   const nodes: ReactNode[] = [];
   let offset = 0;
-  const tokenPattern = /(!\[([^\]]*)\]\(([^)\s]+)\))|(\*\*([^*]+)\*\*)|(\[([^\]]+)\]\((https?:\/\/[^)\s]+)\))/g;
+  const tokenPattern =
+    /(!\[([^\]]*)\]\(([^)\s]+)\))|(\*\*([^*]+)\*\*)|(\[([^\]]+)\]\((https?:\/\/[^)\s]+)\))/g;
   for (const match of text.matchAll(tokenPattern)) {
     if (match.index === undefined) {
       continue;
@@ -1134,17 +1521,17 @@ function renderMarkdownInlineText(text: string) {
     if (match[1] !== undefined && match[3] !== undefined) {
       const imageSrc = markdownImageSrc(match[3]);
       nodes.push(
-        imageSrc === undefined
-          ? match[0]
-          : (
-              <img
-                alt={match[2] || "image"}
-                className="my-2 max-h-80 max-w-full rounded-[4px] border border-border object-contain"
-                key={`image:${match.index}`}
-                loading="lazy"
-                src={imageSrc}
-              />
-            ),
+        imageSrc === undefined ? (
+          match[0]
+        ) : (
+          <img
+            alt={match[2] || "image"}
+            className="my-2 max-h-80 max-w-full rounded-lg border border-border object-contain"
+            key={`image:${match.index}`}
+            loading="lazy"
+            src={imageSrc}
+          />
+        ),
       );
     } else if (match[5] !== undefined) {
       nodes.push(<strong key={`strong:${match.index}`}>{match[5]}</strong>);
@@ -1232,15 +1619,6 @@ function subscriptionThreadKey(
   subscription: TaskDetailData["subscriptions"][number],
 ): string | null {
   return subscription.thread_id ?? subscription.thread_key ?? null;
-}
-
-function formatTime(timestamp: number): string {
-  return new Intl.DateTimeFormat(undefined, {
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-  }).format(new Date(timestamp));
 }
 
 function errorMessage(error: unknown): string {
