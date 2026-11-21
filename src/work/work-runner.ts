@@ -43,6 +43,7 @@ import {
   buildTaskStatusCardSteps,
   type TaskStatusCardStepEvent,
 } from "@/messaging/notifications/task-status-card-updater";
+import {nativeProgressEntries} from "@/messaging/notifications/feishu-task-updater";
 import { getKernel } from "@/server/routes/kernel";
 import { BufferedProgress, RECENT_PROGRESS_STEPS } from "@/messaging/notifications/buffered-progress";
 import {
@@ -209,27 +210,28 @@ export class WorkRunner {
     // The Agent decides whether its Work progress card shows and in which style; a failed or
     // cancelled turn is still reported, so it never ends silently.
     const display = new AgentSettingsStore(this._options.db).get(session.agent_id).work.progressCard;
-    const cardOptions = (entries: readonly TaskStatusCardStepEvent[] = progressEvents) => ({
+    const cardOptions = (entries: readonly TaskStatusCardStepEvent[] = progressEvents, nativeProgress?: readonly NativeProgressEntry[]) => ({
       progressKey: input.turn.id,
       ...(statusCard !== undefined ? { targetMessageId: statusCard.providerMessageId } : {}),
       style: display.style,
-      nativeProgress: entries.map(event => ({ id: event.id!, text: event.summary.slice(0, 800) })),
+      nativeProgress: nativeProgress ?? nativeProgressEntries(entries),
     });
     const progress = new BufferedProgress<TaskStatusCardStepEvent>({
-      persist: summary => {
-        const entry = {id: randomUUID(), type: "runner.step", summary};
+      persist: (summary, nativeText) => {
+        const entry = {id: randomUUID(), type: "runner.step", summary, data: {publicProgress: true, nativeText}};
         progressEvents.push(entry);
         if (progressEvents.length > RECENT_PROGRESS_STEPS) progressEvents.shift();
         return entry;
       },
-      send: async entries => {
+      entryId: entry => entry.id!,
+      send: async (entries, nativeProgress) => {
         if (!display.show) return;
         const stepNames = buildTaskStatusCardSteps({timelineEvents: progressEvents}) ?? [];
         const sentCard = await this._sendStatusCard(channel, inbound, {
           title: "工作会话", status: "in_progress",
           steps: stepNames.map((name, index) => ({name, status: index === stepNames.length - 1 ? "active" : "done"})),
           summary: "",
-        }, latestMessageRow, session.id, cardOptions(entries));
+        }, latestMessageRow, session.id, cardOptions(entries, nativeProgress));
         if (statusCard === undefined) statusCard = sentCard;
         this._attachStatusCardToTurn(input.turn.id, sentCard);
       },
@@ -281,7 +283,7 @@ export class WorkRunner {
           env: launch.env,
           ...(signal !== undefined ? { signal } : {}),
           onAssistantEvent: event => {
-            for (const block of event.content) if (block.type === "tool_use") progress.toolStart(block.id, block.name);
+            for (const block of event.content) if (block.type === "tool_use") progress.toolStart(block.id, block.name, block.displayTitle);
             const text = extractTextContent(event, {includeThinking: false, includeToolUse: false});
             const step = text.trim() ? runnerProgressStepFromAssistant({...event, content: [{type: "text", text}]}) : undefined;
             if (step) progress.summary(step);

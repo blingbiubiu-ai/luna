@@ -245,9 +245,10 @@ function _timelineRunMetadata(data: unknown): {
 
 export function nativeProgressEntries(events: readonly TaskStatusCardStepEvent[]): import("@/channels/outbound").NativeProgressEntry[] {
   return events.flatMap(event => {
-    const data = event.data as {publicProgress?: boolean; toolName?: string; toolCallId?: string; toolTitle?: string; toolPhase?: "start" | "result"} | undefined;
+    const data = event.data as {publicProgress?: boolean; nativeText?: string; toolName?: string; toolCallId?: string; toolTitle?: string; toolPhase?: "start" | "result"} | undefined;
     const id = (event as {id?: string}).id;
     if (!id || !data?.publicProgress || event.type !== "runner.step") return [];
+    if (typeof data.nativeText === "string") return data.nativeText ? [{id, text: data.nativeText.slice(0,800)}] : [];
     return [{id: data.toolCallId ? `${data.toolCallId}:${data.toolPhase ?? "start"}` : id, text: event.summary.slice(0, 800),
       ...(data.toolName ? {toolName: data.toolName.slice(0, 80)} : {}),
       ...(data.toolCallId ? {toolCallId: data.toolCallId} : {}),

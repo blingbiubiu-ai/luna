@@ -228,6 +228,21 @@ test("Service process restart settles a cancelled intent and reattaches an activ
       actorUserId: scope.ownerUserId, runnerKind: "task", taskId, taskRunId, runnerJobId: contextId,
     });
     expect(invocations.store.job(taskJob.jobId)!.cursor).toBeGreaterThanOrEqual(priorCursor);
+    executor.output(taskJob.jobId, {status:"tool_start",id:"read",name:"Read",title:"读取配置"});
+    executor.output(taskJob.jobId, {status:"tool_result",id:"read",text:"工具调用已结束"});
+    executor.output(taskJob.jobId, {status:"tool_start",id:"bash",name:"Bash",title:"检查编译"});
+    executor.output(taskJob.jobId, {status:"tool_result",id:"bash",text:"工具调用已结束"});
+    const liveProgress = "Both checks finished; preparing the report.";
+    executor.output(taskJob.jobId, {status:"stream",text:liveProgress});
+    publish();
+    const progressDeadline = Date.now() + 15000;
+    while (!db.select().from(timelineEvents).all().some(row => row.data && typeof row.data === "object" && "nativeText" in row.data && row.data.nativeText === liveProgress)
+      && Date.now() < progressDeadline) await delay(100);
+    const batchRows = db.select().from(timelineEvents).all().filter(row => row.summary.includes(liveProgress));
+    expect(batchRows).toHaveLength(1);
+    expect(batchRows[0]!.summary).toContain("调用 2 次");
+    expect(batchRows[0]!.data).toMatchObject({nativeText:liveProgress,publicProgress:true});
+    expect(JSON.stringify(batchRows[0]!.data)).not.toContain("toolCallId");
     const report = () => fetch(url + "/api/runner/task-reports", {
       method: "POST",
       headers: { Authorization: "Bearer " + reissuedToken, "Content-Type": "application/json", "Idempotency-Key": "final" },

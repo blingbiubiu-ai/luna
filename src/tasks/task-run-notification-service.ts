@@ -1,3 +1,5 @@
+import type { NativeProgressEntry } from "@/channels/outbound";
+
 import { createHash } from "node:crypto";
 import { SessionDispatcher } from "@/sessions/session-dispatcher";
 import { GatewayError } from "@/server/gateway-error";
@@ -62,6 +64,7 @@ export interface OnTaskRunCompletedInput {
 export interface OnTaskRunProgressInput {
   readonly taskRunId: string;
   readonly events?: readonly TaskStatusCardStepEvent[];
+  readonly nativeProgress?: readonly NativeProgressEntry[];
 }
 
 export interface OnTaskRunFailedInput {
@@ -253,7 +256,7 @@ export class TaskRunNotificationService {
         sessionId: notification.sessionId,
         idempotencyKey: attempt.idempotency_key,
         statusCardStyle: notification.statusCardStyle,
-        nativeProgress: nativeProgressEntries(delta ?? timelineEventsForRun),
+        nativeProgress: input.nativeProgress ?? nativeProgressEntries(delta ?? timelineEventsForRun),
         statusCardState: "active",
         statusCard: {
           taskId: run.task_id,

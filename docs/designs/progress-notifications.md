@@ -1,12 +1,13 @@
 # Progress notifications
 
 Task and Work use `BufferedProgress` to aggregate public execution progress in
-Service memory. Ordinary tool starts/results update bounded counters; they do
+Service memory. Ordinary tool starts/results update bounded counters and a
+separate bounded Native presentation buffer; they do
 not create individual Task timeline rows. There is no new tool journal. Existing
 Runner/provider logs and Executor state ownership remain unchanged.
 
 Tool-only windows flush every five seconds. A complete public Assistant text
-event flushes immediately, with the preceding tool summary before the text.
+event flushes immediately, with the preceding tool events before the text.
 Thinking and tool arguments are excluded. Counts describe observations in that
 window; results can arrive in a later window than their starts. A tool failure
 does not imply Task failure.
@@ -16,14 +17,20 @@ notification lifecycle. Hot updates do not reread the full task timeline. Each
 run's card projection retains at most 200 recent summaries. Recovery, terminal
 updates and explicit resend query at most the current run's recent 200 rows,
 including legacy JSON-string run metadata. Work keeps the same bounded projection
-and persists its status message through the existing path.
+and persists its status message through the existing path. The persisted row's
+`nativeText` contains only public Assistant text (possibly empty). Raw tool
+events travel separately to Native delivery; they are not individual timeline
+rows. Existing durable delivery payloads and Native acknowledgement checkpoints
+remain responsible for delivery recovery, rather than a new tool journal.
 
 The buffer permits one send in flight and retains at most 200 pending summaries.
 Batches retain order; under backpressure the oldest noncritical pending summaries
-can be omitted. Producer callbacks do not await ongoing notification requests.
+can be omitted. Native presentation retains at most 600 pending events and at
+most 600 events in the current window, separately from the summary projection.
+Producer callbacks do not await ongoing notification requests.
 Initial status-message creation may await its receipt once. Closing stops the
-timer, persists the last window and discards pending active sends; terminal
-notification follows the existing serialization path. Hard process termination
+timer and drains the last tool/result window before terminal notification, so
+queued active sends cannot follow terminal state. Hard process termination
 can lose recent noncritical progress.
 
 On Service reconnect, Runtime transport restores saved provider text into its
@@ -41,7 +48,11 @@ a new fixed display setting.
 
 Native appends events to one provider message, batching requests up to 8 KiB of
 serialized request data. A checkpoint tracks cumulative serialized event bytes
-and ordinary entry count. Ordinary progress uses at most 300 entries (including
+and ordinary display node count. Tools render as individual Native nodes with
+their original bounded title and category icon. Results update their existing
+tool node rather than creating a statistics paragraph or consuming another node
+slot. Already displayed tools can receive results after the node limit, within
+the ordinary byte budget. Ordinary progress uses at most 300 nodes (including
 the task title) and 252 KiB;
 a further six nodes / 4 KiB are reserved for the one-time budget notice and
 terminal delivery. Total event budget is 256 KiB. Existing exhausted checkpoints
@@ -49,6 +60,11 @@ remain exhausted when the limits increase; they require an explicit resend to
 start a new progress message. These are Luna limits, not a
 verified Feishu client capacity guarantee. Task and Work final answers remain
 independent of these display budgets.
+
+On recovery or explicit resend, recent summary rows reconstruct only public
+Assistant text; individual historical tool nodes are not reconstructed from
+timeline summaries. Existing Native messages retain their already appended
+nodes. New messages receive subsequent live tool events normally.
 
 Existing `native_progress_deliveries` JSON gains optional `progressBudget`
 metadata; no new table or migration is required. A batch marks pending before

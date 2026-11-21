@@ -108,7 +108,9 @@ export class NativeTaskProgress {
           if (seen.has(entry.id)) continue;
           const nodeId = `${messageId}-${entry.id}`;
           const budget = draft.progressBudget ?? {entries:draft.sentEntries.length,bytes:0,exhausted:false};
-          if (entry.id !== "terminal-note" && budget.exhausted) continue;
+          const closesTool = entry.toolPhase === "result" && !!draft.openTools?.[entry.toolCallId ?? entry.id];
+          const addedNodes = entry.id === "terminal-note" || closesTool ? 0 : 1;
+          if (entry.id !== "terminal-note" && budget.exhausted && !closesTool) continue;
           let next = {...draft, sentEntries:[...draft.sentEntries,entry.id]};
           const events: ReturnType<typeof event>[] = [];
           if (entry.toolName || entry.toolPhase === "result") {
@@ -133,7 +135,8 @@ export class NativeTaskProgress {
               event("REASONING_MESSAGE_END",{messageId:nodeId}));
             next = {...next, lastReasoningId:nodeId};
           }
-          if (entry.id !== "terminal-note" && (budget.entries >= MAX_ENTRIES - 6 || budget.bytes + eventBytes(events) > MAX_BYTES - TERMINAL_RESERVE_BYTES)) {
+          if (entry.id !== "terminal-note" && ((addedNodes > 0 && budget.entries >= MAX_ENTRIES - 6) || budget.bytes + eventBytes(events) > MAX_BYTES - TERMINAL_RESERVE_BYTES)) {
+            if (budget.exhausted) continue;
             const noticeId = `${messageId}-progress-limit`;
             const notice = [event("REASONING_MESSAGE_START",{messageId:noticeId,role:"reasoning"}),
               event("REASONING_MESSAGE_CONTENT",{messageId:noticeId,delta:"详细进度已合并，后续仅汇报最终状态。可在 Dashboard 查看任务状态和结果。"}),
@@ -143,7 +146,7 @@ export class NativeTaskProgress {
             seen.add("progress-limit");
             continue;
           }
-          next = {...next,progressBudget:{...budget,entries:budget.entries+(entry.id === "terminal-note" ? 0 : 1),bytes:budget.bytes+eventBytes(events)}};
+          next = {...next,progressBudget:{...budget,entries:budget.entries+addedNodes,bytes:budget.bytes+eventBytes(events)}};
           await queue(events,next);
           seen.add(entry.id);
         }

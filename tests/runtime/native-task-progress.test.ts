@@ -7,6 +7,7 @@ import * as schema from "../../src/data/schema";
 import {setLunaHome} from "../../src/shared";
 import {NativeTaskProgress, type CotRequest} from "../../extensions/channels/feishu/messaging/native-task-progress";
 import {nativeProgressEntries} from "../../src/messaging/notifications/feishu-task-updater";
+import {BufferedProgress} from "../../src/messaging/notifications/buffered-progress";
 import type {NormalizedInboundMessage} from "../../src/channels";
 import type {OutboundChannelOperation} from "../../src/channels/outbound";
 let home: string;
@@ -19,6 +20,22 @@ const operation: Omit<OutboundChannelOperation,"id"|"channelId"> = {replyMode:"r
 const request = async (req: CotRequest) => {calls.push(req);return {code:0,data:{cot_id:"cot",message_id:"om_progress"}};};
 const adapter = () => new NativeTaskProgress(connection.db,"test",request);
 const events = () => calls.flatMap(call => (call.data?.events ?? []) as {event_type:string;content:string}[]);
+test("buffered tools render individual native nodes before public text with one summary write", async () => {
+  const summaries: string[] = [];
+  const progress = new BufferedProgress({persist: summary => {summaries.push(summary);return summary;},
+    send: async (_,nativeProgress) => {await adapter().send(inbound,{...operation,nativeProgress:[...nativeProgress]});},
+    onError: error => {throw error;}});
+  progress.toolStart("read", "Read", "读取配置"); progress.toolResult("read", false);
+  progress.toolStart("bash", "Bash", "检查远程编译"); progress.toolResult("bash", false);
+  progress.summary("已确认编译通过。"); await progress.close();
+  expect(summaries).toHaveLength(1);
+  const starts=events().filter(e=>e.event_type==="TOOL_CALL_START");
+  expect(starts).toHaveLength(2);
+  expect(JSON.parse(starts[0]!.content)).toMatchObject({title:"读取配置",icon:"read"});
+  expect(JSON.parse(starts[1]!.content)).toMatchObject({title:"检查远程编译",icon:"bash"});
+  expect(events().some(e=>e.content.includes("工具进度："))).toBe(false);
+  expect(events().findIndex(e=>e.content.includes("已确认编译通过"))).toBeGreaterThan(events().findIndex(e=>e.event_type==="TOOL_CALL_RESULT"));
+});
 test("large Native histories are batched and bounded while terminal delivery retains room", async () => {
   const entries = Array.from({length: 1_000}, (_, i) => ({id:`large-${i}`,text:`步骤 ${i}：${"正文".repeat(200)}`}));
   await adapter().send(inbound,{...operation,nativeProgress:entries});
@@ -43,6 +60,17 @@ test("short Native progress retains 300 ordinary entries and one budget notice",
   expect(events().filter(e=>e.content.includes("详细进度已合并"))).toHaveLength(1);
   const checkpoint = connection.db.select().from(schema.nativeProgressDeliveries).get()!;
   expect(checkpoint.state.progressBudget).toMatchObject({entries:300,exhausted:true});
+});
+test("results update existing tools without consuming another display slot, even after the node limit", async () => {
+  const starts = Array.from({length:300},(_,i)=>({id:`call-${i}:start`,toolCallId:`call-${i}`,toolName:"Bash",toolPhase:"start" as const,text:"执行命令"}));
+  await adapter().send(inbound,{...operation,nativeProgress:starts});
+  const update = {...operation,replyMode:"update_status_card" as const,targetMessageId:"om_progress",nativeProgress:
+    starts.slice(0,299).map(e=>({...e,id:e.id.replace(":start",":result"),toolPhase:"result" as const,text:"工具调用已结束"}))};
+  await adapter().send(inbound,update);
+  expect(events().filter(e=>e.event_type === "TOOL_CALL_START")).toHaveLength(299);
+  expect(events().filter(e=>e.event_type === "TOOL_CALL_RESULT")).toHaveLength(299);
+  expect(events().filter(e=>e.content.includes("详细进度已合并"))).toHaveLength(1);
+  expect(connection.db.select().from(schema.nativeProgressDeliveries).get()!.state.progressBudget?.entries).toBe(300);
 });
 test("native thread snapshots append only new public entries across adapter restart and complete once",async()=>{
   const first = await adapter().send(inbound,operation);
@@ -90,6 +118,7 @@ test("native projection excludes historical thinking and arguments; tool IDs rem
     {id:"tool-event",type:"runner.step",summary:"调用工具",data:{publicProgress:true,toolName:"Read",toolCallId:"call-1",input:{secret:"hidden"}}},
   ] as never);
   expect(entries).toEqual([{id:"public",text:"公开进度"},{id:"call-1:start",text:"调用工具",toolName:"Read",toolCallId:"call-1"}]);
+  expect(nativeProgressEntries([{id:"batch",type:"runner.step",summary:"工具进度：调用 2 次",data:{publicProgress:true,nativeText:""}}])).toEqual([]);
 });
 
 

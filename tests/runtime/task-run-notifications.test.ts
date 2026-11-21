@@ -581,10 +581,11 @@ describe("TaskRunNotificationService", () => {
     // No corresponding timeline row: the hot path must use the supplied delta.
     await progressService.onRunProgress({taskRunId:"task_run_progress_update_1",events:[{
       id:"new-delta",type:"runner.step",summary:"工具进度：调用 10000 次。\n已找到原因。",
-      data:{taskRunId:"task_run_progress_update_1",runIndex:1,publicProgress:true},
-    }]});
+      data:{taskRunId:"task_run_progress_update_1",runIndex:1,publicProgress:true,nativeText:"已找到原因。"},
+    }],nativeProgress:[{id:"call:start",toolCallId:"call",toolName:"Bash",toolTitle:"检查编译",toolPhase:"start",text:"检查编译"},
+      {id:"new-delta",text:"已找到原因。"}]});
     expect(operations).toHaveLength(1);
-    expect(operations[0]).toMatchObject({nativeProgress:[{id:"new-delta",text:"工具进度：调用 10000 次。\n已找到原因。"}]});
+    expect(operations[0]).toMatchObject({nativeProgress:[{id:"call:start",toolName:"Bash",toolTitle:"检查编译"},{id:"new-delta",text:"已找到原因。"}]});
   });
 });
 

@@ -7,6 +7,7 @@ import { prepareRunnerFiles } from "@/runners/prepare-runner-files";
 import { randomUUID } from "node:crypto";
 import { BufferedProgress } from "@/messaging/notifications/buffered-progress";
 import type { TaskStatusCardStepEvent } from "@/messaging/notifications/task-status-card-updater";
+import type { NativeProgressEntry } from "@/channels/outbound";
 import { createLogger } from "@/shared";
 const progressLogger = createLogger("task-progress");
 import { InvocationStore } from "@/runners/invocation-store";
@@ -74,7 +75,7 @@ export interface ExecuteTaskRunInput {
   readonly runIndex?: number;
   readonly sourceMessageId?: string;
   readonly signal?: AbortSignal;
-  readonly onProgress?: (events?: readonly TaskStatusCardStepEvent[]) => Promise<void> | void;
+  readonly onProgress?: (events?: readonly TaskStatusCardStepEvent[], nativeProgress?: readonly NativeProgressEntry[]) => Promise<void> | void;
 }
 
 /**
@@ -348,7 +349,7 @@ async function _runFakeTask(input: {
   readonly artifacts: ArtifactStore;
   readonly runMetadata: Record<string, unknown>;
   readonly signal?: AbortSignal;
-  readonly onProgress?: (events?: readonly TaskStatusCardStepEvent[]) => Promise<void> | void;
+  readonly onProgress?: (events?: readonly TaskStatusCardStepEvent[], nativeProgress?: readonly NativeProgressEntry[]) => Promise<void> | void;
 }): Promise<ExecuteTaskRunResult> {
   _throwIfAborted(input.signal);
   const sandbox = new FakeSandboxRuntime({
@@ -412,7 +413,7 @@ async function _runAgentTask(input: {
   readonly inputSnapshot: unknown;
   readonly materializedPrompt: string;
   readonly signal?: AbortSignal;
-  readonly onProgress?: (events?: readonly TaskStatusCardStepEvent[]) => Promise<void> | void;
+  readonly onProgress?: (events?: readonly TaskStatusCardStepEvent[], nativeProgress?: readonly NativeProgressEntry[]) => Promise<void> | void;
 }): Promise<ExecuteTaskRunResult> {
   _throwIfAborted(input.signal);
   if (!["claude", "codex"].includes(input.runnerType)) {
@@ -464,9 +465,10 @@ async function _runAgentTask(input: {
   taskInvocations(input.db).set(invocationId, {taskId: input.taskId, taskRunId: input.taskRunId,
     runnerContextId: runnerContext.id, ...(input.signal ? {signal: input.signal} : {})});
   const progress = new BufferedProgress({
-    persist: (summary: string) => input.timeline.append({taskId: input.taskId, type: "runner.step", summary,
-      data: {...input.runMetadata, publicProgress: true, reason: input.reason}}),
-    send: async entries => { await input.onProgress?.(entries); },
+    persist: (summary: string, nativeText: string) => input.timeline.append({taskId: input.taskId, type: "runner.step", summary,
+      data: {...input.runMetadata, publicProgress: true, reason: input.reason, nativeText}}),
+    entryId: entry => entry.id,
+    send: async (entries, nativeProgress) => { await input.onProgress?.(entries, nativeProgress); },
     onError: error => progressLogger.warn({err: error, taskId: input.taskId}, "task progress update failed"),
   });
   try {
@@ -517,7 +519,7 @@ async function _runAgentTask(input: {
     if (event.role !== "assistant") continue;
     const publicText = extractTextContent(event, {includeThinking: false, includeToolUse: false});
     for (const block of event.content) {
-      if (block.type === "tool_use") progress.toolStart(block.id, block.name);
+      if (block.type === "tool_use") progress.toolStart(block.id, block.name, block.displayTitle);
     }
     const stepSummary = publicText.trim() ? runnerProgressStepFromAssistant({...event, content: [{type: "text", text: publicText}]}) : undefined;
     if (stepSummary?.trim() && stepSummary.trim() !== "LUNA_NOTHING_TO_SEND") progress.summary(stepSummary);
@@ -534,7 +536,7 @@ async function _runAgentTask(input: {
   _throwIfAborted(input.signal);
   return requireTaskReportCompletion(input.db, input.taskRunId, finalText);
   } finally {
-    void progress.close();
+    await progress.close();
     taskInvocations(input.db).delete(invocationId);
   }
 }
