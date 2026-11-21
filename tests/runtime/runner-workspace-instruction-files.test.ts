@@ -223,4 +223,7 @@ test("every skill the instructions point to ships with Luna and holds the manual
     expect(skill.startsWith(`---\nname: ${name}\ndescription: `)).toBe(true);
     expect(skill).toContain(command);
   }
+  expect(main).toContain("luna messages send --purpose answer --request-id opening-1");
+  expect(main).toContain("handed this\nturn's group message into a newly opened topic anchored to it");
+  expect(main).toContain("never append review, merge, or approval disclaimers");
 });

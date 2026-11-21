@@ -208,7 +208,7 @@ src/prompts/
 
 | 变化 | 结果 |
 |---|---|
-| 指令内容（规则、soul）和资源包（prompts、skills、工具） | 只重写文件，provider 会话保留。Claude 下一轮读到新文件；Codex 下一轮追加一条替换指令；skill 正文用到时才读，所以改动下一次使用就生效 |
+| 指令内容（规则、soul）和资源包（prompts、skills、工具） | 只重写文件，provider 会话保留。Claude 下一轮读到新文件；Codex 下一轮追加一条替换指令；skill 正文在会话首次用到时读取（若已恢复的 Codex 会话在更早轮次读过旧版 skill 正文，旧正文会留在其历史里直到新开会话，因此跨会话 `<trigger>` 开场建单与话题 handoff 静默收尾等基础收口协议直接写在静态 `AGENTS.md` 中，确保每轮替换指令都能覆盖） |
 | Worker 或 placement | 重建会话：新的 HOME 里没有原来的 provider 会话 |
 
 已知代价：Codex 只在会话开始时列出 skill 清单，恢复的会话看不到新增的 skill，直到下一次因别的原因开新会话。

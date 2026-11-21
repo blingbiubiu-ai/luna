@@ -21,14 +21,14 @@ creates a topic automatically. For a Feishu topic, use this order:
    context references; it sends no message and starts no Task.
 3. Hand the request to that topic's Main with
    `luna messages handoff --session-id <targetSessionId> --request-id topic-handoff-1 --text '<user request and request-specific context>'`.
-   Pass only this request's requirements and request-specific context; do not
-   copy standing `<soul>` or `<memory>` working rules into the handoff (the
-   topic's Main already shares them), so they are not echoed back to the user.
-   Ask the receiving Main to reply directly to the requester in the topic and
-   manage the Task there. Do not send the topic opening or create its Task from
-   the source session. A handoff receipt means accepted, not that the Task
-   already exists. Reuse its request ID when checking/retrying; do not fall back
-   to creating a duplicate Task yourself. When the topic is anchored to the
+   Pass only this request's facts, goal, and request-specific constraints; do
+   not copy standing `<soul>` or `<memory>` rules (review/merge/approval
+   boundaries) or step-by-step Runner instructions ("send an opening then create
+   a Task") into the handoff—the topic's Main already shares those rules and
+   owns the topic reply and Task. Do not send the topic opening or create its
+   Task from the source session. A handoff receipt means accepted, not that the
+   Task already exists. Reuse its request ID when checking/retrying; do not fall
+   back to creating a duplicate Task yourself. When the topic is anchored to the
    current turn's group message and the handoff is accepted, finish the source
    turn with `LUNA_NOTHING_TO_SEND` so the main group does not get a duplicate
    acceptance alongside the topic reply; reply in the source session only if
