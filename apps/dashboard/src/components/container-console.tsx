@@ -61,7 +61,11 @@ const closeReasons: Record<string, string> = {
 };
 
 const QUICK_KEYS: ReadonlyArray<{ readonly label: string; readonly title: string; readonly seq: string }> = [
-  { label: "Esc", title: "发送 Esc（中断当前回合或取消弹窗）", seq: "\x1b" },
+  { label: "Ctrl+T", title: "展开/关闭 Codex 完整执行记录（Transcript）", seq: "\x14" },
+  { label: "Ctrl+O", title: "展开/折叠 Claude Code 工具输出详情", seq: "\x0f" },
+  { label: "PgUp", title: "向上翻页（在 Transcript 视图中翻看历史命令输出）", seq: "\x1b[5~" },
+  { label: "PgDn", title: "向下翻页", seq: "\x1b[6~" },
+  { label: "Esc", title: "发送 Esc（退出详情视图、取消弹窗或中断当前回合）", seq: "\x1b" },
   { label: "Ctrl+C", title: "发送 Ctrl+C", seq: "\x03" },
   { label: "Shift+Tab", title: "切换 CLI 模式（如权限/计划模式）", seq: "\x1b[Z" },
   { label: "Tab", title: "发送 Tab 补全", seq: "\t" },
