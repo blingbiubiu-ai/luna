@@ -32,6 +32,8 @@ import type {
 import type {
   ChannelAdapter,
   ChannelAdapterRuntimeStatus,
+  ChannelCardAction,
+  ChannelCardActionResult,
   ChannelInboundRuntimeStatus,
   ChannelIdentity,
   ChannelMention,
@@ -388,6 +390,9 @@ export class FeishuMessageChannel
   private _lunaInboundHandler:
     | ((message: NormalizedInboundMessage) => Promise<void>)
     | undefined;
+  private _lunaCardActionHandler:
+    | ((action: ChannelCardAction) => Promise<ChannelCardActionResult | undefined>)
+    | undefined;
   private _resolvedBotIdentity: FeishuBotIdentity | undefined;
   private _userProfileCache = new Map<string, ChannelUserProfileSnapshot | undefined>();
   private _userProfileExpiresAt = new Map<string, number>();
@@ -509,7 +514,8 @@ export class FeishuMessageChannel
         "im.message.receive_v1": this._handleMessageReceive,
         "im.message.recalled_v1": this._handleMessageRecall,
         "im.chat.member.bot.added_v1": this._handleBotAddedToGroup,
-      }),
+        "card.action.trigger": this._handleCardActionTrigger,
+      } as never),
     });
   }
 
@@ -553,6 +559,96 @@ export class FeishuMessageChannel
     }
     this._lunaInboundHandler = handler;
   }
+
+  async subscribeCardActions(
+    handler: (action: ChannelCardAction) => Promise<ChannelCardActionResult | undefined>,
+  ): Promise<void> {
+    this._lunaCardActionHandler = handler;
+  }
+
+  private _handleCardActionTrigger = async (rawEvent: unknown): Promise<Record<string, unknown>> => {
+    this._markInboundConnected();
+    if (!this._lunaCardActionHandler || !rawEvent || typeof rawEvent !== "object") {
+      return {};
+    }
+    const event = rawEvent as {
+      operator?: { open_id?: string; user_id?: string; union_id?: string };
+      action?: { value?: unknown };
+      context?: { open_message_id?: string; open_chat_id?: string };
+      open_message_id?: string;
+      open_chat_id?: string;
+    };
+    const openId = event.operator?.open_id;
+    const userId = event.operator?.user_id;
+    const unionId = event.operator?.union_id;
+    const externalId = openId ?? userId ?? unionId ?? "unknown";
+    const providerIds = Object.fromEntries(
+      Object.entries({ open_id: openId, user_id: userId, union_id: unionId }).filter(
+        (entry): entry is [string, string] => typeof entry[1] === "string" && entry[1].length > 0,
+      ),
+    );
+    const operatorIdentity = scopeFeishuIdentity(
+      { externalId, kind: "user", providerIds },
+      this._identityScope,
+    );
+    const rawValue = event.action?.value;
+    const actionValue: Record<string, unknown> =
+      rawValue && typeof rawValue === "object" && !Array.isArray(rawValue)
+        ? (rawValue as Record<string, unknown>)
+        : typeof rawValue === "string"
+          ? (() => {
+              try {
+                const parsed = JSON.parse(rawValue);
+                return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+                  ? (parsed as Record<string, unknown>)
+                  : { value: rawValue };
+              } catch {
+                return { value: rawValue };
+              }
+            })()
+          : {};
+    const providerMessageId = event.context?.open_message_id ?? event.open_message_id;
+    const chatId = event.context?.open_chat_id ?? event.open_chat_id;
+
+    try {
+      const result = await this._lunaCardActionHandler({
+        channel: { id: this.id, type: "feishu" },
+        ...(providerMessageId ? { providerMessageId } : {}),
+        ...(chatId ? { chatId } : {}),
+        actionValue,
+        operatorIdentity,
+      });
+      if (!result) return {};
+      const response: Record<string, unknown> = {};
+      if (result.toast) {
+        response.toast = result.toast;
+      }
+      if (result.updatedMarkdown) {
+        const updatedCard = await renderMessageCard(
+          [{ type: "text", text: result.updatedMarkdown }],
+          {
+            streaming: false,
+            uploadImage: async () => {
+              throw new Error("Image upload is unused in plain markdown card updates");
+            },
+          },
+        );
+        if (result.updatedTitle) {
+          updatedCard.header = {
+            title: { tag: "plain_text", content: result.updatedTitle },
+            template: "green",
+          };
+        }
+        response.card = { type: "raw", data: updatedCard };
+      }
+      return response;
+    } catch (error) {
+      this._logger.error({ error }, "Failed to process Feishu card action trigger");
+      return {
+        toast: { type: "error", content: "处理卡片操作失败，请稍后重试。" },
+      };
+    }
+  };
 
   private _markInboundConnected(): void {
     this._inboundRuntimeStatus = {
@@ -3192,8 +3288,46 @@ export class FeishuMessageChannel
           throw new ProviderDeliveryRejected(`Image artifact is unavailable: ${block.artifactRef}`);
       }
       if (reply.presentation === "card") {
-        const card = await renderMessageCard([{ type: "text", text: this._operationContent(operation) }],
+        const nonActionReply = reply.content.some(b => b.type === "actions")
+          ? { ...reply, content: reply.content.filter(b => b.type !== "actions") }
+          : undefined;
+        const bodyText = nonActionReply && nonActionReply.content.length > 0
+          ? this._signOutboundArtifactLinks(replyMarkdown(nonActionReply))
+          : this._operationContent(operation);
+        const card = await renderMessageCard([{ type: "text", text: bodyText }],
           { streaming: false, ...this._imageRenderOptions(operation) });
+        if (reply.title) {
+          card.header = {
+            title: { tag: "plain_text", content: reply.title },
+            template: reply.template === "result" ? "blue" : "indigo",
+          };
+        }
+        for (const block of reply.content) {
+          if (block.type !== "actions") continue;
+          card.body.elements.push({
+            tag: "column_set",
+            flex_mode: "none",
+            horizontal_spacing: "small",
+            margin: "8px 0 0 0",
+            columns: block.options.map((option, idx) => ({
+              tag: "column" as const,
+              width: "auto" as const,
+              elements: [
+                {
+                  tag: "button" as const,
+                  text: { tag: "plain_text" as const, content: option },
+                  type: idx === 0 ? ("primary" as const) : ("default" as const),
+                  behaviors: [
+                    {
+                      type: "callback" as const,
+                      value: { requestId: block.requestId, option },
+                    },
+                  ],
+                },
+              ],
+            })),
+          });
+        }
         return { msg_type: "interactive", content: JSON.stringify(card) };
       }
       const only = reply.content[0];

@@ -1,4 +1,10 @@
 import { maintainMemory, type MemoryMaintenanceSettings } from "@/agents/agent-memory-maintenance";
+import { createShadowHeartbeatRoutine } from "@/agents/shadow-heartbeat";
+import type { SelfRoutine } from "@/agents/self-routines";
+import { TaskRunStore } from "@/tasks/task-run-store";
+import { createCorrelatedRequestExpiryRoutine } from "./correlated-request-service";
+import { evaluateOutboundGovernance, releaseDeferredOutboundCommands } from "./outbound-governance";
+import { notifyFailedSchedules } from "./schedule-failure-notifier";
 import {AgentStore} from "@/agents/agent-store";
 import {TaskScopeResolver} from "@/agents/task-scope";
 import {ContextPackScope} from "@/context/context-pack-scope";
@@ -18,7 +24,7 @@ import { ContextPackStore } from "@/context/context-pack-store";
 import { randomUUID } from "node:crypto";
 import { and, asc, eq, lte, sql } from "drizzle-orm";
 import type { DrizzleDB } from "@/data";
-import { channelIdentities, channelSurfaces, channelUserBindings, directRecipients, sessionCommands, sessions, users, managedArtifacts, messages, scheduleOccurrences, sessionSchedules, sessionInbox } from "@/data/schema";
+import { channelIdentities, channelSurfaces, channelUserBindings, directRecipients, sessionCommands, sessions, tasks, users, managedArtifacts, messages, scheduleOccurrences, sessionSchedules, sessionInbox } from "@/data/schema";
 import { MessageStore } from "@/sessions/message-store";
 import { normalizedInboundFromMessageRow } from "@/runners/message-envelope";
 import { sessionDispatcherFor, SessionDispatcher } from "@/sessions/session-dispatcher";
@@ -42,6 +48,7 @@ type DirectDeliveryAddress = Pick<typeof directRecipients.$inferSelect, "channel
 export interface CommandPayload {
     group?: GroupCreation;
     invitation?: GroupInvitation;
+    taskId?: string;
     content: string;
     reply?: ReplyDocument;
     mentionBotUserId?: string;
@@ -49,12 +56,15 @@ export interface CommandPayload {
     contextRefs?: string[];
     contextMessageIds?: string[];
 }
+export type SessionCommandKind = "message.send" | "session.invoke" | "task.run" | "group.create" | "group.invite";
 export interface CommandRuntimeOptions {
     db: DrizzleDB;
     channelFor: (id: string) => ReplyChannel | undefined;
     executeTrigger?: (command: SessionCommand, signal: AbortSignal) => Promise<void>;
-    /** Forgetting, reflection and consolidation of Agent memory; unset leaves memory unmaintained. */
+    executeTaskRun?: (command: SessionCommand, signal: AbortSignal) => Promise<{ taskId: string; runId: string }>;
+    /** Forgetting, reflection and consolidation of Agent memory (plus proactivity routines); unset leaves background routines off. */
     memory?: MemoryMaintenanceSettings | (() => MemoryMaintenanceSettings);
+    extraRoutines?: readonly SelfRoutine<any>[];
 }
 /** Durable command acceptance and source-independent delivery/execution lifecycle. */
 export class SessionCommandService {
@@ -90,13 +100,21 @@ export class SessionCommandService {
             throw new GatewayError(botOnly ? "bot_mention_unresolved" : "mention_unresolved", "Mention target has no unique address in this channel", 409);
         return addresses[0];
     }
-    authorize(actor: CommandActor, targetId: string, capability: string, refs: readonly string[] = [], now = Date.now()) {
+    authorize(actor: CommandActor, targetId: string, capability: string, refs: readonly string[] = [], _now = Date.now(), taskId?: string) {
         const db = this.options.db;
         const target = db.select().from(sessions).where(eq(sessions.id, targetId)).get();
         if (!target || target.status !== "active")
             throw new GatewayError("session_unavailable", "Target session is unavailable", 404);
         const scopes=new TaskScopeResolver(db),scope=scopes.session(actor.sourceSessionId);
         scopes.assertSame(scope,scopes.session(targetId));
+        if (capability === "task.run" || taskId !== undefined) {
+            if (!taskId?.trim())
+                throw new GatewayError("invalid_task_schedule", "task.run requires taskId", 400);
+            const task = db.select().from(tasks).where(eq(tasks.id, taskId)).get();
+            if (!task)
+                throw new GatewayError("task_not_found", "Task not found", 404);
+            scopes.assertSame(scope, scopes.task(task.id));
+        }
         new AgentStore(db).requireAccess(actor.userId,scope.agentId);
         new SessionStore(db).requireReplyUserId(actor.sourceSessionId);
         new SessionStore(db).requireReplyUserId(targetId);
@@ -112,7 +130,7 @@ export class SessionCommandService {
         }
         return target;
     }
-    accept(actor: CommandActor, targetId: string, kind: "message.send" | "session.invoke" | "group.create" | "group.invite", key: string, payload: CommandPayload, timing: {
+    accept(actor: CommandActor, targetId: string, kind: SessionCommandKind, key: string, payload: CommandPayload, timing: {
         availableAt?: number;
         expiresAt?: number;
     } = {}): SessionCommand {
@@ -121,6 +139,9 @@ export class SessionCommandService {
             throw new GatewayError("invalid_command", "Invalid command key or content", 400);
         if (kind === "session.invoke" && (actor.hops ?? 3) <= 0)
             throw new GatewayError("hop_limit", "Trigger hop limit reached", 409);
+        const taskId = kind === "task.run" ? payload.taskId?.trim() : undefined;
+        if (kind === "task.run" && !taskId)
+            throw new GatewayError("invalid_task_schedule", "task.run requires taskId", 400);
         const reply = payload.reply ? parseReply(JSON.stringify(payload.reply)) : undefined;
         if (reply) {
             payload = { ...payload, reply, content: replyMarkdown(reply) };
@@ -138,7 +159,7 @@ export class SessionCommandService {
         if (group && targetId !== actor.sourceSessionId) throw new GatewayError("invalid_group_source", "Group commands belong to their source session", 400);
         const contextMessageIds = groupContextMessageIdsSchema.parse(payload.contextMessageIds ?? []);
         if (contextMessageIds.length && kind !== "group.create") throw new GatewayError("invalid_group_context", "Message context belongs to group creation", 400);
-        const target = this.authorize(actor, targetId, kind, refs);
+        const target = this.authorize(actor, targetId, kind, refs, Date.now(), taskId);
         const mentionBotUserId = payload.mentionBotUserId;
         if (mentionBotUserId) {
             if (kind !== "message.send" || targetId !== actor.sourceSessionId || reply)
@@ -151,22 +172,40 @@ export class SessionCommandService {
                 throw new GatewayError("invalid_mention", "Inline mentions require message presentation in the current group", 400);
             this.mentionAddress(target, block.userId);
         }
-        const canonical = { ...(contextMessageIds.length ? {contextMessageIds} : {}), content: payload.content, ...(reply ? { reply } : {}), purpose: payload.purpose ?? "notification", contextRefs: refs, ...(group ? { group } : {}), ...(invitation ? { invitation } : {}), ...(mentionBotUserId ? { mentionBotUserId } : {}) };
+        const canonical = { ...(contextMessageIds.length ? {contextMessageIds} : {}), ...(taskId ? { taskId } : {}), content: payload.content, ...(reply ? { reply } : {}), purpose: payload.purpose ?? "notification", contextRefs: refs, ...(group ? { group } : {}), ...(invitation ? { invitation } : {}), ...(mentionBotUserId ? { mentionBotUserId } : {}) };
         if (group && (target.channel_type !== "feishu" || target.channel_id !== group.channelId))
             throw new GatewayError("channel_forbidden", "Group creation must use the current session's Feishu binding", 403);
         if (invitation && (target.channel_id !== invitation.channelId || target.group_id !== invitation.chatId || target.thread_key)) throw new GatewayError("invalid_group_target", "Invitation must match its authorized group", 403);
         const dedupeKey = `${actor.sourceSessionId}:${actor.originId}:${key}`;
+        const preExisting = db.select().from(sessionCommands).where(eq(sessionCommands.dedupeKey, dedupeKey)).get();
+        if (preExisting) {
+            if (preExisting.kind !== kind || preExisting.sessionId !== targetId || preExisting.actorUserId !== actor.userId || JSON.stringify({ ...(Array.isArray(preExisting.payload.contextMessageIds) && preExisting.payload.contextMessageIds.length ? {contextMessageIds: preExisting.payload.contextMessageIds} : {}), ...(typeof preExisting.payload.taskId === "string" ? { taskId: preExisting.payload.taskId } : {}), content: preExisting.payload.content, ...(preExisting.payload.reply ? { reply: preExisting.payload.reply } : {}), purpose: preExisting.payload.purpose, contextRefs: preExisting.payload.contextRefs, ...(preExisting.payload.group ? { group: preExisting.payload.group } : {}), ...(preExisting.payload.invitation ? { invitation: preExisting.payload.invitation } : {}), ...(preExisting.payload.mentionBotUserId ? { mentionBotUserId: preExisting.payload.mentionBotUserId } : {}) }) !== JSON.stringify(canonical))
+                throw new GatewayError("idempotency_conflict", "Key already used with different payload", 409);
+            return preExisting;
+        }
+        const acceptNow = Date.now();
+        const governance = kind === "message.send"
+            ? evaluateOutboundGovernance(db, {
+                target,
+                sourceSessionId: actor.sourceSessionId,
+                originId: actor.originId,
+                purpose: (payload.purpose ?? "notification") as "progress" | "answer" | "notification",
+                content: payload.content,
+                requestedAvailableAt: timing.availableAt,
+                now: acceptNow,
+            })
+            : { proactive: false, status: "pending" as const, availableAt: timing.availableAt ?? acceptNow };
         return db.transaction(tx => {
             const existing = tx.select().from(sessionCommands).where(eq(sessionCommands.dedupeKey, dedupeKey)).get();
             if (existing) {
-                if (existing.kind !== kind || existing.sessionId !== targetId || existing.actorUserId !== actor.userId || JSON.stringify({ ...(Array.isArray(existing.payload.contextMessageIds) && existing.payload.contextMessageIds.length ? {contextMessageIds: existing.payload.contextMessageIds} : {}), content: existing.payload.content, ...(existing.payload.reply ? { reply: existing.payload.reply } : {}), purpose: existing.payload.purpose, contextRefs: existing.payload.contextRefs, ...(existing.payload.group ? { group: existing.payload.group } : {}), ...(existing.payload.invitation ? { invitation: existing.payload.invitation } : {}), ...(existing.payload.mentionBotUserId ? { mentionBotUserId: existing.payload.mentionBotUserId } : {}) }) !== JSON.stringify(canonical))
+                if (existing.kind !== kind || existing.sessionId !== targetId || existing.actorUserId !== actor.userId || JSON.stringify({ ...(Array.isArray(existing.payload.contextMessageIds) && existing.payload.contextMessageIds.length ? {contextMessageIds: existing.payload.contextMessageIds} : {}), ...(typeof existing.payload.taskId === "string" ? { taskId: existing.payload.taskId } : {}), content: existing.payload.content, ...(existing.payload.reply ? { reply: existing.payload.reply } : {}), purpose: existing.payload.purpose, contextRefs: existing.payload.contextRefs, ...(existing.payload.group ? { group: existing.payload.group } : {}), ...(existing.payload.invitation ? { invitation: existing.payload.invitation } : {}), ...(existing.payload.mentionBotUserId ? { mentionBotUserId: existing.payload.mentionBotUserId } : {}) }) !== JSON.stringify(canonical))
                     throw new GatewayError("idempotency_conflict", "Key already used with different payload", 409);
                 return existing;
             }
             const launch = group ? selectLaunchMessages(tx as unknown as DrizzleDB, {sourceSessionId: actor.sourceSessionId,
               ...(actor.triggerMessageId ? {anchorMessageId: actor.triggerMessageId} : {}),
               extraMessageIds: contextMessageIds, ...(actor.contextBefore !== undefined ? {before: actor.contextBefore} : {})}) : undefined;
-            const id = randomUUID(), now = Date.now();
+            const id = randomUUID(), now = acceptNow;
             let messageId: string | null = null;
             let directAddress: DirectDeliveryAddress | undefined;
             if (kind === "message.send") {
@@ -179,7 +218,7 @@ export class SessionCommandService {
                     throw new GatewayError("recipient_unresolved", "Resolve this recipient before sending", 409);
                 }
                 messageId = new MessageStore(tx as unknown as DrizzleDB).appendOnce({ sessionId: targetId, channelMessageKey: `command:${id}`, role: "assistant", content: [{ type: "text", text: payload.content }], ...(reply?.presentation === "card" ? { presentationKind: "rich_markdown" as const } : {}),
-                    channel: { type: target.channel_type, id: target.channel_id }, senderUserId: new SessionStore(tx as unknown as DrizzleDB).requireReplyUserId(targetId), rawPayload: { commandId: id, sourceSessionId: actor.sourceSessionId, deliveryStatus: "pending", ...(reply?.replyTo ? { replyTo: reply.replyTo } : {}) } }).row.id;
+                    channel: { type: target.channel_type, id: target.channel_id }, senderUserId: new SessionStore(tx as unknown as DrizzleDB).requireReplyUserId(targetId), rawPayload: { commandId: id, sourceSessionId: actor.sourceSessionId, deliveryStatus: governance.status, ...(reply?.replyTo ? { replyTo: reply.replyTo } : {}) } }).row.id;
             }
             let contextPackId: string | undefined;
             if (kind === "session.invoke") {
@@ -188,9 +227,13 @@ export class SessionCommandService {
                 packs.addItems(pack.id, refs.map(artifactId => ({ itemKind: "artifact", itemId: artifactId, sourceSessionId: actor.sourceSessionId, role: "context", reason: "explicit_handoff", metadataJson: { artifactId } })));
                 contextPackId = pack.id;
             }
+            const rawPayload = payload as unknown as Record<string, unknown>;
+            const extraPayload = "requestResult" in rawPayload
+                ? { requestResult: rawPayload.requestResult }
+                : {};
             tx.insert(sessionCommands).values({ id, kind, sessionId: targetId, sourceSessionId: actor.sourceSessionId, actorUserId: actor.userId,
-                originId: actor.originId, dedupeKey, payload: { ...canonical, ...(directAddress ? {directAddress} : {}), ...(launch ? {launchMessageIds: launch.selected.map(row => row.message.id), launchAnchorMessageId: launch.anchorMessageId} : {}), ...(contextPackId ? { contextPackId } : {}) }, status: "pending", messageId, correlationId: actor.correlationId ?? id, hops: kind === "session.invoke" ? (actor.hops ?? 3) - 1 : actor.hops ?? 3,
-                availableAt: timing.availableAt ?? now, expiresAt: timing.expiresAt ?? null, createdAt: now, updatedAt: now }).run();
+                originId: actor.originId, dedupeKey, payload: { ...canonical, ...extraPayload, ...(governance.metadata ? { proactiveGovernance: governance.metadata } : {}), ...(directAddress ? {directAddress} : {}), ...(launch ? {launchMessageIds: launch.selected.map(row => row.message.id), launchAnchorMessageId: launch.anchorMessageId} : {}), ...(contextPackId ? { contextPackId } : {}) }, status: governance.status, messageId, correlationId: actor.correlationId ?? id, hops: kind === "session.invoke" ? (actor.hops ?? 3) - 1 : actor.hops ?? 3,
+                availableAt: governance.availableAt, expiresAt: timing.expiresAt ?? null, createdAt: now, updatedAt: now }).run();
             return tx.select().from(sessionCommands).where(eq(sessionCommands.id, id)).get()!;
         });
     }
@@ -227,19 +270,27 @@ export class SessionCommandService {
         if (this.stopped)
             return;
         this.materializeSchedules(now);
+        releaseDeferredOutboundCommands(this.options.db, now);
+        notifyFailedSchedules(this.options.db, this, now);
         if (this.options.memory && now - this.memoryScannedAt >= MEMORY_SCAN_INTERVAL_MS) {
             this.memoryScannedAt = now;
             const memorySettings = typeof this.options.memory === "function" ? this.options.memory() : this.options.memory;
-            maintainMemory(this.options.db, this, memorySettings, now);
+            maintainMemory(this.options.db, this, memorySettings, now, [
+                createShadowHeartbeatRoutine(),
+                createCorrelatedRequestExpiryRoutine(),
+                ...(this.options.extraRoutines ?? []),
+            ]);
         }
+        const isTriggerKind = (kind: string | undefined) => kind === "session.invoke" || kind === "task.run";
         const pending = this.options.db.select().from(sessionCommands).where(and(eq(sessionCommands.status, "pending"), lte(sessionCommands.availableAt, Math.max(now, Date.now())))).orderBy(asc(sessionCommands.createdAt), sql`session_commands.rowid`).all();
-        let triggerSlots = 8 - [...this.inFlight.keys()].filter(id => this.get(id)?.kind === "session.invoke").length;
-        let deliverySlots = 32 - [...this.inFlight.keys()].filter(id => this.get(id)?.kind !== "session.invoke").length;
+        let triggerSlots = 8 - [...this.inFlight.keys()].filter(id => isTriggerKind(this.get(id)?.kind)).length;
+        let deliverySlots = 32 - [...this.inFlight.keys()].filter(id => !isTriggerKind(this.get(id)?.kind)).length;
         for (const command of pending) {
-            if (command.kind === "session.invoke" ? triggerSlots <= 0 : deliverySlots <= 0) continue;
+            const triggerLike = isTriggerKind(command.kind);
+            if (triggerLike ? triggerSlots <= 0 : deliverySlots <= 0) continue;
             if (this.inFlight.has(command.id))
                 continue;
-            if (command.kind === "session.invoke") triggerSlots--; else deliverySlots--;
+            if (triggerLike) triggerSlots--; else deliverySlots--;
             const execution = this.execute(command, now).catch(error => console.error("command execution", error)).finally(() => this.inFlight.delete(command.id));
             this.inFlight.set(command.id, execution);
         }
@@ -281,12 +332,21 @@ export class SessionCommandService {
                     finish("skipped", "Expired");
                     return;
                 }
-                const target = this.authorize({ userId: command.actorUserId, sourceSessionId: command.sourceSessionId, originId: command.originId }, command.sessionId, command.kind, command.payload.contextRefs as string[] ?? [], now);
+                const target = this.authorize({ userId: command.actorUserId, sourceSessionId: command.sourceSessionId, originId: command.originId }, command.sessionId, command.kind, command.payload.contextRefs as string[] ?? [], now, typeof command.payload.taskId === "string" ? command.payload.taskId : undefined);
                 if (command.kind === "session.invoke") {
                     if (!this.options.executeTrigger)
                         throw new Error("Trigger executor unavailable");
                     await this.options.executeTrigger(command, controller.signal);
                     finish(controller.signal.aborted ? "cancelled" : "completed");
+                }
+                else if (command.kind === "task.run") {
+                    if (!this.options.executeTaskRun)
+                        throw new Error("Scheduled Task executor unavailable");
+                    const result = await this.options.executeTaskRun(command, controller.signal);
+                    db.transaction(tx => {
+                        tx.update(sessionCommands).set({ payload: { ...command.payload, result } }).where(and(eq(sessionCommands.id, command.id), eq(sessionCommands.claim, claim))).run();
+                        finish(controller.signal.aborted ? "cancelled" : "completed");
+                    });
                 }
                 else if (command.kind === "group.invite") {
                     const invitation = groupInvitationSchema.parse(command.payload.invitation);
@@ -374,9 +434,10 @@ export class SessionCommandService {
             }
             finally {
                 this.running.delete(command.id);
+                notifyFailedSchedules(db, this, Date.now());
             }
         };
-        if (command.kind === "session.invoke")
+        if (command.kind === "session.invoke" || command.kind === "task.run")
             await sessionDispatcherFor(this.options.db).dispatch({ kind: "session_trigger", sessionId: command.sessionId }, run);
         else
             await this.deliveryDispatcher.dispatch({kind:"message_delivery",sessionId:command.sessionId},run);
@@ -427,23 +488,39 @@ export class SessionCommandService {
                 const occurrenceId = `${current.id}:${current.revision}:${scheduledAt}`;
                 if (missed > 0)
                     tx.insert(scheduleOccurrences).values({ id: `${occurrenceId}:missed`, scheduleId: current.id, scheduledAt: current.nextAt, revision: current.revision, status: "skipped", reason: current.recurrence ? "Coalesced earlier calendar occurrences" : `Coalesced ${missed} missed occurrences`, snapshot: { schedule: current, missedCount: missed }, createdAt: now }).onConflictDoNothing().run();
-                const active = tx.select().from(scheduleOccurrences).where(eq(scheduleOccurrences.scheduleId, current.id)).all().some(o => o.commandId && ["pending", "running"].includes(this.get(o.commandId)?.status ?? ""));
+                const scheduledTaskId = current.action.kind === "task.run" && typeof current.action.taskId === "string" ? current.action.taskId : undefined;
+                const activeCommand = tx.select().from(scheduleOccurrences).where(eq(scheduleOccurrences.scheduleId, current.id)).all().some(o => o.commandId && ["pending", "running"].includes(this.get(o.commandId)?.status ?? ""));
+                const activeTaskRun = scheduledTaskId ? new TaskRunStore(tx as unknown as DrizzleDB).getActiveRunForTask(scheduledTaskId) !== undefined : false;
                 let reason: string | null = null;
-                if (active && current.overlap === "skip")
-                    reason = "Previous occurrence is active";
+                let acceptFailed = false;
+                if ((activeCommand || activeTaskRun) && current.overlap === "skip")
+                    reason = activeTaskRun ? "Previous task run is active" : "Previous occurrence is active";
                 if ((missed > 0 || now - scheduledAt > current.expiresAfterMs) && current.misfire === "skip")
                     reason = "Missed occurrence";
                 let commandId: string | null = null;
                 try {
                     if (!reason) {
-                        const command = this.accept({ userId: current.actorUserId, sourceSessionId: current.sourceSessionId, originId: occurrenceId }, current.targetSessionId, current.action.kind as "message.send" | "session.invoke", "occurrence", { content: String(current.action.content), purpose: "notification", contextRefs: current.action.contextRefs as string[] ?? [] }, { expiresAt: scheduledAt + current.expiresAfterMs });
+                        const command = this.accept(
+                            { userId: current.actorUserId, sourceSessionId: current.sourceSessionId, originId: occurrenceId },
+                            current.targetSessionId,
+                            current.action.kind as "message.send" | "session.invoke" | "task.run",
+                            "occurrence",
+                            {
+                                ...(scheduledTaskId ? { taskId: scheduledTaskId } : {}),
+                                content: String(current.action.content),
+                                purpose: "notification",
+                                contextRefs: current.action.contextRefs as string[] ?? [],
+                            },
+                            { expiresAt: scheduledAt + current.expiresAfterMs },
+                        );
                         commandId = command.id;
                     }
                 }
                 catch (error) {
+                    acceptFailed = true;
                     reason = String(error);
                 }
-                tx.insert(scheduleOccurrences).values({ id: occurrenceId, scheduleId: current.id, scheduledAt, revision: current.revision, commandId, status: reason ? "skipped" : "pending", reason, snapshot: current, createdAt: now }).onConflictDoNothing().run();
+                tx.insert(scheduleOccurrences).values({ id: occurrenceId, scheduleId: current.id, scheduledAt, revision: current.revision, commandId, status: acceptFailed ? "failed" : reason ? "skipped" : "pending", reason, snapshot: current, createdAt: now }).onConflictDoNothing().run();
                 tx.update(sessionSchedules).set({ nextAt: current.recurrence ? calendarOccurrence(current.recurrence, current.timezone, now) : interval ? scheduledAt + interval : scheduledAt, enabled: !!current.recurrence || interval !== null }).where(eq(sessionSchedules.id, current.id)).run();
             });
     }

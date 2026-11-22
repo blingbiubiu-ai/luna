@@ -63,3 +63,5 @@ including deferred references, ownership checks and deletion guards. See
 
 
 Task progress shares `timeline_events`: `runner.tool` inserts on start and updates on result, while public text and state remain separate rows. Migration 0009 adds `task_run_id`, `updated_at` and Task/Run ordering indexes. See [Progress notifications](progress-notifications.md).
+
+Migration 0010 (`0010_agent_proactivity.sql`) adds proactivity persistence: `shadow_heartbeats` (per-Shadow dedicated Heartbeat local session, activity cursor, covered window and latest command), `correlated_requests` (unified `ask` and `handoff` tracking with options, resolution payload, expiry and callback command), and `schedule_failure_notifications` (rate-limited owner DM notifications for failed schedules), alongside `task.run` schedule actions and `deferred` quiet-hours command state. See [Agent Proactivity](agent-proactivity.md).

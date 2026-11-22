@@ -14,7 +14,15 @@ import { randomUUID } from "node:crypto";
 import { mainInvocations, mainMessageOrigin } from "@/runners/main-invocation-registry";
 import type { AgentExecutionSnapshot } from "@/agent-config";
 import type { DrizzleDB } from "@/data";
-import { channelSurfaces, runnerOperations, sessions, tasks } from "@/data/schema";
+import { channelSurfaces, runnerOperations, sessions, shadowHeartbeats, tasks } from "@/data/schema";
+import { CorrelatedRequestService, type CorrelatedRequestRow } from "@/messaging/correlated-request-service";
+import {
+  buildMainCapabilities,
+  isMainSelfRoutineInput,
+  resolveMainAllowSilent,
+  resolveMainTriggerClassification,
+  type RunnerCapabilitiesManifest,
+} from "@/runners/capabilities";
 import {
   requestedIdentityFromInbound,
   requiresExplicitRequesterIdentity,
@@ -38,7 +46,7 @@ import {
 import { and, eq } from "drizzle-orm";
 
 import type { ActivationContextMessage, MainRunnerCompletion, MainRunnerContextPack, MainRunnerInput } from "./types";
-import { addressingFacts, compact, dataBlock, joinBlocks, messageItem, turnClock, zonedIso, type PeopleResolver } from "@/runners/turn-envelope";
+import { addressingFacts, compact, dataBlock, joinBlocks, messageItem, turnClock, turnEvent, zonedIso, type PeopleResolver } from "@/runners/turn-envelope";
 import { shadowPeople } from "@/runners/shadow-people";
 import { runnerArtifactAllowlistFromInput } from "./artifact-allowlist";
 
@@ -156,9 +164,24 @@ export class MainRunner {
       ? memoryInjection(this._options.serviceAuthDb, {...scope, actorUserId: invocation.actorUserId, sessionId: input.input.context.sessionId, taskId: null, runnerContextId: runnerContext.id},
         input.input.type === "user_messages" ? input.input.messages.map(message => message.text).join("\n") : undefined)
       : undefined;
+    const senderIds = input.input.type === "user_messages"
+      ? input.input.messages.map(m => m.senderUserId).filter((id): id is string => Boolean(id))
+      : undefined;
+    const pendingAsks = this._options.serviceAuthDb && input.input.type === "user_messages"
+      ? new CorrelatedRequestService(this._options.serviceAuthDb, () => undefined)
+          .pendingAsksForTurn(input.input.context.sessionId, senderIds)
+      : undefined;
+    const capabilities = buildMainCapabilities(this._options.serviceAuthDb, input.input, {
+      agentId: scope.agentId,
+      shadowId: scope.shadowId,
+      actorUserId: invocation?.actorUserId,
+    });
     const prompt = renderMainRunnerPrompt(input.input, {
       ...(memory?.text ? { memory: memory.text } : {}),
+      capabilities,
+      ...(pendingAsks?.length ? { pendingAsks } : {}),
       ...(this._options.serviceAuthDb ? {
+        db: this._options.serviceAuthDb,
         people: shadowPeople(this._options.serviceAuthDb, scope),
         timezone: new PlatformSettingsStore(this._options.serviceAuthDb).get().general.timezone,
       } : {}),
@@ -205,12 +228,22 @@ export class MainRunner {
     memory?.commit();
     const db = this._options.serviceAuthDb;
     if (input.signal?.aborted) throw new Error("Runner was cancelled before final reply");
+    const isHeartbeatSession = db
+      ? Boolean(
+          db
+            .select({ shadowId: shadowHeartbeats.shadowId })
+            .from(shadowHeartbeats)
+            .where(eq(shadowHeartbeats.sessionId, input.input.context.sessionId))
+            .get(),
+        )
+      : false;
+    const ignoreTerminalOutput = isMainSelfRoutineInput(db, input.input) || isHeartbeatSession;
     try {
-      if (db) finalizeRunnerReply(db, {
+      if (db && !ignoreTerminalOutput) finalizeRunnerReply(db, {
         sessionId: input.input.context.sessionId, originId: mainMessageOrigin(input),
         ...(input.invocationId && new InvocationStore(db).find(input.invocationId) ? { invocationId: input.invocationId } : {}),
         text: primaryOutput.text,
-        allowSilent: input.input.type !== "user_messages" || input.input.latestMessage.surface.kind !== "p2p",
+        allowSilent: resolveMainAllowSilent(db, input.input),
         actorUserId: requestedByUserIdForServiceEnv(input, db) ?? (input.input.type === "user_messages" ? input.input.messages.at(-1)?.senderUserId : undefined),
       });
     } catch (error) {
@@ -414,16 +447,22 @@ function buildMainRunnerContextFile(input: MainRunnerInput, db?: DrizzleDB) {
 export interface MainRunnerPromptOptions {
   /** Agent memory sections for this turn, already rendered as text. */
   readonly memory?: string;
+  /** Capability manifest for Protocol v2. */
+  readonly capabilities?: RunnerCapabilitiesManifest;
+  /** Pending asks targeting the current sender(s) in this session. */
+  readonly pendingAsks?: readonly CorrelatedRequestRow[];
+  readonly db?: DrizzleDB;
   /** Relation of each sender to this Shadow. */
   readonly people?: PeopleResolver;
   readonly now?: Date;
   readonly timezone?: string;
 }
 
-/** The turn input for Main: background blocks first, this turn's input last. */
+/** The turn input for Main (Protocol v2): capabilities, background context, clock, then `<events>`. */
 export function renderMainRunnerPrompt(input: MainRunnerInput, options: MainRunnerPromptOptions = {}): string {
   const clock = turnClock(options.now, options.timezone);
   const context = input.context;
+  const capabilities = options.capabilities ?? buildMainCapabilities(options.db, input);
   const pack = (value: MainRunnerContextPack | undefined) => value && {
     kind: value.kind,
     items: value.items.map((item) => compact({
@@ -433,11 +472,44 @@ export function renderMainRunnerPrompt(input: MainRunnerInput, options: MainRunn
   };
   const activation = input.type === "user_messages" ? input.activationContextMessages?.map((message) => activationItem(message, options.people, clock.timezone)) : undefined;
   const history = compact({ launchSeed: pack(context.launchSeed), deltaContext: pack(context.deltaContext), activationContext: activation });
+
+  const events: ReturnType<typeof turnEvent>[] = [];
+  if (context.clarification) {
+    events.push(turnEvent({
+      id: `clarification:${context.sessionId}`,
+      kind: "clarification",
+      time: clock.now,
+      source: `session:${context.sessionId}`,
+      actor: input.requesterUserId ?? undefined,
+      payload: clarificationFacts(context.clarification) as Record<string, unknown>,
+    }));
+  }
+  for (const ask of options.pendingAsks ?? []) {
+    events.push(turnEvent({
+      id: ask.id,
+      kind: "pending_ask",
+      time: zonedIso(new Date(ask.createdAt), clock.timezone),
+      source: `session:${ask.originSessionId}`,
+      actor: ask.targetUserId ?? undefined,
+      correlationId: ask.id,
+      payload: compact({
+        question: ask.instruction,
+        context: ask.contextSummary ?? undefined,
+        options: ask.optionsJson ?? undefined,
+        expiresAt: ask.expiresAt ? zonedIso(new Date(ask.expiresAt), clock.timezone) : undefined,
+      }) as Record<string, unknown>,
+    }));
+  }
+
+  const { primaryEvents, text } = buildPrimaryMainEvents(input, clock, options.people, options.db);
+  events.push(...primaryEvents);
+
   return joinBlocks([
+    dataBlock("capabilities", { json: capabilities }),
     dataBlock("memory", { text: options.memory ?? "" }),
     Object.keys(history).length ? dataBlock("history", { json: history }) : "",
-    context.clarification ? dataBlock("clarification", { json: clarificationFacts(context.clarification) }) : "",
-    mainTurnBlock(input, clock, options.people),
+    dataBlock("now", { json: clock }),
+    dataBlock("events", { json: events, ...(text ? { text } : {}) }),
   ]);
 }
 
@@ -450,44 +522,132 @@ function clarificationFacts(clarification: NonNullable<MainRunnerInput["context"
   return facts;
 }
 
-function mainTurnBlock(input: MainRunnerInput, clock: ReturnType<typeof turnClock>, people: PeopleResolver | undefined): string {
+function buildPrimaryMainEvents(
+  input: MainRunnerInput,
+  clock: ReturnType<typeof turnClock>,
+  people: PeopleResolver | undefined,
+  db: DrizzleDB | undefined,
+): { readonly primaryEvents: ReturnType<typeof turnEvent>[]; readonly text?: string | undefined } {
   if (input.type === "task_result") {
     const { userVisibleReport, artifactIds, ...result } = input.result;
-    // Timeline IDs remain in business persistence, never masquerade as download IDs.
     const visible = input.result.artifactRefs !== undefined ? result : { ...result, artifactIds };
-    return dataBlock("task_result", {
-      json: compact({
-        ...clock,
-        sessionId: input.sessionId,
-        surface: input.surface,
-        requesterUserId: input.requesterUserId,
-        sourceMessageId: input.sourceMessageId,
-        ...visible,
-      }),
+    return {
+      primaryEvents: [
+        turnEvent({
+          id: input.result.taskRunId,
+          kind: "task_result",
+          time: clock.now,
+          source: `task:${input.result.taskId}`,
+          actor: input.requesterUserId ?? undefined,
+          payload: compact({
+            sessionId: input.sessionId,
+            surface: input.surface,
+            requesterUserId: input.requesterUserId,
+            sourceMessageId: input.sourceMessageId,
+            ...visible,
+          }) as Record<string, unknown>,
+        }),
+      ],
       text: userVisibleReport,
-    });
+    };
   }
   if (input.type === "session_trigger") {
-    const { instruction, context: _context, type: _type, ...trigger } = input;
-    return dataBlock("trigger", { json: { ...clock, ...trigger }, text: instruction });
+    const classified = resolveMainTriggerClassification(
+      db,
+      input.triggerId,
+      input.sourceSessionId,
+      input.context.sessionId,
+    );
+    if (classified.originKind === "self_routine") {
+      return {
+        primaryEvents: [
+          turnEvent({
+            id: input.triggerId,
+            kind: "routine",
+            time: clock.now,
+            source: "system",
+            actor: input.requesterUserId ?? undefined,
+            payload: compact({
+              routineKind: classified.routineKind,
+              sessionId: input.context.sessionId,
+            }) as Record<string, unknown>,
+          }),
+        ],
+        text: input.instruction,
+      };
+    }
+    if (classified.originKind === "request_result") {
+      return {
+        primaryEvents: [
+          turnEvent({
+            id: input.triggerId,
+            kind: "request_result",
+            time: clock.now,
+            source: `session:${String(classified.requestResult?.targetSessionId ?? input.sourceSessionId)}`,
+            actor:
+              (classified.requestResult?.resolvedByUserId as string | undefined) ??
+              input.requesterUserId ??
+              undefined,
+            correlationId: input.correlationId,
+            payload: (classified.requestResult ?? {}) as Record<string, unknown>,
+          }),
+        ],
+        text: input.instruction,
+      };
+    }
+    const eventKind = classified.originKind === "handoff" ? "handoff" : "schedule_fired";
+    return {
+      primaryEvents: [
+        turnEvent({
+          id: input.triggerId,
+          kind: eventKind,
+          time: clock.now,
+          source: `session:${input.sourceSessionId}`,
+          actor: input.requesterUserId ?? undefined,
+          correlationId: input.correlationId,
+          payload: compact({
+            sourceSessionId: input.sourceSessionId,
+            hops: input.hops,
+            artifactRefs: input.artifactRefs,
+          }) as Record<string, unknown>,
+        }),
+      ],
+      text: input.instruction,
+    };
   }
+
   const rawById = new Map(input.messages.map((message) => [message.messageId, message.rawMessage]));
   const surface = input.latestMessage.thread
     ? "thread"
     : input.latestMessage.surface.kind !== "unknown"
       ? input.latestMessage.surface.kind
       : undefined;
-  return dataBlock("messages", {
-    json: compact({
-      ...clock,
-      surface,
-      requesterUserId: input.requesterUserId,
-      listening: input.ambient,
-      addressing: addressingFacts(input.latestMessage),
-      activationSource: input.activationSourceMessage && activationItem(input.activationSourceMessage, people, clock.timezone),
-      items: input.messages.map((message) => messageItem(message, people, rawById.get(message.messageId), clock.timezone)),
-    }),
-  });
+  const lastIdx = input.messages.length - 1;
+  return {
+    primaryEvents: input.messages.map((message, idx) =>
+      turnEvent({
+        id: message.messageId,
+        kind: "message",
+        time: zonedIso(new Date(message.createdAt), clock.timezone),
+        source: `session:${input.context.sessionId}`,
+        actor: message.senderUserId ?? message.sender.externalId,
+        payload: compact({
+          ...messageItem(message, people, rawById.get(message.messageId), clock.timezone),
+          surface,
+          ...(idx === lastIdx
+            ? {
+                requesterUserId: input.requesterUserId,
+                listening: input.ambient,
+                addressing: addressingFacts(input.latestMessage),
+                activationSource:
+                  input.activationSourceMessage &&
+                  activationItem(input.activationSourceMessage, people, clock.timezone),
+              }
+            : {}),
+        }) as Record<string, unknown>,
+      }),
+    ),
+  };
 }
 
 function activationItem(message: ActivationContextMessage, people: PeopleResolver | undefined, timezone?: string) {

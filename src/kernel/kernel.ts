@@ -23,6 +23,7 @@ import { SessionReplyDispatcher } from "@/messaging/session-reply-dispatcher";
 import { DashboardChannel, DASHBOARD_CHANNEL_ID } from "@/channels/dashboard/dashboard-channel";
 import { SessionCommandService, registerSessionCommands } from "@/messaging/session-command-service";
 import { createSessionTriggerExecutor } from "@/sessions/trigger-executor";
+import { createScheduledTaskRunExecutor } from "@/tasks/scheduled-task-executor";
 
 import { DataConnection } from "@/data";
 import * as lunaSchema from "@/data/schema";
@@ -270,6 +271,7 @@ class Kernel {
     this._sessionCommands = new SessionCommandService({ db: this._database.db, channelFor: id => this.replyChannel(id),
       executeTrigger: createSessionTriggerExecutor(this._database.db, () => this._createMainRunner(), (sessionId) => this._runnerTypeForSession(sessionId),
         (session, command, signal) => new WorkRunner({ db: this._database.db, runnerType: "unconfigured", channelForMessage: id => this.replyChannel(id) }).executeMaintenanceTurn(session, command, signal)),
+      executeTaskRun: createScheduledTaskRunExecutor(this._database.db, () => this._taskRunSupervisor),
       memory: () => new PlatformSettingsStore(this._database.db).get().memory });
     // Entries imported by a migration have no search terms until they are indexed here.
     new AgentMemoryStore(this._database.db).reindex();

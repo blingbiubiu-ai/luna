@@ -1,6 +1,5 @@
 #!/usr/bin/env bun
 import { runDeployment } from "./deployment";
-import { runTaskReportCli } from "./commands/task-report";
 import { runGroupsCli } from "./commands/groups";
 import { runUsersCli } from "./commands/users";
 import { runRootCli } from "./commands/root";
@@ -10,8 +9,15 @@ import { versionHelpText } from "@luna/cli-support/help";
 import { loadDefaultLunaEnv, resolveTurnLunaEnv } from "@luna/cli-support/env";
 import { hasFlag } from "@luna/cli-support/options";
 import { runSchedulesCli } from "./commands/schedules";
-import { runRunnerOperationsCli } from "./commands/runner-operations";
-import { runMessagesCli } from "./commands/messages";
+import { runSayCli } from "./commands/say";
+import { runHandoffCli, runHandoffsCli } from "./commands/handoffs";
+import { runAsksCli } from "./commands/asks";
+import { runRequestsCli } from "./commands/requests";
+import { runCommandsCli } from "./commands/commands";
+import { runWhoamiCli } from "./commands/whoami";
+import { runActivityCli } from "./commands/activity";
+import { runTasksCli } from "./commands/tasks";
+import { runSessionsCli } from "./commands/sessions";
 import { runMemoryCli } from "./commands/memory";
 import { runChatCli } from "./commands/chat";
 import { runAuthCli } from "./commands/auth";
@@ -24,6 +30,12 @@ import {
 } from "./commands/plugin-command";
 
 export { loadDefaultLunaEnv } from "@luna/cli-support/env";
+
+const LEGACY_REMOVED_TOP_LEVEL: Record<string, string> = {
+  messages: "`luna messages` is removed in Protocol v2; use `luna say` or `luna handoff`",
+  task: "`luna task` is removed in Protocol v2; use `luna tasks`",
+  session: "`luna session` is removed in Protocol v2; use `luna sessions`",
+};
 
 export async function runClientCli(
   argv: string[],
@@ -44,6 +56,13 @@ export async function runClientCli(
   if (!command || command === "--help" || command === "-h") {
     return { status: "ok", output: await clientHelpTextWithPlugins(env) };
   }
+  if (command in LEGACY_REMOVED_TOP_LEVEL) {
+    return {
+      status: "error",
+      code: "legacy_command_removed",
+      message: LEGACY_REMOVED_TOP_LEVEL[command]!,
+    };
+  }
   if (command === "service" || command === "worker") {
     try {
       const result = await runDeployment(command, rest, env);
@@ -56,15 +75,22 @@ export async function runClientCli(
     if (rest[0] === "help" || hasFlag(rest, "--help") || hasFlag(rest, "-h")) {
       return { status: "ok", output: versionHelpText() };
     }
-    return { status: "ok", output: "0.1.0" };
+    return { status: "ok", output: "0.2.0" };
   }
+  if (command === "say") return runSayCli(rest, env);
+  if (command === "handoff") return runHandoffCli(rest, env);
+  if (command === "handoffs") return runHandoffsCli(rest, env);
+  if (command === "asks") return runAsksCli(rest, env);
+  if (command === "requests") return runRequestsCli(rest, env);
+  if (command === "commands") return runCommandsCli(rest, env);
+  if (command === "whoami") return runWhoamiCli(rest, env);
+  if (command === "activity") return runActivityCli(rest, env);
+  if (command === "tasks") return runTasksCli(rest, env);
+  if (command === "sessions") return runSessionsCli(rest, env);
   if (command === "schedules") return runSchedulesCli(rest, env);
   if (command === "groups") return runGroupsCli(rest, env);
   if (command === "users") return runUsersCli(rest, env);
   if (command === "root") return runRootCli(rest, env);
-  if (command === "task" && rest[0] === "report") return runTaskReportCli(rest.slice(1), env);
-  if (command === "task" || command === "session") return runRunnerOperationsCli(command, rest, env);
-  if (command === "messages") return runMessagesCli(rest, env);
   if (command === "memory") return runMemoryCli(rest, env);
   if (command === "chat") return runChatCli(rest, env);
   if (command === "auth") {
@@ -97,48 +123,34 @@ async function clientHelpTextWithPlugins(env: Env): Promise<string> {
 
 function clientHelpText(): string {
   return [
-    "Luna CLI",
+    "Luna CLI (Protocol v2)",
     "",
     "Usage:",
     "  luna service <command>",
     "  luna worker <command>",
     "  luna auth <command>",
+    "  luna whoami",
+    "  luna say [--to <address>] (--text <text> | --stdin) [--json] [--purpose progress|answer|notification] [--repeat]",
+    "  luna handoff --to <address> (--text <instruction> | --stdin) [--expires-in <duration>] [--repeat]",
+    "  luna handoffs resolve <request-id> (--summary <text> | --declined --reason <text>)",
+    "  luna asks create|answer|cancel|list",
+    "  luna requests list [--status <status>] [--kind ask|handoff] [--limit <n>]",
+    "  luna commands status|wait <command-id> [--timeout-ms <ms>]",
+    "  luna tasks list|get|progress|create|update|restart|cancel|status-card|report",
+    "  luna sessions list|timeline|messages|create-thread|clarify|release",
+    "  luna schedules create|list|get|update|pause|resume|cancel",
+    "  luna activity --since <ISO-8601-or-epoch-ms> [--limit <n>]",
+    "  luna groups search|get|lookup|create|invite",
+    "  luna users search --query <name> [--kind user|bot] | get <user-id> | lookup --channel-id <id> --feishu-user-id <id>",
+    "  luna memory list|search|timeline|get|add|update|delete|restore (see `luna memory help`)",
+    "  luna chat listen status|on|off",
+    "  luna root status [--user <user-id>]",
     "  luna knowledge <command>",
     "  luna workspace <workspace-id> <command>",
-    "  luna task list [--agent-id <id> | --session-id <id>] | get --task-id <id> | progress --task-id <id> [--run-id <id|all>] [--limit <n>] [--cursor <cursor>]",
-    "  luna session messages|read_session_timeline --session-id <id>",
-    "  luna artifacts materialize artifact:<id>",
-    "  luna artifacts download artifact:<id> --output <path>",
-    "  luna artifacts register <path>",
-    "  luna groups search [--query <name>] [--user-id <Luna-user-id>]; luna groups get|lookup|status",
-    "  luna groups create|invite --json '<object>' [--request-id <id>]",
-    "  luna session create-thread [--json '<object>' | --stdin] [--request-id <id>]",
-    "  luna users search --query <name> [--kind user|bot] | get <user-id> | lookup --channel-id <id> --feishu-user-id <id>",
-    "  luna root status [--user <user-id>]",
-    "  luna messages send (--text <text> | --stdin) [--json] [--request-id <id>] [--purpose progress|answer|notification] [--session-id <id> | --user-id <id> | --feishu-user-id <id> --channel-id <id>]",
-    "  luna memory list|search|get|add|update|delete (see `luna memory help`)",
-    "  luna chat listen status|on|off",
-    "  luna task create|update|restart|cancel (--stdin | --json <JSON>) --request-id <id>",
-    "  luna task status <command-id>",
-    "  luna task status-card --task-id <id> --request-id <id> [--resend] [--style card|native]",
-    "  luna task report (--stdin | --text <report>) --request-id <id> [--waiting]",
-    "  luna task report status <command-id>",
-    "  luna session clarify|release (--stdin | --json <JSON>) --request-id <id>",
-    "  luna session status <command-id>",
+    "  luna artifacts materialize|download|register|cat",
     "  luna version",
     "",
-    "Commands:",
-    "  service            Manage the local Luna Service",
-    "  worker             Bind and manage the local Worker",
-    "  auth               Authenticate this client with Luna Service",
-    "  knowledge          Query and administer Luna knowledge through Luna Service",
-    "  workspace          Read and write managed Luna workspaces through Luna Service",
-    "  task               Query and manage Agent tasks",
-    "  session            Query and manage Agent sessions",
-    "  artifacts          Register, materialize, and download Luna artifacts",
-    "  memory             Read and write the Agent's long-term memory",
-    "  version            Print CLI version",
-    "",
+    "Addresses: current, self, user:<id>, session:<id>, group:<id>",
     "Run `luna auth login` before using protected Luna Service commands.",
   ].join("\n");
 }

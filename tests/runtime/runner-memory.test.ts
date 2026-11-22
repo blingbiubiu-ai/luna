@@ -258,6 +258,6 @@ test("each change records where in the conversation it was made, and get shows h
   expect(sources.map((s: any) => [s.revision, s.entryId])).toEqual([[2, entryOf(later.id).id], [1, first.id]]);
   expect(sources[1]).toMatchObject({ sessionId: f.session.id, messageId: first.messageId, at: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T/) });
   // Reading up to and including the anchor: the cursor is the entry that came after it.
-  expect(sources[1].read).toBe(`luna session read_session_timeline --session-id ${f.session.id} --before-entry-id ${entryOf(later.id).id} --limit 20`);
+  expect(sources[1].read).toBe(`luna sessions timeline --session session:${f.session.id} --before-entry-id ${entryOf(later.id).id} --limit 20`);
   expect(sources[0].read).toContain("--before-entry-id");
 });

@@ -1,6 +1,8 @@
 import { memoryInjection } from "@/agents/agent-memory-injection";
+import { selfRoutineKindOfTrigger } from "@/agents/self-routines";
 import { PlatformSettingsStore } from "@/platform/platform-settings-store";
-import { addressingFacts, compact, dataBlock, joinBlocks, messageItem, turnClock, type PeopleResolver } from "@/runners/turn-envelope";
+import { buildWorkCapabilities } from "@/runners/capabilities";
+import { addressingFacts, compact, dataBlock, joinBlocks, messageItem, turnClock, turnEvent, zonedIso, type PeopleResolver } from "@/runners/turn-envelope";
 import { shadowPeople } from "@/runners/shadow-people";
 import type {AgentExecutionSnapshot} from "@/agent-config";
 import { contextFileSurface, prepareRunnerDirectory, syncAgentCompatibility, turnAttempt } from "@/runners/session-runner-turn";
@@ -203,7 +205,16 @@ export class WorkRunner {
     }, "Prepared work runner prompt");
 
     const timezone = new PlatformSettingsStore(this._options.db).get().general.timezone;
+    const workCapabilities = buildWorkCapabilities(this._options.db, {
+      agentId: session.agent_id,
+      shadowId: session.shadow_id,
+      sessionId: session.id,
+      actorUserId: latestMessageRow.senderUserId ?? undefined,
+      allowSilent: false,
+    });
     const prompt = buildWorkTurnPrompt({
+      sessionId: session.id,
+      capabilities: workCapabilities,
       inbound,
       people: shadowPeople(this._options.db, { agentId: session.agent_id, shadowId: session.shadow_id }),
       currentTurnMessages: turnMessages,
@@ -399,7 +410,34 @@ export class WorkRunner {
       const memory = memoryInjection(db, {agentId: session.agent_id, shadowId: session.shadow_id, actorUserId: command.actorUserId,
         sessionId: session.id, taskId: null, runnerContextId: runnerContext.id});
       const timezone = new PlatformSettingsStore(db).get().general.timezone;
-      const prompt = joinBlocks([command.instruction, dataBlock("memory", { text: memory.text ?? "" }), dataBlock("now", { json: turnClock(new Date(), timezone) })]);
+      const clock = turnClock(new Date(), timezone);
+      const routineKind = selfRoutineKindOfTrigger(db, command.id) ?? "reflection";
+      const capabilities = buildWorkCapabilities(db, {
+        agentId: session.agent_id,
+        shadowId: session.shadow_id,
+        sessionId: session.id,
+        actorUserId: command.actorUserId,
+        routineKind,
+        allowSilent: true,
+      });
+      const prompt = joinBlocks([
+        dataBlock("capabilities", { json: capabilities }),
+        dataBlock("memory", { text: memory.text ?? "" }),
+        dataBlock("now", { json: clock }),
+        dataBlock("events", {
+          json: [
+            turnEvent({
+              id: command.id,
+              kind: "routine",
+              time: clock.now,
+              source: "system",
+              actor: command.actorUserId,
+              payload: { routineKind, sessionId: session.id },
+            }),
+          ],
+          text: command.instruction,
+        }),
+      ]);
       if (prompt !== command.instruction) this._attemptStore.updateInputPrompt(attempt.id, prompt);
       const invocation = await invokeSessionAgent({
         runner: launch.runner, runnerContext, runnerContextStore: this._runnerContexts, runnerKind: "work",
@@ -408,11 +446,7 @@ export class WorkRunner {
         ...(signal !== undefined ? { signal } : {}),
       });
       memory.commit();
-      if (!signal?.aborted) finalizeRunnerReply(db, {
-        sessionId: session.id, originId: command.id, text: invocation.text, allowSilent: true,
-        ...(new InvocationStore(db).find(invocationId) ? { invocationId } : {}),
-        actorUserId: command.actorUserId,
-      });
+      // Protocol v2: self-routine terminal output is never delivered as a conversation reply.
       this._attemptStore.markParsed(attempt.id, {
         rawOutput: invocation.text, parsedActionJson: { title: "记忆维护", status: "completed", steps: [], summary: "" },
         ...(invocation.runnerSessionId !== undefined ? { runnerSessionId: invocation.runnerSessionId } : {}),
@@ -674,8 +708,10 @@ export class WorkRunner {
   }
 }
 
-/** The Work turn input: earlier messages on a fresh provider session, then this turn's messages. */
+/** The Work turn input (Protocol v2): capabilities, optional launch history, clock, then `<events>`. */
 function buildWorkTurnPrompt(input: {
+  readonly sessionId: string;
+  readonly capabilities: ReturnType<typeof buildWorkCapabilities>;
   readonly inbound: NormalizedInboundMessage;
   readonly currentTurnMessages: readonly RunnerMessageEnvelope[];
   readonly launchContext: readonly RunnerMessageEnvelope[];
@@ -685,15 +721,32 @@ function buildWorkTurnPrompt(input: {
 }): string {
   const clock = turnClock(new Date(), input.timezone);
   const history = input.includeLaunchContext ? input.launchContext.map((message) => messageItem(message, input.people, undefined, clock.timezone)) : [];
-  return joinBlocks([
-    history.length ? dataBlock("history", { json: { launchContext: history } }) : "",
-    dataBlock("messages", {
-      json: {
-        ...clock,
-        addressing: compact({ ...addressingFacts(input.inbound), ...activationFollowupAddressing(input.inbound) }),
-        items: input.currentTurnMessages.map((message) => messageItem(message, input.people, undefined, clock.timezone)),
-      },
+  const lastIdx = input.currentTurnMessages.length - 1;
+  const events = input.currentTurnMessages.map((message, idx) =>
+    turnEvent({
+      id: message.messageId,
+      kind: "message",
+      time: zonedIso(new Date(message.createdAt), clock.timezone),
+      source: `session:${input.sessionId}`,
+      actor: message.senderUserId ?? message.sender.externalId,
+      payload: compact({
+        ...messageItem(message, input.people, undefined, clock.timezone),
+        ...(idx === lastIdx
+          ? {
+              addressing: compact({
+                ...addressingFacts(input.inbound),
+                ...activationFollowupAddressing(input.inbound),
+              }),
+            }
+          : {}),
+      }) as Record<string, unknown>,
     }),
+  );
+  return joinBlocks([
+    dataBlock("capabilities", { json: input.capabilities }),
+    history.length ? dataBlock("history", { json: { launchContext: history } }) : "",
+    dataBlock("now", { json: clock }),
+    dataBlock("events", { json: events }),
   ]);
 }
 

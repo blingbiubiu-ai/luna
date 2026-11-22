@@ -447,7 +447,10 @@ export function resolveServiceBaseUrl(rawEnv: Env): string {
 
 export function unifiedServiceHeaders(rawEnv: Env): Headers {
   const env = resolveTurnLunaEnv(rawEnv);
-  const headers = new Headers({ accept: "application/json" });
+  const headers = new Headers({
+    accept: "application/json",
+    "x-luna-protocol-version": "2",
+  });
   const token = resolveAccessToken(env);
   if (token) {
     headers.set("authorization", `Bearer ${token}`);
@@ -460,6 +463,187 @@ export function unifiedServiceHeaders(rawEnv: Env): Headers {
   setHeader(headers, "x-luna-task-id", env.LUNA_TASK_ID);
   setHeader(headers, "x-luna-task-run-id", env.LUNA_TASK_RUN_ID);
   return headers;
+}
+
+function canonicalizeValue(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map(canonicalizeValue);
+  }
+  if (value !== null && typeof value === "object") {
+    const entries = Object.entries(value as Record<string, unknown>)
+      .filter(([, v]) => v !== undefined)
+      .sort(([a], [b]) => a.localeCompare(b));
+    return Object.fromEntries(
+      entries.map(([k, v]) => [k, canonicalizeValue(v)]),
+    );
+  }
+  return value;
+}
+
+export function assertNoLegacyRequestId(argv: readonly string[]): void {
+  if (argv.includes("--request-id")) {
+    throw new Error(
+      "--request-id is removed in Protocol v2; idempotency keys are derived automatically (pass --repeat to intentionally execute an identical command again)",
+    );
+  }
+}
+
+export function deriveCommandIdempotencyKey(
+  rawEnv: Env,
+  commandName: string,
+  payload: unknown,
+  options: { readonly repeat?: boolean } = {},
+): string {
+  const env = resolveTurnLunaEnv(rawEnv);
+  const seed =
+    env.LUNA_INVOCATION_ID?.trim() ||
+    env.LUNA_TASK_RUN_ID?.trim() ||
+    env.LUNA_SESSION_ID?.trim() ||
+    env.LUNA_RUNNER_CONTEXT_ID?.trim() ||
+    env.LUNA_ACCESS_TOKEN?.trim() ||
+    "cli";
+  const nonce = options.repeat ? crypto.randomUUID() : "";
+  const canonical = JSON.stringify([
+    seed,
+    commandName,
+    canonicalizeValue(payload),
+    nonce,
+  ]);
+  const digest = createHash("sha256").update(canonical).digest("hex").slice(0, 32);
+  return `v2_${digest}`;
+}
+
+export function parseDurationMs(value: string): number {
+  const trimmed = value.trim();
+  const match = trimmed.match(/^(\d+)(ms|s|m|h|d)?$/i);
+  if (!match) {
+    throw new Error(
+      `Invalid duration "${value}"; expected e.g. 30m, 2h, 7d, 60s, or milliseconds`,
+    );
+  }
+  const amount = Number(match[1]);
+  const unit = (match[2] ?? "ms").toLowerCase();
+  const multipliers: Record<string, number> = {
+    ms: 1,
+    s: 1_000,
+    m: 60_000,
+    h: 3_600_000,
+    d: 86_400_000,
+  };
+  return amount * multipliers[unit]!;
+}
+
+function settleCommandResult(result: CliResult): {
+  readonly done: boolean;
+  readonly commandId?: string;
+  readonly settled: CliResult;
+} {
+  if (result.status !== "ok") {
+    return { done: true, settled: result };
+  }
+  const payload = parseJsonPayload(result.output ?? "{}");
+  if (!isPlainRecord(payload)) {
+    return { done: true, settled: result };
+  }
+  const commandId =
+    typeof payload.commandId === "string" ? payload.commandId : undefined;
+  const status =
+    typeof payload.status === "string"
+      ? payload.status
+      : typeof payload.deliveryStatus === "string"
+        ? payload.deliveryStatus
+        : undefined;
+  if (!commandId || !status) {
+    return { done: true, settled: result };
+  }
+  if (
+    (status === "pending" || status === "running") &&
+    payload.kind !== "ask" &&
+    payload.kind !== "handoff"
+  ) {
+    return { done: false, commandId, settled: result };
+  }
+  if (
+    status === "failed" ||
+    status === "rejected" ||
+    (status === "cancelled" && payload.kind !== "ask")
+  ) {
+    const errMsg =
+      typeof payload.error === "string"
+        ? payload.error
+        : isPlainRecord(payload.error) && typeof payload.error.message === "string"
+          ? payload.error.message
+          : `Command ${commandId} ended with status ${status}`;
+    return {
+      done: true,
+      commandId,
+      settled: {
+        status: "error",
+        code: "command_failed",
+        message: errMsg,
+        ...(result.output !== undefined ? { output: result.output } : {}),
+      },
+    };
+  }
+  return { done: true, commandId, settled: result };
+}
+
+export async function waitForCommand(
+  env: Env,
+  commandId: string,
+  options: { readonly timeoutMs?: number; readonly pollIntervalMs?: number } = {},
+): Promise<CliResult> {
+  const timeoutMs = options.timeoutMs ?? 30_000;
+  const pollIntervalMs = options.pollIntervalMs ?? 250;
+  const deadline = Date.now() + timeoutMs;
+  while (true) {
+    const current = await callUnifiedService(env, {
+      method: "GET",
+      path: `/api/runner/commands/${encodeURIComponent(commandId)}`,
+    });
+    const state = settleCommandResult(current);
+    if (state.done) {
+      return state.settled;
+    }
+    if (Date.now() >= deadline) {
+      return {
+        status: "error",
+        code: "command_pending_timeout",
+        message: `Command ${commandId} is still pending; run \`luna commands wait ${commandId}\` to continue waiting`,
+        ...(current.output !== undefined ? { output: current.output } : {}),
+      };
+    }
+    await sleep(pollIntervalMs);
+  }
+}
+
+export async function submitAndWaitCommand(
+  env: Env,
+  request: UnifiedServiceRequest,
+  options: {
+    readonly timeoutMs?: number;
+    readonly pollIntervalMs?: number;
+    readonly wait?: boolean;
+  } = {},
+): Promise<CliResult> {
+  const initial = await callUnifiedService(env, request);
+  if (initial.status !== "ok") {
+    return initial;
+  }
+  const payload = parseJsonPayload(initial.output ?? "{}");
+  // Asynchronous cross-session triggers (`handoff`, `ask`) return their receipt immediately.
+  if (
+    options.wait === false ||
+    (isPlainRecord(payload) &&
+      (payload.kind === "handoff" || payload.kind === "ask"))
+  ) {
+    return initial;
+  }
+  const state = settleCommandResult(initial);
+  if (state.done || !state.commandId) {
+    return state.settled;
+  }
+  return waitForCommand(env, state.commandId, options);
 }
 
 export function setHeader(headers: Headers, name: string, value: string | undefined): void {

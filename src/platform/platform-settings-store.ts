@@ -154,6 +154,47 @@ export const PlatformMessagingSettings = z
   .strict();
 export type PlatformMessagingSettings = z.infer<typeof PlatformMessagingSettings>;
 
+export const QuietHoursWindow = z
+  .object({
+    start: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, "时间格式必须为 HH:mm。"),
+    end: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, "时间格式必须为 HH:mm。"),
+  })
+  .strict();
+export type QuietHoursWindow = z.infer<typeof QuietHoursWindow>;
+
+export const PlatformProactivitySettings = z
+  .object({
+    heartbeatIntervalMs: z
+      .number()
+      .int()
+      .min(0)
+      .max(30 * 86_400_000)
+      .default(30 * 60 * 1000),
+    outboundPerSessionPerHour: z.number().int().min(0).max(1_000).default(3),
+    outboundPerRecipientPerDay: z.number().int().min(0).max(1_000).default(10),
+    outboundDedupWindowMs: z
+      .number()
+      .int()
+      .min(0)
+      .max(30 * 86_400_000)
+      .default(24 * 60 * 60 * 1000),
+    quietHours: QuietHoursWindow.nullable().default(null),
+    askDefaultExpiresMs: z
+      .number()
+      .int()
+      .min(60_000)
+      .max(30 * 86_400_000)
+      .default(2 * 60 * 60 * 1000),
+    scheduleFailureNotifyIntervalMs: z
+      .number()
+      .int()
+      .min(0)
+      .max(30 * 86_400_000)
+      .default(24 * 60 * 60 * 1000),
+  })
+  .strict();
+export type PlatformProactivitySettings = z.infer<typeof PlatformProactivitySettings>;
+
 export const PlatformRuntimeSettings = z
   .object({
     general: PlatformGeneralSettings.default(() => PlatformGeneralSettings.parse({})),
@@ -161,6 +202,7 @@ export const PlatformRuntimeSettings = z
     memory: PlatformMemorySettings.default(() => PlatformMemorySettings.parse({})),
     marketplace: PlatformMarketplaceSettings.default(() => PlatformMarketplaceSettings.parse({})),
     messaging: PlatformMessagingSettings.default(() => PlatformMessagingSettings.parse({})),
+    proactivity: PlatformProactivitySettings.default(() => PlatformProactivitySettings.parse({})),
   })
   .strict();
 export type PlatformRuntimeSettings = z.infer<typeof PlatformRuntimeSettings>;
@@ -172,6 +214,7 @@ export const PlatformRuntimeSettingsPatch = z
     memory: PlatformMemorySettings.partial().strict().optional(),
     marketplace: PlatformMarketplaceSettings.partial().strict().optional(),
     messaging: PlatformMessagingSettings.partial().strict().optional(),
+    proactivity: PlatformProactivitySettings.partial().strict().optional(),
   })
   .strict()
   .refine(
@@ -180,7 +223,8 @@ export const PlatformRuntimeSettingsPatch = z
       patch.execution !== undefined ||
       patch.memory !== undefined ||
       patch.marketplace !== undefined ||
-      patch.messaging !== undefined,
+      patch.messaging !== undefined ||
+      patch.proactivity !== undefined,
     "至少需要提供一个设置分组。",
   );
 export type PlatformRuntimeSettingsPatch = z.infer<typeof PlatformRuntimeSettingsPatch>;
@@ -238,6 +282,7 @@ export class PlatformSettingsStore {
         memory: { ...current.memory, ...patch.memory },
         marketplace: { ...current.marketplace, ...patch.marketplace },
         messaging: { ...current.messaging, ...patch.messaging },
+        proactivity: { ...current.proactivity, ...patch.proactivity },
       });
       const values = {
         id: PLATFORM_SETTINGS_ID,

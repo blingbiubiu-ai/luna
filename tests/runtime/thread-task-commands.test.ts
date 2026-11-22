@@ -23,7 +23,8 @@ import {SessionReplyDispatcher} from "../../src/messaging/session-reply-dispatch
 import {FakeFeishuChannel} from "../../extensions/channels/fake/fake-feishu-channel";
 import {Hono} from "hono";
 import {createRunnerOperationRoutes} from "../../src/server/routes/runner-operations";
-import {runRunnerOperationsCli} from "@luna/cli/commands/runner-operations";
+import {runSessionsCli} from "@luna/cli/commands/sessions";
+import {runTasksCli} from "@luna/cli/commands/tasks";
 import type {LunaAccessTokenClaims} from "../../src/server/auth/access-token-service";
 import {AgentSettingsStore} from "../../src/agents/agent-settings-store";
 import type {NormalizedInboundMessage} from "../../src/channels";
@@ -129,12 +130,12 @@ test("thread CLI returns a session receipt and task CLI accepts binding and card
   app.use("*",async(c,next)=>{c.set("lunaAccessTokenClaims",f.claims);await next();});
   app.route("/api/runner",createRunnerOperationRoutes(f.service));
   const server=Bun.serve({port:0,fetch:req=>app.fetch(req)});
-  const env={LUNA_SERVICE_URL:`http://127.0.0.1:${server.port}`,LUNA_ACCESS_TOKEN:"test"};
+  const env={LUNA_SERVICE_URL:`http://127.0.0.1:${server.port}`,LUNA_ACCESS_TOKEN:"test",LUNA_INVOCATION_ID:"invocation"};
   try{
-    const thread=await runRunnerOperationsCli("session",["create-thread","--json",JSON.stringify({contextMessageIds:[f.history.id]})],env);
+    const thread=await runSessionsCli(["create-thread","--json",JSON.stringify({contextMessageIds:[f.history.id]})],env);
     expect(thread.status).toBe("ok");
     const receipt=JSON.parse(thread.output!);
-    const task=await runRunnerOperationsCli("task",["create","--request-id","cli-task","--json",JSON.stringify({title:"CLI task",summary:"Execute",facts:[],sessionId:receipt.targetSessionId,sendStatusCard:false})],env);
+    const task=await runTasksCli(["create","--json",JSON.stringify({title:"CLI task",summary:"Execute",facts:[],sessionId:receipt.targetSessionId,sendStatusCard:false})],env);
     expect(task.status).toBe("ok");
     await f.supervisor.waitForIdle();
     expect(f.channel.outbound).toHaveLength(0);
@@ -227,7 +228,7 @@ test("status-card CLI supports task-id and resend flags",async()=>{
   app.route("/api/runner",createRunnerOperationRoutes(f.service));
   const server=Bun.serve({port:0,fetch:req=>app.fetch(req)});
   try {
-    const response=await runRunnerOperationsCli("task",["status-card","--task-id",task.taskIds[0]!,"--resend","--request-id","cli-resend","--style","native"],{LUNA_SERVICE_URL:`http://127.0.0.1:${server.port}`,LUNA_ACCESS_TOKEN:"test"});
+    const response=await runTasksCli(["status-card","--task-id",task.taskIds[0]!,"--resend","--style","native"],{LUNA_SERVICE_URL:`http://127.0.0.1:${server.port}`,LUNA_ACCESS_TOKEN:"test",LUNA_INVOCATION_ID:"invocation"});
     expect(response.status).toBe("ok");
     expect(JSON.parse(response.output!)).toMatchObject({status:"applied",statusMessageId:expect.any(String)});
     expect(f.channel.outbound.at(-1)?.statusCardStyle).toBe("native");
@@ -328,15 +329,17 @@ test("cancel CLI stops one run, closes its card, and replay cannot cancel a late
     const created = await f.service.execute(f.claims, "task.create", "create-cancel", {title: "Cancellable", summary: "Wait", facts: [], statusCardStyle: "card"});
     const taskId = created.taskIds[0]!;
     const body = {taskId, reason: "用户取消天气查询"};
-    const result = await runRunnerOperationsCli("task", ["cancel", "--request-id", "cancel-one", "--json", JSON.stringify(body)],
-      {LUNA_SERVICE_URL: `http://127.0.0.1:${server.port}`, LUNA_ACCESS_TOKEN: "test"});
+    const env = {LUNA_SERVICE_URL: `http://127.0.0.1:${server.port}`, LUNA_ACCESS_TOKEN: "test", LUNA_INVOCATION_ID: "invocation"};
+    const result = await runTasksCli(["cancel", "--json", JSON.stringify(body)], env);
     expect(result.status).toBe("ok");
-    expect(JSON.parse(result.output!)).toMatchObject({operation: "task.cancel", status: "applied", cancelled: true, runId: created.runId});
+    const cancelReceipt = JSON.parse(result.output!);
+    expect(cancelReceipt).toMatchObject({operation: "task.cancel", status: "applied", cancelled: true, runId: created.runId});
     expect(f.db.select().from(schema.tasks).get()?.status).toBe("cancelled");
     expect(f.db.select().from(schema.taskRuns).all()).toMatchObject([{status: "cancelled", run_index: 1}]);
     const next = await f.service.execute(f.claims, "task.restart", "explicit-restart", {taskId});
     expect(next.runId).not.toBe(created.runId);
-    expect(await f.service.execute(f.claims, "task.cancel", "cancel-one", body)).toMatchObject({cancelled: true, runId: created.runId});
+    // Replaying identical CLI cancel deduplicates to the first cancel run rather than cancelling `next`.
+    expect(JSON.parse((await runTasksCli(["cancel", "--json", JSON.stringify(body)], env)).output!)).toMatchObject({cancelled: true, runId: created.runId});
     expect(f.db.select().from(schema.taskRuns).where(eq(schema.taskRuns.id, next.runId!)).get()?.status).toBe("running");
     f.supervisor.cancelTaskRun({taskId, runId: next.runId!, reason: "test cleanup"});
     release(); await f.supervisor.waitForIdle();

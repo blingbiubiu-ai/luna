@@ -18,8 +18,10 @@ export type MemoryViewer =
   | {agentId: string; all?: false; shadowId: string; participants: readonly string[];
     /** Who asked for this turn, and whether that is the Agent owner. Episodes are shown to the owner, and to others only when they took part. */
     actorUserId?: string | undefined; owner?: boolean | undefined;
-    /** Provider chat of the conversation; `chat` entries are seen only there. Null outside a Main conversation in a chat. */
-    chatId?: string | null | undefined};
+    /** Provider chat of the conversation; `chat` entries are seen only there, except in the Shadow's own heartbeat (`shadowSelf`). */
+    chatId?: string | null | undefined;
+    /** True in the Shadow's own heartbeat turn (owner-scoped), so the Shadow sees its own trusted `chat` and `person` entries across chats without crossing into other Shadows. */
+    shadowSelf?: boolean | undefined};
 
 /** Who is writing. Callers derive this from an invocation or an authorized owner, never from request input. */
 export interface MemoryWriter {
@@ -519,9 +521,10 @@ export class AgentMemoryStore {
     if (viewer.all) return and(...scope)!;
     return and(...scope,
       or(eq(agentMemories.visibility, "agent"), eq(agentMemories.originShadowId, viewer.shadowId)),
-      or(sql`${agentMemories.type} <> 'person'`,
+      or(sql`${agentMemories.type} <> 'person'`, viewer.shadowSelf ? eq(agentMemories.trusted, true) : undefined,
         viewer.participants.length ? inArray(agentMemories.subjectId, [...viewer.participants]) : sql`0`),
-      or(sql`${agentMemories.type} <> 'chat'`, viewer.chatId ? eq(agentMemories.subjectId, viewer.chatId) : sql`0`),
+      or(sql`${agentMemories.type} <> 'chat'`, viewer.shadowSelf ? eq(agentMemories.trusted, true) : undefined,
+        viewer.chatId ? eq(agentMemories.subjectId, viewer.chatId) : sql`0`),
       // The Agent owner sees every episode; anyone else only those they took part in, whoever wrote them down.
       or(sql`${agentMemories.type} <> 'episode'`, viewer.owner ? sql`1`
         : viewer.actorUserId ? sql`EXISTS (SELECT 1 FROM json_each(${agentMemories.participants}) WHERE value = ${viewer.actorUserId})` : sql`0`),

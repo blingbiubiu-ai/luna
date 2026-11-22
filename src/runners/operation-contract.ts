@@ -12,7 +12,7 @@ export const operationSchemas = {
   "task.status_card": z.object({taskId: text, resend: z.boolean().default(false), style: z.enum(["card", "native"]).optional()}).strict(),
   "task.cancel": z.object({taskId: text, reason: text.default("用户取消任务"), sourceMessageIds}).strict(),
   "task.restart": z.object({taskId: text, sourceMessageIds, ...runOptions}).strict(),
-  "session.create_thread": z.object({anchorMessageId: text, contextMessageIds: z.array(text).max(100).default([]), title: text.optional()}).strict(),
+  "session.create_thread": z.object({anchorMessageId: text, contextMessageIds: z.array(text).max(100).default([]), title: text.optional(), handoffInstruction: z.string().trim().min(1).max(100000).optional()}).strict(),
   "session.clarify": z.object({pendingIntent: z.enum(["task", "question"]), missingFields: z.array(text).min(1), collectedFacts: z.array(text), question: text, reason: text}).strict(),
   "session.release": z.object({reason: text}).strict(),
 } as const;
@@ -30,4 +30,4 @@ export interface StatusCardDelivery {
   previousMessageId: string | null;
   operation: Omit<import("@/channels/outbound").OutboundChannelOperation, "id" | "channelId">;
 }
-export interface OperationResult { cancelled?: boolean; cardDelivery?: StatusCardDelivery; statusMessageId?: string; notificationId?: string; taskId?: string; sourceMessageId?: string; runId?: string; taskSessionId?: string; targetSessionId?: string; }
+export interface OperationResult { cancelled?: boolean; cardDelivery?: StatusCardDelivery; statusMessageId?: string; notificationId?: string; taskId?: string; sourceMessageId?: string; runId?: string; taskSessionId?: string; targetSessionId?: string; handoffCommandId?: string; handoffRequestId?: string; }

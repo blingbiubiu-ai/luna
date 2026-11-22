@@ -6,6 +6,7 @@ import {MEMORY_TYPES, users} from "@/data/schema";
 import {AgentError} from "@/agents/agent-store";
 import {memoryAccess} from "@/agents/agent-memory-access";
 import {memoryOriginOfTrigger} from "@/agents/agent-memory-maintenance";
+import {selfRoutineKindOfTrigger} from "@/agents/self-routines";
 import {AgentMemoryStore, MemoryConflictError, MemoryDuplicateError, MemoryTypeFactsError, memorySummary, type MemoryRecord, MEMORY_BODY_LIMIT, MEMORY_REASON_LIMIT, memorySources} from "@/agents/agent-memory-store";
 import {InvocationService} from "@/runners/invocation-service";
 import type {LunaAccessTokenClaims} from "../auth/access-token-service";
@@ -42,7 +43,12 @@ export function createRunnerMemoryRoutes(options: {db?: DrizzleDB} = {}) {
     // A Service-queued turn carries its command id: as the trigger of a Main turn, or as the turn id of a Work maintenance turn.
     const trigger = snapshot.kind === "main" ? (snapshot.input.input.type === "session_trigger" ? snapshot.input.input.triggerId : undefined)
       : snapshot.kind === "work" ? snapshot.input.turnId : undefined;
-    return memoryAccess(db(), invocation, trigger ? memoryOriginOfTrigger(db(), trigger) : "inline");
+    return memoryAccess(
+      db(),
+      invocation,
+      trigger ? memoryOriginOfTrigger(db(), trigger) : "inline",
+      trigger ? selfRoutineKindOfTrigger(db(), trigger) : undefined,
+    );
   };
   /** Summaries name who said it and when, so the reader can weigh the source. */
   const summaries = (rows: readonly MemoryRecord[]) => {
@@ -86,7 +92,7 @@ export function createRunnerMemoryRoutes(options: {db?: DrizzleDB} = {}) {
       const row = new AgentMemoryStore(db()).use(access(c.get("lunaAccessTokenClaims")).viewer, c.req.param("id"));
       // Where each change was made, so the Runner can read the conversation around it.
       const sources = memorySources(db(), row.id).map(({nextEntryId, ...source}) => ({...source, at: new Date(source.at).toISOString(),
-        read: `luna session read_session_timeline --session-id ${source.sessionId}${nextEntryId ? ` --before-entry-id ${nextEntryId}` : ""} --limit 20`}));
+        read: `luna sessions timeline --session session:${source.sessionId}${nextEntryId ? ` --before-entry-id ${nextEntryId}` : ""} --limit 20`}));
       return c.json({memory: {...detail(row), sources}});
     })
     .post("/memory", async c => {

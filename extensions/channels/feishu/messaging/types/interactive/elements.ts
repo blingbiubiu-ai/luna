@@ -110,11 +110,35 @@ export interface CollapsiblePanel extends BaseContainer<"collapsible_panel"> {
   };
 }
 
+export interface ButtonElement extends BaseElement<"button"> {
+  tag: "button";
+  text: PlainTextElement;
+  type?: "default" | "primary" | "danger";
+  behaviors?: readonly {
+    readonly type: "callback";
+    readonly value: Record<string, unknown>;
+  }[];
+}
+
+export interface ColumnSetElement extends BaseElement<"column_set"> {
+  tag: "column_set";
+  flex_mode?: "none" | "stretch";
+  horizontal_spacing?: string;
+  margin?: string;
+  columns: readonly {
+    readonly tag: "column";
+    readonly width: "auto" | "weighted";
+    readonly elements: readonly Element[];
+  }[];
+}
+
 /**
  * Represents Element values used by Feishu interactive card rendering.
  */
 export type Element =
+  | ButtonElement
   | CollapsiblePanel
+  | ColumnSetElement
   | DivElement
   | IconElement
   | ImageElement

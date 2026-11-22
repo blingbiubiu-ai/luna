@@ -2,7 +2,7 @@
 
 ## Responsibility Boundary
 
-A session is the user interaction work view. Main Runner is the session-level decision maker: it understands messages, context, attached tasks, and activation reasons, executes task/state commands while running, then returns its final reply for Service delivery. `luna messages send` remains available for progress, notifications and early answers.
+A session is the user interaction work view. Main Runner is the session-level decision maker: it reads `<capabilities>` and `<events>` on each turn, understands messages, context, attached tasks, correlated requests, and activation reasons, executes task/state commands while running, then returns its final reply for Service delivery. `luna say` remains available for progress, notifications, proactive outbound messages, and early answers. Self-routine turns (`reflection`, `consolidation`, `heartbeat`, `request_expiry`) set `terminalOutputMode: "ignored"` so terminal prose is ignored without requiring a sentinel, whereas passive conversation turns keep terminal-output-as-reply (`LUNA_NOTHING_TO_SEND` only when `allowSilent: true`). When Main creates a topic thread and hands off the current turn's trigger message atomically via `luna sessions create-thread --handoff`, Service suppresses any duplicate reply in the source group. See [Runner Protocol v2](runner-protocol.md).
 
 Main Runner does not directly:
 

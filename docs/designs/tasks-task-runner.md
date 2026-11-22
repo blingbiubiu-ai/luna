@@ -152,7 +152,8 @@ Status card body comes from runner/LLM output, while artifact links come from pe
 - Runner output explains the conclusion, process, and next steps.
 - Task artifact list provides complete reports, images, files, and previewable resources.
 - Status cards display operational progress and terminal status.
-- Main reads the internal report and sends the user-facing answer through `luna messages send`, including for short answers such as weather results.
+- Main reads the internal report and sends the user-facing answer as its final reply or through `luna say --purpose answer`, including for short answers such as weather results.
+- Scheduled background inspections (`task.run` schedules) invoke `TaskRunSupervisor.restartTaskRun` directly with `quiet: true` so routine runs execute without waking Main first; when a quiet run finds something actionable, its report wakes Main or is picked up by the Shadow's heartbeat.
 
 Do not require the LLM to manually assemble complete report links. When a task has artifact outputs, the notification layer can append links deterministically.
 
@@ -208,8 +209,8 @@ API to address users. Main asks the user and receives their answer, then chooses
 the task command that supplies further context to the Task.
 
 A completed run with status cards enabled updates its operational status card with a neutral completion
-notice. Main receives the task-result event and sends the user-facing explanation
-with `luna messages send --purpose answer`; terminal Main output is not re-sent.
+notice. Main receives the `task_result` event in `<events>` and sends the user-facing explanation
+as its final reply or with `luna say --purpose answer`; terminal Main output is suppressed when an early CLI answer already owns delivery.
 The result publisher correlates this command with its notification attempt and
 avoids duplicate delivery during recovery.
 
@@ -447,8 +448,8 @@ Task internal terminal report semantics are unchanged.
 Main resolves the intended Task from the conversation for both `/stop` and
 natural-language stop requests. If the target is ambiguous it asks the user;
 there is no automatic whole-session cancellation or special `/stop` bypass.
-Main calls `luna task cancel --request-id ID --json '{"taskId":"...","reason":"..."}'`.
-The command uses the existing conversation scope checks and operation ledger.
+Main calls `luna tasks cancel --json '{"taskId":"...","reason":"..."}'`.
+The command uses the existing conversation scope checks and operation ledger, with deterministic invocation-scoped idempotency and unified inspection via `luna commands status <id>`.
 Preparation freezes the active Run ID, so replay cannot cancel a later explicit
 restart. A run already completed/failed is unchanged (`cancelled: false`).
 

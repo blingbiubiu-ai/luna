@@ -64,6 +64,13 @@
       "when": 1795824000000,
       "tag": "0009_unified_progress",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1795910400000,
+      "tag": "0010_agent_proactivity",
+      "breakpoints": true
     }
   ]
 }

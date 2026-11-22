@@ -1,6 +1,6 @@
 import { and, asc, eq, sql } from "drizzle-orm";
 import type { DrizzleDB } from "@/data";
-import { sessionCommands } from "@/data/schema";
+import { runnerOperations, sessionCommands } from "@/data/schema";
 import { InvocationService } from "@/runners/invocation-service";
 import { parseReply, replyMarkdown } from "@luna/runner-protocol/reply";
 import { sessionCommandsFor } from "./session-command-service";
@@ -27,6 +27,20 @@ export function finalizeRunnerReply(db: DrizzleDB, input: {
 }) {
   const answers = runnerAnswers(db, input.sessionId, input.originId);
   if (answers.length) return { kind: "existing" as const, commandIds: answers.map(row => row.id) };
+  // Protocol v2 invariant (3.6): atomic `create-thread --handoff` anchored to this turn's message suppresses source group duplicate reply.
+  const threadHandoff = db.select().from(runnerOperations)
+    .where(and(eq(runnerOperations.sessionId, input.sessionId), eq(runnerOperations.originId, input.originId)))
+    .all()
+    .find(op => {
+      if (op.status !== "applied" || op.request.kind !== "session.create_thread" || !op.result?.handoffCommandId) {
+        return false;
+      }
+      const latestTurnMsgId = op.context.sourceMessageIds.at(-1);
+      return !latestTurnMsgId || op.request.payload.anchorMessageId === latestTurnMsgId;
+    });
+  if (threadHandoff?.result?.handoffCommandId) {
+    return { kind: "thread_handoff" as const, commandId: threadHandoff.result.handoffCommandId };
+  }
   const text = input.text.trim();
   if (text === "LUNA_NOTHING_TO_SEND") {
     if (!input.allowSilent) throw new Error("Runner ended a private turn without an answer");

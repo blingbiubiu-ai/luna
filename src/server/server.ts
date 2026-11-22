@@ -17,6 +17,9 @@ import { createRunnerChatRoutes } from "./routes/runner-chat";
 import { createRunnerRootRoutes } from "./routes/runner-root";
 import { createSessionCommandAdminRoutes } from "./routes/session-commands";
 import { createRunnerMessageRoutes } from "./routes/runner-messages";
+import { createRunnerProactivityRoutes } from "./routes/runner-proactivity";
+import { createRunnerProtocolV2Routes } from "./routes/runner-protocol-v2";
+import { createRunnerRequestRoutes } from "./routes/runner-requests";
 import { loginDotMatrixScript } from "./login-dot-matrix";
 import { existsSync } from "node:fs";
 import { extname, join } from "node:path";
@@ -112,6 +115,7 @@ function createApp(
         db === undefined ? artifactsRoutes : createArtifactsRoutes({ db }),
       )
       .route("/api/runtime", runtimeRoutes)
+      .route("/api/runner", createRunnerProtocolV2Routes(db === undefined ? {} : { db }))
       .route("/api/runner", createRunnerGroupRoutes(db === undefined ? {} : { db }))
       .route("/api/runner", createRunnerUserRoutes(db === undefined ? {} : { db }))
       .route("/api/runner", createRunnerMemoryRoutes(db === undefined ? {} : { db }))
@@ -120,6 +124,8 @@ function createApp(
       .route("/api/runner", createRunnerOperationRoutes())
       .route("/api/runner/task-reports", createTaskReportRoutes())
       .route("/api/runner", createRunnerMessageRoutes(db === undefined ? {} : { db }))
+      .route("/api/runner", createRunnerProactivityRoutes(db === undefined ? {} : { db }))
+      .route("/api/runner", createRunnerRequestRoutes(db === undefined ? {} : { db }))
       .route("/api/session-commands", createSessionCommandAdminRoutes(db === undefined ? {} : { db }))
       .route(
         "/api/tasks",

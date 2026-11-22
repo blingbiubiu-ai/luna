@@ -68,13 +68,13 @@ come from the invocation, never request JSON. Cross-session messages, handoffs,
 schedules and group operations do not require an `authority-id`. Acceptance and
 execution check active actors, active target sessions and artifact availability.
 
-Targets can name the current session, a session ID, a known surface, or a canonical
-user with a uniquely known private conversation. The authenticated runner endpoint can
-resolve/create a local session for a known surface using SessionStore. Unknown
-session IDs fail. Explicit `feishu_user` targets carry channelId, idType
-(open_id/user_id/union_id) and id. The message endpoint resolves an address into
-a durable `direct_recipients` record and a provisional local session; it does not
-send a message. A message command sends to the user ID if no provider conversation
+Targets use unified Luna addresses (`current`, `self`, `user:<id>`, `session:<id>`,
+and `group:<id>`) across messaging, handoffs, asks, schedules and group invitations; see
+[Agent Proactivity](agent-proactivity.md) and [Runner Protocol v2](runner-protocol.md).
+The authenticated runner endpoint resolves or creates a local session for a known
+surface or verified user recipient using `SessionStore`. Unknown session IDs fail.
+Explicit recipient claims record a durable `direct_recipients` entry and a provisional
+local session; resolving an address does not send a message. A message command sends to the user ID if no provider conversation
 is bound yet. The Feishu receipt's chat_id binds the same session and records a
 p2p surface. Later sends use chat_id. Inbound private messages can complete this
 binding before the HTTP receipt arrives, using the sender's matching provider ID.
@@ -114,7 +114,11 @@ Each occurrence snapshots the schedule revision and action. Occurrence creation,
 command acceptance and advancing the schedule happen in one transaction. Stable
 occurrence identity prevents duplicate execution after scheduler restarts.
 
-Fixed reminders use message.send. Analysis uses session.invoke. The default
+Fixed reminders use `message.send`, session reasoning uses `session.invoke`, and
+scheduled background inspections use `task.run` (dispatching `TaskRunSupervisor.restartTaskRun`
+directly with `quiet: true` so routine runs do not wake Main first). Failed schedule
+occurrences notify the Agent owner via rate-limited private message (`schedule_failure_notifications`)
+and surface a failure banner on the Dashboard Schedules page. The default
 missed-time policy coalesces to the latest occurrence and records skipped ranges;
 skip policy discards missed work. Overlap can skip or queue; pending occurrences
 expire. One-shot schedules disable after acceptance. Edits affect future
@@ -401,14 +405,19 @@ one-shot self-rescheduling as its implementation.
 
 The schedule detail panel exposes permanent deletion through `DELETE /api/session-commands/schedules/:id`. This is distinct from pause/resume. A running occurrence command blocks deletion with 409. In one synchronous transaction deletion removes the schedule, occurrence history and associated commands, cancels pending message delivery metadata, and removes unused pending invocation context packs. Already delivered messages, executed conversation history and independent tasks remain. The scheduler re-reads the schedule before materialization and command workers claim existing pending rows, so deleted work cannot execute from a stale scheduler snapshot. `schedule_deletions` records the ID and deletion time and rejects late occurrence inserts. The endpoint checks the selected Agent and source scope while the schedule exists. Subsequent requests for an absent ID return 404.
 
-## Runner-controlled replies
+## Runner-controlled replies and outbound governance
 
-Main and Work invoke `luna messages send --purpose answer --request-id <stable-id>
---stdin` (or `--text`) while they are running. `progress` and `notification` are
-also supported. The CLI waits up to 30 seconds for `sent`, returning the command
-ID, message ID, provider message ID, delivery state and error. A pending timeout
-or ambiguous outcome is not success: inspect `luna messages status <id>` and reuse
-the request ID instead of creating a duplicate command.
+Main and Work invoke `luna say --purpose answer --stdin` (or `--text`) while they
+are running; `progress` and `notification` are also supported. Protocol v2 derives
+deterministic idempotency keys from `(LUNA_INVOCATION_ID, command, canonicalPayload)`
+without caller-supplied `--request-id` flags (`--repeat` opts into an intentional
+duplicate). The CLI submits and waits up to 30 seconds for settlement, returning the
+command ID, message ID, provider message ID, delivery state and error. Inspect or
+continue waiting with `luna commands status <id>` and `luna commands wait <id>`.
+Proactive outbound messages (`notification` or cross-session sends) pass through
+per-session hourly limits, per-recipient daily limits, 24-hour content deduplication
+and quiet-hours deferral (`status = "deferred"`), while passive `answer` and `progress`
+sends in the current session are exempt.
 
 The command queue owns accepted deliveries independently of runner exit. Pending,
 running, sent and unknown answer commands retain that ownership; failed commands
@@ -421,10 +430,10 @@ Task Runner has no user-message capability and reports internally to Main.
 ## Task and session operations
 
 Task and session-state mutations are domain commands, separate from message delivery:
-`luna task create|update|restart|cancel`, `luna session create-thread|clarify|release`, and
-`luna task status COMMAND_ID` / `luna session status COMMAND_ID`. They use the
-runner task/session endpoints and `GET /api/runner/operations/:id`. There is no
-generic action API or batch response command.
+`luna tasks` (`create`, `update`, `restart`, `cancel`, `report`, `status-card`),
+`luna sessions` (`create-thread`, `clarify`, `release`), `luna handoff` / `luna handoffs resolve`,
+`luna asks` / `luna requests`, and unified `luna commands status|wait <id>` backed by
+`GET /api/runner/commands/:id`. There is no generic action API or batch response command.
 
 `runner_operations` stores trusted context and phases `accepted`, `prepared`,
 `applied`, or `failed`. Task mutations and preparation commit atomically, then the

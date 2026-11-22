@@ -1,41 +1,61 @@
 ---
 name: luna-schedules
 description: >-
-  Create, list or change scheduled reminders and recurring work with `luna schedules`. Use when someone asks for a reminder or for something to happen later or repeatedly: "每天X点", "每周X", "每月X号", "N分钟后", "明天X点", "提醒我", "定时", "周期", recurring, reminder.
+  Create, list, inspect, update, pause, resume or cancel scheduled reminders and recurring work with `luna schedules`. Use when someone asks for a reminder, future follow-up, or recurring schedule: "每天X点", "每周X", "每月X号", "N分钟后", "明天X点", "提醒我", "定时", "周期", "暂停/修改/取消定时", recurring, reminder.
 ---
 
 # Luna schedules
 
+## Creating a schedule
+
 ```bash
-luna schedules create --at '2026-11-10T09:00:00+08:00' --timezone Asia/Singapore --text '检查最新进展并汇报' --invoke --request-id schedule-1
+# One-shot session wake-up (--invoke wakes Main at the scheduled time)
+luna schedules create --title '跟进进展' --to current \
+  --at '2026-11-10T09:00:00+08:00' --timezone Asia/Shanghai \
+  --text '检查最新进展并汇报' --invoke
+
+# Direct recurring Task execution (--task-id runs Task Runner directly with quiet: true)
+luna schedules create --title '每日汇总' --to current \
+  --frequency daily --time 09:00 --timezone Asia/Shanghai \
+  --task-id TASK_ID --text '执行每日汇总并生成报告'
+
+# Plain text reminder (no --invoke and no --task-id: delivers fixed text directly)
+luna schedules create --title '开会提醒' --to user:USER_ID \
+  --at '2026-11-10T14:55:00+08:00' --timezone Asia/Shanghai \
+  --text '5 分钟后开始周会'
 ```
 
-Use the actual requested date, time and timezone (see `now` and `timezone` in your input), never the example values.
+Use the actual requested date, time and timezone (see `<now>` in your input), never example values. CLI derives idempotency keys automatically—do not pass `--request-id` (pass `--repeat` only if intentionally creating a duplicate schedule).
 
-A schedule without
-`--invoke` delivers the fixed text without invoking Main. `--interval-ms` creates
-fixed elapsed-time recurrence; it is not a wall-clock cron rule. It may omit
-`--at`: the server starts it one interval after creation.
+`--to` accepts unified Luna addresses: `current` (default), `self`, `user:<id>`, `session:<id>`, `group:<id>`.
 
-Calendar recurrence is natively supported through the same scheduler as the
-dashboard. Use `--repeat` with `--time HH:mm` and `--timezone`:
-- `daily` or `weekdays`: the specified local time.
-- `weekly --days 1,3,5`: Monday/Wednesday/Friday (0=Sunday, 1=Monday … 6=Saturday).
-- `monthly --month-days 1,15`: the 1st and 15th of each month.
-- `yearly --month 2 --month-days 28,29`: selected days of February.
-- `hourly --every 3`: every three wall-clock hours from the start date/time.
-Use `--every N --start-date YYYY-MM-DD` for anchored custom cycles (not weekdays).
-Every defaults to 1; the start date defaults to today's date in the specified
-timezone. Keep an explicit start date for custom rules and reuse the exact
-arguments and request ID on retries, including across midnight.
-Calendar options cannot be combined with `--at` or `--interval-ms`.
-Missing dates (e.g. February 29 in non-leap years) are skipped, never moved to
-month end. Invalid dates for a selected yearly month are rejected.
+### Action modes
+- Default (neither `--invoke` nor `--task-id`): `message.send` — delivers `--text` directly without waking a Runner.
+- `--invoke`: `session.invoke` — wakes the target session's Main Runner with `schedule_fired`.
+- `--task-id <id>`: `task.run` — starts a quiet run on the existing Task directly without waking Main first; Main wakes when `task_result` arrives. Prefer this for recurring inspections and standing duties (`luna-duties`).
 
-For a monthly analysis, use the actual requested time and timezone, for example:
-`luna schedules create --repeat monthly --month-days 1 --time 09:00 --start-date 2026-11-10 --timezone Asia/Singapore --text '执行每月汇总并汇报' --invoke --request-id monthly-summary-1`
+### Timing modes
+- One-shot: `--at '<ISO-8601 with explicit offset>'` (e.g. `2026-11-10T09:00:00+08:00`).
+- Fixed elapsed interval: `--interval-ms <ms>` (optional `--at` anchor).
+- Wall-clock calendar recurrence: `--frequency` with `--time HH:mm` and `--timezone`:
+  - `daily` or `weekdays`
+  - `weekly --days 1,3,5` (0=Sunday, 1=Monday … 6=Saturday)
+  - `monthly --month-days 1,15`
+  - `yearly --month 2 --month-days 28,29`
+  - `hourly --every 3`
+  - Optional `--every N --start-date YYYY-MM-DD` for custom cycles (not `weekdays`).
 
-The scheduler advances recurring tasks itself. Do not implement calendar
-recurrence by asking Main to create another one-shot task after each execution.
-Only report successful creation after the command succeeds; report validation
-errors rather than claiming a schedule exists.
+Calendar options cannot be combined with `--at` or `--interval-ms`. Missing calendar dates (e.g. Feb 29 in non-leap years) are skipped. The scheduler advances recurring schedules automatically—never simulate recurrence by creating a new one-shot schedule on each run.
+
+## Listing, updating, pausing, resuming, and cancelling
+
+```bash
+luna schedules list [--status active|paused|finished]
+luna schedules get <schedule-id>
+luna schedules update <schedule-id> --time 10:00 --timezone Asia/Shanghai [--expected-revision <n>]
+luna schedules pause <schedule-id>
+luna schedules resume <schedule-id>
+luna schedules cancel <schedule-id>
+```
+
+Inspect `lastFailure` in `list` / `get` output when diagnosing missed or failed runs. Report successful creation or updates only after the CLI command succeeds.

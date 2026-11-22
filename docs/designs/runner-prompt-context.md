@@ -1,6 +1,6 @@
 # Runner 提示词与上下文重构
 
-状态：第一、二阶段已实现。
+状态：第一、二阶段已实现；每轮输入与 CLI 命名已升级至 [Runner Protocol v2](runner-protocol.md)（`<capabilities>` + 统一 `<events>` 信封、被动轮终端直出答复 vs 自驱轮忽略终端输出，以及 [主动型数字员工架构](agent-proactivity.md) 中的 `luna-duties` 职责规范）。
 
 ## 1. 背景与问题
 

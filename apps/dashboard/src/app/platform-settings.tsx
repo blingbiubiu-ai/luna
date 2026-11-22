@@ -66,12 +66,28 @@ export interface PlatformMessagingSettings {
   feishuDevelopers: Record<string, string>;
 }
 
+export interface QuietHoursWindow {
+  start: string;
+  end: string;
+}
+
+export interface PlatformProactivitySettings {
+  heartbeatIntervalMs: number;
+  outboundPerSessionPerHour: number;
+  outboundPerRecipientPerDay: number;
+  outboundDedupWindowMs: number;
+  quietHours: QuietHoursWindow | null;
+  askDefaultExpiresMs: number;
+  scheduleFailureNotifyIntervalMs: number;
+}
+
 export interface PlatformRuntimeSettings {
   general: PlatformGeneralSettings;
   execution: PlatformExecutionSettings;
   memory: PlatformMemorySettings;
   marketplace: PlatformMarketplaceSettings;
   messaging: PlatformMessagingSettings;
+  proactivity?: PlatformProactivitySettings;
 }
 
 export interface PlatformRuntimeSettingsPatch {
@@ -80,7 +96,18 @@ export interface PlatformRuntimeSettingsPatch {
   memory?: Partial<PlatformMemorySettings>;
   marketplace?: Partial<PlatformMarketplaceSettings>;
   messaging?: Partial<PlatformMessagingSettings>;
+  proactivity?: Partial<PlatformProactivitySettings>;
 }
+
+const DEFAULT_PLATFORM_PROACTIVITY: PlatformProactivitySettings = {
+  heartbeatIntervalMs: 30 * 60_000,
+  outboundPerSessionPerHour: 3,
+  outboundPerRecipientPerDay: 10,
+  outboundDedupWindowMs: 24 * 3_600_000,
+  quietHours: null,
+  askDefaultExpiresMs: 120 * 60_000,
+  scheduleFailureNotifyIntervalMs: 24 * 3_600_000,
+};
 
 interface PlatformSettings {
   platform: PlatformRuntimeSettings;
@@ -166,6 +193,7 @@ export function PlatformSettingsPage() {
   const saveMarketplace = usePatchSection();
   const saveExecution = usePatchSection();
   const saveMemory = usePatchSection();
+  const saveProactivity = usePatchSection();
   const saveMessaging = usePatchSection();
   const saveOrphan = useMutation({
     mutationFn: (value: OrphanCleanup) =>
@@ -283,6 +311,15 @@ export function PlatformSettingsPage() {
             error={saveMemory.error}
             saved={saveMemory.isSuccess}
             onSave={(memory) => saveMemory.mutate({ memory })}
+          />
+          <ProactivitySettingsForm
+            key={JSON.stringify(query.data.platform.proactivity ?? DEFAULT_PLATFORM_PROACTIVITY)}
+            settings={query.data.platform.proactivity ?? DEFAULT_PLATFORM_PROACTIVITY}
+            canEdit={query.data.canEdit}
+            saving={saveProactivity.isPending}
+            error={saveProactivity.error}
+            saved={saveProactivity.isSuccess}
+            onSave={(proactivity) => saveProactivity.mutate({ proactivity })}
           />
           <FeishuMessagingSettingsForm
             key={JSON.stringify(query.data.platform.messaging)}
@@ -1057,6 +1094,258 @@ export function MemorySettingsForm({
             coreLimit: pCore!,
             shadowCoreLimit: pShadowCore!,
             personaLimit: pPersona!,
+          })
+        }
+      />
+    </section>
+  );
+}
+
+const HHMM_REGEX = /^([01]\d|2[0-3]):[0-5]\d$/;
+
+export function ProactivitySettingsForm({
+  settings,
+  canEdit,
+  saving,
+  error,
+  saved,
+  onSave,
+}: {
+  readonly settings: PlatformProactivitySettings;
+  readonly canEdit: boolean;
+  readonly saving: boolean;
+  readonly error: Error | null;
+  readonly saved: boolean;
+  readonly onSave: (value: PlatformProactivitySettings) => void;
+}) {
+  const [heartbeatMin, setHeartbeatMin] = useState(
+    String(Math.round(settings.heartbeatIntervalMs / 60_000)),
+  );
+  const [perSessionHour, setPerSessionHour] = useState(
+    String(settings.outboundPerSessionPerHour),
+  );
+  const [perRecipientDay, setPerRecipientDay] = useState(
+    String(settings.outboundPerRecipientPerDay),
+  );
+  const [dedupHours, setDedupHours] = useState(
+    String(Math.round(settings.outboundDedupWindowMs / 3_600_000)),
+  );
+  const [askExpiresMin, setAskExpiresMin] = useState(
+    String(Math.round(settings.askDefaultExpiresMs / 60_000)),
+  );
+  const [failNotifyHours, setFailNotifyHours] = useState(
+    String(Math.round(settings.scheduleFailureNotifyIntervalMs / 3_600_000)),
+  );
+  const [quietEnabled, setQuietEnabled] = useState(settings.quietHours !== null);
+  const [quietStart, setQuietStart] = useState(
+    settings.quietHours?.start ?? "23:00",
+  );
+  const [quietEnd, setQuietEnd] = useState(settings.quietHours?.end ?? "08:00");
+  const [touched, setTouched] = useState(false);
+
+  const pHeartbeat = intInRange(heartbeatMin, 0, 43200);
+  const pPerSession = intInRange(perSessionHour, 0, 1000);
+  const pPerRecipient = intInRange(perRecipientDay, 0, 1000);
+  const pDedup = intInRange(dedupHours, 0, 720);
+  const pAskExpires = intInRange(askExpiresMin, 1, 43200);
+  const pFailNotify = intInRange(failNotifyHours, 0, 720);
+  const quietValid =
+    !quietEnabled || (HHMM_REGEX.test(quietStart) && HHMM_REGEX.test(quietEnd));
+
+  const valid =
+    pHeartbeat !== null &&
+    pPerSession !== null &&
+    pPerRecipient !== null &&
+    pDedup !== null &&
+    pAskExpires !== null &&
+    pFailNotify !== null &&
+    quietValid;
+
+  const disabled = !canEdit || saving;
+  const edit = <T,>(set: (value: T) => void) => (value: T) => {
+    set(value);
+    setTouched(true);
+  };
+
+  return (
+    <section
+      className="space-y-4 rounded-lg border p-4"
+      aria-labelledby="platform-proactivity-title"
+      data-testid="platform-proactivity-settings-card"
+    >
+      <div className="space-y-1">
+        <h2 id="platform-proactivity-title" className="font-medium">
+          主动行为与外发调控（平台默认）
+        </h2>
+        <p className="text-sm text-muted-foreground">
+          控制各分身自驱心跳间隔、主动消息频控/去重/免打扰窗口、提问默认超时以及定时任务失败告警冷却时间。各 Agent 可在自身设置中覆盖这些默认值。
+        </p>
+      </div>
+      <div className="grid gap-4 sm:grid-cols-2">
+        <label className="space-y-1 text-sm">
+          <span className="font-medium">分身心跳间隔（分钟）</span>
+          <Input
+            type="number"
+            inputMode="numeric"
+            min={0}
+            max={43200}
+            value={heartbeatMin}
+            disabled={disabled}
+            aria-invalid={pHeartbeat === null}
+            data-testid="platform-heartbeat-interval-minutes"
+            onChange={(event) => edit(setHeartbeatMin)(event.target.value)}
+          />
+          <span className="block text-xs text-muted-foreground">
+            默认 30 分钟（仅在分身有新活动时唤醒），填 0 关闭平台默认心跳。
+          </span>
+        </label>
+        <label className="space-y-1 text-sm">
+          <span className="font-medium">单会话每小时主动发言上限（条）</span>
+          <Input
+            type="number"
+            inputMode="numeric"
+            min={0}
+            max={1000}
+            value={perSessionHour}
+            disabled={disabled}
+            aria-invalid={pPerSession === null}
+            data-testid="platform-outbound-per-session-hour"
+            onChange={(event) => edit(setPerSessionHour)(event.target.value)}
+          />
+          <span className="block text-xs text-muted-foreground">
+            默认 3 条，0 不限制（被动回复不受影响）。
+          </span>
+        </label>
+        <label className="space-y-1 text-sm">
+          <span className="font-medium">单接收人每日主动发言上限（条）</span>
+          <Input
+            type="number"
+            inputMode="numeric"
+            min={0}
+            max={1000}
+            value={perRecipientDay}
+            disabled={disabled}
+            aria-invalid={pPerRecipient === null}
+            data-testid="platform-outbound-per-recipient-day"
+            onChange={(event) => edit(setPerRecipientDay)(event.target.value)}
+          />
+          <span className="block text-xs text-muted-foreground">
+            默认 10 条，0 不限制。
+          </span>
+        </label>
+        <label className="space-y-1 text-sm">
+          <span className="font-medium">相同主动消息去重窗口（小时）</span>
+          <Input
+            type="number"
+            inputMode="numeric"
+            min={0}
+            max={720}
+            value={dedupHours}
+            disabled={disabled}
+            aria-invalid={pDedup === null}
+            data-testid="platform-outbound-dedup-hours"
+            onChange={(event) => edit(setDedupHours)(event.target.value)}
+          />
+          <span className="block text-xs text-muted-foreground">
+            默认 24 小时，0 关闭去重。
+          </span>
+        </label>
+        <label className="space-y-1 text-sm">
+          <span className="font-medium">主动提问（Ask）默认过期（分钟）</span>
+          <Input
+            type="number"
+            inputMode="numeric"
+            min={1}
+            max={43200}
+            value={askExpiresMin}
+            disabled={disabled}
+            aria-invalid={pAskExpires === null}
+            data-testid="platform-ask-expires-minutes"
+            onChange={(event) => edit(setAskExpiresMin)(event.target.value)}
+          />
+          <span className="block text-xs text-muted-foreground">
+            默认 120 分钟（2 小时）。
+          </span>
+        </label>
+        <label className="space-y-1 text-sm">
+          <span className="font-medium">定时失败通知最小间隔（小时）</span>
+          <Input
+            type="number"
+            inputMode="numeric"
+            min={0}
+            max={720}
+            value={failNotifyHours}
+            disabled={disabled}
+            aria-invalid={pFailNotify === null}
+            data-testid="platform-schedule-failure-notify-hours"
+            onChange={(event) => edit(setFailNotifyHours)(event.target.value)}
+          />
+          <span className="block text-xs text-muted-foreground">
+            默认 24 小时，0 关闭自动私信告警。
+          </span>
+        </label>
+      </div>
+      <div className="space-y-3 rounded-md border p-3">
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <p className="text-sm font-medium">平台默认免打扰时段</p>
+            <p className="text-xs text-muted-foreground">
+              开启后，免打扰窗口内的主动通知自动延后（deferred）至窗口结束后投递。
+            </p>
+          </div>
+          <Switch
+            aria-label="启用平台默认免打扰时段"
+            checked={quietEnabled}
+            disabled={disabled}
+            onCheckedChange={edit(setQuietEnabled)}
+          />
+        </div>
+        {quietEnabled && (
+          <div className="grid gap-4 sm:grid-cols-2">
+            <label className="space-y-1 text-sm">
+              <span className="font-medium">开始时间</span>
+              <Input
+                type="time"
+                value={quietStart}
+                disabled={disabled}
+                aria-invalid={!HHMM_REGEX.test(quietStart)}
+                data-testid="platform-quiet-hours-start"
+                onChange={(event) => edit(setQuietStart)(event.target.value)}
+              />
+            </label>
+            <label className="space-y-1 text-sm">
+              <span className="font-medium">结束时间</span>
+              <Input
+                type="time"
+                value={quietEnd}
+                disabled={disabled}
+                aria-invalid={!HHMM_REGEX.test(quietEnd)}
+                data-testid="platform-quiet-hours-end"
+                onChange={(event) => edit(setQuietEnd)(event.target.value)}
+              />
+            </label>
+          </div>
+        )}
+      </div>
+      <FormFooter
+        canEdit={canEdit}
+        saving={saving}
+        touched={touched}
+        valid={valid}
+        error={error}
+        saved={saved}
+        testId="platform-proactivity-save"
+        onSave={() =>
+          onSave({
+            heartbeatIntervalMs: pHeartbeat! * 60_000,
+            outboundPerSessionPerHour: pPerSession!,
+            outboundPerRecipientPerDay: pPerRecipient!,
+            outboundDedupWindowMs: pDedup! * 3_600_000,
+            quietHours: quietEnabled
+              ? { start: quietStart, end: quietEnd }
+              : null,
+            askDefaultExpiresMs: pAskExpires! * 60_000,
+            scheduleFailureNotifyIntervalMs: pFailNotify! * 3_600_000,
           })
         }
       />

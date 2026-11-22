@@ -298,7 +298,12 @@ is "revert".
 | Consolidation | An Agent's memory was changed by something other than consolidation, at most once per `memory.consolidation_interval_ms` (24 hours) | Silent turn in a dedicated Dashboard session of the default Shadow |
 
 The session command worker runs one maintenance pass a minute: forget, then
-queue reflection and consolidation. Setting an interval to 0 turns that run off.
+evaluate registered `SelfRoutine` definitions (`reflection`, `consolidation`,
+per-Shadow `heartbeat`, and correlated-request `request_expiry`; see
+[Agent Proactivity](agent-proactivity.md)). Setting an interval to 0 turns that
+run off. Heartbeat turns read memory through the `shadowSelf` viewer, which
+includes the Agent's shared trusted memory plus that Shadow's own trusted
+`chat` and `person` entries, without exposing another Shadow's private memory.
 
 A human message is *reflectable* only when a completed Main Runner turn took it
 in: as its trigger or coalesced input, as turn context or launch context

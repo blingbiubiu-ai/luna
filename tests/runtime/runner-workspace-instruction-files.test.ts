@@ -199,10 +199,10 @@ test("all generated Runner entrypoints use the current command/report protocol",
       expect(content).not.toContain("/data/contexts/");
       expect(content).not.toMatch(/luna actions|create_task_and_dispatch|attach_existing_task_and_dispatch|update_task_and_restart_runner|ask_clarification|batch_response|no_reply|reply_normal|publish_task_result/);
       if (runnerKind === "task") {
-        expect(content).toContain("luna task report --request-id final-report --stdin");
+        expect(content).toContain("luna tasks report --stdin");
         expect(content).toContain("You cannot send user messages");
       } else {
-        expect(content).toContain("luna messages send");
+        expect(content).toContain("luna say");
         expect(content).toContain("LUNA_NOTHING_TO_SEND");
       }
     }
@@ -213,17 +213,29 @@ test("every skill the instructions point to ships with Luna and holds the manual
   const skills = join(import.meta.dir, "../../skills");
   const main = renderRunnerInstructions({ home: "/home/luna", promptsRoot: join(import.meta.dir, "../../src/prompts"), runnerKind: "main", runnerRootPath });
   const manuals: Record<string, string> = {
-    "luna-schedules": "--repeat", "luna-users": "luna users search", "luna-topics-groups": "luna session create-thread",
-    "luna-status-card": "luna task status-card", "luna-memory": "luna memory add --type persona",
+    "luna-duties": "luna asks create",
+    "luna-schedules": "--frequency",
+    "luna-users": "luna users search",
+    "luna-topics-groups": "luna sessions create-thread",
+    "luna-status-card": "luna tasks status-card",
+    "luna-memory": "luna memory add --type persona",
   };
   for (const [name, command] of Object.entries(manuals)) {
     expect(main).toContain(`\`${name}\``);
-    expect(main).not.toContain(command === "luna task status-card" ? "--resend --style card" : command);
+    expect(main).not.toContain(
+      command === "luna tasks status-card"
+        ? "--resend --style card"
+        : command === "luna sessions create-thread"
+          ? "--anchor-message-id"
+          : command === "luna asks create"
+            ? "NO_ALERT_CHANGE"
+            : command,
+    );
     const skill = readFileSync(join(skills, name, "SKILL.md"), "utf-8");
     expect(skill.startsWith(`---\nname: ${name}\ndescription: `)).toBe(true);
     expect(skill).toContain(command);
   }
-  expect(main).toContain("luna messages send --purpose answer --request-id opening-1");
-  expect(main).toContain("handed this\nturn's group message into a newly opened topic anchored to it");
+  expect(main).toContain("luna say --purpose answer --text");
+  expect(main).toContain("luna sessions create-thread --handoff");
   expect(main).toContain("never append review, merge, or approval disclaimers");
 });

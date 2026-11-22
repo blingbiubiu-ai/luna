@@ -238,13 +238,17 @@ the reply in its bound parent surface; it cannot address the new child thread.
 Local user mentions are rendered without treating canonical local IDs as external
 provider mentions. Targets and anchors are resolved from each binding separately.
 
-Service delivers quotes (`replyTo`) and inline mentions (`{"type":"mention","userId":"..."}`)
-solely as authored by the Runner in its `luna.reply` document; Service neither
-auto-injects quotes or `@`-mentions on final group answers nor blocks `replyTo`
-or inline user mentions on direct (`p2p`) Feishu chats. Turn inputs (`<messages>`
-and `<task_result>`) include the resolved `surface` (`p2p`, `group`, or `thread`)
+Service delivers quotes (`replyTo`), interactive action rows (`{"type":"actions","requestId":"...","options":[...]}`),
+and inline mentions (`{"type":"mention","userId":"..."}`) solely as authored by the Runner
+in its `luna.reply` document; Service neither auto-injects quotes or `@`-mentions on final
+group answers nor blocks `replyTo` or inline user mentions on direct (`p2p`) Feishu chats.
+Turn inputs (`<capabilities>` and `<events>`) include the resolved `surface` (`p2p`, `group`, or `thread`)
 along with message/source IDs and requester canonical user IDs so the Agent can
-apply conversation etiquette from its prompt instructions. `channel_surfaces`
+apply conversation etiquette from its prompt instructions. On Feishu, interactive
+card button clicks arrive through `card.action.trigger` on the WebSocket `EventDispatcher`,
+where `CorrelatedRequestService.handleCardAction` deterministically resolves the pending
+`ask` in `correlated_requests`, updates the card to its settled state, returns a toast, and
+queues a `request_result` wake-up to the originating session without running an intermediate LLM turn. `channel_surfaces`
 preserves provider chat mode metadata (`chat_mode: "p2p"`) so profile-less
 internal notifications cannot reclassify a direct chat as a group. In a topic
 thread, replies already post in place on the thread root, so `replyTo` is
@@ -287,9 +291,9 @@ offline migration. Dashboard starts with an empty channel list.
 
 Bot-authored messages can start a turn when the channel adapter reports an explicit mention of the receiving bot in a group. Self messages, ordinary replies, aliases and activation follow-ups do not start a bot-authored turn.
 
-A Runner can use a JSON `mention` block with the recipient’s Luna user ID in `luna messages send --json` for its current group, including for a bot-triggered handoff. The command resolves the recipient's address in the sending channel and passes it to the adapter as structured mention metadata. Runner instructions reserve mentions for explicit next steps and direct ordinary replies, acknowledgments, and result reporting to the group without a bot mention. Feishu escapes raw mention markup in message text.
+A Runner can use a JSON `mention` block with the recipient’s Luna user ID in `luna say --json` for its current group, including for a bot-triggered handoff. The command resolves the recipient's address in the sending channel and passes it to the adapter as structured mention metadata. Runner instructions reserve mentions for explicit next steps and direct ordinary replies, acknowledgments, and result reporting to the group without a bot mention. Feishu escapes raw mention markup in message text.
 
-For inline placement, `luna messages send --json --stdin` accepts an ordered array of `{"text":"…"}` and `{"mention":"Luna-user-id"}` entries. The CLI expands it into `luna.reply` with `message` presentation and generates a request ID unless supplied. Use the same explicit request ID for retries across CLI calls. The service validates mention targets in the current group's sending channel and resolves their addresses again on delivery. Feishu renders these blocks as Markdown with native mentions at the specified positions.
+For inline placement, `luna say --json --stdin` accepts an ordered array of `{"text":"…"}` and `{"mention":"Luna-user-id"}` entries. The CLI expands it into `luna.reply` with `message` presentation and derives a deterministic idempotency key per invocation (`--repeat` opts into an intentional duplicate). The service validates mention targets in the current group's sending channel and resolves their addresses again on delivery. Feishu renders these blocks as Markdown with native mentions at the specified positions.
 
 ## Retired delivery records
 

@@ -56,7 +56,8 @@ test("an idle session with unreflected human messages gets exactly one silent re
   ask("user:alice", 40 * MIN);
   const [id] = schedule();
   expect(command(id!)).toMatchObject({kind: "session.invoke", sessionId: "session", sourceSessionId: "session", actorUserId: "user:alice", status: "pending"});
-  expect(String(command(id!).payload.content)).toContain("LUNA_NOTHING_TO_SEND");
+  expect(String(command(id!).payload.content)).toContain("Do not send any message");
+  expect(String(command(id!).payload.content)).not.toContain("LUNA_NOTHING_TO_SEND");
   expect(memoryOriginOfTrigger(db.db, id!)).toBe("reflection");
   expect(memoryOriginOfTrigger(db.db, "unrelated")).toBe("inline");
   expect(schedule()).toEqual([]);
@@ -438,7 +439,7 @@ test("Main reflection and inline triggers do not re-inject <history> into an exi
   await execReflection(command(reflectId!), new AbortController().signal);
   expect(capturedPrompts).toHaveLength(1);
   expect(capturedPrompts[0]).not.toContain("<history>");
-  expect(capturedPrompts[0]).toContain("<trigger>");
+  expect(capturedPrompts[0]).toContain("<events>");
 
   // 2) Inline trigger on an existing provider session with no unseen messages also sends zero <history>.
   const quietInline = commands.accept({userId: "user:alice", sourceSessionId: "session", originId: "schedule:daily-1"}, "session", "session.invoke", "daily-1", {content: "daily check", purpose: "notification"});

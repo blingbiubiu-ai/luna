@@ -5,6 +5,7 @@ import {AuthorizationRuleStore} from "@/server/policy/authorization-rule-store";
 import {ruleMatchesOperation} from "@/server/policy/operation-policy";
 import {AgentError, AgentStore} from "./agent-store";
 import type {MemoryViewer, MemoryWriter} from "./agent-memory-store";
+import type {SelfRoutineKind} from "./self-routines";
 
 export interface MemoryInvocation {
   agentId: string;
@@ -47,7 +48,12 @@ export function memoryChat(db: DrizzleDB, sessionId: string | null): string | nu
  * Agent or holds an allow rule for `memory.write`; an explicit deny blocks the
  * corresponding operation.
  */
-export function memoryAccess(db: DrizzleDB, invocation: MemoryInvocation, kind: MemoryWriter["kind"] = "inline"): {viewer: MemoryViewer; writer: () => MemoryWriter} {
+export function memoryAccess(
+  db: DrizzleDB,
+  invocation: MemoryInvocation,
+  kind: MemoryWriter["kind"] = "inline",
+  routineKind?: SelfRoutineKind,
+): {viewer: MemoryViewer; writer: () => MemoryWriter} {
   const grants = new AuthorizationRuleStore(db, {kind: "agent", agentId: invocation.agentId}).getEffectiveGrantsForUser(invocation.actorUserId);
   const rule = (effect: "allow" | "deny", operation: string) => grants.some(grant => grant.effect === effect && ruleMatchesOperation(grant, operation));
   if (rule("deny", "memory.read")) throw new AgentError("memory_access_denied", 403);
@@ -56,7 +62,15 @@ export function memoryAccess(db: DrizzleDB, invocation: MemoryInvocation, kind: 
   return {
     // Consolidation is queued by Service for the owner and has to see everything it tidies.
     viewer: kind === "consolidation" && owner ? {agentId: invocation.agentId, all: true}
-      : {agentId: invocation.agentId, shadowId: invocation.shadowId, participants: memoryParticipants(db, invocation), actorUserId: invocation.actorUserId, owner, chatId},
+      : {
+          agentId: invocation.agentId,
+          shadowId: invocation.shadowId,
+          participants: memoryParticipants(db, invocation),
+          actorUserId: invocation.actorUserId,
+          owner,
+          chatId,
+          ...(routineKind === "heartbeat" && owner ? {shadowSelf: true} : {}),
+        },
     writer: () => {
       if (rule("deny", "memory.write")) throw new AgentError("memory_access_denied", 403);
       return {

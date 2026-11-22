@@ -23,7 +23,9 @@ import {TaskReportService} from "../../src/tasks/task-report-service";
 import {requireTaskReportCompletion} from "../../src/tasks/task-report-store";
 import {TaskRunSupervisor} from "../../src/tasks/task-run-supervisor";
 import {createTaskReportRoutes} from "../../src/server/routes/task-reports";
-import {runTaskReportCli} from "@luna/cli/commands/task-report";
+import {createRunnerProtocolV2Routes} from "../../src/server/routes/runner-protocol-v2";
+import {runTasksCli} from "@luna/cli/commands/tasks";
+import {runCommandsCli} from "@luna/cli/commands/commands";
 import type {LunaAccessTokenClaims} from "../../src/server/auth/access-token-service";
 
 let home: string;
@@ -119,16 +121,17 @@ test("report CLI posts text and reads receipt through authenticated routes",asyn
   const app=new Hono<{Variables:{lunaAccessTokenClaims:LunaAccessTokenClaims}}>();
   app.use("*",async(c,next)=>{c.set("lunaAccessTokenClaims",f.claims);await next();});
   app.route("/api/runner/task-reports",createTaskReportRoutes(f.service));
+  app.route("/api/runner",createRunnerProtocolV2Routes({db:f.db,channelFor:()=>undefined}));
   const server=Bun.serve({port:0,fetch:req=>app.fetch(req)});
-  const env={LUNA_SERVICE_URL:`http://127.0.0.1:${server.port}`,LUNA_ACCESS_TOKEN:"test"};
+  const env={LUNA_SERVICE_URL:`http://127.0.0.1:${server.port}`,LUNA_ACCESS_TOKEN:"test",LUNA_INVOCATION_ID:"invocation"};
   try {
-    const result=await runTaskReportCli(["--request-id","final","--text","CLI report"],env);
+    const result=await runTasksCli(["report","--text","CLI report"],env);
     expect(result.status).toBe("ok");
     const receipt=JSON.parse(result.output!);
     expect(receipt.status).toBe("accepted");
-    const status=await runTaskReportCli(["status",receipt.commandId],env);
-    expect(JSON.parse(status.output!)).toEqual(receipt);
-    expect((await runTaskReportCli(["--text","missing request id"],env)).status).toBe("error");
+    const status=await runCommandsCli(["status",receipt.commandId],env);
+    expect(JSON.parse(status.output!)).toMatchObject({commandId:receipt.commandId,status:"accepted"});
+    expect((await runTasksCli(["report","--request-id","legacy","--text","rejected"],env)).status).toBe("error");
   } finally {server.stop(true);}
 });
 test("a process failure after acceptance preserves the submitted report",async()=>{
@@ -266,9 +269,9 @@ test("report CLI sends --waiting and rejects it on the wire only when malformed"
   app.use("*", async (c, next) => { c.set("lunaAccessTokenClaims", f.claims); await next(); });
   app.route("/api/runner/task-reports", createTaskReportRoutes(f.service));
   const server = Bun.serve({ port: 0, fetch: req => app.fetch(req) });
-  const env = { LUNA_SERVICE_URL: `http://127.0.0.1:${server.port}`, LUNA_ACCESS_TOKEN: "test" };
+  const env = { LUNA_SERVICE_URL: `http://127.0.0.1:${server.port}`, LUNA_ACCESS_TOKEN: "test", LUNA_INVOCATION_ID: "invocation" };
   try {
-    const result = await runTaskReportCli(["--request-id", "final", "--waiting", "--text", "Confirm the scope"], env);
+    const result = await runTasksCli(["report", "--waiting", "--text", "Confirm the scope"], env);
     expect(result.status).toBe("ok");
     expect(f.db.select().from(schema.tasks).where(eq(schema.tasks.id, "task")).get()!.block_reason).toBe("waiting_user");
     const malformed = await fetch(`${env.LUNA_SERVICE_URL}/api/runner/task-reports`, { method: "POST",

@@ -1,4 +1,5 @@
 import { memoryInjection } from "@/agents/agent-memory-injection";
+import { buildTaskCapabilities } from "@/runners/capabilities";
 import { compact, dataBlock, joinBlocks, turnClock, zonedIso } from "@/runners/turn-envelope";
 import { promptBlock } from "@luna/host-runtime/prompt-blocks";
 import type {AgentExecutionSnapshot} from "@/agent-config";
@@ -513,8 +514,18 @@ async function _runAgentTask(input: {
     sessionId: taskRow?.primary_session_id ?? null, taskId: input.taskId, runnerContextId: runnerContext.id},
     input.pendingText.trim() || [taskRow?.title, taskRow?.summary].filter(Boolean).join("\n"));
   const timezone = new PlatformSettingsStore(input.db).get().general.timezone;
+  const capabilities = buildTaskCapabilities({
+    agentId: runnerContext.agent_id,
+    shadowId: runnerContext.shadow_id,
+    taskId: input.taskId,
+    taskRunId: input.taskRunId,
+    actorUserId: actor,
+  });
   const turnMessage: UserMessage = {...userMessage, content: [{type: "text", text: joinBlocks([
-    input.materializedPrompt, dataBlock("memory", {text: memory.text ?? ""}), dataBlock("now", {json: turnClock(new Date(), timezone)}),
+    dataBlock("capabilities", {json: capabilities}),
+    input.materializedPrompt,
+    dataBlock("memory", {text: memory.text ?? ""}),
+    dataBlock("now", {json: turnClock(new Date(), timezone)}),
   ])}]};
   for await (const event of runner.stream(turnMessage, {
     cwd: runnerContext.runner_root_path,

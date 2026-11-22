@@ -1,4 +1,6 @@
 import { resolveMessageTarget } from "@/messaging/delivery-target";
+import { resolveFeishuMemberProviderIds, resolveLunaAddress } from "@/messaging/luna-address";
+import { RunnerMessageService } from "@/messaging/runner-message-service";
 import { Hono } from "hono";
 import { eq, inArray, and, isNull } from "drizzle-orm";
 import { z } from "zod";
@@ -14,9 +16,21 @@ import { sessionCommandsFor } from "@/messaging/session-command-service";
 import { ChannelDirectoryStore } from "@/channels/directory-store";
 import { SessionStore } from "@/sessions/session-store";
 
-const createGroupInput = groupCreationSchema.partial({ channelId: true })
-  .extend({ contextMessageIds: groupContextMessageIdsSchema.default([]) });
-const inviteGroupInput = groupInvitationSchema.partial({ channelId: true, chatId: true });
+const memberRefSchema = z.array(z.string().trim().min(1).max(256)).min(1).max(50);
+const createGroupInput = z.object({
+  channelId: z.string().min(1).optional(),
+  name: z.string().trim().min(1).max(100),
+  idType: z.enum(["open_id", "user_id", "union_id"]).default("open_id"),
+  memberIds: memberRefSchema,
+  contextMessageIds: groupContextMessageIdsSchema.default([]),
+}).strict();
+const inviteGroupInput = z.object({
+  channelId: z.string().min(1).optional(),
+  chatId: z.string().min(1).max(256).optional(),
+  to: z.string().min(1).max(512).optional(),
+  idType: z.enum(["open_id", "user_id", "union_id"]).default("open_id"),
+  memberIds: memberRefSchema,
+}).strict();
 
 /** Match the bot's own recorded group conversations, then intersect with the caller's directory. */
 function observedBotGroups(db: DrizzleDB, agentId: string, botUserId: string): ReadonlySet<string> {
@@ -107,28 +121,54 @@ export function createRunnerGroupRoutes(options: { db?: DrizzleDB; channelFor?: 
     })
     .post("/groups/invite", async c => {
       const input = inviteGroupInput.parse(await c.req.json());
-      const { actor, session } = groupSource(c.get("lunaAccessTokenClaims"), input.channelId);
-      const chatId = input.chatId ?? session.group_id;
-      if (!chatId) throw new GatewayError("group_required", "Specify chatId or run from a group conversation", 400);
-      const invitation = { ...input, channelId: session.channel_id, chatId };
+      const claims = c.get("lunaAccessTokenClaims");
+      let resolvedChatId = input.chatId;
+      let resolvedChannelId = input.channelId;
+      if (input.to) {
+        const msgActor = new RunnerMessageService(db(), channelFor).actor(claims);
+        const addr = resolveLunaAddress(
+          db(),
+          { agentId: msgActor.agentId, shadowId: msgActor.shadowId, currentSessionId: msgActor.currentSessionId },
+          input.to,
+          { create: false },
+        );
+        resolvedChannelId = addr.channelId ?? resolvedChannelId;
+        resolvedChatId = addr.chatId ?? resolvedChatId;
+      }
+      const { actor, session } = groupSource(claims, resolvedChannelId);
+      const chatId = resolvedChatId ?? session.group_id;
+      if (!chatId) throw new GatewayError("group_required", "Specify group address / chatId or run from a group conversation", 400);
+      const resolvedMembers = resolveFeishuMemberProviderIds(db(), session.channel_id, input.idType, input.memberIds);
+      const invitation = groupInvitationSchema.parse({
+        idType: input.idType,
+        memberIds: resolvedMembers,
+        channelId: session.channel_id,
+        chatId,
+      });
       const key = c.req.header("Idempotency-Key");
       if (!key || !/^[\w.-]{1,128}$/.test(key)) throw new GatewayError("invalid_idempotency_key", "Stable idempotency key required", 400);
       const surface = db().select().from(channelSurfaces).where(and(eq(channelSurfaces.channelId, invitation.channelId), eq(channelSurfaces.externalId, invitation.chatId))).get();
       if (surface?.surfaceKind !== "group") {
-        if (!input.chatId) throw new GatewayError("group_required", "Specify chatId or run from a group conversation", 400);
+        if (!resolvedChatId) throw new GatewayError("group_required", "Specify group address / chatId or run from a group conversation", 400);
         throw new GatewayError("group_not_found", "Resolve the group before inviting members", 404);
       }
       const targetId = resolveMessageTarget(db(), { kind: "surface", channelId: invitation.channelId, surfaceId: invitation.chatId }, actor.currentSessionId);
       const row = sessionCommandsFor(db(), channelFor).accept(actor, targetId, "group.invite", key, { content: "Invite group members", invitation });
-      return c.json({ commandId: row.id, status: row.status, result: row.payload.result ?? null }, ["pending", "running"].includes(row.status) ? 202 : 200);
+      return c.json({ commandId: row.id, kind: "group.invite", status: row.status, result: row.payload.result ?? null, error: row.error }, ["pending", "running"].includes(row.status) ? 202 : 200);
     })
     .post("/groups", async c => {
       const input = createGroupInput.parse(await c.req.json());
       const { actor, session } = groupSource(c.get("lunaAccessTokenClaims"), input.channelId);
       const key = c.req.header("Idempotency-Key");
       if (!key || !/^[\w.-]{1,128}$/.test(key)) throw new GatewayError("invalid_idempotency_key", "Stable idempotency key required", 400);
-      const { contextMessageIds, ...group } = input;
-      const row = sessionCommandsFor(db(), channelFor).accept(actor, actor.sourceSessionId, "group.create", key, { content: group.name, group: { ...group, channelId: session.channel_id }, contextMessageIds });
-      return c.json({ commandId: row.id, status: row.status, result: row.payload.result ?? null }, ["pending", "running"].includes(row.status) ? 202 : 200);
+      const resolvedMembers = resolveFeishuMemberProviderIds(db(), session.channel_id, input.idType, input.memberIds);
+      const group = groupCreationSchema.parse({
+        name: input.name,
+        idType: input.idType,
+        memberIds: resolvedMembers,
+        channelId: session.channel_id,
+      });
+      const row = sessionCommandsFor(db(), channelFor).accept(actor, actor.sourceSessionId, "group.create", key, { content: group.name, group, contextMessageIds: input.contextMessageIds });
+      return c.json({ commandId: row.id, kind: "group.create", status: row.status, result: row.payload.result ?? null, error: row.error }, ["pending", "running"].includes(row.status) ? 202 : 200);
     });
 }

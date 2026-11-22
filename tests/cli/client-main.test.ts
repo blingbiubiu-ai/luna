@@ -10,34 +10,42 @@ type CapturedRequest = {
   readonly body: unknown;
 };
 
-describe("client-only Luna CLI", () => {
-  test("queries tasks and sessions through their top-level commands", async () => {
+describe("client-only Luna CLI (Protocol v2)", () => {
+  test("queries tasks, sessions and unified command ledger through Protocol v2 commands", async () => {
     await withMockFetch(200, [], async captured => {
       const env = { LUNA_SERVICE_URL: "http://service.test", LUNA_AGENT_ID: "agent-1" };
       for (const command of [
-        ["task", "list"],
-        ["task", "list", "--session-id", "session-1"],
-        ["task", "get", "--task-id", "task-1"],
-        ["task", "status", "command-1"],
-        ["session", "messages", "--session-id", "session-1"],
-        ["session", "read_session_timeline", "--session-id", "session-1", "--limit", "5"],
+        ["tasks", "list"],
+        ["tasks", "list", "--session", "session:session-1"],
+        ["tasks", "get", "--task-id", "task-1"],
+        ["commands", "status", "command-1"],
+        ["sessions", "list", "--kind", "group"],
+        ["sessions", "messages", "--session", "session:session-1"],
+        ["sessions", "timeline", "--session", "session:session-1", "--limit", "5"],
       ]) expect((await runClientCli(command, env)).status).toBe("ok");
-      expect(captured.map(({url}) => url)).toEqual([
+      expect(captured.map(({ url }) => url)).toEqual([
         "http://service.test/api/tasks?agentId=agent-1",
         "http://service.test/api/tasks?sessionId=session-1",
         "http://service.test/api/tasks/task-1",
-        "http://service.test/api/runner/operations/command-1",
+        "http://service.test/api/runner/commands/command-1",
+        "http://service.test/api/runner/sessions?kind=group",
         "http://service.test/api/sessions/session-1/messages",
         "http://service.test/api/sessions/session-1/timeline/read?limit=5",
       ]);
     });
   });
 
-  test("does not expose the removed session attachment query", async () => {
-    const result = await runClientCli([
-      "session", "find_recent_session_attachments", "--session-id", "session-1",
-    ], {});
-    expect(result).toMatchObject({ status: "error", code: "invalid_operation" });
+  test("rejects removed v1 commands and attachment queries without forwarding to plugin resolver", async () => {
+    for (const legacy of [
+      ["task", "list"],
+      ["session", "messages", "--session-id", "session-1"],
+      ["messages", "send", "--text", "hi"],
+      ["sessions", "find_recent_session_attachments", "--session", "session-1"],
+      ["sessions", "read_session_timeline", "--session", "session-1"],
+    ]) {
+      const result = await runClientCli(legacy, {});
+      expect(result.status).toBe("error");
+    }
   });
 
   test("forwards plugin commands to Luna Service by default", async () => {

@@ -12,6 +12,28 @@ import { apiFetch } from "@/lib/api/client";
 export const Route = createFileRoute("/$agentId/settings/general/")({ component: AgentSettingsPage });
 
 export type ProgressCardStyle = "card" | "native";
+export interface QuietHoursWindow {
+  start: string;
+  end: string;
+}
+export interface ProactivitySettings {
+  heartbeatIntervalMs?: number | null;
+  outboundPerSessionPerHour?: number | null;
+  outboundPerRecipientPerDay?: number | null;
+  outboundDedupWindowMs?: number | null;
+  quietHours?: QuietHoursWindow | false | null;
+  askDefaultExpiresMs?: number | null;
+  scheduleFailureNotifyIntervalMs?: number | null;
+}
+export interface ProactivityDefaults {
+  heartbeatIntervalMs: number;
+  outboundPerSessionPerHour: number;
+  outboundPerRecipientPerDay: number;
+  outboundDedupWindowMs: number;
+  quietHours: QuietHoursWindow | null;
+  askDefaultExpiresMs: number;
+  scheduleFailureNotifyIntervalMs: number;
+}
 export interface AgentSettings {
   inbound: { processingReaction: boolean };
   work: { progressCard: { show: boolean; style: ProgressCardStyle } };
@@ -19,7 +41,79 @@ export interface AgentSettings {
   pty?: { idleTimeoutMinutes: number };
   messages?: MessageSettings;
   listening?: ListeningSettings;
+  proactivity?: ProactivitySettings;
 }
+
+const FALLBACK_PROACTIVITY_DEFAULTS: ProactivityDefaults = {
+  heartbeatIntervalMs: 30 * 60_000,
+  outboundPerSessionPerHour: 3,
+  outboundPerRecipientPerDay: 10,
+  outboundDedupWindowMs: 24 * 3_600_000,
+  quietHours: null,
+  askDefaultExpiresMs: 120 * 60_000,
+  scheduleFailureNotifyIntervalMs: 24 * 3_600_000,
+};
+
+type NumericProactivitySetting = Exclude<keyof ProactivitySettings, "quietHours">;
+const PROACTIVITY_FIELDS: Record<
+  NumericProactivitySetting,
+  { label: string; hint: string; unit: string; scale: number; min: number; max: number; step: number }
+> = {
+  heartbeatIntervalMs: {
+    label: "分身心跳间隔（分钟）",
+    hint: "有新消息、Task 或定时事件时按此最小间隔自驱唤醒；0 关闭该 Agent 心跳。",
+    unit: "分钟",
+    scale: 60_000,
+    min: 0,
+    max: 43200,
+    step: 1,
+  },
+  outboundPerSessionPerHour: {
+    label: "单会话每小时主动发言上限（条）",
+    hint: "同一会话每小时最多发送多少条主动通知；0 不限制。",
+    unit: "条",
+    scale: 1,
+    min: 0,
+    max: 1000,
+    step: 1,
+  },
+  outboundPerRecipientPerDay: {
+    label: "单接收人每日主动发言上限（条）",
+    hint: "同一用户每天最多收到多少条主动私聊通知；0 不限制。",
+    unit: "条",
+    scale: 1,
+    min: 0,
+    max: 1000,
+    step: 1,
+  },
+  outboundDedupWindowMs: {
+    label: "相同主动消息去重窗口（小时）",
+    hint: "窗口内完全相同的主动通知会被拦截；0 关闭去重。",
+    unit: "小时",
+    scale: 3_600_000,
+    min: 0,
+    max: 720,
+    step: 1,
+  },
+  askDefaultExpiresMs: {
+    label: "主动提问（Ask）默认过期（分钟）",
+    hint: "未单独指定过期时间时，跨会话提问等待回复的时长。",
+    unit: "分钟",
+    scale: 60_000,
+    min: 1,
+    max: 43200,
+    step: 1,
+  },
+  scheduleFailureNotifyIntervalMs: {
+    label: "定时失败通知最小间隔（小时）",
+    hint: "同一计划任务执行失败向 Owner 发送告警的冷却时间；0 关闭告警。",
+    unit: "小时",
+    scale: 3_600_000,
+    min: 0,
+    max: 720,
+    step: 1,
+  },
+};
 
 /** Listening in group chats: when overheard messages are given to the Runner together. Times are in milliseconds. */
 export interface ListeningSettings {
@@ -112,6 +206,7 @@ function normalizeSettings(settings: AgentSettings): Required<AgentSettings> {
     pty: { idleTimeoutMinutes: settings.pty?.idleTimeoutMinutes ?? 10 },
     messages: settings.messages ?? {},
     listening: settings.listening ?? DEFAULT_LISTENING,
+    proactivity: settings.proactivity ?? {},
   };
 }
 
@@ -125,7 +220,12 @@ function AgentSettingsLoader({ agentId, agentName }: { agentId: string; agentNam
   const path = `/agents/${encodeURIComponent(agentId)}/settings`;
   const query = useQuery({
     queryKey: [path],
-    queryFn: ({ signal }) => apiFetch<{ settings: AgentSettings; messageDefaults?: MessageDefaults }>(path, { signal }),
+    queryFn: ({ signal }) =>
+      apiFetch<{
+        settings: AgentSettings;
+        messageDefaults?: MessageDefaults;
+        proactivityDefaults?: ProactivityDefaults;
+      }>(path, { signal }),
   });
 
   const [saving, setSaving] = useState(false);
@@ -142,7 +242,11 @@ function AgentSettingsLoader({ agentId, agentName }: { agentId: string; agentNam
       .catch(() => {})
       .then(async () => {
         try {
-          const data = await apiFetch<{ settings: AgentSettings; messageDefaults?: MessageDefaults }>(path, {
+          const data = await apiFetch<{
+            settings: AgentSettings;
+            messageDefaults?: MessageDefaults;
+            proactivityDefaults?: ProactivityDefaults;
+          }>(path, {
             method: "PUT",
             body: JSON.stringify(nextSettings),
           });
@@ -178,6 +282,7 @@ function AgentSettingsLoader({ agentId, agentName }: { agentId: string; agentNam
         <AgentSettingsForm
           settings={query.data.settings}
           {...(query.data.messageDefaults ? { messageDefaults: query.data.messageDefaults } : {})}
+          {...(query.data.proactivityDefaults ? { proactivityDefaults: query.data.proactivityDefaults } : {})}
           error={saveError}
           onChange={enqueueSave}
         />
@@ -189,12 +294,15 @@ function AgentSettingsLoader({ agentId, agentName }: { agentId: string; agentNam
 export function AgentSettingsForm({
   settings,
   messageDefaults = FALLBACK_MESSAGE_DEFAULTS,
+  proactivityDefaults = FALLBACK_PROACTIVITY_DEFAULTS,
   error,
   onChange,
 }: {
   readonly settings: AgentSettings;
   /** What each message setting the Agent leaves unset follows. */
   readonly messageDefaults?: MessageDefaults;
+  /** Platform defaults for proactivity settings left unset on this Agent. */
+  readonly proactivityDefaults?: ProactivityDefaults;
   readonly error: Error | null;
   readonly onChange: (value: AgentSettings) => void;
 }) {
@@ -341,6 +449,12 @@ export function AgentSettingsForm({
           />
         ))}
       </section>
+
+      <ProactivitySection
+        proactivity={value.proactivity}
+        defaults={proactivityDefaults}
+        onChange={proactivity => update({ ...value, proactivity })}
+      />
 
       <section className="space-y-4 rounded-lg border p-4" aria-labelledby="pty-title">
         <div>
@@ -530,6 +644,214 @@ function AliasRow({ value, fallback, onChange }: {
         />
       </Row>
       {invalid && <p role="alert" className="text-xs text-destructive">最多 10 个别名，每个不超过 32 字，这次修改没有保存。</p>}
+    </div>
+  );
+}
+
+const AGENT_HHMM = /^([01]\d|2[0-3]):[0-5]\d$/;
+
+function ProactivitySection({
+  proactivity,
+  defaults,
+  onChange,
+}: {
+  proactivity: ProactivitySettings;
+  defaults: ProactivityDefaults;
+  onChange: (next: ProactivitySettings) => void;
+}) {
+  const hasAnyOverride = Object.values(proactivity).some(
+    v => v !== undefined && v !== null,
+  );
+
+  const setField = <K extends keyof ProactivitySettings>(
+    key: K,
+    next: ProactivitySettings[K] | undefined,
+  ) => {
+    const rest = { ...proactivity };
+    delete rest[key];
+    onChange(next === undefined || next === null ? rest : { ...rest, [key]: next });
+  };
+
+  const quietMode: "inherit" | "disabled" | "custom" =
+    proactivity.quietHours === false
+      ? "disabled"
+      : proactivity.quietHours
+        ? "custom"
+        : "inherit";
+
+  const platformQuietLabel = defaults.quietHours
+    ? `${defaults.quietHours.start}–${defaults.quietHours.end}`
+    : "未开启";
+
+  const customWindow =
+    proactivity.quietHours && typeof proactivity.quietHours === "object"
+      ? proactivity.quietHours
+      : defaults.quietHours ?? { start: "23:00", end: "08:00" };
+
+  return (
+    <section
+      className="space-y-4 rounded-lg border p-4"
+      aria-labelledby="proactivity-title"
+      data-testid="agent-proactivity-settings-card"
+    >
+      <div className="flex flex-wrap items-start justify-between gap-2">
+        <div>
+          <h2 id="proactivity-title" className="font-medium">
+            主动
+          </h2>
+          <p className="text-sm text-muted-foreground">
+            控制分身自驱心跳、跨会话提问超时与主动消息频控/免打扰。留空的项继承平台默认值（当前生效值灰色显示）。
+          </p>
+        </div>
+        <button
+          type="button"
+          className="rounded-md border px-3 py-1.5 text-xs disabled:opacity-50"
+          disabled={!hasAnyOverride}
+          data-testid="agent-proactivity-reset-all"
+          onClick={() => onChange({})}
+        >
+          全部恢复默认
+        </button>
+      </div>
+
+      {(Object.keys(PROACTIVITY_FIELDS) as NumericProactivitySetting[]).map(
+        field => (
+          <ProactivityNumberRow
+            key={field}
+            field={field}
+            value={proactivity[field] ?? undefined}
+            fallback={defaults[field]}
+            onChange={next => setField(field, next)}
+          />
+        ),
+      )}
+
+      <div className="space-y-2 pt-1">
+        <Row
+          label="免打扰时段"
+          hint="免打扰期间的主动通知会自动延后到窗口结束后投递；可继承平台默认、显式关闭或自定义时段。"
+        >
+          <SelectField
+            aria-label="免打扰时段策略"
+            align="end"
+            value={quietMode}
+            onValueChange={mode => {
+              if (mode === "inherit") setField("quietHours", undefined);
+              else if (mode === "disabled") setField("quietHours", false);
+              else setField("quietHours", customWindow);
+            }}
+            options={[
+              {
+                value: "inherit",
+                label: `继承平台默认（当前：${platformQuietLabel}）`,
+              },
+              { value: "disabled", label: "显式关闭免打扰" },
+              { value: "custom", label: "自定义免打扰时段" },
+            ]}
+          />
+        </Row>
+        {quietMode === "custom" && (
+          <div className="flex flex-wrap items-center justify-end gap-3">
+            <label className="flex items-center gap-2 text-xs text-muted-foreground">
+              <span>开始</span>
+              <Input
+                type="time"
+                aria-label="自定义免打扰开始时间"
+                className="w-32"
+                value={customWindow.start}
+                onChange={e => {
+                  if (AGENT_HHMM.test(e.target.value)) {
+                    setField("quietHours", {
+                      start: e.target.value,
+                      end: customWindow.end,
+                    });
+                  }
+                }}
+              />
+            </label>
+            <label className="flex items-center gap-2 text-xs text-muted-foreground">
+              <span>结束</span>
+              <Input
+                type="time"
+                aria-label="自定义免打扰结束时间"
+                className="w-32"
+                value={customWindow.end}
+                onChange={e => {
+                  if (AGENT_HHMM.test(e.target.value)) {
+                    setField("quietHours", {
+                      start: customWindow.start,
+                      end: e.target.value,
+                    });
+                  }
+                }}
+              />
+            </label>
+          </div>
+        )}
+      </div>
+    </section>
+  );
+}
+
+function ProactivityNumberRow({
+  field,
+  value,
+  fallback,
+  onChange,
+}: {
+  field: NumericProactivitySetting;
+  value: number | undefined;
+  fallback: number;
+  onChange: (next: number | undefined) => void;
+}) {
+  const meta = PROACTIVITY_FIELDS[field];
+  const shown = (stored: number | undefined) =>
+    stored === undefined
+      ? ""
+      : String(Math.round((stored / meta.scale) * 1000) / 1000);
+  const [text, setText] = useState(shown(value));
+  useEffect(() => {
+    setText(shown(value));
+  }, [value]); // eslint-disable-line react-hooks/exhaustive-deps
+  const valid = (n: number) =>
+    Number.isFinite(n) &&
+    n >= meta.min &&
+    n <= meta.max &&
+    Number.isInteger(Math.round(n * meta.scale));
+  const parsed = text.trim() === "" ? undefined : Number(text);
+  const invalid = parsed !== undefined && !valid(parsed);
+  return (
+    <div className="space-y-1">
+      <Row
+        label={meta.label}
+        hint={`${meta.hint}（继承平台默认：${shown(fallback)} ${meta.unit}）`}
+      >
+        <Input
+          type="number"
+          aria-label={meta.label}
+          className="w-28"
+          min={meta.min}
+          max={meta.max}
+          step={meta.step}
+          placeholder={shown(fallback)}
+          value={text}
+          onChange={event => {
+            const next = event.target.value;
+            setText(next);
+            if (next.trim() === "") {
+              onChange(undefined);
+              return;
+            }
+            const n = Number(next);
+            if (valid(n)) onChange(Math.round(n * meta.scale));
+          }}
+        />
+      </Row>
+      {invalid && (
+        <p role="alert" className="text-xs text-destructive">
+          请输入 {meta.min} 到 {meta.max} {meta.unit}之间的整数，这次修改没有保存。
+        </p>
+      )}
     </div>
   );
 }

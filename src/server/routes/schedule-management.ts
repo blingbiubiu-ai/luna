@@ -7,17 +7,36 @@ import { z } from "zod";
 import { and, eq } from "drizzle-orm";
 import { randomUUID } from "node:crypto";
 import type { DrizzleDB } from "@/data";
-import { sessionSchedules, scheduleOccurrences, sessions } from "@/data/schema";
+import { sessionSchedules, scheduleOccurrences, scheduleFailureNotifications, sessions } from "@/data/schema";
 import type { SessionCommandService } from "@/messaging/session-command-service";
 import { AgentStore } from "@/agents/agent-store";
 import { deleteDashboardSchedule } from "@/dashboard-api/task-deletion";
 import { isGuardResponse, requireDashboardOnly } from "../auth/guards";
 import { GatewayError } from "../gateway-error";
 
+export const scheduleActionSchema = z.discriminatedUnion("kind", [
+  z.object({
+    kind: z.literal("message.send"),
+    content: z.string().trim().min(1).max(100000),
+    contextRefs: z.array(z.string()).default([]),
+  }).strict(),
+  z.object({
+    kind: z.literal("session.invoke"),
+    content: z.string().trim().min(1).max(100000),
+    contextRefs: z.array(z.string()).default([]),
+  }).strict(),
+  z.object({
+    kind: z.literal("task.run"),
+    taskId: z.string().trim().min(1),
+    content: z.string().trim().min(1).max(100000),
+    contextRefs: z.array(z.string()).default([]),
+  }).strict(),
+]);
+
 const editorSchema = z.object({
   title: z.string().trim().min(1).max(120),
   targetSessionId: z.string().min(1),
-  action: z.object({ kind: z.enum(["message.send", "session.invoke"]), content: z.string().trim().min(1).max(100000), contextRefs: z.array(z.string()).default([]) }).strict(),
+  action: scheduleActionSchema,
   ...scheduleTimingShape,
   revision: z.number().int().positive().optional(),
 }).strict();
@@ -79,7 +98,8 @@ export function scheduleManagementRoutes(db: () => DrizzleDB, service: () => Ses
       if (!source || source.status !== "active") throw new GatewayError("source_unavailable", "Source session is unavailable", 404);
       const actor = { userId: scope.actorUserId, sourceSessionId, originId: scheduleId };
       const refs = [...body.action.contextRefs, ...scanArtifactRefs(body.action.content)];
-      service().authorize(actor, body.targetSessionId, body.action.kind, refs);
+      const taskId = body.action.kind === "task.run" ? body.action.taskId : undefined;
+      service().authorize(actor, body.targetSessionId, body.action.kind, refs, now, taskId);
       service().authorize(actor, body.targetSessionId, "message.send", refs);
       if (existing) cancelPending(existing);
       const { revision: _revision, ...values } = body;
@@ -93,9 +113,20 @@ export function scheduleManagementRoutes(db: () => DrizzleDB, service: () => Ses
   return new Hono()
     .get("/schedules", c => {
       const scope = ownerScope(c);
+      const failureMap = new Map(
+        db().select().from(scheduleFailureNotifications).all().map(f => [f.scheduleId, {
+          occurrenceId: f.lastFailedOccurrenceId,
+          failedAt: f.lastFailedAt,
+          reason: f.lastReason,
+          notifiedAt: f.lastNotifiedAt,
+        }]),
+      );
       return c.json(db().select({ schedule: sessionSchedules }).from(sessionSchedules)
         .innerJoin(sessions, eq(sessions.id, sessionSchedules.sourceSessionId))
-        .where(inScope(scope)).all().map(row => row.schedule));
+        .where(inScope(scope)).all().map(row => ({
+          ...row.schedule,
+          lastFailure: failureMap.get(row.schedule.id) ?? null,
+        })));
     })
     .get("/occurrences", c => {
       const scope = ownerScope(c);
@@ -130,7 +161,8 @@ export function scheduleManagementRoutes(db: () => DrizzleDB, service: () => Ses
           }
           const actor = { userId: existing.actorUserId, sourceSessionId: existing.sourceSessionId, originId: existing.id };
           const refs = [...(existing.action.contextRefs as string[] ?? []), ...scanArtifactRefs(String(existing.action.content))];
-          service().authorize(actor, existing.targetSessionId, String(existing.action.kind), refs);
+          const taskId = existing.action.kind === "task.run" && typeof existing.action.taskId === "string" ? existing.action.taskId : undefined;
+          service().authorize(actor, existing.targetSessionId, String(existing.action.kind), refs, now, taskId);
           service().authorize(actor, existing.targetSessionId, "message.send", refs);
         } else cancelPending(existing);
         tx.update(sessionSchedules).set({ enabled: body.enabled, paused: !body.enabled, nextAt, revision: existing.revision + 1 }).where(eq(sessionSchedules.id, existing.id)).run();
