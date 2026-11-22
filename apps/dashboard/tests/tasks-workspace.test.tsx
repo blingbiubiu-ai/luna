@@ -5,6 +5,7 @@ import { createRoot } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
 
 import { filterTasks, TasksWorkspaceView } from "../src/app/tasks/index";
+import { TaskDetailView, type TaskDetailData } from "../src/app/tasks/task-detail-view";
 import type { DashboardTask } from "../src/lib/api";
 import { LocaleProvider } from "../src/lib/i18n";
 
@@ -307,5 +308,35 @@ describe("TasksWorkspaceView", () => {
         priorityFilter: "all",
       }).map((t) => t.id),
     ).toEqual(["task-failed"]);
+  });
+
+  test("TaskDetailView renders persistent inspector rail alongside timeline and unified header slots", () => {
+    const sample = fixtureTasks[0]! as unknown as TaskDetailData;
+    const html = renderToStaticMarkup(
+      createElement(
+        LocaleProvider,
+        { initialLocale: "zh-CN" },
+        createElement(TaskDetailView, {
+          taskDetail: sample,
+          runs: sample.runs,
+          timeline: sample.timeline,
+          artifacts: sample.artifacts,
+          backSlot: createElement("a", { href: "/tasks" }, "返回任务列表"),
+          actionsSlot: createElement("button", { type: "button" }, "打开 TUI"),
+          loading: {
+            taskDetail: false,
+            runs: false,
+            timeline: false,
+            artifacts: false,
+          },
+        }),
+      ),
+    );
+
+    expect(html).toContain('data-testid="task-inspector-rail"');
+    expect(html).toContain("任务概览");
+    expect(html).toContain("关联会话");
+    expect(html).toContain("返回任务列表");
+    expect(html).toContain("打开 TUI");
   });
 });

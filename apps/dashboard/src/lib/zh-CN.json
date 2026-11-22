@@ -666,5 +666,12 @@
   "full": "完整进度",
   "summary": "关键摘要",
   "Full updates": "完整进度推送",
-  "Summary updates": "摘要进度推送"
+  "Summary updates": "摘要进度推送",
+  "Task overview": "任务概览",
+  "Latest run": "最近运行",
+  "All runs": "全部运行",
+  "events": "条事件",
+  "No notifications configured.": "暂无通知规则",
+  "No linked sessions.": "暂无关联会话",
+  "internal": "内部记录"
 }

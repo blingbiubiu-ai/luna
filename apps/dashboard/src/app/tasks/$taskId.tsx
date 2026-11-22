@@ -66,53 +66,55 @@ function TaskDetailPage() {
   const tasksHref = `${base}/tasks`;
   const tuiHref = `${base}/terminals?taskId=${encodeURIComponent(taskId)}`;
 
+  const backSlot = (
+    <a
+      href={tasksHref}
+      onClick={(event) => navigateClient(event, tasksHref)}
+      className="inline-flex h-7 items-center gap-1.5 rounded-[7px] border border-border bg-background px-2.5 text-xs font-medium text-foreground transition-colors hover:bg-accent hover:no-underline"
+    >
+      <ArrowLeft className="size-3.5" />
+      <span>{t("Back to tasks")}</span>
+    </a>
+  );
+
+  const actionsSlot = taskDetail ? (
+    <>
+      <CopyTextButton
+        className="h-7 max-w-44 truncate rounded-[7px] border border-border bg-background px-2.5 font-mono text-xs text-muted-foreground hover:text-foreground"
+        label={t("Copy task ID")}
+        text={taskId}
+      >
+        {taskId.length > 20 ? `${taskId.slice(0, 18)}…` : taskId}
+      </CopyTextButton>
+      <a
+        href={tuiHref}
+        onClick={(event) => navigateClient(event, tuiHref)}
+        className="inline-flex h-7 items-center gap-1.5 rounded-[7px] border border-border bg-background px-2.5 text-xs font-medium text-foreground transition-colors hover:bg-accent hover:no-underline"
+      >
+        <TerminalSquareIcon className="size-3.5" />
+        <span>{t("Open TUI")}</span>
+      </a>
+      <DeleteRecordButton
+        kind="tasks"
+        id={taskId}
+        path={`/tasks/${encodeURIComponent(taskId)}?agentId=${encodeURIComponent(agentId)}`}
+        name={taskDetail.title}
+        onDeleted={() => {
+          appHistory.push(tasksHref);
+        }}
+      />
+    </>
+  ) : undefined;
+
   return (
     <div className="flex h-full min-h-0 flex-1 flex-col overflow-hidden border-t border-border bg-background">
-      <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-b border-border bg-card px-5 py-2.5 md:px-6">
-        <a
-          href={tasksHref}
-          onClick={(event) => navigateClient(event, tasksHref)}
-          className="inline-flex h-[30px] items-center gap-1.5 rounded-[7px] border border-border bg-background px-2.5 text-xs font-medium text-foreground transition-colors hover:bg-accent hover:no-underline"
-        >
-          <ArrowLeft className="size-3.5" />
-          <span>{t("Back to tasks")}</span>
-        </a>
-
-        {taskDetail ? (
-          <div className="flex items-center gap-1.5">
-            <CopyTextButton
-              className="h-[30px] max-w-44 truncate rounded-[7px] border border-border bg-background px-2.5 font-mono text-xs text-muted-foreground hover:text-foreground"
-              label={t("Copy task ID")}
-              text={taskId}
-            >
-              {taskId.length > 20 ? `${taskId.slice(0, 18)}…` : taskId}
-            </CopyTextButton>
-            <a
-              href={tuiHref}
-              onClick={(event) => navigateClient(event, tuiHref)}
-              className="inline-flex h-[30px] items-center gap-1.5 rounded-[7px] border border-border bg-background px-2.5 text-xs font-medium text-foreground transition-colors hover:bg-accent hover:no-underline"
-            >
-              <TerminalSquareIcon className="size-3.5" />
-              <span>{t("Open TUI")}</span>
-            </a>
-            <DeleteRecordButton
-              kind="tasks"
-              id={taskId}
-              path={`/tasks/${encodeURIComponent(taskId)}?agentId=${encodeURIComponent(agentId)}`}
-              name={taskDetail.title}
-              onDeleted={() => {
-                appHistory.push(tasksHref);
-              }}
-            />
-          </div>
-        ) : null}
-      </div>
-
       <TaskDetailView
         taskDetail={taskDetail}
         runs={runs}
         timeline={timeline}
         artifacts={displayArtifacts}
+        backSlot={backSlot}
+        actionsSlot={actionsSlot}
         loading={{
           taskDetail: taskLoading,
           runs: runsLoading,
