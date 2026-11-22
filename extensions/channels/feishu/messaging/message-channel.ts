@@ -15,7 +15,11 @@ import { parseArtifactRef } from "@luna/service-client/artifact-ref";
 import { ArtifactRegistry } from "@/artifacts/artifact-registry";
 import type { DrizzleDB } from "@/data";
 import { ChannelMessageMarkerStore } from "@/messaging/channel-message-marker-store";
-import { PlatformSettingsStore, resolvePublicBaseUrl } from "@/platform/platform-settings-store";
+import {
+  PlatformSettingsStore,
+  resolveArtifactSignedUrlTtlMs,
+  resolvePublicBaseUrl,
+} from "@/platform/platform-settings-store";
 import { signedArtifactPreviewUrl } from "@/server/artifact-content-url";
 import type {
   ChannelChatProfileSnapshot,
@@ -3273,6 +3277,7 @@ export class FeishuMessageChannel
     const path = signedArtifactPreviewUrl({
       artifactId,
       now: Date.now(),
+      ttlMs: resolveArtifactSignedUrlTtlMs(this.config.db),
     });
     const publicUrl = resolvePublicBaseUrl(this.config.db);
     if (!publicUrl) {

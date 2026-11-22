@@ -18,6 +18,9 @@ import { AuthorizationRuleStore } from "../../src/server/policy/authorization-ru
 import { createPlatformSettingsRoutes } from "../../src/server/routes/platform-settings";
 import { OrphanCleanupStore } from "../../src/runtime/orphan-cleanup";
 import { FeishuMessageChannel } from "../../extensions/channels/feishu";
+import { createDashboardArtifactSigner } from "../../src/dashboard-api/local-paths";
+import { createArtifactsRoutes } from "../../src/server/routes/artifacts";
+import { signedArtifactPreviewUrl } from "../../src/server/artifact-content-url";
 import { fixtureAgent, fixtureNamedSession } from "../helpers/platform-fixtures";
 
 function testCipher(): AgentSecretCipher {
@@ -106,11 +109,16 @@ test("every account reads platform settings; only a platform administrator chang
     expect((await putPlatform("admin", {})).status).toBe(400);
     expect((await putPlatform("admin", { general: { publicBaseUrl: "https://luna.example.com/subpath" } })).status).toBe(400);
     expect((await putPlatform("admin", { general: { timezone: "Invalid/Zone" } })).status).toBe(400);
+    expect((await putPlatform("admin", { general: { artifactSignedUrlTtlMs: 1000 } })).status).toBe(400);
     expect((await putPlatform("admin", { execution: { maxTransientRetries: 99 } })).status).toBe(400);
 
     // Partial section saves merge atomically without resetting other sections.
     const savedGeneral = await putPlatform("admin", {
-      general: { publicBaseUrl: "http://10.37.108.127:8090/", timezone: "Asia/Singapore" },
+      general: {
+        publicBaseUrl: "http://10.37.108.127:8090/",
+        timezone: "Asia/Singapore",
+        artifactSignedUrlTtlMs: 24 * 3_600_000,
+      },
     });
     expect(savedGeneral.status).toBe(200);
     const savedGeneralJson = (await savedGeneral.json()) as {
@@ -120,6 +128,7 @@ test("every account reads platform settings; only a platform administrator chang
     expect(savedGeneralJson.platform.general).toEqual({
       publicBaseUrl: "http://10.37.108.127:8090",
       timezone: "Asia/Singapore",
+      artifactSignedUrlTtlMs: 24 * 3_600_000,
     });
     expect(savedGeneralJson.feishuAuth.publicBaseUrl).toBe("http://10.37.108.127:8090");
 
@@ -134,6 +143,7 @@ test("every account reads platform settings; only a platform administrator chang
     expect(mergedPlatform.general).toEqual({
       publicBaseUrl: "http://10.37.108.127:8090",
       timezone: "Asia/Singapore",
+      artifactSignedUrlTtlMs: 24 * 3_600_000,
     });
     expect(mergedPlatform.marketplace).toEqual({
       gitUrl: "https://git.example.com/luna-plugins.git",
@@ -246,7 +256,7 @@ test("every account reads platform settings; only a platform administrator chang
   }
 });
 
-test("Feishu outbound artifact preview links use general.publicBaseUrl from PlatformSettingsStore immediately", () => {
+test("Feishu outbound artifact preview links use general.publicBaseUrl from PlatformSettingsStore immediately", async () => {
   const sqlite = new Database(":memory:");
   try {
     const db = drizzle(sqlite, { schema });
@@ -275,12 +285,49 @@ test("Feishu outbound artifact preview links use general.publicBaseUrl from Plat
       new RegExp(`^\\[HTML 报告\\]\\(/artifacts/${artifact.id}/preview\\?expires=\\d+&sig=[^)]+\\)$`),
     );
 
-    // Once publicBaseUrl is saved in PlatformSettingsStore, outbound links include full host/IP without restart.
+    // Once publicBaseUrl and artifactSignedUrlTtlMs are saved in PlatformSettingsStore, outbound links reflect both immediately without restart.
+    const customTtlMs = 7 * 24 * 3_600_000;
+    const before = Date.now();
     new PlatformSettingsStore(db).patch({
-      general: { publicBaseUrl: "http://10.37.108.127:8090" },
+      general: {
+        publicBaseUrl: "http://10.37.108.127:8090",
+        artifactSignedUrlTtlMs: customTtlMs,
+      },
     });
-    expect(signLinks(`[HTML 报告](artifact:${artifact.id})`)).toMatch(
-      new RegExp(`^\\[HTML 报告\\]\\(http://10\\.37\\.108\\.127:8090/artifacts/${artifact.id}/preview\\?expires=\\d+&sig=[^)]+\\)$`),
+    const signed = signLinks(`[HTML 报告](artifact:${artifact.id})`);
+    const after = Date.now();
+    const match = signed.match(
+      new RegExp(`^\\[HTML 报告\\]\\(http://10\\.37\\.108\\.127:8090/artifacts/${artifact.id}/preview\\?expires=(\\d+)&sig=[^)]+\\)$`),
+    );
+    expect(match).not.toBeNull();
+    const expires = Number(match![1]);
+    expect(expires).toBeGreaterThanOrEqual(before + customTtlMs);
+    expect(expires).toBeLessThanOrEqual(after + customTtlMs);
+
+    // Dashboard artifact signer and /api/artifacts/:id/preview downloadUrl also honor general.artifactSignedUrlTtlMs.
+    const fixedNow = 1_795_348_600_000;
+    const dashboardSigner = createDashboardArtifactSigner({
+      db,
+      requesterAccountId: "owner",
+      now: () => fixedNow,
+    });
+    expect(dashboardSigner.previewUrl(artifact.id)).toContain(
+      `expires=${fixedNow + customTtlMs}`,
+    );
+
+    const routes = createArtifactsRoutes({ db, now: () => fixedNow });
+    const previewQuery = signedArtifactPreviewUrl({
+      artifactId: artifact.id,
+      now: fixedNow,
+      ttlMs: customTtlMs,
+    }).split("?")[1]!;
+    const previewRes = await routes.request(`/${artifact.id}/preview?${previewQuery}`);
+    expect(previewRes.status).toBe(200);
+    const previewJson = (await previewRes.json()) as {
+      artifact: { downloadUrl: string };
+    };
+    expect(previewJson.artifact.downloadUrl).toContain(
+      `expires=${fixedNow + customTtlMs}`,
     );
   } finally {
     sqlite.close();

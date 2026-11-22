@@ -26,6 +26,7 @@ import {
 import { createArtifactAccessPolicy, runnerArtifactScope } from "../artifact-access-policy";
 import { RunnerArtifactGrantStore } from "../auth/runner-artifact-grant-store";
 import { runnerActorUserId } from "../auth/access-token-service";
+import { resolveArtifactSignedUrlTtlMs } from "@/platform/platform-settings-store";
 import { getKernel } from "./kernel";
 
 export interface ArtifactsRouteOptions {
@@ -47,21 +48,19 @@ type ArtifactRenderMode =
 export function createArtifactsRoutes(options: ArtifactsRouteOptions = {}) {
   const getDb = () => options.db ?? getKernel().database.db;
   const now = () => options.now?.() ?? Date.now();
+  const signedUrlTtlMs = () =>
+    options.signedUrlTtlMs ?? resolveArtifactSignedUrlTtlMs(getDb());
   const artifactDownloadUrl = (artifactId: string) =>
     signedArtifactContentUrl({
       artifactId,
       now: now(),
-      ...(options.signedUrlTtlMs === undefined
-        ? {}
-        : { ttlMs: options.signedUrlTtlMs }),
+      ttlMs: signedUrlTtlMs(),
     });
   const artifactPreviewUrl = (artifactId: string) =>
     signedArtifactPreviewUrl({
       artifactId,
       now: now(),
-      ...(options.signedUrlTtlMs === undefined
-        ? {}
-        : { ttlMs: options.signedUrlTtlMs }),
+      ttlMs: signedUrlTtlMs(),
     });
 
   return new Hono()

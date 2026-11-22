@@ -36,6 +36,7 @@ export interface FeishuAuthUpdate {
 export interface PlatformGeneralSettings {
   publicBaseUrl: string;
   timezone: string;
+  artifactSignedUrlTtlMs: number;
 }
 
 export interface PlatformExecutionSettings {
@@ -324,11 +325,15 @@ export function GeneralSettingsForm({
 }) {
   const [publicBaseUrl, setPublicBaseUrl] = useState(settings.publicBaseUrl);
   const [timezone, setTimezone] = useState(settings.timezone);
+  const [artifactTtlHours, setArtifactTtlHours] = useState(
+    String(Math.max(1, Math.round(settings.artifactSignedUrlTtlMs / 3_600_000))),
+  );
   const [touched, setTouched] = useState(false);
 
   const currentOrigin = typeof window !== "undefined" ? window.location.origin : "http://127.0.0.1:8090";
   const urlValid = isValidRootUrl(publicBaseUrl);
   const tzValid = isValidTimezone(timezone);
+  const parsedTtlHours = intInRange(artifactTtlHours, 1, 8760);
   const disabled = !canEdit || saving;
   const edit = <T,>(set: (value: T) => void) => (value: T) => {
     set(value);
@@ -346,11 +351,11 @@ export function GeneralSettingsForm({
           常规与对外访问
         </h2>
         <p className="text-sm text-muted-foreground">
-          设置平台对外访问根地址（用于飞书消息附件预览链接、飞书 OAuth 登录回调）与 Runner 默认时区。
+          设置平台对外访问根地址（用于飞书消息附件预览链接、飞书 OAuth 登录回调）、产物签名链接有效期与 Runner 默认时区。
         </p>
       </div>
       <div className="grid gap-4 sm:grid-cols-2">
-        <label className="space-y-1 text-sm">
+        <label className="space-y-1 text-sm sm:col-span-2">
           <span className="font-medium">对外访问地址</span>
           <Input
             value={publicBaseUrl}
@@ -390,12 +395,29 @@ export function GeneralSettingsForm({
             IANA 时区名称（如 Asia/Shanghai、Asia/Singapore、UTC），用于会话与任务时间信封。
           </span>
         </label>
+        <label className="space-y-1 text-sm">
+          <span className="font-medium">产物签名链接有效期（小时）</span>
+          <Input
+            type="number"
+            inputMode="numeric"
+            min={1}
+            max={8760}
+            value={artifactTtlHours}
+            disabled={disabled}
+            aria-invalid={parsedTtlHours === null}
+            data-testid="platform-artifact-signed-url-ttl-hours"
+            onChange={(event) => edit(setArtifactTtlHours)(event.target.value)}
+          />
+          <span className="block text-xs text-muted-foreground">
+            1～8760 小时（最长 365 天），默认 2 小时（如 24 = 1 天，168 = 7 天）。
+          </span>
+        </label>
       </div>
       <FormFooter
         canEdit={canEdit}
         saving={saving}
         touched={touched}
-        valid={urlValid && tzValid}
+        valid={urlValid && tzValid && parsedTtlHours !== null}
         error={error}
         saved={saved}
         testId="platform-general-save"
@@ -403,6 +425,7 @@ export function GeneralSettingsForm({
           onSave({
             publicBaseUrl: publicBaseUrl.trim().replace(/\/+$/, ""),
             timezone: timezone.trim(),
+            artifactSignedUrlTtlMs: parsedTtlHours! * 3_600_000,
           })
         }
       />

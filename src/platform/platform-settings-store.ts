@@ -6,6 +6,8 @@ import { platformAuthSettings, platformSettings } from "@/data/schema";
 
 const PLATFORM_SETTINGS_ID = "default";
 
+export const DEFAULT_ARTIFACT_SIGNED_URL_TTL_MS = 2 * 60 * 60 * 1000;
+
 export function defaultSystemTimezone(): string {
   return Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
 }
@@ -68,6 +70,12 @@ export const PlatformGeneralSettings = z
   .object({
     publicBaseUrl: PublicBaseUrlField.default(""),
     timezone: TimezoneField.default(defaultSystemTimezone),
+    artifactSignedUrlTtlMs: z
+      .number()
+      .int()
+      .min(60_000)
+      .max(365 * 24 * 3_600_000)
+      .default(DEFAULT_ARTIFACT_SIGNED_URL_TTL_MS),
   })
   .strict();
 export type PlatformGeneralSettings = z.infer<typeof PlatformGeneralSettings>;
@@ -285,4 +293,15 @@ export function resolvePublicBaseUrl(
     }
   }
   return "";
+}
+
+export function resolveArtifactSignedUrlTtlMs(db?: DrizzleDB): number {
+  if (db === undefined) {
+    return DEFAULT_ARTIFACT_SIGNED_URL_TTL_MS;
+  }
+  try {
+    return new PlatformSettingsStore(db).get().general.artifactSignedUrlTtlMs;
+  } catch {
+    return DEFAULT_ARTIFACT_SIGNED_URL_TTL_MS;
+  }
 }

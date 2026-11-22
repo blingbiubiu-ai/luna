@@ -8,6 +8,7 @@ import {
   signedArtifactPreviewUrl,
 } from "@/server/artifact-content-url";
 import { createArtifactAccessPolicy } from "@/server/artifact-access-policy";
+import { resolveArtifactSignedUrlTtlMs } from "@/platform/platform-settings-store";
 import type { LunaAccessTokenClaims } from "@/server/auth/access-token-service";
 
 /**
@@ -99,12 +100,13 @@ export function createDashboardArtifactSigner(input: {
     requesterAccountId: input.requesterAccountId,
     accessTokenClaims: input.accessTokenClaims,
   });
+  const ttlMs = resolveArtifactSignedUrlTtlMs(input.db);
   const url = (artifactId: string, variant: "preview" | "content") => {
     const artifact = registry.getActive(artifactId);
     if (artifact === undefined) return undefined;
     if (policy.canCreateSignedUrl(artifact)) {
       const sign = variant === "preview" ? signedArtifactPreviewUrl : signedArtifactContentUrl;
-      return sign({artifactId, now: input.now?.() ?? Date.now()});
+      return sign({ artifactId, now: input.now?.() ?? Date.now(), ttlMs });
     }
     // Historical Dashboard links retain cookie authentication at the destination.
     if (input.accessTokenClaims === undefined && policy.canReadMetadata(artifact)) {

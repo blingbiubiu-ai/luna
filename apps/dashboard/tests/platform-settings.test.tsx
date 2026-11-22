@@ -16,7 +16,11 @@ const noop = () => {};
 test("platform settings forms render all migrated runtime sections for admins and read-only viewers", () => {
   const generalHtml = renderToStaticMarkup(
     createElement(GeneralSettingsForm, {
-      settings: { publicBaseUrl: "http://10.37.108.127:8090", timezone: "Asia/Singapore" },
+      settings: {
+        publicBaseUrl: "http://10.37.108.127:8090",
+        timezone: "Asia/Singapore",
+        artifactSignedUrlTtlMs: 24 * 3_600_000,
+      },
       canEdit: true,
       saving: false,
       error: null,
@@ -27,6 +31,8 @@ test("platform settings forms render all migrated runtime sections for admins an
   expect(generalHtml).toContain("常规与对外访问");
   expect(generalHtml).toContain("http://10.37.108.127:8090");
   expect(generalHtml).toContain("Asia/Singapore");
+  expect(generalHtml).toContain("产物签名链接有效期（小时）");
+  expect(generalHtml).toContain('value="24"');
 
   const feishuHtml = renderToStaticMarkup(
     createElement(FeishuAuthForm, {

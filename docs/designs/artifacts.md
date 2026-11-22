@@ -69,7 +69,7 @@ Runner registration uses content upload to Service. Service validates runner sco
 Content access uses both signed links and authenticated authorization:
 
 - A valid signed URL is a bearer operation until expiry.
-- Signed link expiry is 2 hours.
+- Signed link expiry defaults to 2 hours (`7,200,000 ms`) and is live-configurable by platform administrators via `platform_settings.settings.general.artifactSignedUrlTtlMs` (`1 minute` to `365 days`) on Dashboard `/platform/settings`.
 - After expiry, anonymous access fails.
 - Authenticated related users can still access artifacts related to them.
 - Runner bearer tokens can read artifact ids granted to that exact token. They
