@@ -120,6 +120,11 @@ export function createExecutor(db: SqlDatabase, authority: TokenAuthority, confi
           detach?.();
           if (!response.writableEnded && !response.destroyed) response.end();
         };
+        const rawCols = Number(url.searchParams.get("cols"));
+        const rawRows = Number(url.searchParams.get("rows"));
+        const initialSize = Number.isInteger(rawCols) && rawCols >= 1 && rawCols <= 1000 && Number.isInteger(rawRows) && rawRows >= 1 && rawRows <= 1000
+          ? { cols: rawCols, rows: rawRows }
+          : undefined;
         const detach = processes.attachPtyViewer(contextId, {
           onData: (bytes) => {
             if (ended || response.destroyed || response.writableEnded) return;
@@ -127,7 +132,7 @@ export function createExecutor(db: SqlDatabase, authority: TokenAuthority, confi
             response.write(bytes);
           },
           onClose: () => finishStream(),
-        });
+        }, initialSize);
         if (!detach) throw new ExecutionError(404, "pty_session_not_found");
         sendHeaders();
         await new Promise<void>((resolve) => {

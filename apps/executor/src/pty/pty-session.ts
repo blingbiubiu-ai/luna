@@ -125,6 +125,8 @@ export class PtySessionController {
 
   private proc: LivePtyProcess | null = null;
   private viewport: HeadlessViewport | null = null;
+  private currentCols = DEFAULT_PTY_COLS;
+  private currentRows = DEFAULT_PTY_ROWS;
   private idleDetector: PtyIdleDetector | null = null;
   private hookPollTimer: ReturnType<typeof setInterval> | null = null;
   private hookEventsOffset = 0;
@@ -176,6 +178,17 @@ export class PtySessionController {
     return merged;
   }
 
+  async flushViewport(): Promise<void> {
+    await this.viewport?.flush();
+  }
+
+  getReplaySnapshot(): Buffer {
+    if (this.viewport) {
+      return this.viewport.serializeAnsi();
+    }
+    return this.getReplayBuffer();
+  }
+
   writeRaw(bytes: Uint8Array): void {
     if (!this.proc || this.exitCode !== null) return;
     this.proc.write(bytes);
@@ -184,12 +197,18 @@ export class PtySessionController {
     }
   }
 
-  resize(cols: number, rows: number): void {
-    if (cols < 1 || rows < 1) return;
-    this.viewport?.resize(cols, rows);
-    if (this.proc && this.exitCode === null) {
-      this.proc.resize(cols, rows);
+  resize(cols: number, rows: number): boolean {
+    if (!Number.isFinite(cols) || !Number.isFinite(rows) || cols < 1 || rows < 1) return false;
+    const clampedCols = Math.max(40, Math.min(400, Math.trunc(cols)));
+    const clampedRows = Math.max(12, Math.min(200, Math.trunc(rows)));
+    const changed = clampedCols !== this.currentCols || clampedRows !== this.currentRows;
+    this.currentCols = clampedCols;
+    this.currentRows = clampedRows;
+    this.viewport?.resize(clampedCols, clampedRows);
+    if (changed && this.proc && this.exitCode === null) {
+      this.proc.resize(clampedCols, clampedRows);
     }
+    return changed;
   }
 
   private appendReplay(bytes: Uint8Array): void {
@@ -251,7 +270,7 @@ export class PtySessionController {
       this.currentSessionId = spec.initialSessionId;
     }
 
-    const viewport = new HeadlessViewport(DEFAULT_PTY_COLS, DEFAULT_PTY_ROWS);
+    const viewport = new HeadlessViewport(this.currentCols, this.currentRows);
     const detector = new PtyIdleDetector(this.adapter.idleConfig, () => ({
       full: viewport.readViewport(),
       bottom: viewport.readBottomProbeRegion(),
@@ -263,8 +282,8 @@ export class PtySessionController {
     const proc = this.spawner(spec.command, spec.args, {
       cwd: this.options.cwd,
       env: spec.env,
-      cols: DEFAULT_PTY_COLS,
-      rows: DEFAULT_PTY_ROWS,
+      cols: this.currentCols,
+      rows: this.currentRows,
       onData: (bytes: Uint8Array) => {
         this.appendReplay(bytes);
         this.options.onLiveData?.(bytes);

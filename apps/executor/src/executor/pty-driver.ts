@@ -260,14 +260,18 @@ class WarmPtyHost {
     };
   }
 
-  attachViewer(handlers: PtyViewerHandlers): () => void {
+  attachViewer(handlers: PtyViewerHandlers, size?: { cols: number; rows: number }): () => void {
     if (this.closed) {
       handlers.onClose("pty_session_closed");
       return () => {};
     }
     const viewerId = randomUUID();
     this.viewers.set(viewerId, { ...handlers, replayed: false });
-    this.sendCommand({ type: "attach_viewer", viewerId });
+    this.sendCommand({
+      type: "attach_viewer",
+      viewerId,
+      ...(size ? { cols: size.cols, rows: size.rows } : {}),
+    });
     return () => {
       if (this.viewers.delete(viewerId) && !this.closed) {
         this.sendCommand({ type: "detach_viewer", viewerId });
@@ -454,10 +458,10 @@ export class PtyContextPool {
     return out;
   }
 
-  attachViewer(contextId: string, handlers: PtyViewerHandlers): (() => void) | null {
+  attachViewer(contextId: string, handlers: PtyViewerHandlers, size?: { cols: number; rows: number }): (() => void) | null {
     const host = this.hosts.get(contextId);
     if (!host || !host.isAlive()) return null;
-    return host.attachViewer(handlers);
+    return host.attachViewer(handlers, size);
   }
 
   writeInput(contextId: string, bytes: Uint8Array): boolean {

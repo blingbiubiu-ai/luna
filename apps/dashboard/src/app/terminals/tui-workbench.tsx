@@ -245,9 +245,7 @@ export function TuiWorkbench({
                         <div className="flex items-center gap-1.5">
                           <span
                             aria-hidden="true"
-                            className={`size-2 shrink-0 rounded-full ${
-                              item.busy ? "animate-pulse bg-amber-500" : "bg-emerald-500"
-                            }`}
+                            className="size-2 shrink-0 rounded-full bg-emerald-500"
                           />
                           <span className="truncate text-xs font-medium">
                             {item.title || `${item.runnerType} · ${item.contextId.slice(0, 8)}`}
@@ -261,7 +259,13 @@ export function TuiWorkbench({
                           {item.model && <span className="truncate">· {item.model}</span>}
                         </div>
                         <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
-                          <span>{item.busy ? "执行中" : "空闲常驻"}</span>
+                          {item.busy ? (
+                            <span className="animate-pulse rounded bg-amber-500/15 px-1.5 py-0.2 font-medium text-amber-700 dark:text-amber-300">
+                              执行中
+                            </span>
+                          ) : (
+                            <span>空闲常驻</span>
+                          )}
                           {item.shadowName && <span>· {item.shadowName}</span>}
                           <span>· {formatRelativeTime(item.lastActiveAt)}</span>
                         </div>

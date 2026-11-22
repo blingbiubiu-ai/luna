@@ -106,7 +106,7 @@ export class ContainerStreams {
       if (!command.contextId) throw new ExecutionError(400, "invalid_request");
       if (!this.manager.ptyStreamTarget) throw new ExecutionError(409, "worker_streams_unsupported");
       const target = await this.manager.ptyStreamTarget(command.environmentId, command.agentId);
-      return openExecutorPtyStream(target.endpoint, target.token, command.contextId, onData);
+      return openExecutorPtyStream(target.endpoint, target.token, command.contextId, { cols: command.cols, rows: command.rows }, onData);
     }
     const root = command.kind === "terminal" && command.user === "root";
     const target = await this.manager.streamTarget(command.environmentId, command.agentId, root ? { root: true } : undefined);
@@ -162,11 +162,13 @@ async function openExecutorPtyStream(
   endpoint: string,
   token: string,
   contextId: string,
+  size: { cols: number; rows: number },
   onData: (bytes: Uint8Array) => void,
 ): Promise<StreamProcess> {
   const abort = new AbortController();
   const baseUrl = `${endpoint.replace(/\/$/, "")}/v1/pty-sessions/${encodeURIComponent(contextId)}`;
-  const response = await fetch(`${baseUrl}/stream`, {
+  const streamParams = new URLSearchParams({ cols: String(size.cols), rows: String(size.rows) });
+  const response = await fetch(`${baseUrl}/stream?${streamParams}`, {
     headers: { authorization: `Bearer ${token}` },
     signal: abort.signal,
   });

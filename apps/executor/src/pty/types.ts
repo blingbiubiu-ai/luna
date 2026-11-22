@@ -93,6 +93,8 @@ export type PtyHostCommand =
   | {
       readonly type: "attach_viewer";
       readonly viewerId: string;
+      readonly cols?: number;
+      readonly rows?: number;
     }
   | {
       readonly type: "detach_viewer";

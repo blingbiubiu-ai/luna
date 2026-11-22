@@ -813,8 +813,50 @@ process.stdin.on("data", (chunk: string) => {
   );
 });
 
+describe("HeadlessViewport ANSI snapshot serialization", () => {
+  test("preserves scrollback, active screen, CJK glyphs, colors, and cursor across >500 KiB of differential spinner updates", async () => {
+    const src = new HeadlessViewport(120, 36, 1500);
+    // Emit 80 scrollback + command output lines with ANSI colors and CJK text.
+    for (let i = 1; i <= 80; i += 1) {
+      src.feed(`\x1b[32m[cmd-${i}]\x1b[0m 检查鸿蒙与 iOS 构建状态 line-${i}\r\n`);
+    }
+    src.feed("\x1b[30;1H\x1b[1;36m• Running bytedcli bits client workflow job get...\x1b[0m");
+    src.feed("\x1b[32;5H\x1b[2m+25 lines (^t to view transcript)\x1b[0m");
+
+    // Simulate >500 KiB of differential ratatui spinner updates that previously evicted a 256 KiB raw byte buffer.
+    const frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+    let chunk = "";
+    for (let tick = 0; tick < 6000; tick += 1) {
+      const f = frames[tick % frames.length]!;
+      chunk += `\x1b]0;${f} 跟进 Bits MR 8625303\x07\x1b[?2026h\x1b[34;1H${f} Waiting (${tick}s)\x1b[35;3H\x1b[?2026l`;
+      if (chunk.length >= 16384) {
+        src.feed(chunk);
+        chunk = "";
+      }
+    }
+    if (chunk) src.feed(chunk);
+    await src.flush();
+
+    const snapshot = src.serializeAnsi();
+    const dst = new HeadlessViewport(120, 36, 1500);
+    dst.feed(snapshot);
+    await dst.flush();
+
+    expect(dst.readViewport()).toBe(src.readViewport());
+    expect(dst.readViewport()).toContain("Running bytedcli bits client workflow job get");
+    expect(dst.readViewport()).toContain("+25 lines (^t to view transcript)");
+    expect(dst.readViewport()).toContain("Waiting (5999s)");
+    // Scrollback history is also preserved in the serialized snapshot.
+    expect(snapshot.toString("utf8")).toContain("检查鸿蒙与 iOS 构建状态 line-1");
+    expect(snapshot.toString("utf8")).toContain("\x1b[0;32m[cmd-1]\x1b[0m");
+
+    src.dispose();
+    dst.dispose();
+  });
+});
+
 describe("ContainerConsoleSession TUI read-only & takeover gating", () => {
-  test("drops keystrokes and resizes in read-only PTY mode until mode writable=true is sent", () => {
+  test("blocks keystrokes in read-only PTY mode while forwarding viewport resizes, and enables keystrokes when mode writable=true", () => {
     const writes: Uint8Array[] = [];
     const resizes: Array<{ cols: number; rows: number }> = [];
     let openedRequest: Record<string, unknown> | undefined;
@@ -852,19 +894,19 @@ describe("ContainerConsoleSession TUI read-only & takeover gating", () => {
     expect(openedRequest?.kind).toBe("pty");
     expect(openedRequest?.contextId).toBe("ctx-1");
 
-    // Read-only by default: binary input and resize frames are ignored.
+    // Read-only by default: binary input is blocked, while viewport resize frames pass through.
     session.message(fakeWs, Buffer.from("ls\r"));
     session.message(fakeWs, JSON.stringify({ type: "resize", cols: 140, rows: 45 }));
     expect(writes).toHaveLength(0);
-    expect(resizes).toHaveLength(0);
+    expect(resizes).toEqual([{ cols: 140, rows: 45 }]);
 
-    // Take input control: binary input and resize frames now pass through.
+    // Take input control: binary input and resize frames both pass through.
     session.message(fakeWs, JSON.stringify({ type: "mode", writable: true }));
     session.message(fakeWs, Buffer.from("pwd\r"));
-    session.message(fakeWs, JSON.stringify({ type: "resize", cols: 140, rows: 45 }));
+    session.message(fakeWs, JSON.stringify({ type: "resize", cols: 150, rows: 48 }));
     expect(writes).toHaveLength(1);
     expect(Buffer.from(writes[0]!).toString("utf8")).toBe("pwd\r");
-    expect(resizes).toEqual([{ cols: 140, rows: 45 }]);
+    expect(resizes).toEqual([{ cols: 140, rows: 45 }, { cols: 150, rows: 48 }]);
 
     // Release input control: subsequent keystrokes are blocked again.
     session.message(fakeWs, JSON.stringify({ type: "mode", writable: false }));

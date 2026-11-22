@@ -21,7 +21,8 @@ export interface ContainerConsoleSocketData { kind: "container-console"; session
 /**
  * One Dashboard WebSocket bridged to one Worker container stream.
  * Browser binary frames are stream bytes; text frames are control messages ({type:"resize"} | {type:"mode"}).
- * For `kind: "pty"`, input and resize frames are gated by `writable` (read-only by default until taken over).
+ * For `kind: "pty"`, keyboard input frames are gated by `writable` (read-only by default until taken over),
+ * while viewport `resize` frames always sync dimensions so full-screen TUIs match the viewer pane.
  */
 export class ContainerConsoleSession {
   private handle: ContainerStreamHandle | undefined;
@@ -60,9 +61,7 @@ export class ContainerConsoleSession {
       this.writable = control.data.writable;
       return;
     }
-    if (this.writable) {
-      this.handle?.resize(control.data.cols, control.data.rows);
-    }
+    this.handle?.resize(control.data.cols, control.data.rows);
   }
 
   closed(): void {

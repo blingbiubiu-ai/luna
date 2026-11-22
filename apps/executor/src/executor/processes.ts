@@ -97,7 +97,7 @@ export class ExecutorProcesses {
   }
   activeCount(): number { return this.store.list(true).filter(job => !isTerminal(job.state) && this.store.request(job.jobId)).length; }
   listPtySessions(): PtySessionSummary[] { return this.ptyPool.listSessions(); }
-  attachPtyViewer(contextId: string, handlers: PtyViewerHandlers): (() => void) | null { return this.ptyPool.attachViewer(contextId, handlers); }
+  attachPtyViewer(contextId: string, handlers: PtyViewerHandlers, size?: { cols: number; rows: number }): (() => void) | null { return this.ptyPool.attachViewer(contextId, handlers, size); }
   writePtyInput(contextId: string, bytes: Uint8Array): boolean { return this.ptyPool.writeInput(contextId, bytes); }
   resizePtySession(contextId: string, cols: number, rows: number): boolean { return this.ptyPool.resizePty(contextId, cols, rows); }
   setPtyIdleTimeout(idleTimeoutMs: number): void { this.ptyPool.setIdleTimeoutAll(idleTimeoutMs); }

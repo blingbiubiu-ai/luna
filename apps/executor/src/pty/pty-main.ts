@@ -1,4 +1,5 @@
 import { createInterface } from "node:readline";
+import { setTimeout as delay } from "node:timers/promises";
 import { buildChildEnvironment } from "../job-env";
 import { prepareRunnerEnvironment } from "../executor/runner-environment";
 import { writeOutput } from "../protocol";
@@ -118,12 +119,20 @@ export async function runPtyHostLoop(): Promise<void> {
     if (cmd.type === "attach_viewer") {
       if (controller) {
         const viewerId = cmd.viewerId;
+        const { cols, rows } = cmd;
         void (async () => {
           try {
             if (!controller!.isAlive()) {
               await controller!.ensureStarted();
             }
-            const replay = controller!.getReplayBuffer();
+            if (cols !== undefined && rows !== undefined) {
+              const resized = controller!.resize(cols, rows);
+              if (resized) {
+                await delay(50);
+              }
+            }
+            await controller!.flushViewport();
+            const replay = controller!.getReplaySnapshot();
             const sid = controller!.getSessionId();
             emitHostEvent({
               status: "pty_replay",

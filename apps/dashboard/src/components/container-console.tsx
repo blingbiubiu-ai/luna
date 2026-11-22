@@ -339,16 +339,17 @@ export function Workspace({
                   <span
                     aria-hidden="true"
                     className={`size-1.5 rounded-full ${
-                      !connected
-                        ? "bg-muted-foreground/50"
-                        : itemBusy
-                          ? "animate-pulse bg-amber-500"
-                          : "bg-emerald-500"
+                      connected ? "bg-emerald-500" : "bg-muted-foreground/50"
                     }`}
                   />
                   <span className="max-w-48 truncate">{label}</span>
                   {item.kind === "pty" && (
                     <span className="rounded bg-muted px-1 py-0.2 text-[10px] text-muted-foreground">TUI</span>
+                  )}
+                  {item.kind === "pty" && itemBusy && (
+                    <span className="animate-pulse rounded bg-amber-500/15 px-1.5 py-0.2 text-[10px] font-medium text-amber-700 dark:text-amber-300">
+                      执行中
+                    </span>
                   )}
                 </button>
                 <button
@@ -698,7 +699,12 @@ function TerminalView({
   writableRef.current = writable;
 
   useEffect(() => {
-    if (active && writable) terminalRef.current?.focus();
+    if (!active) return;
+    const element = ref.current;
+    if (element && element.clientWidth > 0 && element.clientHeight > 0) {
+      fitRef.current?.fit();
+    }
+    if (writable) terminalRef.current?.focus();
   }, [active, writable]);
 
   // Dynamically toggle read-only <-> writable mode on PTY streams without reconnecting.
@@ -784,8 +790,9 @@ function TerminalView({
       if (socket.readyState === WebSocket.OPEN) socket.send(encoder.encode(data));
     });
     const resize = terminal.onResize(({ cols, rows }) => {
-      if (!writableRef.current) return;
-      if (socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ type: "resize", cols, rows }));
+      if (socket.readyState === WebSocket.OPEN && cols > 0 && rows > 0) {
+        socket.send(JSON.stringify({ type: "resize", cols, rows }));
+      }
     });
     const observer = new ResizeObserver(refit);
     observer.observe(element);
