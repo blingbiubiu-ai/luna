@@ -1,4 +1,5 @@
 import { scopeFeishuIdentity, type FeishuIdentityScope } from "@/identity/feishu-identity-scopes";
+import {OrdinaryProgress} from "./ordinary-progress";
 import { NativeTaskProgress } from "./native-task-progress";
 import { createHash } from "node:crypto";
 import { ProviderDeliveryRejected } from "@/messaging/provider-delivery-error";
@@ -641,7 +642,23 @@ export class FeishuMessageChannel
     return scopeFeishuIdentity({ externalId: user.open_id ?? id, kind: "user", ...(user.name ? { displayName: user.name } : {}), providerIds }, this._identityScope);
   }
 
-  async sendTo(target: DeliveryTarget, operation: Omit<OutboundChannelOperation, "id" | "channelId">): Promise<OutboundChannelOperation> {
+  private _progressPresentation?: OrdinaryProgress;
+  private _prepareProgress(operation: Omit<OutboundChannelOperation,"id"|"channelId">) {
+    this._progressPresentation ??= new OrdinaryProgress(this.config.db,this.id);
+    return this._progressPresentation.prepare(operation,this._maxVisibleSteps);
+  }
+  async sendTo(target: DeliveryTarget, operation: Omit<OutboundChannelOperation,"id"|"channelId">): Promise<OutboundChannelOperation> {
+    if(operation.statusCardStyle === "native" || operation.replyMode === "update_status_card") {
+      const inbound: NormalizedInboundMessage = {id: target.rootMessageId ?? operation.targetMessageId ?? "", channel: {id: target.channelId, type: "feishu"},
+        surface: {externalId: target.surfaceId, kind: target.threadId ? "thread" : "group"},
+        ...(target.threadId ? {thread: {externalId: target.threadId, rootMessageExternalId: target.rootMessageId!}} : {}),
+        sender: {externalId: "luna", kind: "bot"}, text: "", mentions: [], addressing: {addressedToBot: false, reason: "silent_group"}};
+      return this.send(inbound, operation);
+    }
+    const prepared=this._prepareProgress(operation);
+    return this._progressPresentation!.remember(await this._sendTo(target,prepared));
+  }
+  private async _sendTo(target: DeliveryTarget, operation: Omit<OutboundChannelOperation, "id" | "channelId">): Promise<OutboundChannelOperation> {
     if (target.threadId) {
       if (!target.rootMessageId) throw new Error("Thread delivery requires a root message");
       return this._replyLunaMessage({id:target.rootMessageId,channel:{id:target.channelId,type:"feishu"},surface:{externalId:target.surfaceId,kind:"thread"},thread:{externalId:target.threadId,rootMessageExternalId:target.rootMessageId},sender:{externalId:"luna",kind:"bot"},text:"",mentions:[],addressing:{addressedToBot:false,reason:"silent_group"}},operation);
@@ -674,6 +691,8 @@ export class FeishuMessageChannel
       }
     }
 
+    operation=this._prepareProgress(operation);
+
     try {
       const outbound = operation.statusCardStyle === "native"
         ? await this._sendNativeProgress(inbound, operation)
@@ -686,7 +705,7 @@ export class FeishuMessageChannel
       if (outbound.idempotencyKey !== undefined) {
         this._providerIdempotencyRegistry.set(outbound.idempotencyKey, outbound);
       }
-      return outbound;
+      return this._progressPresentation!.remember(outbound);
     } finally {
       await this._clearProcessingReaction(inbound.id);
     }

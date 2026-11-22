@@ -8,6 +8,8 @@ export interface TaskStatusCardStepEvent {
   readonly type: string;
   readonly summary: string;
   readonly data?: unknown;
+  readonly created_at?: number;
+  readonly updated_at?: number;
 }
 
 /** Tool results replace the existing in-memory step; public text remains chronological. */

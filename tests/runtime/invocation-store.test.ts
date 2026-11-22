@@ -63,7 +63,7 @@ test("invocation ledger survives restart, rolls back failed projection/settlemen
     consume(3, "provider", { status: "stream", text: "failed attempt partial text" });
     consume(4, "state", { jobId: "job-retry", assignmentId: "assignment", instanceId: "instance", bootId: "boot", streamId: "stream", requestHash: "hash", state: "starting", lastSeq: 4, createdAt: 1,
       retry: { attempt: 2, totalRetries: 1, consecutiveRetries: 1, deadlineAt: 10000, nextRetryAt: null, reason: "rate_limited" } });
-    expect(store.job("job-retry")!.providerState).toEqual({ sessionId: "provider-session", checkpoint: true });
+    expect(store.job("job-retry")!.providerState).toEqual({ sessionId: "provider-session", checkpoint: true, progressAttempt: 2 });
     consume(5, "provider", { status: "success", result: "final answer" });
     expect(store.job("job-retry")!.providerState?.text).toBe("final answer");
     const event = { jobId: "job1", seq: 1, kind: "placement" as const, data: { placementState: "terminal" } };

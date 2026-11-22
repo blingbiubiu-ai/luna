@@ -960,7 +960,15 @@ export function useTask(taskId: string, agentId: string) {
 }
 
 export function useTaskTimeline(taskId: string, agentId: string) {
-  return useTaskResource<DashboardTaskTimelineEvent[]>(taskId, agentId, "timeline");
+  return useInfiniteQuery({
+    queryKey: ["luna", "tasks", taskId, "timeline", agentId],
+    initialPageParam: null as string | null,
+    queryFn: ({signal, pageParam}) => apiFetch<{items: DashboardTaskTimelineEvent[]; nextCursor: string | null}>(
+      `/tasks/${encodeURIComponent(taskId)}/timeline/page?agentId=${encodeURIComponent(agentId)}${pageParam ? `&cursor=${encodeURIComponent(pageParam)}` : ""}`, {signal}),
+    getNextPageParam: page => page.nextCursor ?? undefined,
+    enabled: Boolean(taskId),
+    refetchInterval: 5000,
+  });
 }
 
 export function useTaskRuns(taskId: string, agentId: string) {

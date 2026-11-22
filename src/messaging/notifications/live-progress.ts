@@ -5,10 +5,10 @@ import {toolDisplay} from "@luna/runner-protocol/tool-display";
 export const RECENT_PROGRESS_STEPS = 200;
 export const MAX_PENDING_PROGRESS = 600;
 
-/** Send each observation immediately; only public Assistant text is persisted. */
+/** Send each observation immediately; persistence is supplied by the caller. */
 export class LiveProgress<T> {
   private lastText = "";
-  private activeTools = new Map<string, {name: string; title?: string}>();
+  private activeTools = new Map<string, {name: string; title?: string; startedAt: number}>();
   private pending: {entry: T; native: NativeProgressEntry}[] = [];
   private sending: Promise<void> | undefined;
   private closed = false;
@@ -34,10 +34,10 @@ export class LiveProgress<T> {
 
   toolStart(id: string, name: string, title?: string): void {
     if (this.closed || this.activeTools.has(id)) return;
-    const tool = {name: name.slice(0,80), title: title?.slice(0,120) || toolDisplay(name).label.slice(0,120)};
+    const tool = {startedAt: Date.now(), name: name.slice(0,80), title: title?.slice(0,120) || toolDisplay(name).label.slice(0,120)};
     if (this.activeTools.size < 300) this.activeTools.set(id, tool);
     this.tool({id: `${id}:start`, text: tool.title ?? tool.name, toolCallId: id,
-      toolName: tool.name, ...(tool.title ? {toolTitle: tool.title} : {}), toolPhase: "start"});
+      startedAt: tool.startedAt, toolName: tool.name, ...(tool.title ? {toolTitle: tool.title} : {}), toolPhase: "start"});
   }
 
   toolResult(id: string, failed: boolean): void {
@@ -45,7 +45,7 @@ export class LiveProgress<T> {
     const tool = this.activeTools.get(id);
     this.activeTools.delete(id);
     this.tool({id: `${id}:result`, text: failed ? "工具执行失败" : "工具调用已结束", toolCallId: id,
-      ...(tool ? {toolName: tool.name, ...(tool.title ? {toolTitle: tool.title} : {})} : {}), toolPhase: "result"});
+      ...(tool ? {startedAt: tool.startedAt, toolName: tool.name, ...(tool.title ? {toolTitle: tool.title} : {})} : {}), toolPhase: "result"});
   }
 
   private tool(native: NativeProgressEntry): void {

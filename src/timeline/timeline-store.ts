@@ -37,6 +37,7 @@ export class TimelineStore {
     const row = {
       id: uuid(),
       task_id: input.taskId,
+      task_run_id: typeof input.data?.taskRunId === "string" ? input.data.taskRunId : null,
       session_id: input.sessionId ?? null,
       message_id: input.messageId ?? null,
       actor_user_id: null,
@@ -46,6 +47,7 @@ export class TimelineStore {
       data: input.data ?? null,
       visibility: input.visibility ?? "full",
       created_at: createdAt,
+      updated_at: createdAt,
     } satisfies TimelineEvent;
     this._db.insert(timelineEvents).values(row).run();
     return row;

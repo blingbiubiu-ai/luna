@@ -368,10 +368,9 @@ including a resend, returns that receipt without sending another card.
 
 ### Task progress presentation
 
-Current aggregation, bounded projections and Native delivery budgets are defined
-in [Progress notifications](progress-notifications.md). Ordinary tool events are
-counted in memory instead of written individually to the business timeline;
-public text flushes preceding tool progress immediately and in order.
+Current incremental updates, durable tool rows, adapter projections and Native
+delivery budgets are defined in [Progress notifications](progress-notifications.md).
+Tools and public text share the Task timeline; each tool updates one row.
 
 Task creation accepts `sendStatusCard` (true by default) and
 `statusCardStyle: "card" | "native"` (default native for new tasks; existing subscriptions retain their style). `tasks status-card` accepts
@@ -402,8 +401,8 @@ common status-card projection and records the provider presentation style.
 
 Tool progress is preserved structurally from the CLI provider through the
 Executor/Runtime stream, `RunnerOutputState`, and the transient progress sender.
-Only public Assistant text is written to the Task timeline; tool events remain
-in the in-memory card projection and existing delivery records. Provider adapters
+Tool starts insert `runner.tool` rows and results update those rows; public
+Assistant text remains separate `runner.step` rows. Provider adapters
 emit ordered public text, tool-start (call ID, name, display title), and tool-result
 (call ID, outcome) events. Results also emit the existing retry checkpoint;
 progress is never appended to the Runner's final answer. Claude mixed content

@@ -125,7 +125,7 @@ export class NativeTaskProgress {
               tools[callId] = toolNodeId;
             }
             if (entry.toolPhase === "result") {
-              events.push(toolResult(toolNodeId, entry.text === "工具执行失败" ? "工具执行失败" : "工具调用已结束"));
+              events.push(toolResult(toolNodeId, entry.toolOutcome === "interrupted" ? "本轮已结束，未确认工具结果" : entry.text === "工具执行失败" ? "工具执行失败" : "工具调用已结束"));
               delete tools[callId];
             }
             next = {...next, openTools:tools};
@@ -139,7 +139,7 @@ export class NativeTaskProgress {
             if (budget.exhausted) continue;
             const noticeId = `${messageId}-progress-limit`;
             const notice = [event("REASONING_MESSAGE_START",{messageId:noticeId,role:"reasoning"}),
-              event("REASONING_MESSAGE_CONTENT",{messageId:noticeId,delta:"详细进度已合并，后续仅汇报最终状态。可在 Dashboard 查看任务状态和结果。"}),
+              event("REASONING_MESSAGE_CONTENT",{messageId:noticeId,delta:"进度已达到展示上限，后续仅汇报最终状态。可在 Dashboard 查看完整工具进度和结果。"}),
               event("REASONING_MESSAGE_END",{messageId:noticeId})];
             await queue(notice,{...draft,lastReasoningId:noticeId,sentEntries:[...draft.sentEntries,"progress-limit"],
               progressBudget:{...budget,bytes:budget.bytes+eventBytes(notice),exhausted:true}});

@@ -1,9 +1,12 @@
+import {TaskProgressStore} from "@/timeline/task-progress-store";
+import {GatewayError} from "../gateway-error";
 import {ResourceRouteAccess} from "../policy/resource-route-access";
 import {AgentError} from "@/agents/agent-store";
 import { deleteDashboardTask } from "@/dashboard-api/task-deletion";
 import { loadDashboardUserRows } from "@/dashboard-api/user-display";
 import { asc, desc, eq, sql } from "drizzle-orm";
 import { Hono, type Context } from "hono";
+import type { ContentfulStatusCode } from "hono/utils/http-status";
 import { HTTPException } from "hono/http-exception";
 
 import { ContextPackStore } from "@/context";
@@ -64,7 +67,7 @@ export function createTasksRoutes(options: TasksRouteOptions = {}) {
     await next();
   };
   return new Hono()
-    .onError((error,c)=>{if(error instanceof AgentError)return c.json({code:error.code},error.status);if(error instanceof HTTPException)return error.res ?? c.json({message:error.message},error.status);throw error;})
+    .onError((error,c)=>{if(error instanceof GatewayError)return c.json({code:error.code,message:error.message},error.status as ContentfulStatusCode);if(error instanceof AgentError)return c.json({code:error.code},error.status);if(error instanceof HTTPException)return error.res ?? c.json({message:error.message},error.status);throw error;})
     .use("/:id",guard).use("/:id/*",guard)
     .delete("/:id", c => { deleteDashboardTask(routeDb(), c.req.param("id")); return c.json({ status: "ok" }); })
     .get("/", (c) => {
@@ -88,6 +91,21 @@ export function createTasksRoutes(options: TasksRouteOptions = {}) {
         ),
       );
     })
+    .get("/:id/progress",c=>{
+      const limit=Number(c.req.query("limit")??20);
+      if(!Number.isInteger(limit)||limit<1||limit>100)return c.json({code:"invalid_progress_limit"},400);
+      return c.json(new TaskProgressStore(routeDb()).query(c.req.param("id"),{
+        ...(c.req.query("runId")?{runId:c.req.query("runId")!}:{}),limit,...(c.req.query("cursor")?{cursor:c.req.query("cursor")!}:{}),
+      }));
+    })
+    .get("/:id/timeline/page",c=>{
+      const db=routeDb(),id=c.req.param("id");assertTaskExists(db,id);
+      const limit=Number(c.req.query("limit")??50);
+      if(!Number.isInteger(limit)||limit<1||limit>100)return c.json({code:"invalid_progress_limit"},400);
+      const page=new TaskProgressStore(db).page(id,{limit,allEvents:true,...(c.req.query("cursor")?{cursor:c.req.query("cursor")!}:{})});
+      const signer=dashboardArtifactSignerForContext(c,db),userRows=loadDashboardUserRows(db);
+      return c.json({items:page.rows.map(row=>toDashboardTimelineEvent(row,{artifactSigner:signer,userRows})).reverse(),nextCursor:page.nextCursor});
+    })
     .get("/:id", (c) => {
       const taskId = c.req.param("id");
       const db = routeDb();
@@ -96,6 +114,9 @@ export function createTasksRoutes(options: TasksRouteOptions = {}) {
       if (!row) {
         throw new HTTPException(404, { message: `Task not found: ${taskId}` });
       }
+      const claims=lunaAccessTokenClaimsFromContext(c);
+      if(claims?.source==="runner")return c.json({id:taskId,taskId,title:row.title,summary:row.summary,status:row.status,
+        progress:new TaskProgressStore(db).query(taskId)});
       const [dashboardTask] = buildDashboardTasks(
         [row],
         selectDashboardTaskProjectionRows(db, [row], { artifactSigner }),
@@ -252,7 +273,7 @@ function selectDashboardTaskProjectionRows(
     messageRows: selectTimelineMessageRows(db),
     turnEntryRows: selectDashboardSessionTurnEntryRows(db),
     runRows: selectDashboardTaskRunRows(db),
-    timelineRows: selectDashboardTimelineEventRows(db),
+    timelineRows: taskRows.flatMap(row=>selectDashboardTimelineEventRowsForTask(db,row.id)),
     artifactRows: selectDashboardArtifactRows(db),
     contextBundleRows: selectDashboardContextBundleRows(
       db,
@@ -341,14 +362,6 @@ function dashboardTimelineEventSelection() {
   };
 }
 
-function selectDashboardTimelineEventRows(db: DrizzleDB): TimelineEventRow[] {
-  return db
-    .select(dashboardTimelineEventSelection())
-    .from(timelineEvents)
-    .orderBy(asc(timelineEvents.created_at))
-    .all();
-}
-
 function selectDashboardTimelineEventRowsForTask(
   db: DrizzleDB,
   taskId: string,
@@ -357,8 +370,9 @@ function selectDashboardTimelineEventRowsForTask(
     .select(dashboardTimelineEventSelection())
     .from(timelineEvents)
     .where(eq(timelineEvents.task_id, taskId))
-    .orderBy(asc(timelineEvents.created_at))
-    .all();
+    .orderBy(desc(timelineEvents.created_at),desc(timelineEvents.id))
+    .limit(100)
+    .all().reverse();
 }
 
 function dashboardArtifactSelection() {
