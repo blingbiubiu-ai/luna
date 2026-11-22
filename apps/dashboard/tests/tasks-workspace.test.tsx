@@ -7,6 +7,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { filterTasks, TasksWorkspaceView } from "../src/app/tasks/index";
 import { TaskDetailView, type TaskDetailData } from "../src/app/tasks/task-detail-view";
 import type { DashboardTask } from "../src/lib/api";
+import { appHistory } from "../src/lib/app-history";
 import { LocaleProvider } from "../src/lib/i18n";
 
 function makeTask(overrides: Partial<DashboardTask> & { id: string; title: string }): DashboardTask {
@@ -228,7 +229,7 @@ describe("TasksWorkspaceView", () => {
     expect(html).not.toContain("队列空闲");
   });
 
-  test("filters by status tabs and opens the quick-peek inspector on row click", async () => {
+  test("filters by status tabs and navigates directly to full detail on row click", async () => {
     const { window, document } = parseHTML("<!doctype html><html><body></body></html>");
     (window as unknown as { location?: { href: string } }).location ??= {
       href: "http://localhost",
@@ -239,6 +240,11 @@ describe("TasksWorkspaceView", () => {
     const container = document.createElement("div");
     document.body.appendChild(container);
     const root = createRoot(container as never);
+    const pushedHrefs: string[] = [];
+    const originalPush = appHistory.push.bind(appHistory);
+    appHistory.push = ((href: string) => {
+      pushedHrefs.push(href);
+    }) as typeof appHistory.push;
 
     try {
       root.render(
@@ -261,10 +267,8 @@ describe("TasksWorkspaceView", () => {
       waitingRow!.dispatchEvent(new window.Event("click", { bubbles: true }));
       await new Promise((resolve) => setTimeout(resolve, 20));
 
-      const drawer = document.querySelector('[data-testid="task-quick-peek"]');
-      expect(drawer).not.toBeNull();
-      expect(drawer?.textContent ?? "").toContain("PG 只读副本扩容审批");
-      expect(drawer?.textContent ?? "").toContain("完整详情");
+      expect(document.querySelector('[data-testid="task-quick-peek"]')).toBeNull();
+      expect(pushedHrefs).toEqual(["/agent/tasks/task-waiting"]);
 
       const completedTab = Array.from(document.querySelectorAll('[role="tab"]')).find((node) =>
         (node.textContent ?? "").includes("已完成"),
@@ -276,6 +280,7 @@ describe("TasksWorkspaceView", () => {
       expect(document.querySelector('[data-testid="task-row-task-done"]')).not.toBeNull();
       expect(document.querySelector('[data-testid="task-row-task-running"]')).toBeNull();
     } finally {
+      appHistory.push = originalPush;
       root.unmount();
       await new Promise((resolve) => setTimeout(resolve, 20));
     }

@@ -1,7 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 import {
-  ArrowRight,
-  ArrowUpRight,
+  ChevronRight,
   CircleCheck,
   FileText,
   MessageSquare,
@@ -9,13 +8,10 @@ import {
   Search,
   TerminalSquareIcon,
   User,
-  X,
 } from "lucide-react";
 import { useMemo, useState, type MouseEvent } from "react";
 
-import { avatarColorForKey } from "@/app/sessions/session-avatar";
-import { CopyTextButton } from "@/components/copy-text-button";
-import { IdentityLink, identitySearchText } from "@/components/identity-link";
+import { identitySearchText } from "@/components/identity-link";
 import { ShadowPicker, useShadowScope } from "@/components/shadow-picker";
 import { SelectField } from "@/components/ui/select-field";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -103,7 +99,6 @@ export function TasksWorkspaceView({
   const [typeFilter, setTypeFilter] = useState("all");
   const [statusFilter, setStatusFilter] = useState<TaskStatusTab>("all");
   const [priorityFilter, setPriorityFilter] = useState("all");
-  const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
 
   const counts = useMemo(() => {
     let running = 0;
@@ -161,11 +156,6 @@ export function TasksWorkspaceView({
     [filtered],
   );
 
-  const selectedTask = useMemo(
-    () => (selectedTaskId ? tasks.find((item) => item.id === selectedTaskId) ?? null : null),
-    [selectedTaskId, tasks],
-  );
-
   const hasActiveFilters =
     statusFilter !== "all" ||
     typeFilter !== "all" ||
@@ -185,7 +175,7 @@ export function TasksWorkspaceView({
       data-testid="tasks-workspace"
     >
       <div className="@container min-h-0 min-w-0 flex-1 overflow-y-auto px-5 py-5 md:px-7">
-        <div className="mx-auto max-w-[1400px] space-y-4 pb-6">
+        <div className="space-y-4 pb-6">
           {/* Page Header + Live Queue Pulse + Metric Cards */}
           <div className="flex flex-col gap-3.5 @[860px]:flex-row @[860px]:items-start @[860px]:justify-between">
             <div className="min-w-0 space-y-1">
@@ -434,10 +424,6 @@ export function TasksWorkspaceView({
                         base={base}
                         locale={locale}
                         task={item}
-                        selected={selectedTask?.id === item.id}
-                        onToggleSelect={() =>
-                          setSelectedTaskId((prev) => (prev === item.id ? null : item.id))
-                        }
                       />
                     ))}
                   </div>
@@ -457,10 +443,6 @@ export function TasksWorkspaceView({
                         base={base}
                         locale={locale}
                         task={item}
-                        selected={selectedTask?.id === item.id}
-                        onToggleSelect={() =>
-                          setSelectedTaskId((prev) => (prev === item.id ? null : item.id))
-                        }
                       />
                     ))}
                   </div>
@@ -478,26 +460,12 @@ export function TasksWorkspaceView({
                   base={base}
                   locale={locale}
                   task={item}
-                  selected={selectedTask?.id === item.id}
-                  onToggleSelect={() =>
-                    setSelectedTaskId((prev) => (prev === item.id ? null : item.id))
-                  }
                 />
               ))}
             </div>
           )}
         </div>
       </div>
-
-      {/* Right Quick-Peek Inspector Drawer */}
-      {selectedTask ? (
-        <TaskQuickPeekDrawer
-          base={base}
-          locale={locale}
-          task={selectedTask}
-          onClose={() => setSelectedTaskId(null)}
-        />
-      ) : null}
     </div>
   );
 }
@@ -619,14 +587,10 @@ function TaskRowItem({
   base,
   locale,
   task,
-  selected,
-  onToggleSelect,
 }: {
   readonly base: string;
   readonly locale: "en" | "zh-CN";
   readonly task: DashboardTask;
-  readonly selected: boolean;
-  readonly onToggleSelect: () => void;
 }) {
   const { t } = useTranslation();
   const detailHref = `${base}/tasks/${encodeURIComponent(task.id)}`;
@@ -657,27 +621,17 @@ function TaskRowItem({
         if (target?.closest("a,button")) {
           return;
         }
-        onToggleSelect();
-      }}
-      onDoubleClick={(event) => {
-        const target = event.target as HTMLElement | null;
-        if (target?.closest("a,button")) {
+        if (typeof window !== "undefined" && window.getSelection?.()?.toString()) {
+          return;
+        }
+        if (event.metaKey || event.ctrlKey) {
+          window.open(detailHref, "_blank", "noopener,noreferrer");
           return;
         }
         appHistory.push(detailHref);
       }}
-      className={cn(
-        "group relative grid cursor-pointer grid-cols-[26px_minmax(0,1fr)_auto] items-start gap-3.5 border-b border-border/60 px-4 py-3.5 transition-colors last:border-b-0",
-        selected ? "bg-accent/55" : "hover:bg-muted/45",
-      )}
+      className="group relative grid cursor-pointer grid-cols-[26px_minmax(0,1fr)_auto] items-start gap-3.5 border-b border-border/60 px-4 py-3.5 transition-colors last:border-b-0 hover:bg-muted/45"
     >
-      {selected ? (
-        <span
-          aria-hidden="true"
-          className="absolute top-3 bottom-3 left-0 w-[3px] rounded-r bg-[#a3b69e] dark:bg-[#8ea487]"
-        />
-      ) : null}
-
       <div className="pt-0.5">
         <TaskStateIcon state={effectiveState} />
       </div>
@@ -801,7 +755,7 @@ function TaskRowItem({
           </time>
         </div>
 
-        <div className="flex items-center gap-1 opacity-0 transition-opacity group-focus-within:opacity-100 group-hover:opacity-100">
+        <div className="flex items-center gap-1.5 opacity-0 transition-opacity group-focus-within:opacity-100 group-hover:opacity-100">
           <a
             href={tuiHref}
             onClick={(event) => navigateClient(event, tuiHref)}
@@ -811,14 +765,10 @@ function TaskRowItem({
             <TerminalSquareIcon className="size-3" />
             <span>TUI</span>
           </a>
-          <a
-            href={detailHref}
-            onClick={(event) => navigateClient(event, detailHref)}
-            className="inline-flex h-6 items-center gap-0.5 rounded-[6px] bg-primary px-2 text-[11px] font-medium text-primary-foreground transition-opacity hover:opacity-90 hover:no-underline"
-          >
-            <span>{t("Full details")}</span>
-            <ArrowRight className="size-3" />
-          </a>
+          <ChevronRight
+            aria-hidden="true"
+            className="size-4 text-muted-foreground transition-transform group-hover:translate-x-0.5"
+          />
         </div>
       </div>
     </div>
@@ -884,247 +834,6 @@ function TaskRowSecondaryLine({
     <p className="m-0 truncate text-[12.5px] text-muted-foreground">
       {task.summary || latestEventSummary || task.id}
     </p>
-  );
-}
-
-function TaskQuickPeekDrawer({
-  base,
-  locale,
-  task,
-  onClose,
-}: {
-  readonly base: string;
-  readonly locale: "en" | "zh-CN";
-  readonly task: DashboardTask;
-  readonly onClose: () => void;
-}) {
-  const { t } = useTranslation();
-  const detailHref = `${base}/tasks/${encodeURIComponent(task.id)}`;
-  const tuiHref = `${base}/terminals?taskId=${encodeURIComponent(task.id)}`;
-  const effectiveState = resolveTaskEffectiveState(task);
-  const parsedContext = parseTaskContext(task.taskContext);
-  const latestRun = latestTaskRun(task.runs ?? []);
-  const runDuration = latestRun
-    ? formatRunDuration(latestRun.startedAt ?? latestRun.started_at, latestRun.finishedAt ?? latestRun.finished_at)
-    : null;
-  const sessions = resolveTaskSessions(task);
-  const artifacts = task.artifacts ?? [];
-
-  return (
-    <aside
-      aria-label={task.title}
-      data-testid="task-quick-peek"
-      className="hidden w-[380px] shrink-0 flex-col overflow-hidden border-l border-border bg-card lg:flex xl:w-[420px]"
-    >
-      <div className="flex items-center justify-between gap-2 border-b border-border px-4 py-3">
-        <div className="flex min-w-0 items-center gap-2">
-          <TaskStatusPill status={task.status} effectiveState={effectiveState} showDot />
-          <CopyTextButton
-            className="h-6 max-w-36 truncate px-2 font-mono text-xs text-muted-foreground"
-            label={t("Copy task ID")}
-            text={task.id}
-          >
-            {shortTaskId(task.id)}
-          </CopyTextButton>
-        </div>
-        <div className="flex shrink-0 items-center gap-1.5">
-          <a
-            href={detailHref}
-            onClick={(event) => navigateClient(event, detailHref)}
-            className="inline-flex h-7 items-center gap-1 rounded-[7px] bg-primary px-2.5 text-xs font-medium text-primary-foreground transition-opacity hover:opacity-90 hover:no-underline"
-          >
-            <span>{t("Full details")}</span>
-            <ArrowUpRight className="size-3.5" />
-          </a>
-          <button
-            type="button"
-            aria-label={t("Close preview")}
-            onClick={onClose}
-            className="inline-grid size-7 place-items-center rounded-[7px] text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-          >
-            <X className="size-4" />
-          </button>
-        </div>
-      </div>
-
-      <div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-4">
-        <div className="space-y-2">
-          <h2 className="m-0 text-base leading-snug font-semibold break-words text-foreground">
-            {task.title}
-          </h2>
-          <div className="flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
-            <TaskTypePill type={task.type} />
-            <TaskPriorityPill priority={task.priority} alwaysShow />
-            <span>· {formatTaskRelativeTime(task.last_activity_at, locale)}</span>
-          </div>
-        </div>
-
-        {parsedContext.pendingQuestions.length > 0 ? (
-          <div
-            className={cn(
-              "space-y-1 rounded-xl border p-3 text-xs",
-              taskStateClasses("waiting").calloutClass,
-            )}
-          >
-            <div className="font-semibold">{t("Waiting for confirmation")}</div>
-            {parsedContext.pendingQuestions.map((question, idx) => (
-              <div key={idx} className="leading-relaxed break-words">
-                {question}
-              </div>
-            ))}
-          </div>
-        ) : null}
-
-        {latestRun?.error ? (
-          <div
-            className={cn(
-              "space-y-1 rounded-xl border p-3 text-xs",
-              taskStateClasses("failed").calloutClass,
-            )}
-          >
-            <div className="font-semibold">{t("Latest run error")}</div>
-            <div className="font-mono leading-relaxed break-all">{latestRun.error}</div>
-          </div>
-        ) : null}
-
-        <div className="space-y-1.5 rounded-xl border border-border bg-muted/45 p-3.5">
-          <div className="text-xs font-medium text-muted-foreground">
-            {t("Progress & summary")}
-          </div>
-          <p className="m-0 text-[13px] leading-relaxed break-words text-foreground">
-            {task.summary || t("No report summary is available.")}
-          </p>
-        </div>
-
-        {latestRun ? (
-          <section className="space-y-2">
-            <h3 className="m-0 text-xs font-semibold tracking-wider uppercase text-muted-foreground">
-              {t("Runner state")}
-            </h3>
-            <div className="flex items-center justify-between gap-2 rounded-xl border border-border p-3 text-xs">
-              <div className="min-w-0 space-y-0.5">
-                <div className="font-semibold text-foreground">
-                  Run #{latestRun.runIndex ?? latestRun.run_index} ·{" "}
-                  {latestRun.runnerType || latestRun.runner_type}
-                </div>
-                <div className="text-muted-foreground">
-                  <UiText>{latestRun.status}</UiText>
-                  {runDuration ? ` · ${runDuration}` : ""}
-                </div>
-              </div>
-              <a
-                href={tuiHref}
-                onClick={(event) => navigateClient(event, tuiHref)}
-                className="inline-flex h-7 shrink-0 items-center gap-1.5 rounded-[7px] border border-border bg-background px-2.5 text-xs font-medium text-foreground transition-colors hover:bg-accent hover:no-underline"
-              >
-                <TerminalSquareIcon className="size-3.5" />
-                <span>{t("Open TUI")}</span>
-              </a>
-            </div>
-          </section>
-        ) : null}
-
-        {sessions.length > 0 ? (
-          <section className="space-y-2">
-            <h3 className="m-0 text-xs font-semibold tracking-wider uppercase text-muted-foreground">
-              {t("Linked Sessions")} ({sessions.length})
-            </h3>
-            <div className="grid gap-1.5">
-              {sessions.map((session) => {
-                const label = session.displayTitle || session.title || session.id;
-                const sessionHref = `${base}/sessions/${encodeURIComponent(session.id)}`;
-                return (
-                  <a
-                    key={session.id}
-                    href={sessionHref}
-                    onClick={(event) => navigateClient(event, sessionHref)}
-                    className="flex items-center gap-2.5 rounded-xl border border-border px-3 py-2 text-xs transition-colors hover:bg-muted/50 hover:no-underline"
-                  >
-                    <span
-                      className="inline-grid size-7 shrink-0 place-items-center rounded-full text-[11px] font-semibold text-white"
-                      style={{ backgroundColor: avatarColorForKey(session.group_id ?? session.id) }}
-                    >
-                      {Array.from(label.trim() || "?").slice(0, 2).join("")}
-                    </span>
-                    <div className="min-w-0 flex-1">
-                      <div className="truncate font-medium text-foreground">{label}</div>
-                      <div className="mt-0.5 truncate text-muted-foreground">
-                        {session.thread_id
-                          ? `${session.channel_type} · # ${session.thread_id}`
-                          : session.channel_type}
-                      </div>
-                    </div>
-                  </a>
-                );
-              })}
-            </div>
-          </section>
-        ) : null}
-
-        <section className="space-y-2">
-          <h3 className="m-0 text-xs font-semibold tracking-wider uppercase text-muted-foreground">
-            {t("Artifacts")} ({artifacts.length})
-          </h3>
-          {artifacts.length === 0 ? (
-            <div className="rounded-xl border border-dashed border-border px-3 py-3 text-xs text-muted-foreground">
-              {t("No artifacts recorded.")}
-            </div>
-          ) : (
-            <div className="grid gap-1.5">
-              {artifacts.slice(0, 5).map((artifact) => (
-                <div
-                  key={artifact.id}
-                  className="flex items-center justify-between gap-2 rounded-xl border border-border px-3 py-2 text-xs"
-                >
-                  {artifact.href ? (
-                    <a
-                      href={artifact.href}
-                      className="min-w-0 flex-1 truncate font-mono text-foreground hover:underline"
-                    >
-                      {artifact.name}
-                    </a>
-                  ) : (
-                    <span className="min-w-0 flex-1 truncate font-mono text-foreground">
-                      {artifact.name}
-                    </span>
-                  )}
-                  <span className="shrink-0 rounded bg-[#5b8a72]/14 px-1.5 py-0.5 text-[11px] font-medium text-[#5b8a72] dark:bg-[#7fb096]/16 dark:text-[#7fb096]">
-                    {artifact.type}
-                  </span>
-                </div>
-              ))}
-            </div>
-          )}
-        </section>
-
-        {task.participants.length > 0 ? (
-          <section className="space-y-2">
-            <h3 className="m-0 text-xs font-semibold tracking-wider uppercase text-muted-foreground">
-              {t("Participants")}
-            </h3>
-            <div className="flex flex-wrap gap-1.5">
-              {task.participants.map((participant) => (
-                <span
-                  key={`${participant.userId}:${participant.role}`}
-                  className="inline-flex items-center gap-1.5 rounded-full bg-secondary px-2.5 py-1 text-xs text-secondary-foreground"
-                >
-                  <IdentityLink
-                    className="max-w-32 text-xs"
-                    fallbackKind={participant.role === "agent" ? "bot" : "user"}
-                    identity={identityForCanonicalUser(participant.user)}
-                    showAvatar
-                    showKind={false}
-                  />
-                  <span className="text-[11px] text-muted-foreground">
-                    <UiText>{participant.role}</UiText>
-                  </span>
-                </span>
-              ))}
-            </div>
-          </section>
-        ) : null}
-      </div>
-    </aside>
   );
 }
 
