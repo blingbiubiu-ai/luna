@@ -5,6 +5,7 @@ import { messages, sessionTimelineEntries, sessionChannelDeliveries, sessionRepl
 import type { NormalizedInboundMessage } from "@/channels";
 import type { DeliveryTarget, OutboundChannelOperation, ReplyChannel } from "@/channels/outbound";
 import { SessionStore } from "@/sessions/session-store";
+import { lookupChannelSurfaceKind } from "@/channels/directory-store";
 import { bindSessionBot } from "@/channels/session-bot";
 import { renderLocalUserMentions } from "./reply-text";
 
@@ -99,8 +100,15 @@ export class SessionReplyDispatcher {
           : (sameSource ? operation.targetMessageId : undefined) ?? anchor ?? binding.surfaceId;
         if (!target) throw new Error("Missing channel-specific status card target");
         const { thread: _thread, ...source } = inbound;
+        const surfaceKind = binding.threadId
+          ? "thread"
+          : lookupChannelSurfaceKind(
+              this.db,
+              { type: binding.channelType, id: binding.channelId },
+              binding.surfaceId,
+            ) ?? (sameSource && inbound.surface.kind !== "unknown" ? inbound.surface.kind : "group");
         const normalized: NormalizedInboundMessage = { ...source, id: anchor ?? binding.surfaceId,
-          channel: { type: binding.channelType, id: binding.channelId }, surface: { externalId: binding.surfaceId, kind: binding.threadId ? "thread" : "group" },
+          channel: { type: binding.channelType, id: binding.channelId }, surface: { externalId: binding.surfaceId, kind: surfaceKind },
           ...(binding.threadId ? { thread: { externalId: binding.threadId, rootMessageExternalId: binding.rootMessageId! } } : {}),
         };
         const { mention, assetBasePath: _assets, ...payload } = operation;

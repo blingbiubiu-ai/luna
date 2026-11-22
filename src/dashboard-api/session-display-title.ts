@@ -1,3 +1,4 @@
+import { resolvePersistedSurfaceKind } from "@/channels/directory-store";
 import {
   channelIdentities,
   channelSurfaces,
@@ -56,11 +57,7 @@ export function resolveSessionDisplayTitle(
 }
 
 export function resolveChannelSurfaceKind(row: ChannelSurfaceRow): string {
-  const profileKind = profileSurfaceKind(row.rawProfileJson);
-  if (profileKind !== null) {
-    return profileKind;
-  }
-  return row.surfaceKind;
+  return resolvePersistedSurfaceKind(row);
 }
 
 function channelSurfaceForSession(

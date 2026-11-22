@@ -11,6 +11,7 @@ import { workInvocations } from "@/runners/main-invocation-registry";
 import { runnerAnswers, finalizeRunnerReply } from "@/messaging/runner-answer";
 import { SessionStore } from "@/sessions/session-store";
 import type { NormalizedInboundMessage } from "@/channels";
+import { lookupChannelSurfaceKind } from "@/channels/directory-store";
 import type { DrizzleDB } from "@/data";
 import { users, channelUserBindings } from "@/data/schema";
 import { sessionTimelineEntries } from "@/data/schema";
@@ -80,18 +81,29 @@ interface SentStatusCard {
 }
 
 function buildInboundFromMessageRow(
+  db: DrizzleDB,
   session: SessionRow,
   row: MessageRow,
 ): NormalizedInboundMessage {
-  return normalizedInboundFromMessageRow(row, workSessionInboundFallback(session));
+  return normalizedInboundFromMessageRow(row, workSessionInboundFallback(db, session));
 }
 
-function workSessionInboundFallback(session: SessionRow): NormalizedInboundFallback {
+function workSessionInboundFallback(
+  db: DrizzleDB,
+  session: SessionRow,
+): NormalizedInboundFallback {
+  const resolvedKind = lookupChannelSurfaceKind(
+    db,
+    { type: session.channel_type, id: session.channel_id },
+    session.group_id,
+  );
   return {
     channel: { type: session.channel_type, id: session.channel_id },
     surface: {
       externalId: session.group_id ?? session.channel_id,
-      kind: session.group_id === null ? "p2p" : "group",
+      kind:
+        resolvedKind ??
+        (session.group_id === null ? "p2p" : "group"),
     },
     ...(session.thread_key !== null
       ? {
@@ -141,14 +153,14 @@ export class WorkRunner {
       throw new Error(`No reply channel for work session "${session.id}".`);
     }
 
-    const inbound = buildInboundFromMessageRow(session, latestMessageRow);
+    const inbound = buildInboundFromMessageRow(this._options.db, session, latestMessageRow);
 
     const { invocationId, snapshot, runnerType: currentRunnerType, runnerContext: resolvedRunnerContext } =
       this._resolveExecution(session, input.turn.id, this._options.runAgent === undefined);
     let runnerContext = resolvedRunnerContext;
 
 
-    const fallback = workSessionInboundFallback(session);
+    const fallback = workSessionInboundFallback(this._options.db, session);
     const turnMessages = input.messageRows.map((row, index) =>
       runnerMessageEnvelopeFromRow({
         row,
@@ -390,7 +402,7 @@ export class WorkRunner {
     const attempt = turnAttempt(this._attemptStore, { sessionId: session.id, turnId: command.id, runnerContext, runnerType, inputPrompt: command.instruction });
     try {
       const launch = await this._launch({ session, invocationId, originId: command.id, runnerContext, snapshot,
-        requestedByUserId: command.actorUserId, inbound: buildInboundFromMessageRow(session, latest), signal });
+        requestedByUserId: command.actorUserId, inbound: buildInboundFromMessageRow(db, session, latest), signal });
       runnerContext = launch.runnerContext;
       if (runnerContext.runner_session_id === null) {
         // Changed instructions reset the provider context, and the conversation went with it.

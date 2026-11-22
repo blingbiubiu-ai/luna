@@ -30,7 +30,8 @@ output a second summary or meta-receipt such as "opening sent / Task created"
 (if `task create` fails after the opening, send a brief failure notice first).
 
 In a group, Service quotes the message you answer and @-mentions who asked in
-your final answer; do not add them. Mention no one else, including the bot that
+your final answer; do not add them. In a direct (p2p) chat, reply directly
+without @-mentions. Mention no one else, including the bot that
 sent the message, except for a specific next step the work calls for.
 
 Read the matching skill before using these commands; do not guess them:

@@ -1,6 +1,7 @@
 import { and, asc, eq, sql } from "drizzle-orm";
 import type { DrizzleDB } from "@/data";
-import { channelSurfaces, sessionCommands, sessions } from "@/data/schema";
+import { sessionCommands, sessions } from "@/data/schema";
+import { isGroupChannelSurface } from "@/channels/directory-store";
 import { GatewayError } from "@/server/gateway-error";
 import { InvocationService } from "@/runners/invocation-service";
 import { parseReply, replyMarkdown, type ReplyDocument } from "@luna/runner-protocol/reply";
@@ -62,6 +63,5 @@ const MENTION_REFUSALS = new Set(["mention_unresolved", "bot_mention_self", "bot
 function feishuGroup(db: DrizzleDB, sessionId: string): boolean {
   const session = db.select().from(sessions).where(eq(sessions.id, sessionId)).get();
   if (!session || session.channel_type !== "feishu" || !session.group_id) return false;
-  return Boolean(db.select().from(channelSurfaces).where(and(eq(channelSurfaces.channelId, session.channel_id),
-    eq(channelSurfaces.externalId, session.group_id), eq(channelSurfaces.surfaceKind, "group"))).get());
+  return isGroupChannelSurface(db, session.channel_id, session.group_id, session.channel_type);
 }

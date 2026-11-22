@@ -47,6 +47,7 @@ export class DataConnection<
       this._sqlite.run("PRAGMA foreign_keys = ON");
       this._db = drizzle(this._sqlite, { schema: schemas });
       migrate(this._db, { migrationsFolder });
+      repairChannelSurfaceKinds(this._sqlite);
     } catch (error) {
       this._sqlite.close();
       throw error;
@@ -130,4 +131,42 @@ function uniquePaths(paths: readonly (string | undefined)[]): string[] {
     result.push(path);
   }
   return result;
+}
+
+/**
+ * Repairs channel_surfaces rows whose surface_kind was overwritten by earlier
+ * profile-less synthetic status-card/result upserts despite p2p raw metadata.
+ */
+function repairChannelSurfaceKinds(sqlite: SQLiteDatabase): void {
+  sqlite.run(`
+    UPDATE channel_surfaces
+    SET surface_kind = 'p2p'
+    WHERE surface_kind != 'p2p'
+      AND (
+        (
+          raw_profile_json IS NOT NULL
+          AND json_valid(raw_profile_json)
+          AND (
+            json_extract(raw_profile_json, '$.chat_mode') = 'p2p'
+            OR json_extract(raw_profile_json, '$.chatMode') = 'p2p'
+            OR json_extract(raw_profile_json, '$.chat_type') = 'p2p'
+            OR json_extract(raw_profile_json, '$.chatType') = 'p2p'
+          )
+        )
+        OR (
+          raw_profile_json IS NULL
+          AND EXISTS (
+            SELECT 1
+            FROM messages m
+            WHERE m.channel_type = channel_surfaces.channel_type
+              AND m.channel_id = channel_surfaces.channel_id
+              AND m.role = 'user'
+              AND m.raw_payload_json IS NOT NULL
+              AND json_valid(m.raw_payload_json)
+              AND json_extract(m.raw_payload_json, '$.surface.externalId') = channel_surfaces.external_id
+              AND json_extract(m.raw_payload_json, '$.surface.kind') = 'p2p'
+          )
+        )
+      )
+  `);
 }

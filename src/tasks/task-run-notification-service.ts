@@ -10,6 +10,7 @@ import { RECENT_PROGRESS_STEPS } from "@/messaging/notifications/live-progress";
 import type { TaskStatusCardStepEvent } from "@/messaging/notifications/task-status-card-updater";
 
 import type { NormalizedInboundMessage } from "@/channels";
+import { lookupChannelSurfaceKind } from "@/channels/directory-store";
 import type { DrizzleDB } from "@/data";
 import {
   messages,
@@ -548,7 +549,12 @@ export class TaskRunNotificationService {
       },
       surface: {
         externalId: notification.groupId ?? notification.channelId,
-        kind: notification.groupId !== null ? "group" : "unknown",
+        kind:
+          lookupChannelSurfaceKind(
+            this._options.db,
+            { type: notification.channelType, id: notification.channelId },
+            notification.groupId,
+          ) ?? (notification.groupId !== null ? "group" : "unknown"),
       },
       ...(notification.threadKey !== null
         ? {

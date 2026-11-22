@@ -12,7 +12,7 @@ import { requireFeishuRecipientClaim } from "./feishu-recipient";
 import { RuntimeDetachedError } from "@/runners/runtime-detach";
 import { InvocationStore } from "@/runners/invocation-store";
 import { SessionStore } from "@/sessions/session-store";
-import { ChannelDirectoryStore } from "@/channels/directory-store";
+import { ChannelDirectoryStore, isGroupChannelSurface } from "@/channels/directory-store";
 import { calendarOccurrence } from "@luna/service-client/schedule-timing";
 import { ContextPackStore } from "@/context/context-pack-store";
 import { randomUUID } from "node:crypto";
@@ -69,8 +69,7 @@ export class SessionCommandService {
     private mentionAddress(target: typeof sessions.$inferSelect, userId: string, botOnly = false): string {
         const db = this.options.db;
         if (!target.binding_id || !target.group_id || target.channel_type !== "feishu" ||
-            !db.select().from(channelSurfaces).where(and(eq(channelSurfaces.channelId, target.channel_id),
-                eq(channelSurfaces.externalId, target.group_id), eq(channelSurfaces.surfaceKind, "group"))).get()) {
+            !isGroupChannelSurface(db, target.channel_id, target.group_id, target.channel_type)) {
             throw new GatewayError("bot_mention_group_required", "Bot mentions require a Feishu group conversation", 400);
         }
         if (userId === new SessionStore(db).requireReplyUserId(target.id))

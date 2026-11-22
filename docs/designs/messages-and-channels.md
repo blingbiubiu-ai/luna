@@ -241,7 +241,10 @@ provider mentions. Targets and anchors are resolved from each binding separately
 In a Feishu group or one of its topics, a Main turn's final answer is addressed:
 it quotes the message it answers (the turn's last message, or a Task result's
 source message) and starts with an @-mention of the person who asked (that
-message's sender, or the Task's requester). A topic replies in place, so there it
+message's sender, or the Task's requester). Direct (`p2p`) chats are never
+addressed with quotes or @-mentions; `channel_surfaces` preserves provider chat
+mode metadata (`chat_mode: "p2p"`) so profile-less internal notifications cannot
+reclassify a direct chat as a group. A topic replies in place, so there it
 carries the mention only. The Runner's own `replyTo` or mentions are kept as
 written; a bot sender is not mentioned; listening turns, triggers and Work
 answers are not addressed; and someone without a resolvable address in the chat

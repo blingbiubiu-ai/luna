@@ -221,3 +221,90 @@ test("Feishu renders inline mentions within Markdown and escapes raw mention mar
     tag: "md", text: '**请 <at user_id="ou_one"></at> 和 <at user_id="ou_two"></at> 审阅** &lt;at user_id="all">&lt;/at>',
   }]]);
 });
+
+test("p2p chats never @-mention or quote even after profile-less synthetic surface upserts or legacy surface_kind corruption", async () => {
+  const directory = new ChannelDirectoryStore(db.db);
+  directory.upsertSurface({
+    channel: { type: "feishu", id: "test" },
+    surface: { externalId: "room", kind: "p2p", rawProfile: { chat_mode: "p2p", chat_type: "private" } },
+  });
+  const scope = db.db.select().from(schema.sessions).where(eq(schema.sessions.id, sessionId)).get()!;
+  const identity = directory.upsertIdentity({
+    channel: { type: "feishu", id: "test" },
+    agentId: scope.agent_id,
+    identity: { kind: "user", externalId: "ou_peer", displayName: "Peer", providerIds: { open_id: "ou_peer" } },
+  });
+  const peerUserId = db.db
+    .select()
+    .from(schema.channelUserBindings)
+    .where(eq(schema.channelUserBindings.channelIdentityId, identity.id))
+    .get()!.userId;
+  db.db.insert(schema.messages).values({
+    id: "dm-question",
+    agentId: scope.agent_id,
+    shadowId: scope.shadow_id,
+    bindingId: scope.binding_id,
+    ownerSessionId: sessionId,
+    channelType: "feishu",
+    channelId: "test",
+    externalMessageId: "om_dm_question",
+    senderUserId: peerUserId,
+    role: "user",
+    contentKind: "text",
+    presentationKind: "plain",
+    contentJson: [{ type: "text", text: "今天天气怎么样" }],
+    occurredAt: 1,
+    createdAt: 1,
+  }).run();
+
+  // Simulate a profile-less synthetic status-card/result surface upsert guessing "group" from non-null group_id.
+  directory.upsertSurface({
+    channel: { type: "feishu", id: "test" },
+    surface: { externalId: "room", kind: "group" },
+  });
+
+  const storedSurface = db.db
+    .select()
+    .from(schema.channelSurfaces)
+    .where(eq(schema.channelSurfaces.externalId, "room"))
+    .get();
+  expect(storedSurface?.surfaceKind).toBe("p2p");
+
+  const { sent, service } = capture();
+  answer("今天晴天，22℃。", { messageId: "dm-question", userId: peerUserId });
+  await service.waitForIdle();
+  expect(sent[0]?.inlineMentions).toBeUndefined();
+  expect(sent[0]?.quoteMessageId).toBeUndefined();
+  expect(sent[0]?.reply?.replyTo).toBeUndefined();
+  expect(sent[0]?.reply?.content).toEqual([{ type: "text", text: "今天晴天，22℃。" }]);
+
+  // Simulate an older database row where surface_kind was already corrupted to "group" despite chat_mode="p2p".
+  db.db
+    .update(schema.channelSurfaces)
+    .set({ surfaceKind: "group" })
+    .where(eq(schema.channelSurfaces.externalId, "room"))
+    .run();
+
+  finalizeRunnerReply(db.db, {
+    sessionId,
+    originId: "turn-2",
+    actorUserId: fixtureOwnerUserId("user"),
+    allowSilent: false,
+    text: "还是不加 @。",
+    addressee: { messageId: "dm-question", userId: peerUserId },
+  });
+  await service.waitForIdle();
+  expect(sent[1]?.inlineMentions).toBeUndefined();
+  expect(sent[1]?.quoteMessageId).toBeUndefined();
+  expect(sent[1]?.reply?.content).toEqual([{ type: "text", text: "还是不加 @。" }]);
+
+  // Reopening DataConnection repairs legacy corrupted surface_kind rows automatically.
+  db.close();
+  db = new DataConnection(schema);
+  const repaired = db.db
+    .select()
+    .from(schema.channelSurfaces)
+    .where(eq(schema.channelSurfaces.externalId, "room"))
+    .get();
+  expect(repaired?.surfaceKind).toBe("p2p");
+});

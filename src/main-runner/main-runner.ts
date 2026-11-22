@@ -5,6 +5,7 @@ import {TaskScopeResolver} from "@/agents/task-scope";
 import type {AgentScope} from "@/agents/agent-store";
 import { contextFileSurface, prepareRunnerDirectory, syncAgentCompatibility, turnAttempt } from "@/runners/session-runner-turn";
 import { finalizeRunnerReply, type ReplyAddressee } from "@/messaging/runner-answer";
+import { resolvePersistedSurfaceKind } from "@/channels/directory-store";
 import { RuntimeDetachedError } from "@/runners/runtime-detach";
 import { ExecutionError } from "@luna/execution-store";
 import { InvocationStore } from "@/runners/invocation-store";
@@ -403,9 +404,10 @@ function buildMainRunnerContextFile(input: MainRunnerInput, db?: DrizzleDB) {
                 ? {
                     surface: {
                       externalId: sessionRow.group_id,
-                      kind: surfaceRow?.surfaceKind === "p2p" || surfaceRow?.surfaceKind === "group"
-                        ? surfaceRow.surfaceKind
-                        : "group",
+                      kind: (() => {
+                        const resolved = surfaceRow ? resolvePersistedSurfaceKind(surfaceRow) : undefined;
+                        return resolved === "p2p" || resolved === "group" ? resolved : "group";
+                      })(),
                       ...(surfaceRow?.displayName ? { displayName: surfaceRow.displayName } : {}),
                       ...(surfaceRow?.avatarUrl ? { avatarUrl: surfaceRow.avatarUrl } : {}),
                       ...(providerIds ? { providerIds } : {}),

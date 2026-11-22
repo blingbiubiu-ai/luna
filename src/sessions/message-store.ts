@@ -664,8 +664,10 @@ export class MessageStore {
         agentId,
       });
     }
-    const surface = input.surface ?? input.inbound?.surface;
-    if (surface !== undefined) {
+    const surface =
+      input.surface ??
+      (shouldSkipSenderIdentityUpsert(input) ? undefined : input.inbound?.surface);
+    if (surface !== undefined && surface.kind !== "unknown") {
       this._directory.upsertSurface({
         channel,
         surface,

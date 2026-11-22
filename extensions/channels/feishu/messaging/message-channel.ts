@@ -2083,7 +2083,17 @@ export class FeishuMessageChannel
     }
     const name = firstString(chat.name, chat.i18n_names);
     const displayName = firstString(chat.name, chat.description);
-    const profileChatType = firstString(chat.chat_type, chat.chat_mode, chatType);
+    const chatMode = firstString(chat.chat_mode);
+    const normalizedMode =
+      chatMode === "p2p"
+        ? "p2p"
+        : chatMode === "group" || chatMode === "topic"
+          ? "group"
+          : undefined;
+    const rawChatType = firstString(chat.chat_type);
+    const normalizedChatType =
+      rawChatType === "p2p" || rawChatType === "group" ? rawChatType : undefined;
+    const profileChatType = normalizedMode ?? normalizedChatType ?? chatType;
     const avatarUrl = firstString(chat.avatar, chat.avatar_url);
     const profileTenantKey = firstString(chat.tenant_key, tenantKey);
     return {

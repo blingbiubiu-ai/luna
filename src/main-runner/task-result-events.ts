@@ -15,6 +15,7 @@ import { artifactizeLocalFileReferencesInValue } from "@/artifacts/local-file-ar
 import type { TaskSubscription } from "@/tasks/types";
 import type { TaskRunNotificationService } from "@/tasks/task-run-notification-service";
 import type { NormalizedInboundMessage } from "@/channels";
+import { lookupChannelSurfaceKind } from "@/channels/directory-store";
 import type { DrizzleDB } from "@/data";
 import {
   taskRuns,
@@ -468,7 +469,12 @@ export class TaskResultEventPublisher {
       },
       surface: {
         externalId: subscription.group_id ?? subscription.channel_id,
-        kind: subscription.group_id !== null ? "group" : "unknown",
+        kind:
+          lookupChannelSurfaceKind(
+            this._db,
+            { type: subscription.channel_type, id: subscription.channel_id },
+            subscription.group_id,
+          ) ?? (subscription.group_id !== null ? "group" : "unknown"),
       },
       ...(subscription.thread_key !== null
         ? {

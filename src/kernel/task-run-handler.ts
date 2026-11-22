@@ -8,6 +8,7 @@ import { randomUUID } from "node:crypto";
 import { LiveProgress } from "@/messaging/notifications/live-progress";
 import type { TaskStatusCardStepEvent } from "@/messaging/notifications/task-status-card-updater";
 import type { NativeProgressEntry } from "@/channels/outbound";
+import { lookupChannelSurfaceKind } from "@/channels/directory-store";
 import { createLogger } from "@/shared";
 const progressLogger = createLogger("task-progress");
 import { InvocationStore } from "@/runners/invocation-store";
@@ -138,7 +139,7 @@ export async function executeTaskRun(
   const taskRow = _taskRowById(input.db, input.taskId);
   const deliverySubscriptions = new TaskSubscriptionStore(input.db).listForTask(input.taskId);
   const instructionFiles = input.runnerType==="mock"
-    ? await prepareRunnerFiles(input.runnerContext, _buildTaskRunnerContextFile(input.taskId, taskRow, deliverySubscriptions), input.signal)
+    ? await prepareRunnerFiles(input.runnerContext, _buildTaskRunnerContextFile(input.db, input.taskId, taskRow, deliverySubscriptions), input.signal)
     : undefined;
   const runnerContext = instructionFiles ? new RunnerContextStore(input.db).syncInstructionFingerprint(input.runnerContext.id, instructionFiles.instructionFingerprint).runnerContext : input.runnerContext;
   const promptPackage = _buildTaskRunPromptPackage({
@@ -267,6 +268,7 @@ function _taskRowById(db: DrizzleDB, taskId: string) {
 }
 
 function _buildTaskRunnerContextFile(
+  db: DrizzleDB,
   taskId: string,
   taskRow: typeof tasks.$inferSelect | undefined,
   subscriptions: readonly TaskSubscription[],
@@ -287,28 +289,40 @@ function _buildTaskRunnerContextFile(
       deliverySubscriptions: subscriptions
         .slice()
         .sort((a, b) => a.id.localeCompare(b.id))
-        .map((subscription) => ({
-          sessionId: subscription.session_id,
-          channel: {
-            type: subscription.channel_type,
-            id: subscription.channel_id,
-          },
-          surface: {
-            kind: subscription.group_id === null ? "p2p" : "group",
-            externalId: subscription.group_id ?? subscription.channel_id,
-          },
-          ...(subscription.thread_key !== null
-            ? {
-                thread: {
-                  externalId: subscription.thread_key,
-                  ...(subscription.root_message_key !== null
-                    ? { rootMessageExternalId: subscription.root_message_key }
-                    : {}),
-                },
-              }
-            : {}),
-          visibility: subscription.visibility,
-        })),
+        .map((subscription) => {
+          const resolvedKind = lookupChannelSurfaceKind(
+            db,
+            { type: subscription.channel_type, id: subscription.channel_id },
+            subscription.group_id,
+          );
+          return {
+            sessionId: subscription.session_id,
+            channel: {
+              type: subscription.channel_type,
+              id: subscription.channel_id,
+            },
+            surface: {
+              kind:
+                resolvedKind === "p2p" || resolvedKind === "group"
+                  ? resolvedKind
+                  : subscription.group_id === null
+                    ? "p2p"
+                    : "group",
+              externalId: subscription.group_id ?? subscription.channel_id,
+            },
+            ...(subscription.thread_key !== null
+              ? {
+                  thread: {
+                    externalId: subscription.thread_key,
+                    ...(subscription.root_message_key !== null
+                      ? { rootMessageExternalId: subscription.root_message_key }
+                      : {}),
+                  },
+                }
+              : {}),
+            visibility: subscription.visibility,
+          };
+        }),
     },
   } as const;
 }
@@ -482,7 +496,7 @@ async function _runAgentTask(input: {
   });
   if(!new InvocationStore(input.db).require(invocationId).activeJobId){
     const subscriptions=new TaskSubscriptionStore(input.db).listForTask(input.taskId);
-    const prepared=await prepareRunnerFiles(runnerContext,_buildTaskRunnerContextFile(input.taskId,taskRow,subscriptions),input.signal,invocationId);
+    const prepared=await prepareRunnerFiles(runnerContext,_buildTaskRunnerContextFile(input.db,input.taskId,taskRow,subscriptions),input.signal,invocationId);
     runnerContext=new RunnerContextStore(input.db).syncInstructionFingerprint(runnerContext.id,prepared.instructionFingerprint).runnerContext;
   }
   // The artifact allowlist above is derived from the Task prompt alone; memory text must not widen it.
