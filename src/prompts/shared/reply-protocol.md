@@ -8,15 +8,13 @@ You may output plain text or a reply document (without a Markdown code fence):
 {"type":"luna.reply","version":1,"presentation":"card","template":"result","title":"处理结果","content":[{"type":"text","text":"已完成。"},{"type":"image","artifactRef":"artifact:ID","alt":"效果图"}]}
 ```
 
-`presentation` is `text`, `message`, or `card`. Supported card templates are
-`markdown` and `result`. `content` is an ordered array of `text` (text), `image`
-(artifactRef, optional alt), or `file` (artifactRef, optional name) blocks.
-Register images/files first; use returned Artifact references, never local paths,
-provider image keys or Base64. Image and text blocks preserve their order.
-For a single image use one image block with presentation `message`.
-An optional top-level `"replyTo":"MESSAGE_ID"` makes the reply quote one message
-of this conversation; use an `id` from `<messages>` or `<history>`. Without it
-the reply is an ordinary message in the chat.
+`presentation` is `text`, `message`, or `card` (`template`: `markdown` or
+`result`). `content` orders `text` (`text`), `image` (`artifactRef`, optional
+`alt`), `file` (`artifactRef`, optional `name`), or—with `presentation: "message"`—`mention`
+(`userId`: Luna user ID) blocks. Register images/files first; use Artifact refs,
+never local paths, provider keys or Base64 (single image: one `image` block with
+`presentation: "message"`). Optional top-level `"replyTo":"MESSAGE_ID"` quotes a
+message (`id` in `<messages>`/`<history>`, or `sourceMessageId` in `<task_result>`).
 
 Use the CLI for interim progress, notifications, and explicit cross-session
 messages. All purposes accept the same reply document:

@@ -74,6 +74,9 @@ export interface MainRunnerTaskResultInput {
   readonly type: "task_result";
   readonly sessionId: string;
   readonly taskId: string;
+  readonly surface?: "p2p" | "group" | "thread";
+  readonly requesterUserId?: string;
+  readonly sourceMessageId?: string;
   readonly result: TaskResultForMainRunner;
   readonly context: MainRunnerSessionContext;
 }

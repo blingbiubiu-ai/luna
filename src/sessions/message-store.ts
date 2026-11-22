@@ -667,7 +667,7 @@ export class MessageStore {
     const surface =
       input.surface ??
       (shouldSkipSenderIdentityUpsert(input) ? undefined : input.inbound?.surface);
-    if (surface !== undefined && surface.kind !== "unknown") {
+    if (surface !== undefined) {
       this._directory.upsertSurface({
         channel,
         surface,

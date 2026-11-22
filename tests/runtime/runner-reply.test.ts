@@ -84,51 +84,35 @@ function capture() {
   registerSessionCommands(db.db, service);
   return { sent, service };
 }
-const answer = (text: string, addressee?: { messageId?: string; userId?: string }) =>
-  finalizeRunnerReply(db.db, { sessionId, originId: "turn", actorUserId: fixtureOwnerUserId("user"), allowSilent: false, text, ...(addressee ? { addressee } : {}) });
+const answer = (text: string) =>
+  finalizeRunnerReply(db.db, { sessionId, originId: "turn", actorUserId: fixtureOwnerUserId("user"), allowSilent: false, text });
 
-test("a group answer quotes the message it answers and mentions the person who asked", async () => {
-  const asker = groupAsker(); const { sent, service } = capture();
-  answer("好的，已处理。", { messageId: "question", userId: asker });
-  await service.waitForIdle();
-  expect(sent[0]?.quoteMessageId).toBe("om_question");
-  expect(sent[0]?.inlineMentions).toEqual(["ou_asker"]);
-  expect(sent[0]?.reply).toMatchObject({ presentation: "message", replyTo: "question",
-    content: [{ type: "mention", userId: asker }, { type: "text", text: " " }, { type: "text", text: "好的，已处理。" }] });
-});
-
-test("an asker without an address in the chat still gets the quoted answer", async () => {
+test("Service does not auto-inject quotes or @-mentions into plain group or direct answers", async () => {
   groupAsker(); const { sent, service } = capture();
-  answer("好的。", { messageId: "question", userId: fixtureOwnerUserId("user") });
+  answer("好的，已处理。");
   await service.waitForIdle();
-  expect(sent[0]?.quoteMessageId).toBe("om_question");
+  expect(sent[0]?.quoteMessageId).toBeUndefined();
   expect(sent[0]?.inlineMentions).toBeUndefined();
-  expect(sent[0]?.reply?.content).toEqual([{ type: "text", text: "好的。" }]);
+  expect(sent[0]?.reply).toMatchObject({
+    presentation: "text",
+    content: [{ type: "text", text: "好的，已处理。" }],
+  });
 });
 
-test("the Runner's own quote and mentions are kept, and cards are only quoted", async () => {
+test("Agent-chosen quotes and inline mentions are delivered as written in group and card replies", async () => {
   const asker = groupAsker(); const { sent, service } = capture();
   const own = JSON.stringify({ type: "luna.reply", version: 1, presentation: "message", replyTo: "question",
     content: [{ type: "text", text: "请 " }, { type: "mention", userId: asker }, { type: "text", text: " 确认" }] });
-  answer(own, { messageId: "other", userId: asker });
+  answer(own);
   await service.waitForIdle();
   expect(sent[0]?.reply?.content).toHaveLength(3);
   expect(sent[0]?.inlineMentions).toEqual(["ou_asker"]);
   expect(sent[0]?.quoteMessageId).toBe("om_question");
   finalizeRunnerReply(db.db, { sessionId, originId: "card", actorUserId: fixtureOwnerUserId("user"), allowSilent: false,
-    text: JSON.stringify({ type: "luna.reply", version: 1, presentation: "card", title: "结果", content: [{ type: "text", text: "完成" }] }),
-    addressee: { messageId: "question", userId: asker } });
+    text: JSON.stringify({ type: "luna.reply", version: 1, presentation: "card", title: "结果", replyTo: "question", content: [{ type: "text", text: "完成" }] }) });
   await service.waitForIdle();
   expect(sent[1]?.quoteMessageId).toBe("om_question");
   expect(sent[1]?.inlineMentions).toBeUndefined();
-});
-
-test("answers outside a group chat are not addressed", async () => {
-  const { sent, service } = capture();
-  answer("私聊答复", { messageId: "question", userId: fixtureOwnerUserId("user") });
-  await service.waitForIdle();
-  expect(sent[0]?.reply?.replyTo).toBeUndefined();
-  expect(sent[0]?.inlineMentions).toBeUndefined();
 });
 
 test("structured card is persisted, forwarded, and authorized with active image artifacts", async () => {
@@ -271,12 +255,33 @@ test("p2p chats never @-mention or quote even after profile-less synthetic surfa
   expect(storedSurface?.surfaceKind).toBe("p2p");
 
   const { sent, service } = capture();
-  answer("今天晴天，22℃。", { messageId: "dm-question", userId: peerUserId });
+  answer("今天晴天，22℃。");
   await service.waitForIdle();
   expect(sent[0]?.inlineMentions).toBeUndefined();
   expect(sent[0]?.quoteMessageId).toBeUndefined();
   expect(sent[0]?.reply?.replyTo).toBeUndefined();
   expect(sent[0]?.reply?.content).toEqual([{ type: "text", text: "今天晴天，22℃。" }]);
+
+  // Service also does not forbid Agent-chosen replyTo or inline user mentions in a p2p Feishu chat.
+  finalizeRunnerReply(db.db, {
+    sessionId,
+    originId: "turn-2",
+    actorUserId: fixtureOwnerUserId("user"),
+    allowSilent: false,
+    text: JSON.stringify({
+      type: "luna.reply",
+      version: 1,
+      presentation: "message",
+      replyTo: "dm-question",
+      content: [
+        { type: "mention", userId: peerUserId },
+        { type: "text", text: " 针对你刚才那条天气提问补充一下。" },
+      ],
+    }),
+  });
+  await service.waitForIdle();
+  expect(sent[1]?.quoteMessageId).toBe("om_dm_question");
+  expect(sent[1]?.inlineMentions).toEqual(["ou_peer"]);
 
   // Simulate an older database row where surface_kind was already corrupted to "group" despite chat_mode="p2p".
   db.db
@@ -284,19 +289,6 @@ test("p2p chats never @-mention or quote even after profile-less synthetic surfa
     .set({ surfaceKind: "group" })
     .where(eq(schema.channelSurfaces.externalId, "room"))
     .run();
-
-  finalizeRunnerReply(db.db, {
-    sessionId,
-    originId: "turn-2",
-    actorUserId: fixtureOwnerUserId("user"),
-    allowSilent: false,
-    text: "还是不加 @。",
-    addressee: { messageId: "dm-question", userId: peerUserId },
-  });
-  await service.waitForIdle();
-  expect(sent[1]?.inlineMentions).toBeUndefined();
-  expect(sent[1]?.quoteMessageId).toBeUndefined();
-  expect(sent[1]?.reply?.content).toEqual([{ type: "text", text: "还是不加 @。" }]);
 
   // Reopening DataConnection repairs legacy corrupted surface_kind rows automatically.
   db.close();

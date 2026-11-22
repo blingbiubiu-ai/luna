@@ -69,8 +69,12 @@ export class SessionCommandService {
     private mentionAddress(target: typeof sessions.$inferSelect, userId: string, botOnly = false): string {
         const db = this.options.db;
         if (!target.binding_id || !target.group_id || target.channel_type !== "feishu" ||
-            !isGroupChannelSurface(db, target.channel_id, target.group_id, target.channel_type)) {
-            throw new GatewayError("bot_mention_group_required", "Bot mentions require a Feishu group conversation", 400);
+            (botOnly && !isGroupChannelSurface(db, target.channel_id, target.group_id, target.channel_type))) {
+            throw new GatewayError(
+                botOnly ? "bot_mention_group_required" : "mention_channel_unsupported",
+                botOnly ? "Bot mentions require a Feishu group conversation" : "Inline mentions require a bound Feishu conversation",
+                400,
+            );
         }
         if (userId === new SessionStore(db).requireReplyUserId(target.id))
             throw new GatewayError("bot_mention_self", "A bot cannot mention itself", 400);

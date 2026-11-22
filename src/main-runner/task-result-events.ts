@@ -414,10 +414,33 @@ export class TaskResultEventPublisher {
           createdForInvocationId: input.attemptId,
         },
       );
+      const taskOrigin = this._db
+        .select({
+          creatorUserId: tasks.creator_user_id,
+          sourceMessageId: tasks.source_message_id,
+        })
+        .from(tasks)
+        .where(eq(tasks.id, input.result.taskId))
+        .get();
+      const surfaceKind = input.subscription.thread_key !== null
+        ? "thread"
+        : input.subscription.group_id !== null
+          ? lookupChannelSurfaceKind(this._db, {
+              type: input.subscription.channel_type,
+              id: input.subscription.channel_id,
+            }, input.subscription.group_id) ?? "group"
+          : input.subscription.channel_type === "dashboard"
+            ? "p2p"
+            : undefined;
       const mainRunnerInput: MainRunnerInput = {
         type: "task_result",
         sessionId: input.subscription.session_id,
         taskId: input.result.taskId,
+        ...(surfaceKind === "p2p" || surfaceKind === "group" || surfaceKind === "thread"
+          ? { surface: surfaceKind }
+          : {}),
+        ...(taskOrigin?.creatorUserId ? { requesterUserId: taskOrigin.creatorUserId } : {}),
+        ...(taskOrigin?.sourceMessageId ? { sourceMessageId: taskOrigin.sourceMessageId } : {}),
         result: {
           ...input.result,
           artifactRefs: taskResultArtifactRefs(this._db, input.result.taskId, input.result.artifactIds),
