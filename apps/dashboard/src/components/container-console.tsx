@@ -414,7 +414,7 @@ export function Workspace({
                 size="xs"
                 variant={quickKeysOpen ? "secondary" : "outline"}
                 onClick={() => setQuickKeysPref(prev => ({ ...prev, [current.key]: !quickKeysOpen }))}
-                title="展开或收起终端快捷按键与缓冲上屏工具栏"
+                title="展开或收起悬浮快捷按键栏（不改变终端高度）"
               >
                 <TerminalIcon className="size-3.5" />
                 快捷栏
@@ -520,14 +520,6 @@ export function Workspace({
         </p>
       )}
 
-      {current && quickKeysOpen && (
-        <QuickKeyToolbar
-          onSend={seq => {
-            sendInputHandlers.current.get(current.key)?.(seq);
-          }}
-        />
-      )}
-
       <div
         className="relative min-h-0 flex-1 bg-[#0b0b0c]"
         onDragOver={event => {
@@ -548,6 +540,14 @@ export function Workspace({
           openUpload();
         }}
       >
+        {current && quickKeysOpen && (
+          <QuickKeyToolbar
+            onClose={() => setQuickKeysPref(prev => ({ ...prev, [current.key]: false }))}
+            onSend={seq => {
+              sendInputHandlers.current.get(current.key)?.(seq);
+            }}
+          />
+        )}
         {dragging && (
           <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center bg-background/70 text-sm font-medium">
             松开以上传到分身的 HOME
@@ -635,7 +635,13 @@ function streamUrl(
   return `${protocol}//${window.location.host}/api/agents/${encodeURIComponent(agentId)}/containers/${encodeURIComponent(item.row.workerId)}/${encodeURIComponent(item.row.environmentId)}/stream?${params}`;
 }
 
-function QuickKeyToolbar({ onSend }: { readonly onSend: (seq: string) => void }) {
+function QuickKeyToolbar({
+  onClose,
+  onSend,
+}: {
+  readonly onClose: () => void;
+  readonly onSend: (seq: string) => void;
+}) {
   const [pasteText, setPasteText] = useState("");
   const sendBracketedPaste = () => {
     if (!pasteText) return;
@@ -643,7 +649,10 @@ function QuickKeyToolbar({ onSend }: { readonly onSend: (seq: string) => void })
     setPasteText("");
   };
   return (
-    <div className="flex flex-wrap items-center gap-1.5 border-b bg-muted/30 px-2.5 py-1.5">
+    <div
+      aria-label="悬浮快捷按键栏"
+      className="pointer-events-auto absolute top-2 right-4 z-10 flex max-w-[calc(100%-2rem)] flex-wrap items-center gap-1.5 rounded-lg border border-zinc-700/80 bg-zinc-900/90 px-2.5 py-1.5 text-zinc-100 shadow-lg backdrop-blur-sm"
+    >
       <div className="flex flex-wrap items-center gap-1">
         {QUICK_KEYS.map(item => (
           <button
@@ -651,13 +660,13 @@ function QuickKeyToolbar({ onSend }: { readonly onSend: (seq: string) => void })
             type="button"
             title={item.title}
             onClick={() => onSend(item.seq)}
-            className="rounded border bg-background px-2 py-0.5 font-mono text-[11px] text-foreground shadow-2xs hover:bg-muted active:translate-y-px"
+            className="rounded border border-zinc-700 bg-zinc-800/90 px-2 py-0.5 font-mono text-[11px] text-zinc-100 hover:bg-zinc-700 active:translate-y-px"
           >
             {item.label}
           </button>
         ))}
       </div>
-      <div className="ml-auto flex min-w-52 items-center gap-1">
+      <div className="flex min-w-48 items-center gap-1">
         <Input
           value={pasteText}
           onChange={event => setPasteText(event.target.value)}
@@ -667,14 +676,23 @@ function QuickKeyToolbar({ onSend }: { readonly onSend: (seq: string) => void })
               sendBracketedPaste();
             }
           }}
-          placeholder="缓冲输入中文或长文本（上屏不直接回车）…"
+          placeholder="缓冲输入中文或长文本…"
           aria-label="缓冲粘贴到终端"
-          className="h-6 text-xs"
+          className="h-6 border-zinc-700 bg-zinc-950/80 text-xs text-zinc-100 placeholder:text-zinc-400"
         />
         <Button size="xs" variant="secondary" disabled={!pasteText} onClick={sendBracketedPaste}>
           <ClipboardPasteIcon className="size-3" />
           上屏
         </Button>
+        <button
+          type="button"
+          title="收起快捷栏"
+          aria-label="收起快捷栏"
+          onClick={onClose}
+          className="rounded p-1 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100"
+        >
+          <XIcon className="size-3.5" />
+        </button>
       </div>
     </div>
   );
@@ -708,10 +726,10 @@ function TerminalView({
     if (element && element.clientWidth > 0 && element.clientHeight > 0) {
       fitRef.current?.fit();
     }
-    if (writable) terminalRef.current?.focus();
-  }, [active, writable]);
+    if (writableRef.current) terminalRef.current?.focus();
+  }, [active]);
 
-  // Dynamically toggle read-only <-> writable mode on PTY streams without reconnecting.
+  // Dynamically toggle read-only <-> writable mode on PTY streams without resizing or reconnecting.
   useEffect(() => {
     const socket = socketRef.current;
     const term = terminalRef.current;
@@ -721,10 +739,8 @@ function TerminalView({
     }
     if (kind === "pty" && socket?.readyState === WebSocket.OPEN) {
       socket.send(JSON.stringify({ type: "mode", writable }));
-      if (writable && term) {
-        fitRef.current?.fit();
-        socket.send(JSON.stringify({ type: "resize", cols: term.cols, rows: term.rows }));
-        term.focus();
+      if (writable) {
+        term?.focus();
       }
     }
   }, [writable, kind]);
@@ -757,12 +773,22 @@ function TerminalView({
     };
     refit();
 
+    let lastSentCols = 0;
+    let lastSentRows = 0;
     const socket = new WebSocket(
       url({ cols: terminal.cols || 120, rows: terminal.rows || 36 }, writableRef.current),
     );
     socket.binaryType = "arraybuffer";
     socketRef.current = socket;
     const encoder = new TextEncoder();
+
+    const sendResizeIfChanged = (cols: number, rows: number) => {
+      if (socket.readyState !== WebSocket.OPEN || cols <= 0 || rows <= 0) return;
+      if (cols === lastSentCols && rows === lastSentRows) return;
+      lastSentCols = cols;
+      lastSentRows = rows;
+      socket.send(JSON.stringify({ type: "resize", cols, rows }));
+    };
 
     registerSender((seq: string) => {
       if (!writableRef.current) return;
@@ -774,10 +800,11 @@ function TerminalView({
 
     socket.onopen = () => {
       onStatus("已连接");
+      refit();
+      sendResizeIfChanged(terminal.cols, terminal.rows);
       if (writableRef.current) {
         if (kind === "pty") {
           socket.send(JSON.stringify({ type: "mode", writable: true }));
-          socket.send(JSON.stringify({ type: "resize", cols: terminal.cols, rows: terminal.rows }));
         }
         terminal.focus();
       }
@@ -794,13 +821,17 @@ function TerminalView({
       if (socket.readyState === WebSocket.OPEN) socket.send(encoder.encode(data));
     });
     const resize = terminal.onResize(({ cols, rows }) => {
-      if (socket.readyState === WebSocket.OPEN && cols > 0 && rows > 0) {
-        socket.send(JSON.stringify({ type: "resize", cols, rows }));
-      }
+      sendResizeIfChanged(cols, rows);
     });
-    const observer = new ResizeObserver(refit);
+    let resizeTimer: ReturnType<typeof setTimeout> | undefined;
+    const debouncedRefit = () => {
+      if (resizeTimer) clearTimeout(resizeTimer);
+      resizeTimer = setTimeout(refit, 120);
+    };
+    const observer = new ResizeObserver(debouncedRefit);
     observer.observe(element);
     return () => {
+      if (resizeTimer) clearTimeout(resizeTimer);
       registerSender(null);
       observer.disconnect();
       input.dispose();
