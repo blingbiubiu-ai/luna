@@ -14,6 +14,7 @@ import {
   memoryConsolidations,
   scheduleFailureNotifications,
   sessionCommands,
+  sessionRunnerAttempts,
   sessionSchedules,
   sessions,
   sessionTimelineEvents,
@@ -198,6 +199,22 @@ export function createAgentProactivityRoutes(
         const nextEligibleAt =
           intervalMs > 0 ? referenceAt + intervalMs : null;
 
+        const latestAttemptOutput = latestCmd
+          ? d
+              .select({ rawOutput: sessionRunnerAttempts.rawOutput })
+              .from(sessionRunnerAttempts)
+              .where(eq(sessionRunnerAttempts.turnId, latestCmd.id))
+              .orderBy(desc(sessionRunnerAttempts.attemptIndex))
+              .limit(1)
+              .get()?.rawOutput ?? null
+          : null;
+        const cleanSummary =
+          latestAttemptOutput &&
+          latestAttemptOutput.trim() &&
+          latestAttemptOutput.trim() !== "LUNA_NOTHING_TO_SEND"
+            ? latestAttemptOutput.trim().slice(0, 240)
+            : null;
+
         return {
           shadowId: shadow.id,
           shadowName: shadow.name,
@@ -211,6 +228,7 @@ export function createAgentProactivityRoutes(
                 id: latestCmd.id,
                 status: latestCmd.status,
                 error: latestCmd.error,
+                summary: cleanSummary,
                 createdAt: latestCmd.createdAt,
                 updatedAt: latestCmd.updatedAt,
               }

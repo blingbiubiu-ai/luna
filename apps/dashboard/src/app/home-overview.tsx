@@ -203,23 +203,20 @@ export function HomeOverview({
           <CardHeader className="border-b pb-4">
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div>
-                <CardTitle className="flex items-center gap-2">
-                  <HeartPulse className="size-4 text-primary" />
-                  主动巡检与协同（Proactivity）
-                </CardTitle>
+                <CardTitle>主动巡检与协同</CardTitle>
                 <CardDescription>
-                  分身心跳游标、主动提问/协同请求及值班巡检职责实况。
+                  分身心跳动态、待响应追问与值班巡检实况。
                 </CardDescription>
               </div>
               <DashboardLink href={`${base}/proactivity`}>
-                打开主动中心
+                进入主动中心
                 <ArrowRight className="size-4" />
               </DashboardLink>
             </div>
           </CardHeader>
           <CardContent className="grid gap-3 p-4 sm:grid-cols-2 lg:grid-cols-4">
             <StatusTile
-              label="待巡检分身动态"
+              label="待巡检分身"
               value={
                 proactivity.heartbeats.filter(
                   (h) => h.pendingActivity.hasWakeActivity,
@@ -234,7 +231,7 @@ export function HomeOverview({
               }
             />
             <StatusTile
-              label="等待响应的追问 / 委派"
+              label="待响应请求"
               value={
                 proactivity.requests.filter((r) => r.status === "pending").length
               }

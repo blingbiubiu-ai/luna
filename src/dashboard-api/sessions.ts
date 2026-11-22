@@ -1214,8 +1214,27 @@ export function toDashboardSessionTimeline(input: {
       ? item.messages.map((message) => ({ type: "message" as const, message }))
       : [item],
   );
+  const renderedTurnIds = new Set(
+    items.flatMap((item) => (item.type === "turn" ? [item.turn.id] : [])),
+  );
+  const standaloneTurns: DashboardSessionTimelineItem[] = input.turns
+    .filter(
+      (turn) =>
+        !renderedTurnIds.has(turn.id) &&
+        turn.messageIds.length === 0 &&
+        (turn.materializedPrompt !== null ||
+          turn.runnerAttempts.length > 0 ||
+          turn.status === "running" ||
+          turn.status === "failed"),
+    )
+    .map((turn) => ({
+      type: "turn" as const,
+      turn: toDashboardSessionTimelineTurn(turn, 0),
+      messages: [],
+    }));
   const timelineItems = [
     ...groupedItems,
+    ...standaloneTurns,
     ...(input.events ?? []).map((event) => ({ type: "event" as const, event })),
   ];
   return timelineItems.sort(compareDashboardSessionTimelineItems);

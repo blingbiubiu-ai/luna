@@ -1,33 +1,23 @@
 import { createFileRoute } from "@tanstack/react-router";
 import {
-  AlertTriangle,
+  AlertCircle,
   ArrowRight,
   BellOff,
   CalendarClock,
+  Check,
   CheckCircle2,
-  Clock3,
-  ExternalLink,
   GitPullRequestArrow,
-  HeartPulse,
-  HelpCircle,
   Play,
   RefreshCw,
-  ShieldAlert,
+  Search,
   SlidersHorizontal,
-  XCircle,
+  X,
 } from "lucide-react";
 import { useMemo, useState } from "react";
 
+import { IdentityAvatar } from "@/components/identity-link";
 import { ShadowPicker, useShadowScope } from "@/components/shadow-picker";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useAgentBasePath, useRouteAgent } from "@/lib/agent-route";
 import {
@@ -35,6 +25,8 @@ import {
   useProactivityOverview,
   useTriggerShadowHeartbeat,
   type DashboardCorrelatedRequestItem,
+  type DashboardDutyScheduleItem,
+  type DashboardProactivityOverview,
   type DashboardShadowHeartbeatItem,
 } from "@/lib/api";
 import { cn } from "@/lib/utils";
@@ -43,9 +35,23 @@ export const Route = createFileRoute("/$agentId/proactivity/")({
   component: ProactivityPage,
 });
 
+type LedgerTab = "requests" | "duties" | "governance";
 type RequestFilter = "all" | "pending" | "ask" | "handoff";
 
-function formatDateTime(ms: number | null | undefined, timezone?: string): string {
+function formatHeartbeatError(raw: string): string {
+  if (
+    raw.includes("no_scoped_worker_available") ||
+    raw.includes("shadow_worker_unavailable")
+  ) {
+    return "暂无可用执行 Worker（请确认绑定的 Worker 与容器服务在线）";
+  }
+  if (raw.includes("AgentNotConfiguredError")) {
+    return "尚未启用模型配置（请先在「模型配置」中激活可用模型）";
+  }
+  return raw;
+}
+
+function formatShortTime(ms: number | null | undefined, timezone?: string): string {
   if (!ms || ms <= 0) return "尚未运行";
   try {
     return new Intl.DateTimeFormat("zh-CN", {
@@ -54,7 +60,6 @@ function formatDateTime(ms: number | null | undefined, timezone?: string): strin
       day: "2-digit",
       hour: "2-digit",
       minute: "2-digit",
-      second: "2-digit",
       hour12: false,
     }).format(new Date(ms));
   } catch {
@@ -82,7 +87,9 @@ function ProactivityPage() {
   const triggerHeartbeat = useTriggerShadowHeartbeat(agent.id);
   const cancelRequest = useCancelProactivityRequest(agent.id);
 
+  const [ledgerTab, setLedgerTab] = useState<LedgerTab>("requests");
   const [requestFilter, setRequestFilter] = useState<RequestFilter>("all");
+  const [searchQuery, setSearchQuery] = useState("");
   const [triggerBanner, setTriggerBanner] = useState<{
     shadowName: string;
     sessionId: string;
@@ -92,16 +99,11 @@ function ProactivityPage() {
   const data = overviewQuery.data;
   const now = data?.now ?? Date.now();
 
-  const filteredRequests = useMemo(() => {
-    const list = data?.requests ?? [];
-    return list.filter(item => {
-      if (requestFilter === "pending") return item.status === "pending";
-      if (requestFilter === "ask") return item.kind === "ask";
-      if (requestFilter === "handoff") return item.kind === "handoff";
-      return true;
-    });
-  }, [data?.requests, requestFilter]);
-
+  const runningShadows = (data?.heartbeats ?? []).filter(
+    hb =>
+      hb.latestCommand?.status === "pending" ||
+      hb.latestCommand?.status === "running",
+  ).length;
   const wakeShadows = (data?.heartbeats ?? []).filter(
     hb => hb.pendingActivity.hasWakeActivity,
   ).length;
@@ -113,6 +115,38 @@ function ProactivityPage() {
     d => d.lastFailure !== null,
   ).length;
   const deferredCount = data?.governance.deferredQueue.length ?? 0;
+  const governanceTotal =
+    deferredCount + (data?.governance.recentEvents.length ?? 0);
+
+  const normalizedSearch = searchQuery.trim().toLowerCase();
+
+  const filteredRequests = useMemo(() => {
+    const list = data?.requests ?? [];
+    return list.filter(item => {
+      if (requestFilter === "pending" && item.status !== "pending") return false;
+      if (requestFilter === "ask" && item.kind !== "ask") return false;
+      if (requestFilter === "handoff" && item.kind !== "handoff") return false;
+      if (!normalizedSearch) return true;
+      return [
+        item.id,
+        item.instruction,
+        item.originSessionTitle,
+        item.targetSessionTitle,
+        item.targetUserName ?? "",
+        item.shadowName,
+      ].some(v => v.toLowerCase().includes(normalizedSearch));
+    });
+  }, [data?.requests, requestFilter, normalizedSearch]);
+
+  const filteredDuties = useMemo(() => {
+    const list = data?.duties ?? [];
+    if (!normalizedSearch) return list;
+    return list.filter(item =>
+      [item.title, item.instruction, item.taskTitle, item.targetSessionTitle].some(
+        v => v.toLowerCase().includes(normalizedSearch),
+      ),
+    );
+  }, [data?.duties, normalizedSearch]);
 
   async function handleTriggerHeartbeat(hb: DashboardShadowHeartbeatItem) {
     const res = await triggerHeartbeat.mutateAsync(hb.shadowId);
@@ -123,533 +157,509 @@ function ProactivityPage() {
     });
   }
 
+  const policySummary = data
+    ? [
+        data.settings.heartbeatIntervalMs > 0
+          ? `心跳每 ${Math.round(data.settings.heartbeatIntervalMs / 60_000)} 分钟`
+          : "周期心跳已关闭",
+        data.settings.outboundPerSessionPerHour > 0
+          ? `单会话 ${data.settings.outboundPerSessionPerHour} 条/时`
+          : "单会话不限",
+        data.settings.outboundPerRecipientPerDay > 0
+          ? `单人 ${data.settings.outboundPerRecipientPerDay} 条/天`
+          : "单人不限",
+        data.settings.outboundDedupWindowMs > 0
+          ? `${Math.round(data.settings.outboundDedupWindowMs / 3_600_000)}h 去重`
+          : "不去重",
+      ].join(" · ")
+    : "";
+
   return (
-    <div className="flex min-h-0 flex-1 flex-col overflow-y-auto bg-background">
-      <div className="mx-auto flex w-full max-w-6xl flex-col gap-6 px-6 py-6">
-        {/* Header */}
-        <header className="flex flex-wrap items-start justify-between gap-4 border-b border-border pb-5">
-          <div className="space-y-1.5">
-            <div className="flex items-center gap-2 text-xs font-medium text-muted-foreground">
-              <HeartPulse className="size-3.5 text-primary" />
-              <span>自我层 · 主动沟通 · 外发调控</span>
-            </div>
-            <h1 className="text-2xl font-semibold tracking-tight">主动中心</h1>
-            <p className="max-w-2xl text-sm text-muted-foreground">
-              实时查看数字分身的心跳巡检状态、向用户发起的追问确认（Ask）、跨会话协同委派（Handoff）、值班职责及免打扰外发调控。
-            </p>
-          </div>
-          <div className="flex flex-wrap items-center gap-2">
-            {selection.availableShadows.length > 1 && (
-              <ShadowPicker selection={selection} />
-            )}
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              disabled={overviewQuery.isFetching}
-              onClick={() => void overviewQuery.refetch()}
-            >
-              <RefreshCw
-                className={cn(
-                  "mr-1.5 size-3.5",
-                  overviewQuery.isFetching && "animate-spin",
+    <div
+      className="flex h-full min-h-0 flex-1 overflow-hidden border-t border-border bg-background"
+      data-testid="proactivity-workspace"
+    >
+      <div className="@container min-h-0 min-w-0 flex-1 overflow-y-auto px-5 py-5 md:px-7">
+        <div className="mx-auto max-w-[1180px] space-y-6 pb-8">
+          {/* Header + Inline Policy + KPI Strip */}
+          <div className="flex flex-col gap-4 @[880px]:flex-row @[880px]:items-start @[880px]:justify-between">
+            <div className="min-w-0 space-y-1.5">
+              <div className="flex flex-wrap items-center gap-2.5">
+                <h1 className="m-0 text-[22px] font-semibold tracking-tight text-foreground">
+                  主动中心
+                </h1>
+                {data && (
+                  <LivePulsePill
+                    runningCount={runningShadows}
+                    wakeCount={wakeShadows}
+                    totalShadows={data.heartbeats.length}
+                  />
                 )}
+                {data?.settings.quietHours && (
+                  <span
+                    className={cn(
+                      "inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-xs font-medium",
+                      data.settings.inQuietHours
+                        ? "border-[#7d6b91]/30 bg-[#7d6b91]/14 text-[#7d6b91] dark:border-[#b2a1c7]/30 dark:bg-[#b2a1c7]/16 dark:text-[#b2a1c7]"
+                        : "border-border bg-muted/60 text-muted-foreground",
+                    )}
+                  >
+                    <BellOff className="size-3" />
+                    免打扰 {data.settings.quietHours.start}–
+                    {data.settings.quietHours.end}
+                    {data.settings.inQuietHours ? " · 生效中" : ""}
+                  </span>
+                )}
+              </div>
+
+              <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[13px] text-muted-foreground">
+                <span>
+                  {policySummary || "管理数字分身的周期自检、主动追问协同、值班巡检与免打扰调控"}
+                </span>
+                <a
+                  href={`${base}/settings/general`}
+                  className="inline-flex items-center gap-1 text-xs font-medium text-foreground/80 underline decoration-border underline-offset-4 transition-colors hover:text-foreground hover:decoration-foreground/50"
+                >
+                  <SlidersHorizontal className="size-3" />
+                  调整策略
+                </a>
+                <button
+                  type="button"
+                  disabled={overviewQuery.isFetching}
+                  onClick={() => void overviewQuery.refetch()}
+                  className="inline-flex items-center gap-1 text-xs text-muted-foreground transition-colors hover:text-foreground disabled:opacity-50"
+                >
+                  <RefreshCw
+                    className={cn(
+                      "size-3",
+                      overviewQuery.isFetching && "animate-spin",
+                    )}
+                  />
+                  刷新
+                </button>
+              </div>
+            </div>
+
+            {/* 4 Compact Interactive KPI Tiles (matching TasksWorkspaceView) */}
+            <div className="grid grid-cols-2 gap-2 @[520px]:grid-cols-4 @[880px]:min-w-[27rem] @[880px]:shrink-0">
+              <KpiTile
+                label="待巡检分身"
+                value={data ? wakeShadows : "-"}
+                sub={data ? `共 ${data.heartbeats.length} 个分身` : ""}
+                tone={wakeShadows > 0 ? "ochre" : "neutral"}
+                withSageBar={wakeShadows > 0}
               />
-              刷新
-            </Button>
-            <Button asChild variant="outline" size="sm">
-              <a href={`${base}/settings/general`}>
-                <SlidersHorizontal className="mr-1.5 size-3.5" />
-                主动策略设置
-              </a>
-            </Button>
-          </div>
-        </header>
-
-        {/* Active Policy Bar */}
-        {data && (
-          <div className="flex flex-wrap items-center gap-2 rounded-xl border bg-muted/25 px-4 py-2.5 text-xs text-muted-foreground">
-            <span className="font-medium text-foreground">当前生效策略：</span>
-            <Badge variant="outline">
-              心跳间隔{" "}
-              {data.settings.heartbeatIntervalMs > 0
-                ? `${Math.round(data.settings.heartbeatIntervalMs / 60_000)} 分钟`
-                : "已关闭"}
-            </Badge>
-            <Badge variant="outline">
-              单会话上限{" "}
-              {data.settings.outboundPerSessionPerHour > 0
-                ? `${data.settings.outboundPerSessionPerHour} 条/小时`
-                : "不限"}
-            </Badge>
-            <Badge variant="outline">
-              单接收人上限{" "}
-              {data.settings.outboundPerRecipientPerDay > 0
-                ? `${data.settings.outboundPerRecipientPerDay} 条/天`
-                : "不限"}
-            </Badge>
-            <Badge variant="outline">
-              去重窗口{" "}
-              {data.settings.outboundDedupWindowMs > 0
-                ? `${Math.round(data.settings.outboundDedupWindowMs / 3_600_000)} 小时`
-                : "关闭"}
-            </Badge>
-            {data.settings.quietHours ? (
-              <Badge
-                variant={data.settings.inQuietHours ? "default" : "secondary"}
-                className={cn(
-                  data.settings.inQuietHours &&
-                    "bg-indigo-600 text-white hover:bg-indigo-600",
-                )}
-              >
-                <BellOff className="mr-1 size-3" />
-                免打扰 {data.settings.quietHours.start}–
-                {data.settings.quietHours.end}
-                {data.settings.inQuietHours ? "（生效中）" : "（未到时段）"}
-              </Badge>
-            ) : (
-              <Badge variant="outline">免打扰：未开启</Badge>
-            )}
-          </div>
-        )}
-
-        {/* Manual Trigger Banner */}
-        {triggerBanner && (
-          <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-emerald-500/30 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-950 dark:text-emerald-200">
-            <div className="flex items-center gap-2">
-              <CheckCircle2 className="size-4 shrink-0 text-emerald-600 dark:text-emerald-400" />
-              <span>
-                {triggerBanner.alreadyRunning
-                  ? `分身「${triggerBanner.shadowName}」已有心跳任务正在队列或执行中。`
-                  : `已唤醒分身「${triggerBanner.shadowName}」执行即时心跳巡检。`}
-              </span>
+              <KpiTile
+                label="待响应请求"
+                value={data ? openRequestsCount : "-"}
+                sub={data ? `共 ${data.requests.length} 条记录` : ""}
+                tone={openRequestsCount > 0 ? "slate" : "neutral"}
+                active={ledgerTab === "requests" && requestFilter === "pending"}
+                withSageBar={
+                  openRequestsCount > 0 ||
+                  (ledgerTab === "requests" && requestFilter === "pending")
+                }
+                onClick={() => {
+                  setLedgerTab("requests");
+                  setRequestFilter(prev =>
+                    prev === "pending" ? "all" : "pending",
+                  );
+                }}
+              />
+              <KpiTile
+                label="值班职责"
+                value={data ? enabledDutiesCount : "-"}
+                sub={
+                  failedDutiesCount > 0
+                    ? `${failedDutiesCount} 项执行异常`
+                    : data
+                      ? `共 ${data.duties.length} 项巡检`
+                      : ""
+                }
+                tone={
+                  failedDutiesCount > 0
+                    ? "terra"
+                    : enabledDutiesCount > 0
+                      ? "sage"
+                      : "neutral"
+                }
+                active={ledgerTab === "duties"}
+                withSageBar={ledgerTab === "duties"}
+                onClick={() => setLedgerTab("duties")}
+              />
+              <KpiTile
+                label="24h 主动发言"
+                value={data ? data.governance.sentLast24h : "-"}
+                sub={
+                  deferredCount > 0
+                    ? `${deferredCount} 条顺延待发`
+                    : "外发顺畅"
+                }
+                tone={deferredCount > 0 ? "plum" : "neutral"}
+                active={ledgerTab === "governance"}
+                withSageBar={ledgerTab === "governance" || deferredCount > 0}
+                onClick={() => setLedgerTab("governance")}
+              />
             </div>
-            <div className="flex items-center gap-3">
-              <a
-                href={`${base}/sessions/${encodeURIComponent(triggerBanner.sessionId)}`}
-                className="inline-flex items-center gap-1 font-medium underline"
-              >
-                进入心跳会话查看
-                <ArrowRight className="size-3.5" />
-              </a>
+          </div>
+
+          {/* Manual Wake Toast Banner */}
+          {triggerBanner && (
+            <div className="flex flex-wrap items-center justify-between gap-3 rounded-[12px] border border-[#5b8a72]/30 bg-[#5b8a72]/10 px-3.5 py-2.5 text-[13px] text-foreground">
+              <div className="flex items-center gap-2">
+                <CheckCircle2 className="size-4 shrink-0 text-[#5b8a72] dark:text-[#7fb096]" />
+                <span>
+                  {triggerBanner.alreadyRunning
+                    ? `分身「${triggerBanner.shadowName}」已有心跳任务正在执行或排队中。`
+                    : `已唤醒分身「${triggerBanner.shadowName}」执行即时心跳自检。`}
+                </span>
+                <a
+                  href={`${base}/sessions/${encodeURIComponent(triggerBanner.sessionId)}`}
+                  className="inline-flex items-center gap-1 font-medium text-[#5b8a72] underline underline-offset-4 hover:opacity-85 dark:text-[#7fb096]"
+                >
+                  查看心跳会话
+                  <ArrowRight className="size-3.5" />
+                </a>
+              </div>
               <button
                 type="button"
+                aria-label="关闭提示"
                 onClick={() => setTriggerBanner(null)}
-                className="text-xs opacity-70 hover:opacity-100"
+                className="rounded p-0.5 text-muted-foreground hover:bg-background/60 hover:text-foreground"
               >
-                关闭
+                <X className="size-3.5" />
               </button>
             </div>
-          </div>
-        )}
+          )}
 
-        {/* Error / Loading */}
-        {overviewQuery.error instanceof Error && (
-          <div
-            role="alert"
-            className="rounded-xl border border-destructive/40 bg-destructive/10 p-4 text-sm text-destructive"
-          >
-            加载主动中心数据失败：{overviewQuery.error.message}
-          </div>
-        )}
-
-        {overviewQuery.isLoading && !data ? (
-          <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-            {Array.from({ length: 4 }).map((_, i) => (
-              <Skeleton key={i} className="h-28 w-full rounded-xl" />
-            ))}
-          </div>
-        ) : data ? (
-          <>
-            {/* 4 Metric Cards */}
-            <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-              <SummaryTile
-                title="分身心跳实况"
-                value={`${data.heartbeats.length} 个分身`}
-                subtitle={
-                  wakeShadows > 0
-                    ? `${wakeShadows} 个分身有新动态待巡检`
-                    : "全部游标已同步，安静守候"
-                }
-                icon={HeartPulse}
-                tone={wakeShadows > 0 ? "amber" : "neutral"}
-              />
-              <SummaryTile
-                title="待响应追问 / 协同"
-                value={String(openRequestsCount)}
-                subtitle={`累计记录 ${data.requests.length} 条关联请求`}
-                icon={HelpCircle}
-                tone={openRequestsCount > 0 ? "blue" : "neutral"}
-              />
-              <SummaryTile
-                title="值班巡检职责 (task.run)"
-                value={String(enabledDutiesCount)}
-                subtitle={
-                  failedDutiesCount > 0
-                    ? `${failedDutiesCount} 个巡检最近执行失败`
-                    : `共 ${data.duties.length} 个直连巡检任务`
-                }
-                icon={CalendarClock}
-                tone={failedDutiesCount > 0 ? "red" : "neutral"}
-              />
-              <SummaryTile
-                title="近 24h 主动外发"
-                value={`${data.governance.sentLast24h} 条`}
-                subtitle={
-                  deferredCount > 0
-                    ? `${deferredCount} 条消息因免打扰顺延待发`
-                    : "当前无顺延积压消息"
-                }
-                icon={BellOff}
-                tone={deferredCount > 0 ? "indigo" : "neutral"}
-              />
+          {overviewQuery.error instanceof Error && (
+            <div
+              role="alert"
+              className="rounded-[12px] border border-destructive/35 bg-destructive/10 px-4 py-3 text-sm text-destructive"
+            >
+              加载失败：{overviewQuery.error.message}
             </div>
+          )}
 
-            {/* Section 1: Shadow Heartbeats */}
-            <Card className="rounded-xl">
-              <CardHeader className="border-b pb-4">
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <div>
-                    <CardTitle className="flex items-center gap-2 text-base">
-                      <HeartPulse className="size-4 text-primary" />
-                      分身心跳实况（Shadow Heartbeat）
-                    </CardTitle>
-                    <CardDescription className="mt-1">
-                      每个分身独立维护专属「心跳」会话与游标；仅在游标后出现新人类消息、结案任务或请求回执时才唤醒模型，零动态时零 Token 消耗。
-                    </CardDescription>
-                  </div>
-                </div>
-              </CardHeader>
-              <CardContent className="grid gap-4 p-5 md:grid-cols-2">
-                {data.heartbeats.map(hb => (
-                  <ShadowHeartbeatCard
-                    key={hb.shadowId}
-                    hb={hb}
-                    base={base}
-                    now={now}
-                    timezone={data.settings.timezone}
-                    triggering={
-                      triggerHeartbeat.isPending &&
-                      triggerHeartbeat.variables === hb.shadowId
-                    }
-                    onTrigger={() => void handleTriggerHeartbeat(hb)}
-                  />
+          {overviewQuery.isLoading && !data ? (
+            <div className="space-y-5">
+              <div className="grid gap-3 @[680px]:grid-cols-2 @[1020px]:grid-cols-3">
+                {Array.from({ length: 3 }).map((_, i) => (
+                  <Skeleton key={i} className="h-36 w-full rounded-[14px]" />
                 ))}
-              </CardContent>
-            </Card>
-
-            {/* Section 2: Correlated Requests (Asks & Handoffs) */}
-            <Card className="rounded-xl">
-              <CardHeader className="border-b pb-4">
-                <div className="flex flex-wrap items-center justify-between gap-3">
-                  <div>
-                    <CardTitle className="flex items-center gap-2 text-base">
-                      <GitPullRequestArrow className="size-4 text-primary" />
-                      主动追问与跨会话协同账本（Asks & Handoffs）
-                    </CardTitle>
-                    <CardDescription className="mt-1">
-                      追踪 Agent 通过 `luna asks` 向用户发起的选项/文本确认，以及通过 `luna handoff` 委派给目标会话跟进的闭环状态。
-                    </CardDescription>
+              </div>
+              <Skeleton className="h-64 w-full rounded-[14px]" />
+            </div>
+          ) : data ? (
+            <>
+              {/* Section 1: Per-Shadow Heartbeat Matrix */}
+              <section aria-labelledby="heartbeats-heading" className="space-y-2.5">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="flex items-baseline gap-2.5">
+                    <h2
+                      id="heartbeats-heading"
+                      className="m-0 text-[13px] font-semibold tracking-tight text-foreground"
+                    >
+                      数字分身心跳
+                    </h2>
+                    <span className="text-xs text-muted-foreground">
+                      仅在游标后有新消息、任务结案或协同回执时唤醒，空闲时零开销
+                    </span>
                   </div>
-                  <div
-                    role="group"
-                    aria-label="请求筛选"
-                    className="flex gap-0.5 rounded-lg bg-muted p-1 text-xs"
-                  >
-                    {(
-                      [
-                        ["all", `全部 (${data.requests.length})`],
-                        ["pending", `等待中 (${openRequestsCount})`],
+                  {selection.availableShadows.length > 1 && (
+                    <ShadowPicker selection={selection} size="sm" />
+                  )}
+                </div>
+
+                <div className="grid gap-3 @[680px]:grid-cols-2 @[1020px]:grid-cols-3">
+                  {data.heartbeats.map(hb => (
+                    <ShadowHeartbeatCard
+                      key={hb.shadowId}
+                      hb={hb}
+                      base={base}
+                      now={now}
+                      timezone={data.settings.timezone}
+                      triggering={
+                        triggerHeartbeat.isPending &&
+                        triggerHeartbeat.variables === hb.shadowId
+                      }
+                      onTrigger={() => void handleTriggerHeartbeat(hb)}
+                    />
+                  ))}
+                </div>
+              </section>
+
+              {/* Section 2: Unified Tabbed Activity & Governance Workspace */}
+              <section aria-label="主动协同与职责明细" className="space-y-3">
+                {/* Toolbar */}
+                <div className="flex flex-wrap items-center justify-between gap-2.5">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <div
+                      role="tablist"
+                      aria-label="主动账本视图"
+                      className="inline-flex items-center gap-0.5 rounded-[8px] bg-muted p-0.5 text-xs"
+                    >
+                      {(
                         [
-                          "ask",
-                          `提问 (${data.requests.filter(r => r.kind === "ask").length})`,
-                        ],
-                        [
-                          "handoff",
-                          `委派 (${data.requests.filter(r => r.kind === "handoff").length})`,
-                        ],
-                      ] as const
-                    ).map(([key, label]) => (
-                      <button
-                        key={key}
-                        type="button"
-                        aria-pressed={requestFilter === key}
-                        onClick={() => setRequestFilter(key)}
-                        className={cn(
-                          "rounded-md px-2.5 py-1 transition-colors",
-                          requestFilter === key
-                            ? "bg-card font-medium text-foreground shadow-2xs"
-                            : "text-muted-foreground hover:text-foreground",
-                        )}
+                          {
+                            key: "requests",
+                            label: "追问与协同",
+                            count: data.requests.length,
+                            dot:
+                              openRequestsCount > 0
+                                ? "bg-[#5c7c99] dark:bg-[#86a3be]"
+                                : null,
+                          },
+                          {
+                            key: "duties",
+                            label: "值班职责",
+                            count: data.duties.length,
+                            dot:
+                              failedDutiesCount > 0
+                                ? "bg-[#b5544a] dark:bg-[#dc7a70]"
+                                : enabledDutiesCount > 0
+                                  ? "bg-[#5b8a72] dark:bg-[#7fb096]"
+                                  : null,
+                          },
+                          {
+                            key: "governance",
+                            label: "外发调控",
+                            count: governanceTotal,
+                            dot:
+                              deferredCount > 0
+                                ? "bg-[#7d6b91] dark:bg-[#b2a1c7]"
+                                : null,
+                          },
+                        ] as const
+                      ).map(tab => {
+                        const isCurrent = ledgerTab === tab.key;
+                        return (
+                          <button
+                            key={tab.key}
+                            type="button"
+                            role="tab"
+                            aria-selected={isCurrent}
+                            onClick={() => setLedgerTab(tab.key)}
+                            className={cn(
+                              "inline-flex items-center gap-1.5 rounded-[6px] px-2.5 py-1.5 transition-colors",
+                              isCurrent
+                                ? "bg-card font-semibold text-foreground shadow-xs"
+                                : "text-muted-foreground hover:text-foreground",
+                            )}
+                          >
+                            {tab.dot && (
+                              <span
+                                className={cn(
+                                  "size-1.5 shrink-0 rounded-full",
+                                  tab.dot,
+                                )}
+                              />
+                            )}
+                            <span>{tab.label}</span>
+                            <span className="tabular-nums opacity-65">
+                              {tab.count}
+                            </span>
+                          </button>
+                        );
+                      })}
+                    </div>
+
+                    {ledgerTab === "requests" && (
+                      <div
+                        role="group"
+                        aria-label="请求状态筛选"
+                        className="inline-flex items-center gap-0.5 rounded-[8px] bg-muted/65 p-0.5 text-xs"
                       >
-                        {label}
-                      </button>
-                    ))}
+                        {(
+                          [
+                            ["all", "全部"],
+                            ["pending", "等待响应"],
+                            ["ask", "提问"],
+                            ["handoff", "委派"],
+                          ] as const
+                        ).map(([key, label]) => (
+                          <button
+                            key={key}
+                            type="button"
+                            aria-pressed={requestFilter === key}
+                            onClick={() => setRequestFilter(key)}
+                            className={cn(
+                              "rounded-[6px] px-2 py-1 transition-colors",
+                              requestFilter === key
+                                ? "bg-card font-medium text-foreground shadow-2xs"
+                                : "text-muted-foreground hover:text-foreground",
+                            )}
+                          >
+                            {label}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="flex flex-wrap items-center gap-2">
+                    {ledgerTab !== "governance" && (
+                      <label className="flex h-8 w-56 items-center gap-2 rounded-[8px] border border-border bg-card px-2.5 text-muted-foreground focus-within:border-ring">
+                        <Search className="size-3.5 shrink-0" />
+                        <input
+                          type="search"
+                          value={searchQuery}
+                          onChange={e => setSearchQuery(e.target.value)}
+                          placeholder={
+                            ledgerTab === "requests"
+                              ? "搜索提问、会话或对象…"
+                              : "搜索职责名称或任务…"
+                          }
+                          className="min-w-0 flex-1 border-0 bg-transparent text-xs text-foreground outline-none placeholder:text-muted-foreground"
+                        />
+                      </label>
+                    )}
+                    {ledgerTab === "duties" && (
+                      <Button asChild size="xs" variant="outline">
+                        <a href={`${base}/schedules`}>
+                          管理定时任务
+                          <ArrowRight className="ml-1 size-3" />
+                        </a>
+                      </Button>
+                    )}
                   </div>
                 </div>
-              </CardHeader>
-              <CardContent className="p-5">
-                {filteredRequests.length === 0 ? (
-                  <div className="rounded-lg border border-dashed bg-muted/15 px-4 py-8 text-center text-sm text-muted-foreground">
-                    {requestFilter === "all"
-                      ? "暂无主动追问或跨会话委派记录。当 Agent 主动发起 `luna asks` 或 `luna handoff` 时将在此实时追踪。"
-                      : "当前筛选条件下没有记录。"}
-                  </div>
-                ) : (
-                  <div className="space-y-3">
-                    {filteredRequests.map(req => (
-                      <CorrelatedRequestRow
-                        key={req.id}
-                        item={req}
-                        base={base}
-                        now={now}
-                        timezone={data.settings.timezone}
-                        cancelling={
-                          cancelRequest.isPending &&
-                          cancelRequest.variables === req.id
-                        }
-                        onCancel={() => cancelRequest.mutate(req.id)}
-                      />
-                    ))}
-                  </div>
-                )}
-              </CardContent>
-            </Card>
 
-            {/* Section 3: Duties & Outbound Governance */}
-            <div className="grid gap-5 lg:grid-cols-2">
-              {/* Left: Scheduled task.run Duties */}
-              <Card className="rounded-xl">
-                <CardHeader className="border-b pb-4">
-                  <div className="flex items-center justify-between gap-2">
-                    <div>
-                      <CardTitle className="flex items-center gap-2 text-base">
-                        <CalendarClock className="size-4 text-primary" />
-                        值班巡检职责（直连 `task.run`）
-                      </CardTitle>
-                      <CardDescription className="mt-1">
-                        到点直接以静默模式唤醒后台 Task Runner 执行巡检，不占用会话协调者。
-                      </CardDescription>
-                    </div>
-                    <a
-                      href={`${base}/schedules`}
-                      className="inline-flex shrink-0 items-center gap-1 text-xs font-medium text-primary hover:underline"
-                    >
-                      管理定时任务
-                      <ArrowRight className="size-3.5" />
-                    </a>
-                  </div>
-                </CardHeader>
-                <CardContent className="p-5">
-                  {data.duties.length === 0 ? (
-                    <div className="rounded-lg border border-dashed bg-muted/15 px-4 py-8 text-center text-sm text-muted-foreground">
-                      暂无直连后台任务的巡检计划。可在「定时任务」页面新建 `直连后台任务巡检（task.run）`，或让 Agent 按 `luna-duties` 规范自行建立。
-                    </div>
-                  ) : (
-                    <div className="space-y-3">
-                      {data.duties.map(duty => (
-                        <div
-                          key={duty.id}
-                          className="rounded-lg border bg-card p-3.5 text-sm"
-                        >
-                          <div className="flex flex-wrap items-center justify-between gap-2">
-                            <span className="font-medium">{duty.title}</span>
-                            <div className="flex items-center gap-1.5">
-                              {duty.lastFailure && (
-                                <Badge variant="destructive" className="text-[10px]">
-                                  最近失败
-                                </Badge>
-                              )}
-                              <Badge
-                                variant={duty.enabled ? "secondary" : "outline"}
-                                className="text-[10px]"
-                              >
-                                {duty.enabled ? "启用中" : "已暂停"}
-                              </Badge>
-                            </div>
-                          </div>
-                          <p className="mt-1.5 line-clamp-2 text-xs text-muted-foreground">
-                            {duty.instruction}
-                          </p>
-                          <div className="mt-2.5 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground">
-                            <span>
-                              后台任务：
-                              <a
-                                href={`${base}/tasks/${encodeURIComponent(duty.taskId)}`}
-                                className="text-primary hover:underline"
-                              >
-                                {duty.taskTitle}
-                              </a>
-                            </span>
-                            <span>
-                              汇报会话：
-                              <a
-                                href={`${base}/sessions/${encodeURIComponent(duty.targetSessionId)}`}
-                                className="text-primary hover:underline"
-                              >
-                                {duty.targetSessionTitle}
-                              </a>
-                            </span>
-                            <span>
-                              下次运行：{formatDateTime(duty.nextAt, duty.timezone)}
-                            </span>
-                          </div>
-                          {duty.lastFailure && (
-                            <div className="mt-2 rounded-md border border-destructive/30 bg-destructive/10 px-2.5 py-1.5 text-xs text-destructive">
-                              失败原因：{duty.lastFailure.reason}
-                            </div>
-                          )}
-                        </div>
-                      ))}
-                    </div>
+                {/* Tab Panel Surface */}
+                <div className="overflow-hidden rounded-[14px] border border-border bg-card shadow-[0_2px_5px_#00000003]">
+                  {ledgerTab === "requests" && (
+                    <RequestsLedgerPanel
+                      items={filteredRequests}
+                      hasFilter={
+                        requestFilter !== "all" || normalizedSearch.length > 0
+                      }
+                      base={base}
+                      now={now}
+                      timezone={data.settings.timezone}
+                      cancellingId={
+                        cancelRequest.isPending
+                          ? (cancelRequest.variables ?? null)
+                          : null
+                      }
+                      onCancel={id => cancelRequest.mutate(id)}
+                    />
                   )}
-                </CardContent>
-              </Card>
 
-              {/* Right: Outbound Governance & Deferred Queue */}
-              <Card className="rounded-xl">
-                <CardHeader className="border-b pb-4">
-                  <CardTitle className="flex items-center gap-2 text-base">
-                    <ShieldAlert className="size-4 text-primary" />
-                    免打扰顺延队列与外发调控记录
-                  </CardTitle>
-                  <CardDescription className="mt-1">
-                    被动答复不受限制；主动通知受配额、去重窗口和免打扰时段保护。
-                  </CardDescription>
-                </CardHeader>
-                <CardContent className="space-y-4 p-5">
-                  <div>
-                    <h3 className="mb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                      免打扰待发队列（{data.governance.deferredQueue.length}）
-                    </h3>
-                    {data.governance.deferredQueue.length === 0 ? (
-                      <p className="rounded-lg border border-dashed bg-muted/15 px-3.5 py-4 text-xs text-muted-foreground">
-                        当前没有因免打扰暂存的主动消息。
-                      </p>
-                    ) : (
-                      <div className="space-y-2">
-                        {data.governance.deferredQueue.map(cmd => (
-                          <div
-                            key={cmd.id}
-                            className="rounded-lg border border-indigo-500/25 bg-indigo-500/5 p-3 text-xs"
-                          >
-                            <div className="flex items-center justify-between gap-2">
-                              <a
-                                href={`${base}/sessions/${encodeURIComponent(cmd.sessionId)}`}
-                                className="font-medium text-primary hover:underline"
-                              >
-                                {cmd.sessionTitle}
-                              </a>
-                              <Badge variant="outline" className="text-[10px]">
-                                预计发送：
-                                {formatDateTime(
-                                  cmd.availableAt,
-                                  data.settings.timezone,
-                                )}
-                              </Badge>
-                            </div>
-                            <p className="mt-1.5 line-clamp-2 text-muted-foreground">
-                              {cmd.contentPreview}
-                            </p>
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                  </div>
+                  {ledgerTab === "duties" && (
+                    <DutiesLedgerPanel
+                      items={filteredDuties}
+                      hasFilter={normalizedSearch.length > 0}
+                      base={base}
+                    />
+                  )}
 
-                  <div>
-                    <h3 className="mb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                      近期外发调控事件（{data.governance.recentEvents.length}）
-                    </h3>
-                    {data.governance.recentEvents.length === 0 ? (
-                      <p className="rounded-lg border border-dashed bg-muted/15 px-3.5 py-4 text-xs text-muted-foreground">
-                        近期未触发外发限流、重复拦截或免打扰顺延。
-                      </p>
-                    ) : (
-                      <div className="space-y-2">
-                        {data.governance.recentEvents.slice(0, 10).map(ev => (
-                          <div
-                            key={ev.id}
-                            className="rounded-lg border bg-muted/15 px-3 py-2.5 text-xs"
-                          >
-                            <div className="flex flex-wrap items-center justify-between gap-2">
-                              <div className="flex items-center gap-1.5">
-                                <Badge
-                                  variant={
-                                    ev.controlKind === "outbound_throttled"
-                                      ? "destructive"
-                                      : "secondary"
-                                  }
-                                  className="text-[10px]"
-                                >
-                                  {ev.controlKind === "outbound_throttled"
-                                    ? "外发限流拦截"
-                                    : "免打扰顺延"}
-                                </Badge>
-                                <a
-                                  href={`${base}/sessions/${encodeURIComponent(ev.sessionId)}`}
-                                  className="font-medium text-primary hover:underline"
-                                >
-                                  {ev.sessionTitle}
-                                </a>
-                              </div>
-                              <span className="text-muted-foreground">
-                                {formatDateTime(ev.createdAt, data.settings.timezone)}
-                              </span>
-                            </div>
-                            <p className="mt-1 text-muted-foreground">
-                              {ev.summary}
-                            </p>
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                </CardContent>
-              </Card>
-            </div>
-          </>
-        ) : null}
+                  {ledgerTab === "governance" && (
+                    <GovernanceLedgerPanel
+                      governance={data.governance}
+                      timezone={data.settings.timezone}
+                      base={base}
+                    />
+                  )}
+                </div>
+              </section>
+            </>
+          ) : null}
+        </div>
       </div>
     </div>
   );
 }
 
-function SummaryTile({
-  title,
-  value,
-  subtitle,
-  icon: Icon,
-  tone,
+function LivePulsePill({
+  runningCount,
+  wakeCount,
+  totalShadows,
 }: {
-  readonly title: string;
-  readonly value: string;
-  readonly subtitle: string;
-  readonly icon: typeof HeartPulse;
-  readonly tone: "neutral" | "amber" | "blue" | "red" | "indigo";
+  readonly runningCount: number;
+  readonly wakeCount: number;
+  readonly totalShadows: number;
 }) {
+  if (runningCount > 0) {
+    return (
+      <span className="worker-presence" data-online="true">
+        <span className="worker-presence-dot" aria-hidden="true" />
+        {runningCount} 个分身心跳运行中
+      </span>
+    );
+  }
+  if (wakeCount > 0) {
+    return (
+      <span className="inline-flex items-center gap-1.5 rounded-full border border-[#b07d4f]/30 bg-[#b07d4f]/12 px-2.5 py-0.5 text-xs font-medium text-[#b07d4f] dark:border-[#d1a273]/30 dark:bg-[#d1a273]/15 dark:text-[#d1a273]">
+        <span className="size-1.5 rounded-full bg-[#b07d4f] dark:bg-[#d1a273]" />
+        {wakeCount} 个分身有新动态待巡检
+      </span>
+    );
+  }
   return (
-    <Card className="rounded-xl py-4">
-      <CardContent className="flex items-start justify-between gap-3 px-4">
-        <div className="min-w-0">
-          <p className="text-xs font-medium text-muted-foreground">{title}</p>
-          <p className="mt-2 text-2xl font-semibold tracking-tight">{value}</p>
-          <p className="mt-1 truncate text-xs text-muted-foreground">{subtitle}</p>
-        </div>
-        <div
-          className={cn(
-            "flex size-9 shrink-0 items-center justify-center rounded-lg",
-            tone === "amber" && "bg-amber-500/15 text-amber-600 dark:text-amber-400",
-            tone === "blue" && "bg-blue-500/15 text-blue-600 dark:text-blue-400",
-            tone === "red" && "bg-destructive/15 text-destructive",
-            tone === "indigo" && "bg-indigo-500/15 text-indigo-600 dark:text-indigo-400",
-            tone === "neutral" && "bg-muted text-muted-foreground",
-          )}
-        >
-          <Icon className="size-4" />
-        </div>
-      </CardContent>
-    </Card>
+    <span className="worker-presence">
+      <span className="size-1.5 rounded-full bg-[#5b8a72] dark:bg-[#7fb096]" />
+      {totalShadows} 个分身安静守候
+    </span>
+  );
+}
+
+function KpiTile({
+  label,
+  value,
+  sub,
+  tone,
+  active = false,
+  withSageBar = false,
+  onClick,
+}: {
+  readonly label: string;
+  readonly value: number | string;
+  readonly sub: string;
+  readonly tone: "neutral" | "ochre" | "slate" | "sage" | "terra" | "plum";
+  readonly active?: boolean;
+  readonly withSageBar?: boolean;
+  readonly onClick?: () => void;
+}) {
+  const valueTone =
+    tone === "ochre"
+      ? "text-[#b07d4f] dark:text-[#d1a273]"
+      : tone === "slate"
+        ? "text-[#5c7c99] dark:text-[#86a3be]"
+        : tone === "sage"
+          ? "text-[#5b8a72] dark:text-[#7fb096]"
+          : tone === "terra"
+            ? "text-[#b5544a] dark:text-[#dc7a70]"
+            : tone === "plum"
+              ? "text-[#7d6b91] dark:text-[#b2a1c7]"
+              : "text-foreground";
+
+  const Comp = onClick ? "button" : "div";
+  return (
+    <Comp
+      {...(onClick ? { type: "button" as const, onClick } : {})}
+      className={cn(
+        "relative flex flex-col justify-between overflow-hidden rounded-[12px] border border-border bg-card px-3 py-2.5 text-left transition-colors",
+        onClick && "cursor-pointer hover:border-foreground/20",
+        active && "border-foreground/25 bg-accent/40",
+        withSageBar &&
+          "before:absolute before:top-0 before:left-3 before:h-[2.5px] before:w-5 before:rounded-xs before:bg-[#a3b69e] dark:before:bg-[#8ea487]",
+      )}
+    >
+      <span className="truncate text-[11px] font-medium text-muted-foreground">
+        {label}
+      </span>
+      <span
+        className={cn(
+          "mt-1 text-[20px] leading-tight font-semibold tracking-tight tabular-nums",
+          valueTone,
+        )}
+      >
+        {value}
+      </span>
+      <span className="mt-0.5 truncate text-[11px] text-muted-foreground/85">
+        {sub}
+      </span>
+    </Comp>
   );
 }
 
@@ -673,289 +683,598 @@ function ShadowHeartbeatCard({
   const isFailed = cmdStatus === "failed";
   const act = hb.pendingActivity;
 
-  const activityChips: string[] = [];
+  const activityParts: string[] = [];
   if (act.messageCount > 0) {
-    activityChips.push(`${act.messageSessions} 个会话共 ${act.messageCount} 条新消息`);
+    activityParts.push(`${act.messageCount} 条新消息`);
   }
   if (act.taskRunCount > 0) {
-    activityChips.push(`${act.taskRunCount} 个后台任务已结案`);
+    activityParts.push(`${act.taskRunCount} 个任务结案`);
   }
   if (act.scheduleOccurrenceCount > 0) {
-    activityChips.push(`${act.scheduleOccurrenceCount} 次定时执行`);
+    activityParts.push(`${act.scheduleOccurrenceCount} 次定时触发`);
   }
   if (act.correlatedRequestCount > 0) {
-    activityChips.push(`${act.correlatedRequestCount} 条请求回执`);
+    activityParts.push(`${act.correlatedRequestCount} 条请求回执`);
   }
 
+  const nextWindowText = !hb.nextEligibleAt
+    ? "周期唤醒已关闭"
+    : hb.nextEligibleAt <= now
+      ? act.hasWakeActivity
+        ? "下一轮扫描即唤醒"
+        : "有新动态即唤醒"
+      : `${formatRelative(hb.nextEligibleAt, now)}（${formatShortTime(hb.nextEligibleAt, timezone)}）`;
+
   return (
-    <div className="flex flex-col justify-between rounded-xl border bg-card p-4 shadow-2xs">
-      <div className="space-y-3">
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <div className="flex items-center gap-2">
-            <span className="text-base font-semibold">{hb.shadowName}</span>
-            {hb.isDefault && (
-              <Badge variant="outline" className="text-[10px]">
-                默认分身
-              </Badge>
+    <article
+      aria-label={hb.shadowName}
+      className={cn(
+        "flex flex-col justify-between rounded-[14px] border bg-card p-3.5 transition-colors hover:border-foreground/15",
+        act.hasWakeActivity && "border-[#b07d4f]/30 dark:border-[#d1a273]/30",
+      )}
+    >
+      <div>
+        {/* Card Header with Shadow Avatar */}
+        <div className="flex items-center gap-2.5">
+          <IdentityAvatar
+            className="size-8 shrink-0"
+            size="sm"
+            identity={{
+              id: hb.shadowId,
+              channel: { type: "user", id: "" },
+              externalId: hb.shadowId,
+              identityKind: "shadow",
+              displayName: hb.shadowName,
+              status: "active",
+              avatarUrl: null,
+              providerIds: {},
+            }}
+          />
+          <div className="min-w-0 flex-1">
+            <div className="flex min-w-0 items-center gap-1.5">
+              <h3 className="m-0 truncate text-[14.5px] font-semibold text-foreground">
+                {hb.shadowName}
+              </h3>
+              {hb.isDefault && (
+                <span className="shrink-0 rounded-full bg-muted px-2 py-0.2 text-[10.5px] text-muted-foreground">
+                  本体
+                </span>
+              )}
+            </div>
+          </div>
+
+          {/* Subtle Presence Indicator */}
+          {isRunning ? (
+            <span className="worker-presence shrink-0" data-online="true">
+              <span className="worker-presence-dot" aria-hidden="true" />
+              巡检中
+            </span>
+          ) : isFailed ? (
+            <span className="inline-flex shrink-0 items-center gap-1.5 rounded-full bg-[#b5544a]/12 px-2.5 py-0.5 text-[11.5px] font-medium text-[#b5544a] dark:bg-[#dc7a70]/15 dark:text-[#dc7a70]">
+              <span className="size-1.5 rounded-full bg-current" />
+              上次异常
+            </span>
+          ) : act.hasWakeActivity ? (
+            <span className="inline-flex shrink-0 items-center gap-1.5 rounded-full bg-[#b07d4f]/13 px-2.5 py-0.5 text-[11.5px] font-medium text-[#b07d4f] dark:bg-[#d1a273]/16 dark:text-[#d1a273]">
+              <span className="size-1.5 rounded-full bg-current" />
+              待巡检
+            </span>
+          ) : (
+            <span className="inline-flex shrink-0 items-center gap-1.5 rounded-full bg-muted px-2.5 py-0.5 text-[11.5px] text-muted-foreground">
+              <span className="size-1.5 rounded-full bg-[#5b8a72]/75 dark:bg-[#7fb096]/75" />
+              守候中
+            </span>
+          )}
+        </div>
+
+        {/* Inset Status Tray (ShadowCard idiom) */}
+        <div className="mt-3 grid gap-1.5 rounded-[10px] bg-muted/75 px-3 py-2.5">
+          <div className="truncate text-[12.5px]">
+            {activityParts.length > 0 ? (
+              <span className="font-medium text-[#b07d4f] dark:text-[#d1a273]">
+                {activityParts.join(" · ")}
+              </span>
+            ) : (
+              <span className="text-muted-foreground">
+                游标后无新消息或任务变动
+              </span>
             )}
           </div>
-          {isRunning ? (
-            <Badge className="bg-blue-600 text-white hover:bg-blue-600">
-              心跳执行中
-            </Badge>
-          ) : isFailed ? (
-            <Badge variant="destructive">上次心跳异常</Badge>
-          ) : act.hasWakeActivity ? (
-            <Badge className="bg-amber-500/20 text-amber-800 hover:bg-amber-500/20 dark:text-amber-300">
-              有新动态待巡检
-            </Badge>
-          ) : (
-            <Badge variant="secondary">空闲守候</Badge>
+          <div className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-[11.5px] text-muted-foreground">
+            <span>
+              上次：
+              {hb.lastQueuedAt && hb.lastQueuedAt > 0
+                ? formatRelative(hb.lastQueuedAt, now)
+                : "从未"}
+            </span>
+            <span aria-hidden="true" className="opacity-45">
+              ·
+            </span>
+            <span>窗口：{nextWindowText}</span>
+          </div>
+          {!isFailed && hb.latestCommand?.summary && (
+            <p
+              title={hb.latestCommand.summary}
+              className="mt-0.5 line-clamp-1 border-t border-dashed border-border/80 pt-1.5 text-[11.5px] text-foreground/80"
+            >
+              最近结论：{hb.latestCommand.summary}
+            </p>
+          )}
+          {isFailed && hb.latestCommand?.error && (
+            <p
+              title={hb.latestCommand.error}
+              className="mt-0.5 line-clamp-2 border-t border-dashed border-destructive/25 pt-1.5 text-[11.5px] text-[#b5544a] dark:text-[#dc7a70]"
+            >
+              {formatHeartbeatError(hb.latestCommand.error)}
+            </p>
           )}
         </div>
-
-        {/* Pending Activity Digest */}
-        <div className="rounded-lg bg-muted/35 px-3 py-2 text-xs">
-          <span className="font-medium text-foreground">游标后待巡检动态：</span>
-          {activityChips.length > 0 ? (
-            <span className="ml-1 text-foreground">{activityChips.join(" · ")}</span>
-          ) : (
-            <span className="ml-1 text-muted-foreground">
-              暂无新消息或任务变动（到点将跳过模型调用）
-            </span>
-          )}
-        </div>
-
-        {/* Timestamps */}
-        <div className="grid gap-1.5 text-xs text-muted-foreground sm:grid-cols-2">
-          <div className="flex items-center gap-1.5">
-            <Clock3 className="size-3.5 shrink-0" />
-            <span>
-              上次心跳：{formatDateTime(hb.lastQueuedAt, timezone)}（
-              {formatRelative(hb.lastQueuedAt, now)}）
-            </span>
-          </div>
-          <div className="flex items-center gap-1.5">
-            <CalendarClock className="size-3.5 shrink-0" />
-            <span>
-              下次窗口：
-              {!hb.nextEligibleAt
-                ? "已关闭周期唤醒"
-                : hb.nextEligibleAt <= now
-                  ? act.hasWakeActivity
-                    ? "下一轮扫描即唤醒"
-                    : "随时就绪（有新动态即唤醒）"
-                  : `${formatDateTime(hb.nextEligibleAt, timezone)}（${formatRelative(hb.nextEligibleAt, now)}）`}
-            </span>
-          </div>
-        </div>
-
-        {isFailed && hb.latestCommand?.error && (
-          <div className="flex items-start gap-2 rounded-md border border-destructive/30 bg-destructive/10 px-2.5 py-2 text-xs text-destructive">
-            <AlertTriangle className="mt-0.5 size-3.5 shrink-0" />
-            <span className="line-clamp-2 break-all">{hb.latestCommand.error}</span>
-          </div>
-        )}
       </div>
 
-      {/* Actions */}
-      <div className="mt-4 flex flex-wrap items-center justify-between gap-2 border-t pt-3">
+      {/* Compact Action Footer */}
+      <div className="mt-2.5 flex items-center justify-between gap-2 px-0.5">
         {hb.sessionId ? (
           <a
             href={`${base}/sessions/${encodeURIComponent(hb.sessionId)}`}
-            className="inline-flex items-center gap-1 text-xs font-medium text-primary hover:underline"
+            className="inline-flex items-center gap-1 text-xs font-medium text-foreground/80 transition-colors hover:text-foreground"
           >
-            打开「心跳」专属会话
-            <ExternalLink className="size-3" />
+            查看心跳记录
+            <ArrowRight className="size-3 text-muted-foreground" />
           </a>
         ) : (
-          <span className="text-xs text-muted-foreground">
-            尚未生成心跳会话（首次唤醒时创建）
+          <span className="text-[11.5px] text-muted-foreground/80">
+            首次唤醒时自动建档
           </span>
         )}
         <Button
           type="button"
-          size="sm"
+          size="xs"
           variant={act.hasWakeActivity ? "default" : "outline"}
           disabled={triggering || isRunning}
           onClick={onTrigger}
         >
-          <Play className="mr-1.5 size-3.5" />
-          {triggering
-            ? "唤醒中…"
-            : isRunning
-              ? "正在执行心跳"
-              : "立即唤醒心跳"}
+          <Play className="mr-1 size-3" />
+          {triggering ? "唤醒中…" : isRunning ? "巡检中" : "唤醒巡检"}
         </Button>
       </div>
+    </article>
+  );
+}
+
+const REQUEST_STATUS_STYLE: Record<
+  DashboardCorrelatedRequestItem["status"],
+  { label: string; dot: string; pill: string }
+> = {
+  pending: {
+    label: "等待响应",
+    dot: "bg-[#5c7c99] dark:bg-[#86a3be]",
+    pill: "bg-[#5c7c99]/14 text-[#5c7c99] border-[#5c7c99]/28 dark:bg-[#86a3be]/16 dark:text-[#86a3be] dark:border-[#86a3be]/30",
+  },
+  answered: {
+    label: "已回答",
+    dot: "bg-[#5b8a72] dark:bg-[#7fb096]",
+    pill: "bg-[#5b8a72]/14 text-[#5b8a72] border-[#5b8a72]/28 dark:bg-[#7fb096]/16 dark:text-[#7fb096] dark:border-[#7fb096]/30",
+  },
+  done: {
+    label: "已完成",
+    dot: "bg-[#5b8a72] dark:bg-[#7fb096]",
+    pill: "bg-[#5b8a72]/14 text-[#5b8a72] border-[#5b8a72]/28 dark:bg-[#7fb096]/16 dark:text-[#7fb096] dark:border-[#7fb096]/30",
+  },
+  declined: {
+    label: "已婉拒",
+    dot: "bg-[#b07d4f] dark:bg-[#d1a273]",
+    pill: "bg-[#b07d4f]/14 text-[#b07d4f] border-[#b07d4f]/28 dark:bg-[#d1a273]/16 dark:text-[#d1a273] dark:border-[#d1a273]/30",
+  },
+  expired: {
+    label: "已过期",
+    dot: "bg-muted-foreground",
+    pill: "bg-muted text-muted-foreground border-border",
+  },
+  failed: {
+    label: "异常",
+    dot: "bg-[#b5544a] dark:bg-[#dc7a70]",
+    pill: "bg-[#b5544a]/13 text-[#b5544a] border-[#b5544a]/28 dark:bg-[#dc7a70]/16 dark:text-[#dc7a70] dark:border-[#dc7a70]/30",
+  },
+  cancelled: {
+    label: "已取消",
+    dot: "bg-muted-foreground",
+    pill: "bg-muted text-muted-foreground border-border",
+  },
+};
+
+function RequestsLedgerPanel({
+  items,
+  hasFilter,
+  base,
+  now,
+  timezone,
+  cancellingId,
+  onCancel,
+}: {
+  readonly items: readonly DashboardCorrelatedRequestItem[];
+  readonly hasFilter: boolean;
+  readonly base: string;
+  readonly now: number;
+  readonly timezone: string;
+  readonly cancellingId: string | null;
+  readonly onCancel: (id: string) => void;
+}) {
+  if (items.length === 0) {
+    return (
+      <LedgerEmptyState
+        icon={GitPullRequestArrow}
+        title={hasFilter ? "没有匹配的请求记录" : "暂无追问或跨会话协同"}
+        description={
+          hasFilter
+            ? "尝试切换筛选标签或清空搜索词。"
+            : "当分身主动向用户发起确认提问，或将待跟进事项委派给目标会话时，处理进度与回执会在此实时闭环。"
+        }
+      />
+    );
+  }
+
+  return (
+    <div className="divide-y divide-border">
+      {items.map(item => {
+        const meta = REQUEST_STATUS_STYLE[item.status] ?? {
+          label: item.status,
+          dot: "bg-muted-foreground",
+          pill: "bg-muted text-muted-foreground border-border",
+        };
+        const selectedOption =
+          item.result && typeof item.result.selectedOption === "string"
+            ? item.result.selectedOption
+            : undefined;
+        const answerOrSummary =
+          item.result && typeof item.result.answer === "string"
+            ? item.result.answer
+            : item.result && typeof item.result.summary === "string"
+              ? item.result.summary
+              : item.result && typeof item.result.reason === "string"
+                ? item.result.reason
+                : undefined;
+
+        return (
+          <div
+            key={item.id}
+            className="group px-4 py-3.5 transition-colors hover:bg-muted/30"
+          >
+            {/* Row Top: Status + Kind + Route + Timestamp / Cancel */}
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="flex min-w-0 flex-wrap items-center gap-2 text-xs">
+                <span
+                  className={cn(
+                    "inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-[11px] font-medium",
+                    meta.pill,
+                  )}
+                >
+                  <span className={cn("size-1.5 rounded-full", meta.dot)} />
+                  {meta.label}
+                </span>
+
+                <span className="rounded-[5px] bg-secondary px-1.5 py-0.5 text-[11px] font-medium text-secondary-foreground">
+                  {item.kind === "ask" ? "主动提问" : "跨会话委派"}
+                </span>
+
+                <span className="text-muted-foreground">{item.shadowName}</span>
+                <span aria-hidden="true" className="text-muted-foreground/40">
+                  ·
+                </span>
+
+                <div className="flex min-w-0 items-center gap-1.5 text-muted-foreground">
+                  <a
+                    href={`${base}/sessions/${encodeURIComponent(item.originSessionId)}`}
+                    className="max-w-44 truncate font-medium text-foreground/85 hover:underline"
+                  >
+                    {item.originSessionTitle}
+                  </a>
+                  <ArrowRight className="size-3 shrink-0 opacity-60" />
+                  <a
+                    href={`${base}/sessions/${encodeURIComponent(item.targetSessionId)}`}
+                    className="max-w-44 truncate font-medium text-foreground/85 hover:underline"
+                  >
+                    {item.targetSessionTitle}
+                  </a>
+                  {item.targetUserName && (
+                    <span className="rounded bg-muted px-1.5 py-0.2 text-[11px]">
+                      @{item.targetUserName}
+                    </span>
+                  )}
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2.5 text-xs text-muted-foreground">
+                {item.status === "pending" && item.expiresAt && (
+                  <span>{formatRelative(item.expiresAt, now)}过期</span>
+                )}
+                <span className="tabular-nums">
+                  {formatShortTime(item.createdAt, timezone)}
+                </span>
+                {item.status === "pending" && (
+                  <Button
+                    type="button"
+                    size="xs"
+                    variant="ghost"
+                    disabled={cancellingId === item.id}
+                    onClick={() => onCancel(item.id)}
+                    className="h-6 px-2 text-xs text-[#b5544a] hover:bg-[#b5544a]/10 hover:text-[#b5544a] dark:text-[#dc7a70]"
+                  >
+                    {cancellingId === item.id ? "取消中…" : "取消"}
+                  </Button>
+                )}
+              </div>
+            </div>
+
+            {/* Instruction / Question Text */}
+            <p className="mt-2 whitespace-pre-wrap break-words text-[13.5px] leading-relaxed text-foreground">
+              {item.instruction}
+            </p>
+
+            {/* Options Chips */}
+            {item.options.length > 0 && (
+              <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                {item.options.map(opt => {
+                  const chosen = selectedOption === opt;
+                  return (
+                    <span
+                      key={opt}
+                      className={cn(
+                        "inline-flex items-center gap-1 rounded-full border px-2.5 py-0.5 text-xs",
+                        chosen
+                          ? "border-[#5b8a72]/35 bg-[#5b8a72]/14 font-medium text-[#5b8a72] dark:border-[#7fb096]/35 dark:bg-[#7fb096]/16 dark:text-[#7fb096]"
+                          : "border-border bg-muted/45 text-muted-foreground",
+                      )}
+                    >
+                      {chosen && <Check className="size-3" />}
+                      {opt}
+                    </span>
+                  );
+                })}
+              </div>
+            )}
+
+            {/* Resolution Callout */}
+            {answerOrSummary && (
+              <div className="mt-2.5 flex flex-wrap items-baseline gap-x-2 gap-y-1 rounded-[9px] bg-muted/65 px-3 py-2 text-[12.5px]">
+                <span className="font-medium text-[#5b8a72] dark:text-[#7fb096]">
+                  {item.resolvedByUserName
+                    ? `${item.resolvedByUserName} 响应：`
+                    : "回执结果："}
+                </span>
+                <span className="min-w-0 flex-1 whitespace-pre-wrap break-words text-foreground">
+                  {answerOrSummary}
+                </span>
+              </div>
+            )}
+          </div>
+        );
+      })}
     </div>
   );
 }
 
-const STATUS_META: Record<
-  DashboardCorrelatedRequestItem["status"],
-  { label: string; variant: "default" | "secondary" | "destructive" | "outline"; className?: string }
-> = {
-  pending: {
-    label: "等待响应",
-    variant: "default",
-    className: "bg-blue-600 text-white hover:bg-blue-600",
-  },
-  answered: {
-    label: "已回答",
-    variant: "secondary",
-    className: "bg-emerald-500/15 text-emerald-700 dark:text-emerald-300",
-  },
-  done: {
-    label: "已完成",
-    variant: "secondary",
-    className: "bg-emerald-500/15 text-emerald-700 dark:text-emerald-300",
-  },
-  declined: { label: "已婉拒", variant: "destructive" },
-  expired: { label: "已过期", variant: "outline" },
-  failed: { label: "执行失败", variant: "destructive" },
-  cancelled: { label: "已取消", variant: "outline" },
-};
-
-function CorrelatedRequestRow({
-  item,
+function DutiesLedgerPanel({
+  items,
+  hasFilter,
   base,
-  now,
-  timezone,
-  cancelling,
-  onCancel,
 }: {
-  readonly item: DashboardCorrelatedRequestItem;
+  readonly items: readonly DashboardDutyScheduleItem[];
+  readonly hasFilter: boolean;
   readonly base: string;
-  readonly now: number;
-  readonly timezone: string;
-  readonly cancelling: boolean;
-  readonly onCancel: () => void;
 }) {
-  const statusMeta = STATUS_META[item.status] ?? {
-    label: item.status,
-    variant: "outline" as const,
-  };
-  const selectedOption =
-    item.result && typeof item.result.selectedOption === "string"
-      ? item.result.selectedOption
-      : undefined;
-  const answerOrSummary =
-    item.result && typeof item.result.answer === "string"
-      ? item.result.answer
-      : item.result && typeof item.result.summary === "string"
-        ? item.result.summary
-        : item.result && typeof item.result.reason === "string"
-          ? item.result.reason
-          : undefined;
+  if (items.length === 0) {
+    return (
+      <LedgerEmptyState
+        icon={CalendarClock}
+        title={hasFilter ? "没有匹配的值班职责" : "暂无直连后台巡检职责"}
+        description={
+          hasFilter
+            ? "尝试清空搜索词查看全部职责。"
+            : "周期性监控、看板巡检等职责直接绑定后台 Task 静默运行，仅在发现异常时唤醒会话汇报。"
+        }
+        action={
+          !hasFilter ? (
+            <Button asChild size="xs" variant="outline">
+              <a href={`${base}/schedules`}>
+                前往定时任务创建
+                <ArrowRight className="ml-1 size-3" />
+              </a>
+            </Button>
+          ) : undefined
+        }
+      />
+    );
+  }
 
   return (
-    <div className="rounded-xl border bg-card p-4 text-sm">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <div className="flex flex-wrap items-center gap-2">
-          <Badge variant="outline">
-            {item.kind === "ask" ? "主动提问 (Ask)" : "跨会话委派 (Handoff)"}
-          </Badge>
-          <Badge variant={statusMeta.variant} className={statusMeta.className}>
-            {statusMeta.label}
-          </Badge>
-          <span className="text-xs text-muted-foreground">
-            分身：{item.shadowName}
-          </span>
-          <span className="font-mono text-[11px] text-muted-foreground">
-            {item.id}
-          </span>
-        </div>
-        <div className="flex items-center gap-2 text-xs text-muted-foreground">
-          <span>发起于 {formatDateTime(item.createdAt, timezone)}</span>
-          {item.status === "pending" && (
-            <Button
-              type="button"
-              variant="ghost"
-              size="sm"
-              disabled={cancelling}
-              onClick={onCancel}
-              className="h-7 px-2 text-xs text-destructive hover:text-destructive"
-            >
-              <XCircle className="mr-1 size-3.5" />
-              {cancelling ? "取消中…" : "取消"}
-            </Button>
+    <div className="divide-y divide-border">
+      {items.map(duty => (
+        <div
+          key={duty.id}
+          className="px-4 py-3.5 transition-colors hover:bg-muted/30"
+        >
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="flex min-w-0 items-center gap-2">
+              <span
+                className={cn(
+                  "size-2 shrink-0 rounded-full",
+                  duty.lastFailure
+                    ? "bg-[#b5544a] dark:bg-[#dc7a70]"
+                    : duty.enabled
+                      ? "bg-[#5b8a72] dark:bg-[#7fb096]"
+                      : "bg-muted-foreground/50",
+                )}
+              />
+              <span className="truncate text-[14px] font-medium text-foreground">
+                {duty.title}
+              </span>
+              {!duty.enabled && (
+                <span className="rounded-full bg-muted px-2 py-0.2 text-[11px] text-muted-foreground">
+                  已暂停
+                </span>
+              )}
+              {duty.lastFailure && (
+                <span className="rounded-full bg-[#b5544a]/12 px-2 py-0.2 text-[11px] font-medium text-[#b5544a] dark:text-[#dc7a70]">
+                  最近执行失败
+                </span>
+              )}
+            </div>
+            <span className="text-xs tabular-nums text-muted-foreground">
+              下次：{formatShortTime(duty.nextAt, duty.timezone)}
+            </span>
+          </div>
+
+          <p className="mt-1.5 line-clamp-2 text-[13px] text-muted-foreground">
+            {duty.instruction}
+          </p>
+
+          <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
+            <span>
+              巡检任务：
+              <a
+                href={`${base}/tasks/${encodeURIComponent(duty.taskId)}`}
+                className="font-medium text-foreground/85 hover:underline"
+              >
+                {duty.taskTitle}
+              </a>
+            </span>
+            <span aria-hidden="true" className="opacity-40">
+              ·
+            </span>
+            <span>
+              异常汇报至：
+              <a
+                href={`${base}/sessions/${encodeURIComponent(duty.targetSessionId)}`}
+                className="font-medium text-foreground/85 hover:underline"
+              >
+                {duty.targetSessionTitle}
+              </a>
+            </span>
+          </div>
+
+          {duty.lastFailure && (
+            <div className="mt-2 flex items-start gap-2 rounded-[8px] border border-[#b5544a]/25 bg-[#b5544a]/10 px-3 py-1.5 text-xs text-[#b5544a] dark:text-[#dc7a70]">
+              <AlertCircle className="mt-0.5 size-3.5 shrink-0" />
+              <span>{duty.lastFailure.reason}</span>
+            </div>
           )}
         </div>
-      </div>
+      ))}
+    </div>
+  );
+}
 
-      {/* Session Flow */}
-      <div className="mt-2 flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
-        <span>发起会话：</span>
-        <a
-          href={`${base}/sessions/${encodeURIComponent(item.originSessionId)}`}
-          className="font-medium text-primary hover:underline"
+function GovernanceLedgerPanel({
+  governance,
+  timezone,
+  base,
+}: {
+  readonly governance: DashboardProactivityOverview["governance"];
+  readonly timezone: string;
+  readonly base: string;
+}) {
+  const { deferredQueue, recentEvents } = governance;
+  if (deferredQueue.length === 0 && recentEvents.length === 0) {
+    return (
+      <LedgerEmptyState
+        icon={BellOff}
+        title="外发秩序良好，暂无顺延或限流记录"
+        description="被动回复不受配额与免打扰限制；当主动消息命中免打扰时段或频率上限时，顺延队列与拦截明细会在此显示。"
+      />
+    );
+  }
+
+  return (
+    <div className="divide-y divide-border">
+      {deferredQueue.map(cmd => (
+        <div
+          key={cmd.id}
+          className="px-4 py-3.5 transition-colors hover:bg-muted/30"
         >
-          {item.originSessionTitle}
-        </a>
-        <ArrowRight className="size-3" />
-        <span>目标：</span>
-        <a
-          href={`${base}/sessions/${encodeURIComponent(item.targetSessionId)}`}
-          className="font-medium text-primary hover:underline"
-        >
-          {item.targetSessionTitle}
-        </a>
-        {item.targetUserName && (
-          <Badge variant="outline" className="ml-1 text-[10px]">
-            指定对象：{item.targetUserName}
-          </Badge>
-        )}
-        {item.status === "pending" && item.expiresAt && (
-          <span className="ml-auto text-xs text-muted-foreground">
-            过期时间：{formatDateTime(item.expiresAt, timezone)}（
-            {formatRelative(item.expiresAt, now)}）
-          </span>
-        )}
-      </div>
-
-      {/* Question / Instruction */}
-      <p className="mt-2.5 whitespace-pre-wrap break-words rounded-lg bg-muted/30 px-3 py-2 text-sm">
-        {item.instruction}
-      </p>
-
-      {/* Ask Options */}
-      {item.options.length > 0 && (
-        <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
-          <span className="text-xs text-muted-foreground">快捷选项：</span>
-          {item.options.map(opt => {
-            const chosen = selectedOption === opt;
-            return (
-              <Badge
-                key={opt}
-                variant={chosen ? "default" : "outline"}
-                className={cn(
-                  "text-xs",
-                  chosen && "bg-emerald-600 text-white hover:bg-emerald-600",
-                )}
+          <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
+            <div className="flex items-center gap-2">
+              <span className="inline-flex items-center gap-1.5 rounded-full border border-[#7d6b91]/30 bg-[#7d6b91]/14 px-2 py-0.5 text-[11px] font-medium text-[#7d6b91] dark:border-[#b2a1c7]/30 dark:bg-[#b2a1c7]/16 dark:text-[#b2a1c7]">
+                <span className="size-1.5 rounded-full bg-current" />
+                免打扰顺延待发
+              </span>
+              <a
+                href={`${base}/sessions/${encodeURIComponent(cmd.sessionId)}`}
+                className="font-medium text-foreground/85 hover:underline"
               >
-                {chosen ? `✓ ${opt}` : opt}
-              </Badge>
-            );
-          })}
-        </div>
-      )}
-
-      {/* Resolution */}
-      {answerOrSummary && (
-        <div className="mt-2.5 rounded-lg border border-emerald-500/25 bg-emerald-500/5 px-3 py-2 text-xs">
-          <div className="flex flex-wrap items-center justify-between gap-2 text-muted-foreground">
-            <span className="font-medium text-foreground">
-              回执结果
-              {item.resolvedByUserName ? `（由 ${item.resolvedByUserName} 响应）` : ""}
+                {cmd.sessionTitle}
+              </a>
+            </div>
+            <span className="tabular-nums text-muted-foreground">
+              预计发送：{formatShortTime(cmd.availableAt, timezone)}
             </span>
-            <span>{formatDateTime(item.updatedAt, timezone)}</span>
           </div>
-          <p className="mt-1 whitespace-pre-wrap break-words text-foreground">
-            {answerOrSummary}
+          <p className="mt-1.5 line-clamp-2 text-[13px] text-foreground/90">
+            {cmd.contentPreview}
           </p>
         </div>
-      )}
+      ))}
+
+      {recentEvents.map(ev => {
+        const isThrottled = ev.controlKind === "outbound_throttled";
+        return (
+          <div
+            key={ev.id}
+            className="px-4 py-3 transition-colors hover:bg-muted/30"
+          >
+            <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
+              <div className="flex items-center gap-2">
+                <span
+                  className={cn(
+                    "inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-[11px] font-medium",
+                    isThrottled
+                      ? "border-[#b07d4f]/30 bg-[#b07d4f]/13 text-[#b07d4f] dark:border-[#d1a273]/30 dark:bg-[#d1a273]/16 dark:text-[#d1a273]"
+                      : "border-[#7d6b91]/30 bg-[#7d6b91]/13 text-[#7d6b91] dark:border-[#b2a1c7]/30 dark:bg-[#b2a1c7]/16 dark:text-[#b2a1c7]",
+                  )}
+                >
+                  {isThrottled ? "配额 / 去重拦截" : "免打扰顺延"}
+                </span>
+                <a
+                  href={`${base}/sessions/${encodeURIComponent(ev.sessionId)}`}
+                  className="font-medium text-foreground/85 hover:underline"
+                >
+                  {ev.sessionTitle}
+                </a>
+              </div>
+              <span className="tabular-nums text-muted-foreground">
+                {formatShortTime(ev.createdAt, timezone)}
+              </span>
+            </div>
+            <p className="mt-1 text-[12.5px] text-muted-foreground">
+              {ev.summary}
+            </p>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function LedgerEmptyState({
+  icon: Icon,
+  title,
+  description,
+  action,
+}: {
+  readonly icon: typeof CalendarClock;
+  readonly title: string;
+  readonly description: string;
+  readonly action?: React.ReactNode;
+}) {
+  return (
+    <div className="flex flex-col items-center justify-center px-6 py-12 text-center">
+      <div className="flex size-9 items-center justify-center rounded-full bg-muted text-muted-foreground">
+        <Icon className="size-4" />
+      </div>
+      <p className="mt-3 text-[14px] font-medium text-foreground">{title}</p>
+      <p className="mt-1 max-w-md text-[12.5px] leading-relaxed text-muted-foreground">
+        {description}
+      </p>
+      {action && <div className="mt-3.5">{action}</div>}
     </div>
   );
 }

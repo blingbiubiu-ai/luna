@@ -476,9 +476,9 @@ function ConversationControlTimelineItem({
       className={cn(
         "ml-[52px] max-w-[768px] rounded-md border border-dashed px-3 py-1.5 text-xs",
         isDeferred
-          ? "border-indigo-500/40 bg-indigo-500/5 text-indigo-900 dark:text-indigo-200"
+          ? "border-[#7d6b91]/35 bg-[#7d6b91]/8 text-[#7d6b91] dark:border-[#b2a1c7]/35 dark:bg-[#b2a1c7]/12 dark:text-[#b2a1c7]"
           : isThrottled
-            ? "border-amber-500/40 bg-amber-500/10 text-amber-900 dark:text-amber-200"
+            ? "border-[#b07d4f]/35 bg-[#b07d4f]/10 text-[#b07d4f] dark:border-[#d1a273]/35 dark:bg-[#d1a273]/14 dark:text-[#d1a273]"
             : "bg-muted/20 text-muted-foreground",
       )}
       data-testid={`session-event-${event.entryId}`}
@@ -613,10 +613,12 @@ function TurnTimelineGroup({
               {t("visible")}
             </span>
           ) : null}
-          <span title={item.turn.latestMessageId}>
-            {t("latest")}
-            {shortEntityId(item.turn.latestMessageId)}
-          </span>
+          {item.turn.latestMessageId ? (
+            <span title={item.turn.latestMessageId}>
+              {t("latest")}
+              {shortEntityId(item.turn.latestMessageId)}
+            </span>
+          ) : null}
           <MessageHeaderTagList tags={turnHeaderTags(item)} />
         </div>
       </div>
@@ -659,6 +661,67 @@ function TurnTimelineGroup({
           {assistantMessages.map((msg) => (
             <MessageTimelineItem key={msg.id} message={msg} nested />
           ))}
+          <TurnRunnerAttempts attempts={item.turn.runnerAttempts ?? []} />
+        </div>
+      ) : item.messages.length === 0 ? (
+        <div className="space-y-2.5">
+          <div
+            className="ml-[52px] grid max-w-[768px] gap-1.5 rounded-[10px] border border-border bg-card px-3.5 py-2.5 text-[13px]"
+            data-testid={`internal-turn-${item.turn.id}`}
+          >
+            <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
+              <div className="flex items-center gap-2">
+                <span
+                  className={cn(
+                    "inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-[11px] font-medium",
+                    item.turn.status === "completed"
+                      ? "bg-[#5b8a72]/14 text-[#5b8a72] dark:bg-[#7fb096]/16 dark:text-[#7fb096]"
+                      : item.turn.status === "running"
+                        ? "bg-[#b07d4f]/14 text-[#b07d4f] dark:bg-[#d1a273]/16 dark:text-[#d1a273]"
+                        : "bg-[#b5544a]/13 text-[#b5544a] dark:bg-[#dc7a70]/16 dark:text-[#dc7a70]",
+                  )}
+                >
+                  <span className="size-1.5 rounded-full bg-current" />
+                  {item.turn.status === "completed"
+                    ? "巡检已完成"
+                    : item.turn.status === "running"
+                      ? "巡检执行中"
+                      : "执行异常"}
+                </span>
+                <span className="text-muted-foreground">自驱轮次</span>
+              </div>
+              <span className="tabular-nums text-muted-foreground">
+                {formatShortClock(item.turn.startedAt)}
+              </span>
+            </div>
+            {(() => {
+              const latestRaw = item.turn.runnerAttempts
+                ?.slice()
+                .sort((a, b) => b.attemptIndex - a.attemptIndex)[0]
+                ?.rawOutput?.trim();
+              if (latestRaw && latestRaw !== "LUNA_NOTHING_TO_SEND") {
+                return (
+                  <p className="whitespace-pre-wrap break-words text-[13px] leading-relaxed text-foreground">
+                    {latestRaw}
+                  </p>
+                );
+              }
+              if (item.turn.error) {
+                return (
+                  <p className="whitespace-pre-wrap break-words text-xs text-[#b5544a] dark:text-[#dc7a70]">
+                    {item.turn.error}
+                  </p>
+                );
+              }
+              return (
+                <p className="text-xs text-muted-foreground">
+                  {item.turn.status === "running"
+                    ? "正在读取上下文并执行自检…"
+                    : "本次自检无需主动发声，已静默完成。"}
+                </p>
+              );
+            })()}
+          </div>
           <TurnRunnerAttempts attempts={item.turn.runnerAttempts ?? []} />
         </div>
       ) : (
@@ -1477,7 +1540,7 @@ function turnDetailsText(
     item.turn.visibleMessageCount !== item.turn.messageCount
       ? `${item.turn.visibleMessageCount} visible`
       : null,
-    `latest ${item.turn.latestMessageId}`,
+    item.turn.latestMessageId ? `latest ${item.turn.latestMessageId}` : null,
   ]
     .filter(Boolean)
     .join(" · ");

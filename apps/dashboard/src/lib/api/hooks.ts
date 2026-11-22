@@ -1996,6 +1996,7 @@ export interface DashboardShadowHeartbeatItem {
     id: string;
     status: string;
     error: string | null;
+    summary?: string | null;
     createdAt: number;
     updatedAt: number;
   } | null;
