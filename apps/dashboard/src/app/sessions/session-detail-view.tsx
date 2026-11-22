@@ -464,12 +464,31 @@ function ConversationControlTimelineItem({
   >["event"];
 }) {
   const { t } = useTranslation();
+  const isDeferred = event.controlKind === "outbound_deferred";
+  const isThrottled = event.controlKind === "outbound_throttled";
+  const controlLabel = isDeferred
+    ? "免打扰顺延"
+    : isThrottled
+      ? "主动外发限流"
+      : event.controlKind;
   return (
     <section
-      className="ml-[52px] max-w-[768px] rounded-md border border-dashed bg-muted/20 px-3 py-1.5 text-xs text-muted-foreground"
+      className={cn(
+        "ml-[52px] max-w-[768px] rounded-md border border-dashed px-3 py-1.5 text-xs",
+        isDeferred
+          ? "border-indigo-500/40 bg-indigo-500/5 text-indigo-900 dark:text-indigo-200"
+          : isThrottled
+            ? "border-amber-500/40 bg-amber-500/10 text-amber-900 dark:text-amber-200"
+            : "bg-muted/20 text-muted-foreground",
+      )}
       data-testid={`session-event-${event.entryId}`}
     >
-      <div className="text-muted-foreground">{event.summary}</div>
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="rounded px-1.5 py-0.5 text-[10px] font-medium bg-background/80 border">
+          {controlLabel}
+        </span>
+        <span>{event.summary}</span>
+      </div>
       <div className="mt-0.5 flex flex-wrap gap-x-3 gap-y-0.5 font-mono text-[10px] opacity-80">
         <span>{event.controlKind}</span>
         <span>{event.reasonKind}</span>

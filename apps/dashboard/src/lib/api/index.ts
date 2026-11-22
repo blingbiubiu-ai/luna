@@ -62,6 +62,9 @@ export {
   useTestAgentProfileRevision,
   useActivateAgentProfileRevision,
   useDeleteAgentProfile,
+  useProactivityOverview,
+  useTriggerShadowHeartbeat,
+  useCancelProactivityRequest,
 } from "./hooks";
 
 export type {
@@ -153,4 +156,8 @@ export type {
   DashboardAgentProfileRevision,
   DashboardAgentConfigStatus,
   CreateAgentProfileInput,
+  DashboardShadowHeartbeatItem,
+  DashboardCorrelatedRequestItem,
+  DashboardDutyScheduleItem,
+  DashboardProactivityOverview,
 } from "./hooks";

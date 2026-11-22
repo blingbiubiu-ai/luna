@@ -23,6 +23,7 @@ import { RunnerContextStore } from "@/runners/runner-context-store";
 import type { LunaAccessTokenClaims } from "@/server/auth/access-token-service";
 import { createRunnerMessageRoutes } from "@/server/routes/runner-messages";
 import { createRunnerProactivityRoutes } from "@/server/routes/runner-proactivity";
+import { createAgentProactivityRoutes } from "@/server/routes/agent-proactivity";
 import { fixtureNamedSession, fixtureUser } from "../helpers/platform-fixtures";
 import { registerTestRunnerJob } from "./support/runner-job";
 
@@ -509,4 +510,84 @@ test("failed schedule occurrence records failure marker and rate-limits owner no
     .get();
   expect(marker?.lastFailedOccurrenceId).toBe("occ_fail_1");
   expect(marker?.lastReason).toContain("Target session is unavailable");
+});
+
+test("Dashboard proactivity overview returns live heartbeats/requests/duties and supports manual heartbeat wake & request cancel", async () => {
+  const commands = new SessionCommandService({ db: db.db, channelFor: () => undefined });
+  registerSessionCommands(db.db, commands);
+
+  humanMessage("user:alice", Date.now() - 10_000);
+  db.db.insert(schema.correlatedRequests).values({
+    id: "req_dash_1",
+    kind: "ask",
+    agentId: scope.agentId,
+    shadowId: scope.shadowId,
+    originSessionId: "session",
+    targetAddress: "user:bob",
+    targetSessionId: "session",
+    targetUserId: "user:bob",
+    instruction: "是否现在合并发布？",
+    optionsJson: ["立即合并", "明天再发"],
+    hops: 3,
+    status: "pending",
+    expiresAt: Date.now() + 3_600_000,
+    createdAt: Date.now() - 5_000,
+    updatedAt: Date.now() - 5_000,
+  }).run();
+
+  const app = new Hono()
+    .use("*", async (c, next) => {
+      c.set("dashboardAuthSession" as never, {
+        authenticated: true,
+        account: { id: "alice", name: "Alice", provider: "local" },
+      } as never);
+      c.set("lunaRequestAuthKind" as never, "dashboard-cookie" as never);
+      await next();
+    })
+    .route("/api/proactivity", createAgentProactivityRoutes({ db: db.db }));
+
+  const overviewRes = await app.request(
+    `/api/proactivity/overview?agentId=${encodeURIComponent(scope.agentId)}`,
+  );
+  expect(overviewRes.status).toBe(200);
+  const overview = (await overviewRes.json()) as {
+    heartbeats: { shadowId: string; sessionId: string | null; pendingActivity: { hasWakeActivity: boolean } }[];
+    requests: { id: string; status: string; options: string[] }[];
+  };
+  expect(overview.heartbeats).toHaveLength(1);
+  expect(overview.heartbeats[0]?.pendingActivity.hasWakeActivity).toBe(true);
+  expect(overview.requests[0]).toMatchObject({
+    id: "req_dash_1",
+    status: "pending",
+    options: ["立即合并", "明天再发"],
+  });
+
+  // Trigger manual heartbeat wake-up even before 30m interval elapses.
+  const triggerRes = await app.request(
+    `/api/proactivity/heartbeats/${encodeURIComponent(scope.shadowId)}/trigger?agentId=${encodeURIComponent(scope.agentId)}`,
+    { method: "POST" },
+  );
+  expect(triggerRes.status).toBe(200);
+  const triggered = (await triggerRes.json()) as {
+    ok: boolean;
+    sessionId: string;
+    alreadyRunning: boolean;
+  };
+  expect(triggered.ok).toBe(true);
+  expect(triggered.alreadyRunning).toBe(false);
+  expect(triggered.sessionId).toBeString();
+
+  // Cancel pending request from Dashboard.
+  const cancelRes = await app.request(
+    `/api/proactivity/requests/req_dash_1/cancel?agentId=${encodeURIComponent(scope.agentId)}`,
+    { method: "POST" },
+  );
+  expect(cancelRes.status).toBe(200);
+  expect(
+    db.db
+      .select()
+      .from(schema.correlatedRequests)
+      .where(eq(schema.correlatedRequests.id, "req_dash_1"))
+      .get()?.status,
+  ).toBe("cancelled");
 });

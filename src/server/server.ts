@@ -18,6 +18,7 @@ import { createRunnerRootRoutes } from "./routes/runner-root";
 import { createSessionCommandAdminRoutes } from "./routes/session-commands";
 import { createRunnerMessageRoutes } from "./routes/runner-messages";
 import { createRunnerProactivityRoutes } from "./routes/runner-proactivity";
+import { createAgentProactivityRoutes } from "./routes/agent-proactivity";
 import { createRunnerProtocolV2Routes } from "./routes/runner-protocol-v2";
 import { createRunnerRequestRoutes } from "./routes/runner-requests";
 import { loginDotMatrixScript } from "./login-dot-matrix";
@@ -125,6 +126,7 @@ function createApp(
       .route("/api/runner/task-reports", createTaskReportRoutes())
       .route("/api/runner", createRunnerMessageRoutes(db === undefined ? {} : { db }))
       .route("/api/runner", createRunnerProactivityRoutes(db === undefined ? {} : { db }))
+      .route("/api/proactivity", createAgentProactivityRoutes(db === undefined ? {} : { db }))
       .route("/api/runner", createRunnerRequestRoutes(db === undefined ? {} : { db }))
       .route("/api/session-commands", createSessionCommandAdminRoutes(db === undefined ? {} : { db }))
       .route(

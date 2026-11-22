@@ -92,11 +92,22 @@ export function SessionsWorkspace({
   const defaultDesktopSessionId = useMemo(() => {
     const active = allSessions.filter((s) => s.bindingStatus !== "retired");
     if (active.length === 0) return undefined;
-    // Pick the newest root conversation on desktop when /sessions is opened without an ID.
+    // Pick the newest root conversation on desktop when /sessions is opened without an ID,
+    // preferring external/user conversations over self-routine sessions ("心跳" / "记忆整理").
+    const isRoutine = (s: DashboardSession) =>
+      s.channel_type === "dashboard" &&
+      !s.group_id &&
+      (s.title === "心跳" || s.title === "记忆整理");
     const roots = active.filter(
       (s) => !(s.parentSessionId ?? s.parent_session_id) || s.kind === "work",
     );
-    const pool = roots.length > 0 ? roots : active;
+    const nonRoutineRoots = roots.filter((s) => !isRoutine(s));
+    const pool =
+      nonRoutineRoots.length > 0
+        ? nonRoutineRoots
+        : roots.length > 0
+          ? roots
+          : active;
     return [...pool].sort(
       (a, b) =>
         (b.latest_message_at ?? b.updated_at) -

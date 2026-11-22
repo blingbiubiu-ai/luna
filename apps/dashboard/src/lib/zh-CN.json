@@ -673,5 +673,6 @@
   "events": "条事件",
   "No notifications configured.": "暂无通知规则",
   "No linked sessions.": "暂无关联会话",
-  "internal": "内部记录"
+  "internal": "内部记录",
+  "Proactivity": "主动中心"
 }

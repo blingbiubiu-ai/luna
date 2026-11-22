@@ -270,6 +270,105 @@ export function scheduleShadowHeartbeats(
   return runSelfRoutine({ db, commands, now }, createShadowHeartbeatRoutine());
 }
 
+/**
+ * Manually triggers an immediate heartbeat checkup for a Shadow from the Dashboard,
+ * bypassing the interval gate and running even when no new wake activity has arrived.
+ */
+export function triggerShadowHeartbeatNow(
+  db: DrizzleDB,
+  commands: Pick<SessionCommandService, "accept">,
+  shadowId: string,
+  now = Date.now(),
+): {
+  readonly commandId: string;
+  readonly sessionId: string;
+  readonly alreadyRunning: boolean;
+} {
+  const agents = new AgentStore(db);
+  const shadow = agents.shadow(shadowId);
+  const agent = agents.get(shadow.agentId);
+  if (shadow.status !== "active" || agent.status !== "active") {
+    throw new Error("Shadow or Agent is not active");
+  }
+  const state = db
+    .select()
+    .from(shadowHeartbeats)
+    .where(eq(shadowHeartbeats.shadowId, shadowId))
+    .get();
+  if (state?.commandId && commandInFlight(db, state.commandId)) {
+    return {
+      commandId: state.commandId,
+      sessionId: state.sessionId,
+      alreadyRunning: true,
+    };
+  }
+  const consolidation = db
+    .select()
+    .from(memoryConsolidations)
+    .where(eq(memoryConsolidations.agentId, shadow.agentId))
+    .get();
+  const intervalMs =
+    resolveProactivitySettings(db, shadow.agentId).heartbeatIntervalMs ||
+    30 * 60_000;
+  const since = state ? state.cursorAt : Math.max(0, now - intervalMs);
+  const sessionId = ensureShadowHeartbeatSession(db, shadowId, now);
+  const excludeIds = [sessionId, consolidation?.sessionId].filter(
+    (id): id is string => Boolean(id),
+  );
+  const report = queryShadowActivity(db, shadowId, {
+    since,
+    excludeSessionIds: excludeIds,
+  });
+  const baseInstruction = renderHeartbeatInstruction(now, report);
+  const content = report.hasWakeActivity
+    ? baseInstruction
+    : `${baseInstruction}\n\nManual trigger note: No new wake activity was recorded since the last cursor, because the Agent owner requested an immediate heartbeat checkup from Dashboard. Review your duties, schedules, open requests, and heartbeat journal; finish quietly if nothing needs follow-up.`;
+
+  const ownerUserId = agents.ownerUserId(shadow.agentId);
+  const command = commands.accept(
+    {
+      userId: ownerUserId,
+      sourceSessionId: sessionId,
+      originId: `${HEARTBEAT_ORIGIN}${shadowId}:manual:${now}`,
+    },
+    sessionId,
+    "session.invoke",
+    "heartbeat",
+    { content, purpose: "notification" },
+    { expiresAt: now + RUN_EXPIRES_MS },
+  );
+  const nextCursor = Math.max(now, report.latestCursorAt);
+  db.insert(shadowHeartbeats)
+    .values({
+      shadowId,
+      agentId: shadow.agentId,
+      sessionId,
+      cursorAt: nextCursor,
+      coveredFrom: since,
+      lastQueuedAt: now,
+      commandId: command.id,
+      updatedAt: now,
+    })
+    .onConflictDoUpdate({
+      target: shadowHeartbeats.shadowId,
+      set: {
+        sessionId,
+        cursorAt: nextCursor,
+        coveredFrom: since,
+        lastQueuedAt: now,
+        commandId: command.id,
+        updatedAt: now,
+      },
+    })
+    .run();
+
+  return {
+    commandId: command.id,
+    sessionId,
+    alreadyRunning: false,
+  };
+}
+
 /** Ensures and returns a Shadow's dedicated local Heartbeat session (`self` address target). */
 export function ensureShadowHeartbeatSession(
   db: DrizzleDB,

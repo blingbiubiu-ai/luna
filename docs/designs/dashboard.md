@@ -189,7 +189,9 @@ The Agent owner can pause or resume an assigned Worker from the Agent’s Worker
 
 Task timeline uses `/api/tasks/:id/timeline/page`, polling loaded pages and loading older records on demand. Tool status updates one row and public text can be inspected in full. See [Progress notifications](progress-notifications.md).
 
-## Proactivity Settings And Direct Task Schedules
+## Proactivity Center, Settings And Direct Task Schedules
+
+The Proactivity Center (`/agent/<agentId>/proactivity`, backed by `GET /api/proactivity/overview`, `POST /api/proactivity/heartbeats/:shadowId/trigger`, and `POST /api/proactivity/requests/:requestId/cancel`) gives the Agent owner live visibility and manual controls over the Agent's self-layer and proactive communication loop: per-Shadow heartbeat cursor, pending unread activity digest, dedicated `"心跳"` session link and on-demand manual heartbeat wake-up; correlated `ask` and `handoff` ledger with option selections, resolution status and cancellation; active `task.run` duty schedules; and quiet-hours `deferred` outbound queue plus recent `outbound_throttled` / `outbound_deferred` governance events. The Agent Overview page (`/agent/<agentId>/`) also summarizes live proactivity counts, and the Sessions sidebar marks and filters self-driven (`心跳` / `记忆整理`) sessions under `自驱`.
 
 Platform administrators configure platform-wide proactivity defaults (`proactivity.heartbeatIntervalMs`, `outboundPerSessionPerHour`, `outboundPerRecipientPerDay`, `outboundDedupWindowMs`, `quietHours`, `askDefaultExpiresMs`, and `scheduleFailureNotifyIntervalMs`) on `/platform/settings`. Each Agent owner can inherit those defaults, override individual intervals/quotas, or explicitly disable platform quiet hours (`quietHours: false`) under `/agent/<agentId>/settings/general` ("主动").
 

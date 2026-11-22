@@ -6,6 +6,7 @@ import {
   BriefcaseBusiness,
   CircleCheck,
   Clock3,
+  HeartPulse,
   MessagesSquare,
   ShieldCheck,
   Waypoints,
@@ -21,6 +22,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import type {
+  DashboardProactivityOverview,
   DashboardRuntimeStatus,
   DashboardSession,
   DashboardTask,
@@ -39,6 +41,7 @@ export function HomeOverview({
   runtimeStatus,
   runtimeLoading,
   runtimeError,
+  proactivity,
 }: {
   readonly scopePicker?: ReactNode;
   readonly scopeError?: unknown;
@@ -49,6 +52,7 @@ export function HomeOverview({
   readonly runtimeStatus: DashboardRuntimeStatus | undefined;
   readonly runtimeLoading: boolean;
   readonly runtimeError: unknown;
+  readonly proactivity?: DashboardProactivityOverview | undefined;
 }) {
   const base = useAgentBasePath();
   const { t } = useTranslation();
@@ -193,6 +197,60 @@ export function HomeOverview({
           </CardContent>
         </Card>
       </div>
+
+      {proactivity && (
+        <Card className="rounded-lg">
+          <CardHeader className="border-b pb-4">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <CardTitle className="flex items-center gap-2">
+                  <HeartPulse className="size-4 text-primary" />
+                  主动巡检与协同（Proactivity）
+                </CardTitle>
+                <CardDescription>
+                  分身心跳游标、主动提问/协同请求及值班巡检职责实况。
+                </CardDescription>
+              </div>
+              <DashboardLink href={`${base}/proactivity`}>
+                打开主动中心
+                <ArrowRight className="size-4" />
+              </DashboardLink>
+            </div>
+          </CardHeader>
+          <CardContent className="grid gap-3 p-4 sm:grid-cols-2 lg:grid-cols-4">
+            <StatusTile
+              label="待巡检分身动态"
+              value={
+                proactivity.heartbeats.filter(
+                  (h) => h.pendingActivity.hasWakeActivity,
+                ).length
+              }
+              tone={
+                proactivity.heartbeats.some(
+                  (h) => h.pendingActivity.hasWakeActivity,
+                )
+                  ? "amber"
+                  : "neutral"
+              }
+            />
+            <StatusTile
+              label="等待响应的追问 / 委派"
+              value={
+                proactivity.requests.filter((r) => r.status === "pending").length
+              }
+              tone="blue"
+            />
+            <StatusTile
+              label="启用中的值班巡检"
+              value={proactivity.duties.filter((d) => d.enabled).length}
+            />
+            <StatusTile
+              label="近 24h 主动发言"
+              value={proactivity.governance.sentLast24h}
+            />
+          </CardContent>
+        </Card>
+      )}
     </div>
   );
 }
