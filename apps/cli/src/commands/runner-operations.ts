@@ -7,7 +7,7 @@ export async function runRunnerOperationsCli(scope: "task" | "session", argv: re
   const command = argv[0];
   if (!command || command === "help" || hasFlag(argv, "--help") || hasFlag(argv, "-h")) {
     return {status: "ok", output: scope === "task"
-      ? "luna task list [--agent-id ID | --session-id ID] | get --task-id ID | create|update|restart|cancel|status-card|report|status"
+      ? "luna task list [--agent-id ID | --session-id ID] | get --task-id ID | progress --task-id ID [--run-id ID] [--limit N] [--cursor CURSOR] | create|update|restart|cancel|status-card|report|status"
       : "luna session messages|read_session_timeline --session-id ID | create-thread|clarify|release|status"};
   }
   try {
@@ -20,6 +20,11 @@ export async function runRunnerOperationsCli(scope: "task" | "session", argv: re
       const agentId = (readOption(argv, "--agent-id") ?? env.LUNA_AGENT_ID)?.trim();
       if (!agentId) return {status: "error", code: "agent_scope_required", message: "Use --agent-id or set LUNA_AGENT_ID"};
       return callUnifiedService(env, {method: "GET", path: servicePathWithQuery("/api/tasks", {agentId})});
+    }
+    if(scope==="task"&&command==="progress") {
+      const id=readOption(argv,"--task-id");if(!id)return {status:"error",code:"missing_task_id",message:"missing --task-id"};
+      return callUnifiedService(env,{method:"GET",path:servicePathWithQuery(`/api/tasks/${encodeURIComponent(id)}/progress`,{
+        runId:readOption(argv,"--run-id"),limit:readOption(argv,"--limit"),cursor:readOption(argv,"--cursor")})});
     }
     if (scope === "task" && command === "get") {
       const taskId = readOption(argv, "--task-id");

@@ -32,7 +32,7 @@ export const runnerJobs = sqliteTable("runner_jobs", {
   credentialsRevision: integer("credentials_revision").notNull().default(0),
   credentialsHash: text("credentials_hash"),
   state: text("state").$type<"pending" | "active" | "terminal" | "settled">().notNull(),
-  providerState: text("provider_state_json", { mode: "json" }).$type<{ sessionId?: string; text?: string; checkpoint?: boolean; error?: Record<string, unknown> }>(),
+  providerState: text("provider_state_json", { mode: "json" }).$type<{ sessionId?: string; text?: string; checkpoint?: boolean; progressAttempt?: number; error?: Record<string, unknown> }>(),
   lastEvent: text("last_event_json", { mode: "json" }).$type<RuntimeEvent>(),
   terminalSequence: integer("terminal_sequence"),
   createdAt: integer("created_at").notNull(), updatedAt: integer("updated_at").notNull(),

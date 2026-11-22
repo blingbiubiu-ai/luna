@@ -43,7 +43,7 @@ test("large Native histories are batched and bounded while terminal delivery ret
   const entries = Array.from({length: 1_000}, (_, i) => ({id:`large-${i}`,text:`步骤 ${i}：${"正文".repeat(200)}`}));
   await adapter().send(inbound,{...operation,nativeProgress:entries});
   const before = calls.length;
-  expect(events().filter(e => e.content.includes("详细进度已合并"))).toHaveLength(1);
+  expect(events().filter(e => e.content.includes("进度已达到展示上限"))).toHaveLength(1);
   const visible = events().filter(e => e.event_type === "REASONING_MESSAGE_CONTENT").length;
   expect(visible).toBeGreaterThan(94);
   expect(visible).toBeLessThan(300);
@@ -60,7 +60,7 @@ test("large Native histories are batched and bounded while terminal delivery ret
 test("short Native progress retains 300 ordinary entries and one budget notice", async () => {
   await adapter().send(inbound,{...operation,nativeProgress:Array.from({length:400},(_,i)=>({id:`short-${i}`,text:`步骤 ${i}`}))});
   expect(events().filter(e=>e.event_type === "REASONING_MESSAGE_CONTENT")).toHaveLength(301);
-  expect(events().filter(e=>e.content.includes("详细进度已合并"))).toHaveLength(1);
+  expect(events().filter(e=>e.content.includes("进度已达到展示上限"))).toHaveLength(1);
   const checkpoint = connection.db.select().from(schema.nativeProgressDeliveries).get()!;
   expect(checkpoint.state.progressBudget).toMatchObject({entries:300,exhausted:true});
 });
@@ -72,7 +72,7 @@ test("results update existing tools without consuming another display slot, even
   await adapter().send(inbound,update);
   expect(events().filter(e=>e.event_type === "TOOL_CALL_START")).toHaveLength(299);
   expect(events().filter(e=>e.event_type === "TOOL_CALL_RESULT")).toHaveLength(299);
-  expect(events().filter(e=>e.content.includes("详细进度已合并"))).toHaveLength(1);
+  expect(events().filter(e=>e.content.includes("进度已达到展示上限"))).toHaveLength(1);
   expect(connection.db.select().from(schema.nativeProgressDeliveries).get()!.state.progressBudget?.entries).toBe(300);
 });
 test("native thread snapshots append only new public entries across adapter restart and complete once",async()=>{

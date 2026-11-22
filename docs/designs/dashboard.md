@@ -185,3 +185,6 @@ while history stays, and requires typing the name to confirm. A saved bot config
 At `/agent/<agentId>/settings/workers`, the Agent owner can create a pairing code for that Agent, and see assigned Workers. The Worker CLI redeems the code and the Service assigns the Worker to that Agent. To assign an existing private Worker to another Agent, get a new code from that Agent and run bind again on the same Worker. The owner can remove an assignment from that Agent.
 
 The Agent owner can pause or resume an assigned Worker from the Agent’s Workers page. The action changes only this Agent’s assignment; other Agents using the same Worker keep admitting work.
+
+
+Task timeline uses `/api/tasks/:id/timeline/page`, polling loaded pages and loading older records on demand. Tool status updates one row and public text can be inspected in full. See [Progress notifications](progress-notifications.md).

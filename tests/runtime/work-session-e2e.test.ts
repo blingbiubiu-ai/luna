@@ -1,3 +1,4 @@
+import {OrdinaryProgress} from "../../extensions/channels/feishu/messaging/ordinary-progress";
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -43,6 +44,13 @@ const sessionConfig: SessionConfig = {
   group_activation_followup_recent_messages: 3,
   group_activation_followup_interrupt_on_other_user: true,
 } as SessionConfig;
+
+class ProgressFakeFeishuChannel extends FakeFeishuChannel {
+  private progressAdapter = new OrdinaryProgress(undefined, "feishu-main");
+  override async send(inbound: NormalizedInboundMessage, operation: Omit<OutboundChannelOperation,"id"|"channelId">) {
+    return this.progressAdapter.remember(await super.send(inbound,this.progressAdapter.prepare(operation,32)));
+  }
+}
 
 class ProcessingReactionFakeFeishuChannel extends FakeFeishuChannel {
   readonly processingMessageIds = new Set<string>();
@@ -234,7 +242,7 @@ describe("work session end-to-end", () => {
   });
 
   test("#work → work session → turn → work runner → status card", async () => {
-    const channel = new FakeFeishuChannel("feishu-main");
+    const channel = new ProgressFakeFeishuChannel("feishu-main");
     const sessionStore = new SessionStore(database.db);
     const messageStore = new MessageStore(database.db);
     const inboxStore = new SessionInboxStore(database.db);
@@ -361,6 +369,7 @@ describe("work session end-to-end", () => {
       steps: ["工作会话执行已开始。"],
       payload: {
         status: "completed",
+        progressSnapshot: expect.objectContaining({terminal: true, entries: [expect.objectContaining({kind: "text", text: "工作会话执行已开始。"})]}),
         steps: [{ name: "工作会话执行已开始。", status: "done" }],
       },
     }]);

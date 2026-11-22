@@ -49,6 +49,7 @@ function TaskDetailPage() {
     error: timelineError,
     isError: timelineIsError,
     isLoading: timelineLoading,
+    hasNextPage, fetchNextPage, isFetchingNextPage,
   } = useTaskTimeline(taskId, agentId);
   const {
     data: artifacts,
@@ -111,7 +112,8 @@ function TaskDetailPage() {
       <TaskDetailView
         taskDetail={taskDetail}
         runs={runs}
-        timeline={timeline}
+        timeline={timeline?.pages.flatMap(page => page.items)}
+        timelinePagination={{hasMore: Boolean(hasNextPage), loading: isFetchingNextPage, loadMore: () => { void fetchNextPage(); }}}
         artifacts={displayArtifacts}
         loading={{
           taskDetail: taskLoading,

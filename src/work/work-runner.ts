@@ -40,10 +40,9 @@ import {
 import { createAgentRunnerForConfig } from "@/kernel/agents";
 import { extractSystemCommandMatch } from "@/messaging/gateway/system-command-parser";
 import {
-  buildTaskStatusCardSteps,
   type TaskStatusCardStepEvent,
 } from "@/messaging/notifications/task-status-card-updater";
-import {nativeProgressEntries, updateProgressProjection} from "@/messaging/notifications/feishu-task-updater";
+import {progressEntry,type ProgressUpdate} from "@/messaging/notifications/progress-update";
 import { getKernel } from "@/server/routes/kernel";
 import { LiveProgress } from "@/messaging/notifications/live-progress";
 import {
@@ -206,40 +205,26 @@ export class WorkRunner {
     let attempt: SessionRunnerAttemptRow | undefined;
     let statusCard: SentStatusCard | undefined;
     let runnerSessionId = runnerContext?.runner_session_id ?? undefined;
-    const progressEvents: TaskStatusCardStepEvent[] = [];
+    let progressPosition=0;
+    let progressClock=0;
+    const progressTime=()=>progressClock=Math.max(Date.now(),progressClock+1);
     // The Agent decides whether its Work progress card shows and in which style; a failed or
     // cancelled turn is still reported, so it never ends silently.
     const display = new AgentSettingsStore(this._options.db).get(session.agent_id).work.progressCard;
-    const cardOptions = (entries: readonly TaskStatusCardStepEvent[] = progressEvents, nativeProgress?: readonly NativeProgressEntry[]) => ({
-      progressKey: input.turn.id,
-      ...(statusCard !== undefined ? { targetMessageId: statusCard.providerMessageId } : {}),
-      style: display.style,
-      nativeProgress: nativeProgress ?? nativeProgressEntries(entries),
+    const cardOptions = (update?:ProgressUpdate) => ({
+      progressKey:input.turn.id,...(statusCard?{targetMessageId:statusCard.providerMessageId}:{}),style:display.style,
+      progressUpdate:update??{streamKey:`work:${input.turn.id}`,mode:"delta" as const,position:++progressPosition,entries:[]},
     });
-    const rememberProgress = (entry: TaskStatusCardStepEvent) => {
-      const recent = updateProgressProjection(progressEvents,[entry]);
-      progressEvents.splice(0,progressEvents.length,...recent);
-      return entry;
-    };
     const progress = new LiveProgress<TaskStatusCardStepEvent>({
-      persist: summary => {
-        const entry = {id: randomUUID(), type: "runner.step", summary, data: {publicProgress: true, nativeText:summary}};
-        rememberProgress(entry);
-        return entry;
-      },
-      transient: event => rememberProgress({id:event.id,type:"runner.step",summary:event.toolTitle ?? event.text,
-        data:{publicProgress:true,nativeText:"",toolCallId:event.toolCallId,toolPhase:event.toolPhase}}),
-      entryId: entry => entry.id!,
-      send: async (entries, nativeProgress) => {
-        if (!display.show) return;
-        const stepNames = buildTaskStatusCardSteps({timelineEvents: progressEvents}) ?? [];
-        const sentCard = await this._sendStatusCard(channel, inbound, {
-          title: "工作会话", status: "in_progress",
-          steps: stepNames.map((name, index) => ({name, status: index === stepNames.length - 1 ? "active" : "done"})),
-          summary: "",
-        }, latestMessageRow, session.id, cardOptions(entries, nativeProgress));
-        if (statusCard === undefined) statusCard = sentCard;
-        this._attachStatusCardToTurn(input.turn.id, sentCard);
+      persist:summary=>{const at=progressTime();return {id:randomUUID(),type:"runner.step",summary,created_at:at,updated_at:at,data:{publicProgress:true}};},
+      transient:event=>{const at=progressTime();return {id:event.toolCallId!,type:"runner.tool",summary:event.toolTitle??event.text,created_at:event.toolPhase==="start"?at:event.startedAt??at,updated_at:at,
+        data:{toolName:event.toolName,nativeCallId:event.toolCallId,startedAt:event.startedAt,finishedAt:event.toolPhase==="result"?at:null,status:event.toolPhase==="start"?"running":event.text==="工具执行失败"?"failed":"ended"}};},
+      entryId:entry=>entry.id!,
+      send:async entries=>{
+        if(!display.show)return;
+        const update:ProgressUpdate={streamKey:`work:${input.turn.id}`,mode:statusCard?"delta":"snapshot",position:++progressPosition,entries:entries.map(progressEntry)};
+        const sent=await this._sendStatusCard(channel,inbound,{title:"工作会话",status:"in_progress",steps:[],summary:""},latestMessageRow,session.id,cardOptions(update));
+        statusCard??=sent;this._attachStatusCardToTurn(input.turn.id,sent);
       },
       onError: error => logger.warn({err: error, sessionId: session.id}, "failed to update work status card progress"),
     });
@@ -346,7 +331,7 @@ export class WorkRunner {
       const sentCard = await this._sendStatusCard(channel, inbound, {
         title: "工作会话",
         status: "cancelled",
-        steps: runtimeProgressStepNames(progressEvents).map((name) => ({ name, status: "done" })),
+        steps: [],
         summary: "已通过 #steer 取消",
       }, latestMessageRow, session.id, cardOptions());
       this._attachStatusCardToTurn(input.turn.id, sentCard);
@@ -357,7 +342,7 @@ export class WorkRunner {
     const card: StatusCardOutput = {
       title: "工作会话",
       status: answers.length ? "completed" : "blocked",
-      steps: runtimeProgressStepNames(progressEvents).map(name => ({ name, status: "done" })),
+      steps: [],
       summary: answers.length ? "执行完成，答复已提交投递。" : "执行结束，未提交最终答复。",
     };
     if (attempt !== undefined) {
@@ -518,14 +503,14 @@ export class WorkRunner {
     card: StatusCardOutput,
     messageRow: MessageRow,
     sessionId: string,
-    options: { readonly targetMessageId?: string; readonly style?: "card" | "native"; readonly nativeProgress?: readonly NativeProgressEntry[]; readonly progressKey?: string } = {},
+    options: { readonly targetMessageId?: string; readonly style?: "card" | "native"; readonly nativeProgress?: readonly NativeProgressEntry[]; readonly progressKey?: string; readonly progressUpdate?: ProgressUpdate } = {},
   ): Promise<SentStatusCard> {
     if (sessionId) new SessionStore(this._options.db).requireReplyUserId(sessionId);
     const steps = card.steps.map((s) => `${s.name}${s.note ? ` — ${s.note}` : ""}`);
     const isCreate = options.targetMessageId === undefined;
     const replyMode = isCreate ? "reply_in_thread" : "update_status_card";
     const createTargetMessageId = inbound.thread?.rootMessageExternalId ?? inbound.thread?.externalId ?? inbound.id;
-    const persistedUpdate = options.targetMessageId !== undefined
+    const persistedUpdate = options.targetMessageId !== undefined && !options.progressUpdate
       ? this._persistStatusCard({
         inbound,
         card,
@@ -540,9 +525,9 @@ export class WorkRunner {
       outbound = await channel.send(inbound, {
         replyMode,
         content: card.summary,
-        statusCardSteps: steps,
+        ...(options.progressUpdate?{progressUpdate:options.progressUpdate}:{statusCardSteps:steps}),
         statusCardState: card.status === "in_progress" ? "active" : "terminal",
-        ...(options.style === "native" ? { statusCardStyle: "native" as const, nativeProgress: [...(options.nativeProgress ?? [])] } : {}),
+        ...(options.style === "native" ? {statusCardStyle:"native" as const,...(!options.progressUpdate?{nativeProgress:[...(options.nativeProgress??[])]}:{})}:{}),
         statusCard: {
           taskId: sessionId || "work-session",
           title: card.title,
@@ -561,7 +546,7 @@ export class WorkRunner {
           card.status,
           options.targetMessageId ?? "create",
           statusCardFingerprint(card, steps),
-          ...(options.style === "native" ? [createHash("sha256").update(JSON.stringify(options.nativeProgress ?? [])).digest("hex")] : []),
+          ...(options.progressUpdate || options.style === "native" ? [createHash("sha256").update(JSON.stringify(options.progressUpdate ?? options.nativeProgress ?? [])).digest("hex")] : []),
         ].join(":"),
       });
     } catch (err) {
@@ -577,10 +562,11 @@ export class WorkRunner {
     const providerMessageId = options.targetMessageId ?? outbound.id;
 
     // Persist status card as an assistant message for dashboard visibility
-    return persistedUpdate ?? this._persistStatusCard({
+    return this._persistStatusCard({
       inbound,
       card,
-      steps,
+      steps:outbound.statusCardSteps??steps,
+      ...(outbound.progressSnapshot?{progressSnapshot:outbound.progressSnapshot}:{}),
       messageRow,
       sessionId,
       providerMessageId,
@@ -595,6 +581,7 @@ export class WorkRunner {
     readonly messageRow: MessageRow;
     readonly sessionId: string;
     readonly providerMessageId: string;
+    readonly progressSnapshot?: NonNullable<import("@/channels/outbound").OutboundChannelOperation["progressSnapshot"]>;
     readonly sender?: NormalizedInboundMessage["sender"];
   }): SentStatusCard {
     if (input.sessionId !== "") {
@@ -612,7 +599,8 @@ export class WorkRunner {
           ...(input.steps.length > 0 ? { steps: input.steps } : {}),
           payload: {
             status: input.card.status,
-            steps: input.card.steps,
+            ...(input.progressSnapshot?{progressSnapshot:input.progressSnapshot}:{}),
+            steps: input.steps.map(name=>({name,status:input.card.status === "in_progress" ? "running" : "done"})),
           },
         }],
         channel: input.inbound.channel,
@@ -625,7 +613,7 @@ export class WorkRunner {
           origin: "work_status_card",
           status: input.card.status,
           title: input.card.title,
-          steps: input.card.steps,
+          steps: input.steps.map(name=>({name,status:input.card.status === "in_progress" ? "running" : "done"})),
           statusCardState: input.card.status === "in_progress" ? "active" : "terminal",
         },
       });
@@ -743,12 +731,6 @@ function stripWorkCommand(text: string): string {
     return text;
   }
   return trimmed.slice(command.end).trim();
-}
-
-function runtimeProgressStepNames(
-  progressEvents: readonly TaskStatusCardStepEvent[],
-): readonly string[] {
-  return buildTaskStatusCardSteps({ timelineEvents: progressEvents }) ?? [];
 }
 
 function statusCardFingerprint(

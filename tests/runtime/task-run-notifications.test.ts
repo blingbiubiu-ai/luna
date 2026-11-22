@@ -436,11 +436,10 @@ describe("TaskRunNotificationService", () => {
         status: "completed",
       },
       content: "处理完成。",
-      statusCardSteps: [
-        "第 1 轮执行",
-        "正在查询天气数据。",
-        "天气数据查询完成。",
-      ],
+      progressUpdate: {mode: "snapshot", entries: [
+        expect.objectContaining({text: "正在查询天气数据。", kind: "text"}),
+        expect.objectContaining({text: "天气数据查询完成。", kind: "text"}),
+      ]},
     });
     expect(notificationStore.requireById(notification.id).state).toBe(
       "terminal",
@@ -571,21 +570,17 @@ describe("TaskRunNotificationService", () => {
         status: "running",
       },
       content: "",
-      statusCardSteps: [
-        "第 1 轮执行",
-        "正在查询日志。",
-      ],
+      progressUpdate: {mode: "snapshot", entries: [expect.objectContaining({text: "正在查询日志。", kind: "text"})]},
     });
     expect(notificationStore.requireById(notification.id).state).toBe("active");
     operations.length = 0;
     // No corresponding timeline row: the hot path must use the supplied delta.
     await progressService.onRunProgress({taskRunId:"task_run_progress_update_1",events:[{
-      id:"new-delta",type:"runner.step",summary:"工具进度：调用 10000 次。\n已找到原因。",
-      data:{taskRunId:"task_run_progress_update_1",runIndex:1,publicProgress:true,nativeText:"已找到原因。"},
-    }],nativeProgress:[{id:"call:start",toolCallId:"call",toolName:"Bash",toolTitle:"检查编译",toolPhase:"start",text:"检查编译"},
-      {id:"new-delta",text:"已找到原因。"}]});
+      id:"new-delta",type:"runner.step",summary:"已找到原因。",created_at:10,updated_at:10,
+      data:{taskRunId:"task_run_progress_update_1",runIndex:1,publicProgress:true},
+    }]});
     expect(operations).toHaveLength(1);
-    expect(operations[0]).toMatchObject({nativeProgress:[{id:"call:start",toolName:"Bash",toolTitle:"检查编译"},{id:"new-delta",text:"已找到原因。"}]});
+    expect(operations[0]).toMatchObject({progressUpdate:{mode:"delta",entries:[{id:"new-delta",kind:"text",text:"已找到原因。",createdAt:10,updatedAt:10}]}});
   });
 });
 

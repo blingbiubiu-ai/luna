@@ -105,7 +105,7 @@ function clientHelpText(): string {
     "  luna auth <command>",
     "  luna knowledge <command>",
     "  luna workspace <workspace-id> <command>",
-    "  luna task list [--agent-id <id> | --session-id <id>] | get --task-id <id>",
+    "  luna task list [--agent-id <id> | --session-id <id>] | get --task-id <id> | progress --task-id <id> [--run-id <id|all>] [--limit <n>] [--cursor <cursor>]",
     "  luna session messages|read_session_timeline --session-id <id>",
     "  luna artifacts materialize artifact:<id>",
     "  luna artifacts download artifact:<id> --output <path>",

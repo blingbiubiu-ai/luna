@@ -1,80 +1,99 @@
 # Progress notifications
 
-Task and Work use `LiveProgress` to dispatch each tool start, tool result and
-complete public Assistant text event immediately. There is no timer, tool-count
-aggregation or batching window. Thinking, full arguments and raw tool outputs
-remain excluded. Progress handling does not change prompts or generate extra
-LLM narration.
+Task and Work dispatch each tool start, tool result and complete public Assistant
+text observation immediately through `LiveProgress`. There is no timer, tool-count
+aggregation or batching window. Thinking, full arguments and raw tool output are
+excluded from this public progress path. Prompts and LLM narration are unchanged.
 
-## Memory, persistence and ordering
+## Durable Task timeline
 
-Tools produce transient steps for the ordinary card's in-memory projection and
-individual Native entries with stable call IDs, bounded titles and category
-icons. Tool results replace their existing in-memory step. They do not produce
-Task timeline rows or tool-count summaries. Task persists only public text as
-`runner.step`; existing lifecycle events, reports and results remain durable.
-Work keeps recent progress in memory and persists its status-card snapshot
-through the existing path.
+`timeline_events` is the single Task progress store. A `runner.tool` row is
+inserted when a tool starts and updated when its result arrives. Its deterministic
+identity includes Job ID, provider retry attempt and original tool call ID.
+Metadata contains bounded title/name, run/job IDs, source sequence, status,
+startedAt and finishedAt. Status is running, ended, failed or interrupted. The
+creation timestamp remains fixed when the result updates the row. An interrupted
+tool has an unknown outcome; interruption does not invent a completion time.
+An old live call whose start predates the upgrade gets an explicit unknown-start
+row on result. Existing lost tool history cannot be backfilled from this table.
 
-Each observation enters a single serial sender immediately. One observation is
-passed per send; slow network requests do not block provider consumption, but
-following observations wait in order. At most 600 observations wait in the
-queue, with older noncritical progress dropped under backpressure. The sender
-keeps at most 300 active tool identities and card projections retain at most
-200 recent steps. Closing rejects new observations and drains accepted updates
-before terminal delivery.
+Public text is a separate `runner.step` row: summary is bounded for cards, while
+`data.text` preserves the public body. Lifecycle state, results and reports keep
+existing event types. There is no separate tool table, tool summary row or JSONL
+progress journal. Original Runner logs are independent of this business timeline.
 
-Existing session delivery payloads, attempts, receipts and Native checkpoints
-still persist for delivery recovery. These can contain the public tool delivery
-payload; they are not a new tool journal or individual business timeline rows.
-Hard termination can lose queued noncritical progress; there is no added tool
-recovery log.
+Runtime event consumption, progress projection and Job cursor commit in one
+Service DB transaction. Duplicate source sequences are ignored. Failed projection
+rolls back both row and cursor. Retry attempts have separate call identities;
+retry, revoke and terminal events interrupt unresolved tools. Reconnecting an
+active remote Job preserves its running tools. Late revoked events cannot change
+Task progress. Migration 0009 adds nullable `task_run_id`, `updated_at`, backfills
+old metadata/timestamps and indexes Task/Run creation and update order.
 
-On Service reconnect, Runtime transport restores saved provider text without
-emitting it as new progress. Only events after the persisted cursor and confirmed
-terminal output are emitted. Existing Native messages retain their displayed
-nodes. Recovery, terminal updates and explicit resend query at most the current
-run's 200 recent timeline rows, now containing public text and lifecycle events.
-Historical individual tools are not reconstructed from business history.
-Legacy JSON-string metadata and `nativeText` fields remain compatible.
+## Incremental presentation protocol
 
-## Ordinary Card and Native
+`ProgressUpdate` contains streamKey (Task Run or Work Turn), mode (delta or
+snapshot), position and typed entries with stable IDs and update timestamps.
+Normal callbacks pass the current observation only. Initialization, recovery,
+terminal recovery and explicit resend request a bounded snapshot (at most 200
+recent progress entries). Upper Task/Work layers do not maintain card histories.
 
-Ordinary Card replaces its message with the current complete card. It renders
-the tail of the in-memory projection according to
-`platform.messaging.maxVisibleSteps`, range 1–200 and default 32. Normal hot
-updates do not reread timeline history. Tools and their updated results can
-appear while running; a recovered or terminal projection reflects persisted
-public text and lifecycle state rather than a permanent tool trace.
+The serial sender preserves observation order; preceding tools are sent before
+following public text. Network waits do not block provider consumption. At most
+600 observations wait in the queue and 300 active tool identities are retained.
+Backpressure may drop old presentation updates, but Task durable progress remains
+queryable. Closing drains accepted updates before terminal delivery. Work keeps
+its existing message/body persistence and stores the rendered card projection;
+it does not create Task timeline rows.
 
-Native appends each observation to one provider message. A tool result updates
-its existing tool node rather than adding another statistics paragraph. Each
-request contains protocol events for that observation and stays within 8 KiB;
-there is no deliberate wait to gather multiple observations.
+Ordinary Card owns a per-message projection inside the Feishu adapter. It upserts
+by entry ID, preserves creation order, rejects stale updates/status regressions,
+and clips locally to `platform.messaging.maxVisibleSteps` (1–200, default 32).
+It sends the full resulting card to Feishu on each observation. It restores this
+window from existing delivery receipts or persisted card messages after adapter
+restart. Each receipt carries `progressSnapshot`. Terminal guards prevent later
+active updates from reviving a completed card. No history DB scan occurs on the
+ordinary hot path; the adapter lazily loads one saved projection on cache miss.
 
-Ordinary display budget is 300 nodes (including the title) and 252 KiB. Six
-additional nodes / 4 KiB reserve room for one limit notice and terminal delivery,
-for a total 256 KiB budget. Results for already displayed tools may update after
-the node limit within the ordinary byte budget. Exhausted checkpoints remain
-exhausted until explicit resend starts a new message. These are Luna budgets,
-not a verified Feishu client capacity guarantee. Final answers remain independent
-of these display budgets.
+Native translates the same envelope to individual text/start/result protocol
+events and owns append/update/deduplication. Tool results update their original
+node. Requests stay within 8 KiB. Display budget remains 300 ordinary nodes
+(including title) and 252 KiB, with six nodes / 4 KiB reserved for a limit notice
+and terminal delivery (256 KiB total). Existing displayed tool results may update
+after the node limit within the byte budget. The notice directs users to the
+Dashboard's complete history. Final answers remain independent of display limits.
+These are Luna budgets, not a guarantee of Feishu client display capacity.
 
-`native_progress_deliveries` JSON tracks the optional `progressBudget`, pending
-request state, acknowledged IDs and open tools. Pending is saved before sending;
-acknowledgement is saved on confirmation. Unknown outcomes remain quarantined
-across restart; known rejection clears pending. IDs are not pruned. Legacy byte
-accounting starts with newly sent events. Work's Native create key stays fixed
-per Turn. There is no new table, column or migration.
-Work Native update request keys also include the event payload fingerprint, so
-a result is delivered even when its ordinary card step text matches its start.
+`native_progress_deliveries` keeps pending requests, acknowledged IDs, open tools
+and budget state. Pending is saved before sending and acknowledgement on confirmed
+success. Unknown network outcomes remain quarantined across restart; they are not
+cleared to force resend. Explicit resend creates a new message. Work Native create
+keys stay fixed per Turn; update keys include the observation fingerprint.
+
+## Queries and Dashboard
+
+`GET /api/tasks/:id/progress` and `luna task progress --task-id …` expose compact
+state, latest public text, last activity, running tools and a bounded history page.
+Default page size is 20, maximum 100. Current Run is the default; runId selects a
+Run or `all`. Cursor pagination orders by creation time and ID, binds Task/Run and
+view scope, and uses SQL LIMIT. Task access policy applies before these reads.
+Runner `task get` returns compact Task metadata plus progress instead of embedding
+the entire Dashboard detail projection.
+
+`GET /api/tasks/:id/timeline/page` serves the Dashboard 50 events at a time (maximum
+100). The Dashboard polls loaded pages and loads older history on demand. A tool
+stays one row while its status changes; public text is inspectable in full. Card
+limits do not truncate durable history. Legacy `/timeline` is bounded to the last
+100 events, and embedded Task detail timelines are also bounded per Task.
 
 ## Code paths
 
+- `src/timeline/task-progress-store.ts`
+- `src/runners/invocation-store.ts`
+- `src/messaging/notifications/progress-update.ts`
 - `src/messaging/notifications/live-progress.ts`
 - `src/kernel/task-run-handler.ts`
-- `src/tasks/task-run-supervisor.ts`
 - `src/tasks/task-run-notification-service.ts`
 - `src/work/work-runner.ts`
-- `src/runners/session-agent-invocation.ts`
+- `extensions/channels/feishu/messaging/ordinary-progress.ts`
 - `extensions/channels/feishu/messaging/native-task-progress.ts`

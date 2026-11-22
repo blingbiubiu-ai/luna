@@ -53,6 +53,7 @@ export class SessionReplyDispatcher {
     const signature = JSON.stringify({ content: operation.content, ...(operation.reply ? { reply: operation.reply } : {}), replyMode: operation.replyMode,
       targetMessageId: operation.targetMessageId, statusCard: operation.statusCard, statusCardSteps: operation.statusCardSteps,
       ...(operation.statusCardStyle === "native" ? {statusCardStyle: operation.statusCardStyle, nativeProgress: operation.nativeProgress} : {}),
+      progressUpdate:operation.progressUpdate,
       statusCardState: operation.statusCardState, taskResultCard: operation.taskResultCard, batchSummaryCard: operation.batchSummaryCard,
       mention: operation.mention, inlineMentions: operation.inlineMentions, directTarget });
     const existing = this.db.select().from(sessionReplyDispatches).where(eq(sessionReplyDispatches.idempotencyKey, key)).get();
@@ -157,6 +158,7 @@ export class SessionReplyDispatcher {
     const {assetBasePath:_assets,...payload} = operation;
     const receipt: OutboundChannelOperation = { ...payload, content, id: operation.replyMode === "update_status_card" ? operation.targetMessageId! : dispatch.id,
       channelId:inbound.channel.id,resolvedSessionId:outputSessionId,
+      ...(sourceReceipt?.progressSnapshot?{progressSnapshot:sourceReceipt.progressSnapshot,statusCardSteps:sourceReceipt.statusCardSteps}:{}),
       ...(sourceReceipt?.deliveredSurfaceId ? {deliveredSurfaceId:sourceReceipt.deliveredSurfaceId} : {}) };
     this.db.update(sessionReplyDispatches).set({receipt}).where(eq(sessionReplyDispatches.id,dispatch.id)).run();
     return receipt;

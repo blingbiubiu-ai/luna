@@ -5,6 +5,7 @@ import type {AgentExecutionSnapshot} from "@/agent-config";
 import {TaskScopeResolver} from "@/agents/task-scope";
 import { prepareRunnerFiles } from "@/runners/prepare-runner-files";
 import { randomUUID } from "node:crypto";
+import {TaskProgressStore,runPredicate} from "@/timeline/task-progress-store";
 import { LiveProgress } from "@/messaging/notifications/live-progress";
 import type { TaskStatusCardStepEvent } from "@/messaging/notifications/task-status-card-updater";
 import type { NativeProgressEntry } from "@/channels/outbound";
@@ -15,7 +16,7 @@ import { taskInvocations, requireTaskReportCompletion } from "@/tasks/task-repor
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { setTimeout as delay } from "node:timers/promises";
 
-import { and, asc, desc, eq } from "drizzle-orm";
+import { and, asc, desc, eq, inArray } from "drizzle-orm";
 
 import {
   ContextPackStore,
@@ -464,13 +465,19 @@ async function _runAgentTask(input: {
   const invocationId = new InvocationStore(input.db).findActive({ runnerKind: "task", taskRunId: input.taskRunId })?.id ?? randomUUID();
   taskInvocations(input.db).set(invocationId, {taskId: input.taskId, taskRunId: input.taskRunId,
     runnerContextId: runnerContext.id, ...(input.signal ? {signal: input.signal} : {})});
+  const progressStore=new TaskProgressStore(input.db);
   const progress = new LiveProgress<TaskStatusCardStepEvent>({
-    persist: summary => input.timeline.append({taskId: input.taskId, type: "runner.step", summary,
-      data: {...input.runMetadata, publicProgress: true, reason: input.reason, nativeText: summary}}),
-    transient: event => ({id:event.id,type:"runner.step",summary:event.toolTitle ?? event.text,
-      data:{...input.runMetadata,publicProgress:true,nativeText:"",toolCallId:event.toolCallId,toolPhase:event.toolPhase}}),
+    persist: summary => progressStore.text(input.taskRunId,summary) ?? input.timeline.append({taskId:input.taskId,type:"runner.step",summary,
+      data:{...input.runMetadata,publicProgress:true,nativeText:summary}}),
+    transient: event => {
+      const jobId=new InvocationStore(input.db).require(invocationId).activeJobId;
+      const job=jobId?new InvocationStore(input.db).job(jobId):undefined;
+      return (job?progressStore.tool(job,event.toolCallId!):undefined) ?? {id:event.id,type:"runner.tool",summary:event.toolTitle??event.text,
+        data:{...input.runMetadata,toolName:event.toolName,toolCallId:event.toolCallId,nativeCallId:event.toolCallId,
+          status:event.toolPhase==="start"?"running":event.text==="工具执行失败"?"failed":"ended",publicProgress:true}};
+    },
     entryId: entry => entry.id!,
-    send: async (entries, nativeProgress) => { await input.onProgress?.(entries, nativeProgress); },
+    send: async entries => {await input.onProgress?.(entries);},
     onError: error => progressLogger.warn({err: error, taskId: input.taskId}, "task progress update failed"),
   });
   try {
@@ -1150,24 +1157,10 @@ function _latestRunnerStepSummaries(
   taskId: string,
   options: { readonly taskRunId?: string } = {},
 ): string[] {
-  return db
-    .select()
-    .from(timelineEvents)
-    .where(eq(timelineEvents.task_id, taskId))
-    .orderBy(asc(timelineEvents.created_at), asc(timelineEvents.id))
-    .all()
-    .filter((event) => event.type.startsWith("runner."))
-    .filter((event) => {
-      if (options.taskRunId === undefined) {
-        return true;
-      }
-      return (
-        _isRecord(event.data) &&
-        event.data.taskRunId === options.taskRunId
-      );
-    })
-    .slice(-8)
-    .map((event) => event.summary);
+  return db.select().from(timelineEvents)
+    .where(and(eq(timelineEvents.task_id,taskId),inArray(timelineEvents.type,["runner.step","runner.failed","runner.cancelled","runner.report_submitted"]),
+      options.taskRunId?runPredicate(options.taskRunId):undefined))
+    .orderBy(desc(timelineEvents.created_at),desc(timelineEvents.id)).limit(8).all().reverse().map(event=>event.summary);
 }
 
 function _isRecord(value: unknown): value is Record<string, unknown> {

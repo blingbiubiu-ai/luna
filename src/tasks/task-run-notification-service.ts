@@ -5,8 +5,7 @@ import { SessionDispatcher } from "@/sessions/session-dispatcher";
 import { GatewayError } from "@/server/gateway-error";
 import type { OperationResult } from "@/runners/operation-contract";
 import { SessionStore } from "@/sessions/session-store";
-import { and, desc, eq, inArray, sql } from "drizzle-orm";
-import { RECENT_PROGRESS_STEPS } from "@/messaging/notifications/live-progress";
+import { and, eq } from "drizzle-orm";
 import type { TaskStatusCardStepEvent } from "@/messaging/notifications/task-status-card-updater";
 
 import type { NormalizedInboundMessage } from "@/channels";
@@ -23,11 +22,11 @@ import {
 import { NotificationAttemptStore } from "@/messaging/notifications/notification-attempt-store";
 import { persistTaskStatusCardMessage } from "@/messaging/notifications/status-card-message-store";
 import {
-  buildTaskStatusCardSteps,
   TaskStatusCardUpdater,
 } from "@/messaging/notifications/task-status-card-updater";
 import type { TaskResultForMainRunner } from "@/main-runner/types";
-import { nativeProgressEntries, updateProgressProjection } from "@/messaging/notifications/feishu-task-updater";
+import {TaskProgressStore} from "@/timeline/task-progress-store";
+import {progressEntry} from "@/messaging/notifications/progress-update";
 import type { ReplyChannel } from "@/channels/outbound";
 
 import {
@@ -84,7 +83,7 @@ const cardLanes = new WeakMap<DrizzleDB, SessionDispatcher>();
 export class TaskRunNotificationService {
   private readonly _notifications: TaskRunNotificationStore;
   private readonly _attempts: NotificationAttemptStore;
-  private readonly _recentProgress = new Map<string, readonly TaskStatusCardStepEvent[]>();
+  private readonly _initialized = new Set<string>();
 
   constructor(private readonly _options: TaskRunNotificationServiceOptions) {
     this._notifications = new TaskRunNotificationStore(_options.db);
@@ -146,22 +145,14 @@ export class TaskRunNotificationService {
       }
 
       new SessionStore(this._options.db).requireReplyUserId(notification.sessionId);
-      const outbound = await new TaskStatusCardUpdater(
-        channel,
-        inbound,
-      ).createStatusCard(
-        subscription,
-        {
-          persistentTask: { ...task, status: "running" },
-          subscription,
-          latestEvent: {
-            type: "runner.step",
-            summary: `第 ${run.run_index} 轮执行已开始。`,
-            data: { taskRunId: run.id, runIndex: run.run_index },
-          } as never,
-        },
-        attempt.idempotency_key,
-      );
+      const outbound = await channel.send(inbound, {
+        replyMode:subscription.thread_key?"reply_in_thread":"channel_message",
+        targetMessageId:inbound.thread?.rootMessageExternalId??inbound.id,sessionId:notification.sessionId,
+        idempotencyKey:attempt.idempotency_key,statusCardStyle:notification.statusCardStyle,statusCardState:"active",content:"",
+        statusCard:{taskId:task.id,title:task.title,...(task.summary?{summary:task.summary}:{}),status:"running"},
+        progressUpdate:new TaskProgressStore(this._options.db).snapshot(task.id,run.id),
+      });
+      this._initialized.add(notification.id);
       this._attempts.markSent(attempt.id, outbound.id);
       const saved = this._notifications.setStatusMessageId(
         notification.id,
@@ -199,22 +190,11 @@ export class TaskRunNotificationService {
   private async _onRunProgress(input: OnTaskRunProgressInput): Promise<void> {
     const run = this._requireRun(input.taskRunId);
     const task = this._requireTask(run.task_id);
-    const delta = input.events?.map(event => ({ ...event, id: event.id ?? createHash("sha256").update(event.summary).digest("hex") }));
-    const timelineEventsForRun = delta
-      ? updateProgressProjection(this._recentProgress.get(run.id) ?? [], delta)
-      : this._timelineEventsForRun(run);
-    this._recentProgress.set(run.id, timelineEventsForRun);
-    const latestProgressEvent = _latestProgressEvent(timelineEventsForRun);
-    if (latestProgressEvent === undefined) {
-      return;
-    }
-    const statusCardSteps = buildTaskStatusCardSteps({
-      timelineEvents: timelineEventsForRun,
-    });
-    if (statusCardSteps === undefined) {
-      return;
-    }
-
+    const entries=input.events?.map(progressEntry);
+    const update=entries?{streamKey:`task:${run.id}`,mode:"delta" as const,position:Math.max(0,...entries.map(e=>e.updatedAt)),entries}
+      :new TaskProgressStore(this._options.db).snapshot(run.task_id,run.id);
+    if(!update.entries.length)return;
+    const updateKey=createHash("sha256").update(JSON.stringify(update)).digest("hex");
     for (const notification of this._notifications.listForRun(input.taskRunId)) {
       if (
         notification.state !== "active" ||
@@ -238,17 +218,23 @@ export class TaskRunNotificationService {
           notification.subscriptionId,
           "update_status_card_progress",
           notification.statusMessageId,
-          latestProgressEvent.id!,
+          updateKey,
         ]),
         taskId: run.task_id,
         subscriptionId: notification.subscriptionId,
-        messageId: latestProgressEvent.id!,
+        messageId: updateKey,
         action: "update_status_card_progress",
       });
       if (attempt.status === "sent") {
         continue;
       }
 
+      const presentedUpdate=this._initialized.has(notification.id) ? update : (() => {
+        const snapshot=new TaskProgressStore(this._options.db).snapshot(run.task_id,run.id);
+        const entries=new Map(snapshot.entries.map(entry=>[entry.id,entry]));
+        for(const entry of update.entries)entries.set(entry.id,entry);
+        return {...snapshot,position:Math.max(snapshot.position,update.position),entries:[...entries.values()].sort((a,b)=>a.createdAt-b.createdAt||a.id.localeCompare(b.id)).slice(-200)};
+      })();
       new SessionStore(this._options.db).requireReplyUserId(notification.sessionId);
       const outbound = await channel.send(inbound, {
         replyMode: "update_status_card",
@@ -256,7 +242,7 @@ export class TaskRunNotificationService {
         sessionId: notification.sessionId,
         idempotencyKey: attempt.idempotency_key,
         statusCardStyle: notification.statusCardStyle,
-        nativeProgress: input.nativeProgress ?? nativeProgressEntries(delta ?? timelineEventsForRun),
+        progressUpdate:presentedUpdate,
         statusCardState: "active",
         statusCard: {
           taskId: run.task_id,
@@ -264,9 +250,9 @@ export class TaskRunNotificationService {
           ...(task.summary !== null ? { summary: task.summary } : {}),
           status: "running",
         },
-        statusCardSteps,
         content: "",
       });
+      this._initialized.add(notification.id);
       this._attempts.markSent(attempt.id, outbound.id);
       persistTaskStatusCardMessage({
         db: this._options.db,
@@ -310,7 +296,7 @@ export class TaskRunNotificationService {
     readonly result?: TaskRunNotificationResult;
   }): Promise<void> {
     try { await this._serialize(input.taskRunId, () => this._updateTerminalCardsUnlocked(input)); }
-    finally { this._recentProgress.delete(input.taskRunId); }
+    finally { for(const notification of this._notifications.listForRun(input.taskRunId))this._initialized.delete(notification.id); }
   }
 
   private async _updateTerminalCardsUnlocked(input: {
@@ -359,9 +345,6 @@ export class TaskRunNotificationService {
 
       const title = input.result?.title ?? task.title;
       const summary = input.result?.summary ?? task.summary;
-      const statusCardSteps = buildTaskStatusCardSteps({
-        timelineEvents: this._timelineEventsForRun(run),
-      });
       new SessionStore(this._options.db).requireReplyUserId(notification.sessionId);
       const outbound = await channel.send(inbound, {
         replyMode: "update_status_card",
@@ -369,7 +352,7 @@ export class TaskRunNotificationService {
         sessionId: notification.sessionId,
         idempotencyKey: attempt.idempotency_key,
         statusCardStyle: notification.statusCardStyle,
-        nativeProgress: nativeProgressEntries(this._timelineEventsForRun(run)),
+        progressUpdate:this._initialized.has(notification.id)?{streamKey:`task:${run.id}`,mode:"delta",position:Date.now(),entries:[]}:new TaskProgressStore(this._options.db).snapshot(run.task_id,run.id),
         statusCardState: "terminal",
         statusCard: {
           taskId: run.task_id,
@@ -377,7 +360,7 @@ export class TaskRunNotificationService {
           ...(summary !== null ? { summary } : {}),
           status: input.status,
         },
-        ...(statusCardSteps !== undefined ? { statusCardSteps } : {}),
+
         content: input.content,
       });
       this._attempts.markSent(attempt.id, outbound.id);
@@ -424,10 +407,10 @@ export class TaskRunNotificationService {
       const updater = new TaskStatusCardUpdater(channel, inbound);
       const snapshot = () => {
         const current = this._requireRun(run.id);
-        return updater.statusCardOperation({...subscription, status_card_style: selectedStyle}, {
+        return {...updater.statusCardOperation({...subscription, status_card_style: selectedStyle}, {
           persistentTask: {...this._requireTask(run.task_id), status: current.status},
-          subscription, timelineEvents: this._timelineEventsForRun(current),
-        }, `task-status-card:${operationId}`);
+          subscription,
+        }, `task-status-card:${operationId}`),progressUpdate:new TaskProgressStore(db).snapshot(run.task_id,current.id)};
       };
       if (!saved.cardDelivery) {
         const initial = snapshot();
@@ -453,9 +436,9 @@ export class TaskRunNotificationService {
       const messageId = delivery.operation.replyMode === "update_status_card"
         ? delivery.operation.targetMessageId! : outbound.id;
       const fresh = snapshot();
-      const displayed = (value: typeof fresh) => JSON.stringify({
+      const displayed = (value: Omit<import("@/channels/outbound").OutboundChannelOperation,"id"|"channelId">) => JSON.stringify({
         content: value.content, statusCard: value.statusCard,
-        statusCardStyle: value.statusCardStyle, nativeProgress: value.nativeProgress,
+        statusCardStyle: value.statusCardStyle, progressUpdate:value.progressUpdate,
         statusCardState: value.statusCardState, statusCardSteps: value.statusCardSteps,
       });
       if (displayed(fresh) !== displayed(delivery.operation)) {
@@ -576,40 +559,4 @@ export class TaskRunNotificationService {
     };
   }
 
-  private _timelineEventsForRun(
-    run: typeof taskRuns.$inferSelect,
-  ): (typeof timelineEvents.$inferSelect)[] {
-    return this._options.db
-      .select()
-      .from(timelineEvents)
-      .where(and(eq(timelineEvents.task_id, run.task_id), inArray(timelineEvents.type,["runner.step","runner.cancelled","runner.failed"]), sql`json_extract(
-        CASE WHEN json_valid(${timelineEvents.data}) THEN
-          CASE WHEN json_type(${timelineEvents.data}) = 'text' AND json_valid(json_extract(${timelineEvents.data}, '$'))
-            THEN json_extract(${timelineEvents.data}, '$') ELSE ${timelineEvents.data} END
-          ELSE '{}' END, '$.taskRunId') = ${run.id}`))
-      .orderBy(desc(timelineEvents.created_at), desc(timelineEvents.id))
-      .limit(RECENT_PROGRESS_STEPS)
-      .all()
-      .map((row) => ({ ...row, data: _normalizedTimelineData(row.data) }))
-      .reverse();
-  }
-}
-
-function _normalizedTimelineData(data: unknown): unknown {
-  if (typeof data !== "string") {
-    return data;
-  }
-  try {
-    return JSON.parse(data) as unknown;
-  } catch {
-    return data;
-  }
-}
-
-function _latestProgressEvent(
-  events: readonly TaskStatusCardStepEvent[],
-): TaskStatusCardStepEvent | undefined {
-  return events
-    .filter((event) => event.type === "runner.step")
-    .at(-1);
 }

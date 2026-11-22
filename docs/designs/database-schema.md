@@ -60,3 +60,6 @@ Schema changes must keep TypeScript definitions and SQL constraints consistent,
 including deferred references, ownership checks and deletion guards. See
 [Agents and Shadows](platform-agents-and-shadows.md) and
 [Worker storage](worker-storage-layout.md).
+
+
+Task progress shares `timeline_events`: `runner.tool` inserts on start and updates on result, while public text and state remain separate rows. Migration 0009 adds `task_run_id`, `updated_at` and Task/Run ordering indexes. See [Progress notifications](progress-notifications.md).

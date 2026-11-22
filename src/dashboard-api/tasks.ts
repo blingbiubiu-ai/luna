@@ -862,7 +862,7 @@ export function toDashboardTimelineEvent(
     readonly artifactSigner: DashboardArtifactSigner;
   },
 ): DashboardTimelineEvent {
-  const data = parseJsonOrNull(row.data);
+  const data = parseJsonOrNull(parseJsonOrNull(row.data));
   const runMetadata = timelineRunMetadata(data);
   return signDashboardArtifactReferencesInValue({
     ...row,

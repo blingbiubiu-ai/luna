@@ -213,6 +213,7 @@ export interface TaskDetailViewProps {
   taskDetail: TaskDetailData | undefined;
   runs: TaskRunData[] | undefined;
   timeline: TaskTimelineEventData[] | undefined;
+  timelinePagination?: {hasMore: boolean; loading: boolean; loadMore: () => void};
   artifacts: TaskArtifactData[] | undefined;
   loading: {
     taskDetail: boolean;
@@ -255,6 +256,7 @@ export function TaskDetailView({
   taskDetail,
   runs,
   timeline,
+  timelinePagination,
   artifacts,
   loading,
   errors,
@@ -785,6 +787,11 @@ export function TaskDetailView({
                           </span>
                         </div>
 
+                        {event.type === "runner.tool" && event.data && typeof event.data === "object" ? (
+                          <div className="text-xs text-muted-foreground" data-testid={`task-tool-status-${event.id}`}>
+                            {toolProgressLabel(event.data as Record<string, unknown>)}
+                          </div>
+                        ) : null}
                         <div
                           className="text-[13.5px] leading-relaxed break-words whitespace-normal text-foreground"
                           data-testid={`task-timeline-summary-${event.id}`}
@@ -792,13 +799,16 @@ export function TaskDetailView({
                           <InspectableText
                             label={t("Summary")}
                             previewLength={180}
-                            text={event.summary}
+                            text={event.type === "runner.step" && event.data && typeof event.data === "object" && "text" in event.data && typeof event.data.text === "string" ? event.data.text : event.summary}
                           />
                         </div>
                       </div>
                     ))}
                   </div>
                 )}
+                {timelinePagination?.hasMore ? <button type="button" className="mt-4 rounded border border-border px-3 py-1.5 text-xs" disabled={timelinePagination.loading} onClick={timelinePagination.loadMore}>
+                  {timelinePagination.loading ? "加载中…" : "加载更早记录"}
+                </button> : null}
               </div>
             )}
           </section>
@@ -1623,4 +1633,11 @@ function subscriptionThreadKey(
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : "Unknown error";
+}
+
+function toolProgressLabel(data: Record<string, unknown>): string {
+  const status = data.status === "ended" ? "已结束" : data.status === "failed" ? "失败" : data.status === "interrupted" ? "中断，结果未确认" : "运行中";
+  const started = typeof data.startedAt === "number" ? `开始 ${formatTaskFullTime(data.startedAt)}` : "开始时间未记录";
+  const finished = typeof data.finishedAt === "number" ? ` · 结束 ${formatTaskFullTime(data.finishedAt)}` : "";
+  return `${status} · ${started}${finished}`;
 }

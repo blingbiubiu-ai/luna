@@ -57,6 +57,13 @@
       "when": 1795737600000,
       "tag": "0008_thread_parent_session",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1795824000000,
+      "tag": "0009_unified_progress",
+      "breakpoints": true
     }
   ]
 }

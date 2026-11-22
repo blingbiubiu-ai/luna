@@ -1,5 +1,6 @@
 import {
   integer,
+  index,
   sqliteTable,
   text,
   uniqueIndex,
@@ -13,6 +14,7 @@ export const timelineEvents = sqliteTable(
   {
     id: text("id").primaryKey(),
     task_id: text("task_id").notNull(),
+    task_run_id: text("task_run_id"),
     session_id: text("session_id"),
     message_id: text("message_id"),
     actor_user_id: text("actor_user_id"),
@@ -22,8 +24,11 @@ export const timelineEvents = sqliteTable(
     data: text("data", { mode: "json" }),
     visibility: text("visibility").notNull(),
     created_at: integer("created_at").notNull(),
+    updated_at: integer("updated_at").notNull().default(0),
   },
   (table) => [
+    index("timeline_task_run_created_idx").on(table.task_id, table.task_run_id, table.created_at, table.id),
+    index("timeline_task_run_updated_idx").on(table.task_id, table.task_run_id, table.updated_at, table.id),
     uniqueIndex("timeline_events_task_message_type_unique").on(
       table.task_id,
       table.message_id,

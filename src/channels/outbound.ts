@@ -1,3 +1,4 @@
+import type { ProgressUpdate, ProgressEntry } from "@/messaging/notifications/progress-update";
 import type { ReplyDocument } from "@luna/runner-protocol/reply";
 import type { ChannelIdentity, NormalizedInboundMessage } from "@/channels";
 
@@ -68,7 +69,9 @@ export interface NativeProgressEntry {
   readonly toolName?: string;
   readonly toolTitle?: string;
   readonly toolCallId?: string;
+  readonly startedAt?: number;
   readonly toolPhase?: "start" | "result";
+  readonly toolOutcome?: "ended" | "failed" | "interrupted";
 }
 
 export interface StatusCardOperation {
@@ -113,6 +116,8 @@ export interface OutboundChannelOperation {
   readonly idempotencyKey?: string;
   readonly statusCardStyle?: StatusCardStyle;
   readonly nativeProgress?: readonly NativeProgressEntry[];
+  readonly progressUpdate?: ProgressUpdate;
+  readonly progressSnapshot?: {streamKey:string;position:number;terminal:boolean;entries:readonly ProgressEntry[]};
   readonly statusCardState?: "active" | "terminal";
   readonly statusCardSteps?: readonly string[];
   readonly statusCard?: StatusCardOperation;

@@ -1,3 +1,4 @@
+import {TaskProgressStore} from "@/timeline/task-progress-store";
 import {executionReferenceSchema} from "@/agent-config/execution-reference";
 import {resolveInvocationScope, validateInvocationSnapshot} from "./invocation-scope";
 import { and, eq, isNull } from "drizzle-orm";
@@ -86,9 +87,13 @@ export class InvocationStore {
     });
   }
   revoke(id: string, reason: string): void {
-    this.require(id);
-    this.db.update(runnerInvocations).set({ state: "revoked", revokedAt: Date.now(), revokeReason: reason })
-      .where(and(eq(runnerInvocations.id, id), eq(runnerInvocations.state, "active"))).run();
+    this.db.transaction(() => {
+      const invocation=this.require(id);
+      if(invocation.state!=="active")return;
+      if(invocation.taskRunId)new TaskProgressStore(this.db).interrupt(invocation.taskRunId);
+      this.db.update(runnerInvocations).set({ state: "revoked", revokedAt: Date.now(), revokeReason: reason })
+        .where(and(eq(runnerInvocations.id, id), eq(runnerInvocations.state, "active"))).run();
+    });
   }
   bindToken(id: string, tokenId: string): void {
     if (this.require(id).state !== "active") throw new ExecutionError(409, "invocation_inactive");
@@ -155,6 +160,8 @@ export class InvocationStore {
         }
         if (execution.kind === "state" && execution.data.state === "starting" && (execution.data.retry?.attempt ?? 0) > 1) {
           delete providerState.text; delete providerState.error;
+          if(job.request.runnerKind === "task" && job.request.taskRunId) new TaskProgressStore(this.db).interrupt(job.request.taskRunId);
+          providerState.progressAttempt=execution.data.retry?.attempt ?? 1;
         }
         if (execution.kind === "state" && execution.data.state === "retry_wait"
           && execution.data.retry?.reason === "session_unusable" && job.request.runnerKind === "work") {
@@ -172,6 +179,7 @@ export class InvocationStore {
           } else if (output.status === "error") providerState.error = output;
         }
       }
+      new TaskProgressStore(this.db).consume(job,event,providerState.progressAttempt ?? 1);
       project(event, job);
       this.db.update(runnerJobs).set({ cursor: event.seq, providerState, state: terminal ? "terminal" : "active", lastEvent: event,
         terminalSequence: terminal ? event.seq : null, updatedAt: Date.now() }).where(eq(runnerJobs.id, job.id)).run();
