@@ -581,8 +581,13 @@ async function _runAgentTask(input: {
  */
 /** The persisted input of one Task Run. The current time and memory are added when it is sent. */
 export function buildTaskRunPrompt(input: BuildTaskRunPromptInput): string {
+  const formatAt = (value: number | undefined) => {
+    if (value === undefined || !Number.isFinite(value)) return undefined;
+    const date = new Date(value);
+    return Number.isFinite(date.getTime()) ? zonedIso(date, input.timezone) : undefined;
+  };
   const context = (items: readonly TaskRunPromptContextItem[] | undefined) => (items ?? []).map((item) => compact({
-    role: item.role, source: item.source, reason: item.reason, at: item.occurredAt === undefined ? undefined : zonedIso(new Date(item.occurredAt), input.timezone),
+    role: item.role, source: item.source, reason: item.reason, at: formatAt(item.occurredAt),
     text: item.text.trim(),
   }));
   const launch = context(input.launchContext), update = context(input.updateContext);
@@ -670,7 +675,7 @@ function _promptContextItemsForPacks(input: {
             source: _contextPackItemSource(item.item),
             reason: item.item.reason,
             text,
-            occurredAt: item.occurredAt,
+            ...(item.occurredAt === undefined ? {} : { occurredAt: item.occurredAt }),
           },
         ];
       }),
@@ -678,11 +683,11 @@ function _promptContextItemsForPacks(input: {
 }
 
 function comparePromptContextItems(
-  left: { readonly item: ContextPackItemRow; readonly occurredAt: number },
-  right: { readonly item: ContextPackItemRow; readonly occurredAt: number },
+  left: { readonly item: ContextPackItemRow; readonly occurredAt: number | undefined },
+  right: { readonly item: ContextPackItemRow; readonly occurredAt: number | undefined },
 ): number {
   return (
-    left.occurredAt - right.occurredAt ||
+    (left.occurredAt ?? Number.MAX_SAFE_INTEGER) - (right.occurredAt ?? Number.MAX_SAFE_INTEGER) ||
     left.item.displayOrder - right.item.displayOrder ||
     left.item.id.localeCompare(right.item.id)
   );
@@ -691,19 +696,19 @@ function comparePromptContextItems(
 function _contextPackItemOccurredAt(
   db: DrizzleDB,
   item: ContextPackItemRow,
-): number {
+): number | undefined {
   const messageId =
     item.sourceMessageId ??
     (item.itemKind === "message" ? item.itemId : undefined) ??
     _messageIdForTimelineEntry(db, item.sourceEntryId ?? item.itemId);
   if (messageId === undefined) {
-    return Number.MAX_SAFE_INTEGER;
+    return undefined;
   }
   return db
     .select({ occurredAt: messages.occurredAt })
     .from(messages)
     .where(eq(messages.id, messageId))
-    .get()?.occurredAt ?? Number.MAX_SAFE_INTEGER;
+    .get()?.occurredAt;
 }
 
 function _contextPackItemText(

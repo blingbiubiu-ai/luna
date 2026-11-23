@@ -2548,3 +2548,32 @@ test("a run cancelled by another authority without aborting the process closes i
   expect(cancelled).toEqual([{taskRunId: run.id, reason: "actor_inactive"}]);
   expect(results).toHaveLength(0);
 });
+
+test("restartTaskRun without sourceMessageId materializes fact update_context without Date RangeError", async () => {
+  fixtureNamedSession(database.db, "session-trigger-task-update", "user-1");
+  const taskId = _createTask("task-trigger-update-no-source-message", "session-trigger-task-update");
+  const supervisor = new TaskRunSupervisor({
+    db: database.db,
+    runnerType: "mock",
+  });
+
+  const restarted = supervisor.restartTaskRun({
+    taskId,
+    operationId: "op-trigger-update-1",
+    updatedTaskSummary: "核实 2 个 iOS P2 缺陷归属",
+    updateSummary: "Pipeline 104234775 已结束，请核实 2 个 iOS P2 缺陷是否与本 MR 相关。",
+    inputSnapshot: {
+      operation: "task.update",
+      operationId: "op-trigger-update-1",
+      sessionId: "session-trigger-task-update",
+      messageRowIds: [],
+    },
+  });
+  await supervisor.waitForIdle();
+
+  const persisted = store.listRunsForTask(taskId).find((run) => run.id === restarted.id);
+  expect(persisted?.status).toBe("completed");
+  expect(persisted?.error).toBeNull();
+  expect(persisted?.materializedPrompt).toContain("<update_context>");
+  expect(persisted?.materializedPrompt).toContain("Pipeline 104234775 已结束，请核实 2 个 iOS P2 缺陷是否与本 MR 相关。");
+});

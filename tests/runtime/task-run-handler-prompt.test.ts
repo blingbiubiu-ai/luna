@@ -69,4 +69,53 @@ describe("Task Runner prompt builder", () => {
     expect(prompt).not.toContain("<user_input>");
     expect(taskRunInputText({ prompt: "Investigate playback failures." })).toBe("Investigate playback failures.");
   });
+
+  test("omits invalid or missing occurredAt timestamps in launch and update context items", () => {
+    const prompt = buildTaskRunPrompt({
+      taskType: "task",
+      title: "核实 P2 归属",
+      summary: "核实 pipeline 失败原因",
+      reason: "restart",
+      pendingText: "",
+      facts: [],
+      assumptions: [],
+      timezone: "Asia/Singapore",
+      updateContext: [
+        {
+          packId: "pack-1",
+          itemId: "fact-1",
+          packKind: "task_update",
+          role: "delta_context",
+          source: "fact",
+          reason: "latest restart context",
+          text: "Pipeline 104234775 已结束，请核实 2 个 P2 缺陷归属。",
+        },
+        {
+          packId: "pack-1",
+          itemId: "fact-sentinel",
+          packKind: "task_update",
+          role: "delta_context",
+          source: "fact",
+          reason: "latest restart context",
+          text: "兼容超界时间戳哨兵。",
+          occurredAt: Number.MAX_SAFE_INTEGER,
+        },
+      ],
+    });
+
+    expect(JSON.parse(block(prompt, "update_context")!)).toEqual([
+      {
+        role: "delta_context",
+        source: "fact",
+        reason: "latest restart context",
+        text: "Pipeline 104234775 已结束，请核实 2 个 P2 缺陷归属。",
+      },
+      {
+        role: "delta_context",
+        source: "fact",
+        reason: "latest restart context",
+        text: "兼容超界时间戳哨兵。",
+      },
+    ]);
+  });
 });
