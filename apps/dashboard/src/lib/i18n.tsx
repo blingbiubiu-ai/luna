@@ -33,7 +33,7 @@ export function translate(locale: Locale, text: string): string {
   const runtime = /^(Runtime|Agent) (.+)$/.exec(text);
   if (runtime) return `${runtime[1] === "Runtime" ? "运行状态" : "智能体"} ${translate(locale, runtime[2]!)}`;
   const channel = /^(\w+) (\w+) · (\d+ channels?)$/.exec(text);
-  if (channel) return `${channel[1]} ${translate(locale, channel[2]!)} · ${translate(locale, channel[3]!)}`;
+  if (channel) return `${translate(locale, channel[1]!)} ${translate(locale, channel[2]!)} · ${translate(locale, channel[3]!)}`;
   const total = /^(\d+) total$/.exec(text);
   if (total) return `共 ${total[1]} 项`;
   const count = /^(\d+) (messages?|sessions?|users?|groups?|members?|identit(?:y|ies)|direct grants?|files?|tasks?|channels?|steps?|claims?)$/.exec(text);

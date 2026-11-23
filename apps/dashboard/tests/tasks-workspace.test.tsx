@@ -4,6 +4,7 @@ import { createElement } from "react";
 import { createRoot } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
 
+import { HomeOverview } from "../src/app/home-overview";
 import { filterTasks, TasksWorkspaceView } from "../src/app/tasks/index";
 import { TaskDetailView, type TaskDetailData } from "../src/app/tasks/task-detail-view";
 import type { DashboardTask } from "../src/lib/api";
@@ -343,5 +344,63 @@ describe("TasksWorkspaceView", () => {
     expect(html).toContain("关联会话");
     expect(html).toContain("返回任务列表");
     expect(html).toContain("打开 TUI");
+  });
+
+  test("HomeOverview renders pure runtime health, KPI summary cards, and status distributions without duplicating subpage lists", () => {
+    const html = renderToStaticMarkup(
+      createElement(
+        LocaleProvider,
+        { initialLocale: "zh-CN" },
+        createElement(HomeOverview, {
+          activeModelLabel: "codex · gpt-5",
+          shadowCount: 2,
+          tasks: fixtureTasks,
+          sessions: [
+            {
+              id: "ses-1",
+              title: "SRE 生产值班群",
+              displayTitle: "SRE 生产值班群",
+              display_title: "SRE 生产值班群",
+              channel_type: "feishu",
+              channel_id: "feishu-default",
+              group_id: "oc_sre",
+              thread_id: null,
+              status: "active",
+              latestMessagePreview: "网关延迟已恢复正常",
+              created_at: 1_000,
+              updated_at: 85_000,
+              latest_message_at: 85_000,
+              surface: { kind: "group", externalId: "oc_sre", displayName: "SRE 生产值班群" },
+            } as never,
+          ],
+          tasksLoading: false,
+          sessionsLoading: false,
+          runtimeStatus: {
+            status: "ok",
+            uptime: 3720,
+            channels: [
+              {
+                id: "feishu-default",
+                type: "feishu",
+                inbound: { state: "connected", lastConnectAt: 80_000, reconnectAttempts: 0 },
+              },
+            ],
+          },
+          runtimeLoading: false,
+          runtimeError: null,
+        }),
+      ),
+    );
+
+    expect(html).toContain('data-testid="agent-overview"');
+    expect(html).toContain("运行概览");
+    expect(html).toContain("系统运行正常");
+    expect(html).toContain("服务运行中");
+    expect(html).toContain("飞书 已连接 · 1 个通道");
+    expect(html).toContain("1 运行中 · 1 待反馈");
+    expect(html).toContain("任务状态分布");
+    expect(html).toContain("通道与入口分布");
+    expect(html).not.toContain("网关延迟已恢复正常");
+    expect(html).not.toContain("新建对话");
   });
 });

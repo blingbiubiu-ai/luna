@@ -1,38 +1,37 @@
-import { UiText } from "@/lib/i18n";
-import { useTranslation } from "@/lib/i18n";
 import {
   Activity,
-  ArrowRight,
   BriefcaseBusiness,
   CircleCheck,
-  Clock3,
   MessagesSquare,
+  Radio,
   ShieldCheck,
   Waypoints,
 } from "lucide-react";
-import type { ReactNode } from "react";
+import { useMemo, type ReactNode } from "react";
 
-import { Badge } from "@/components/ui/badge";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
+import { resolveSessionKindCategory } from "@/app/sessions/session-avatar";
+import { resolveTaskEffectiveState } from "@/app/tasks/task-visuals";
+import { Skeleton } from "@/components/ui/skeleton";
 import type {
   DashboardRuntimeStatus,
   DashboardSession,
   DashboardTask,
 } from "@/lib/api";
-import { useAgentBasePath } from "@/lib/agent-route";
+import { UiText, useTranslation } from "@/lib/i18n";
 import { isActiveTaskStatus } from "@/lib/tasks";
 import { cn } from "@/lib/utils";
 
+const cardSurfaceClass =
+  "rounded-2xl border border-border bg-card shadow-[0_2px_6px_#00000005]";
+const sageCardSurfaceClass =
+  "relative overflow-hidden rounded-2xl border border-border bg-card shadow-[0_2px_6px_#00000005] before:absolute before:top-0 before:left-6 before:h-[3px] before:w-7 before:rounded-xs before:bg-[#a3b69e] dark:before:bg-[#8ea487]";
+
 export function HomeOverview({
-  tasks,
+  activeModelLabel,
+  shadowCount,
   scopePicker,
   scopeError,
+  tasks,
   sessions,
   tasksLoading,
   sessionsLoading,
@@ -40,6 +39,8 @@ export function HomeOverview({
   runtimeLoading,
   runtimeError,
 }: {
+  readonly activeModelLabel?: string;
+  readonly shadowCount?: number;
   readonly scopePicker?: ReactNode;
   readonly scopeError?: unknown;
   readonly tasks: readonly DashboardTask[];
@@ -50,39 +51,167 @@ export function HomeOverview({
   readonly runtimeLoading: boolean;
   readonly runtimeError: unknown;
 }) {
-  const base = useAgentBasePath();
-  const { t } = useTranslation();
+  const { locale, t } = useTranslation();
   const tone = runtimeTone(runtimeStatus, runtimeLoading, runtimeError);
-  const activeTasks = tasks.filter((item) =>
-    isActiveTaskStatus(item.status),
+
+  const taskStats = useMemo(() => {
+    let running = 0;
+    let waiting = 0;
+    let completed = 0;
+    let attention = 0;
+    for (const item of tasks) {
+      if (isActiveTaskStatus(item.status)) {
+        running += 1;
+        continue;
+      }
+      const eff = resolveTaskEffectiveState(item);
+      if (eff === "waiting" || eff === "new") {
+        waiting += 1;
+      } else if (eff === "failed" || eff === "cancelled") {
+        attention += 1;
+      } else {
+        completed += 1;
+      }
+    }
+    return {
+      total: tasks.length,
+      running,
+      waiting,
+      openCount: running + waiting,
+      completed,
+      attention,
+    };
+  }, [tasks]);
+
+  const activeSessions = useMemo(
+    () => sessions.filter((s) => s.bindingStatus !== "retired"),
+    [sessions],
+  );
+
+  const sessionStats = useMemo(() => {
+    let groups = 0;
+    let direct = 0;
+    let local = 0;
+    let listening = 0;
+    for (const session of activeSessions) {
+      if (session.parentSessionId ?? session.parent_session_id) {
+        continue;
+      }
+      const kind = resolveSessionKindCategory(session);
+      if (kind === "group") groups += 1;
+      else if (kind === "direct") direct += 1;
+      else local += 1;
+      if (session.listening === true) {
+        listening += 1;
+      }
+    }
+    return {
+      total: activeSessions.length,
+      surfaceTotal: groups + direct + local,
+      groups,
+      direct,
+      local,
+      listening,
+    };
+  }, [activeSessions]);
+
+  const channels = runtimeStatus?.channels ?? [];
+  const connectedChannels = channels.filter(
+    (ch) => ch.inbound?.state === undefined || ch.inbound.state === "connected",
   ).length;
-  const runningWork = activeTasks;
-  const latestTask = [...tasks].sort(
-    (a, b) => b.last_activity_at - a.last_activity_at,
-  )[0];
+
+  const metaItems: string[] = [];
+  if (runtimeStatus?.uptime !== undefined) {
+    metaItems.push(`${t("Uptime")} ${formatUptime(runtimeStatus.uptime)}`);
+  }
+  if (activeModelLabel) {
+    metaItems.push(activeModelLabel);
+  }
+  if (shadowCount !== undefined && shadowCount > 0) {
+    metaItems.push(
+      locale === "zh-CN"
+        ? `${shadowCount} 个分身`
+        : `${shadowCount} ${shadowCount === 1 ? "shadow" : "shadows"}`,
+    );
+  }
 
   return (
-    <div className="luna-overview flex min-h-0 flex-1 flex-col bg-background">
-      {scopePicker && <div className="flex flex-wrap items-center gap-2 px-5 pt-4">{scopePicker}</div>}
-      {scopeError instanceof Error && <p role="alert" className="px-5 pt-2 text-sm text-destructive">{scopeError.message}</p>}
-      <div className="luna-hero">
-        <div className="contents">
+    <div
+      className="@container flex h-full min-h-0 flex-1 flex-col overflow-y-auto bg-background"
+      data-testid="agent-overview"
+    >
+      <div className="mx-auto w-full max-w-6xl space-y-6 px-6 py-7 sm:px-8">
+        {/* Clean Page Header */}
+        <header className="flex flex-wrap items-center justify-between gap-4">
           <div className="min-w-0">
-            <div className="flex items-center gap-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">
-              <Activity
-                className={cn(
-                  "size-3.5",
-                  tone === "ok"
-                    ? "text-green-500"
-                    : tone === "warn"
-                      ? "text-amber-500"
-                      : "text-red-500",
-                )}
-              />{t("Luna Runtime")}</div>
-            <h1 className="mt-2 text-2xl font-semibold tracking-tight">{t("Operations, at a glance.")}</h1>
-            <p className="mt-1 max-w-2xl text-sm text-muted-foreground">{t("Your agents, conversations, and work. All in one place.")}</p>
+            <h1 className="m-0 text-[22px] leading-snug font-semibold tracking-tight text-foreground">
+              {t("Operations, at a glance.")}
+            </h1>
+            <p className="m-0 mt-1 text-sm text-muted-foreground">
+              {t(
+                "Real-time runtime health, channel connectivity, and workload summary.",
+              )}
+            </p>
           </div>
-          <div className="luna-hero-status">
+          {scopePicker ? (
+            <div className="flex shrink-0 items-center gap-2">{scopePicker}</div>
+          ) : null}
+        </header>
+
+        {scopeError instanceof Error ? (
+          <p
+            role="alert"
+            className="m-0 rounded-xl border border-destructive/20 bg-destructive/5 px-4 py-2.5 text-xs text-destructive"
+          >
+            {scopeError.message}
+          </p>
+        ) : null}
+
+        {/* Unified Runtime Health Banner */}
+        <section
+          className={cn(
+            sageCardSurfaceClass,
+            "flex flex-col gap-4 px-6 py-5 @[840px]:flex-row @[840px]:items-center @[840px]:justify-between",
+          )}
+        >
+          <div className="flex min-w-0 items-center gap-3.5">
+            <div
+              className={cn(
+                "grid size-10 shrink-0 place-items-center rounded-xl",
+                tone === "ok"
+                  ? "bg-[#5b8a72]/12 text-[#5b8a72] dark:bg-[#7fb096]/15 dark:text-[#7fb096]"
+                  : tone === "warn"
+                    ? "bg-[#b07d4f]/14 text-[#b07d4f] dark:bg-[#d1a273]/16 dark:text-[#d1a273]"
+                    : "bg-[#b5544a]/14 text-[#b5544a] dark:bg-[#dc7a70]/16 dark:text-[#dc7a70]",
+              )}
+            >
+              <Activity className="size-4.5" />
+            </div>
+            <div className="min-w-0">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="text-[15px] font-semibold text-foreground">
+                  {tone === "ok"
+                    ? t("System healthy")
+                    : tone === "warn"
+                      ? runtimeLoading
+                        ? t("Checking runtime status…")
+                        : t("Channel attention needed")
+                      : t("Runtime unavailable")}
+                </span>
+              </div>
+              {metaItems.length > 0 ? (
+                <p className="m-0 mt-0.5 truncate font-mono text-xs text-muted-foreground">
+                  {metaItems.join("  ·  ")}
+                </p>
+              ) : (
+                <p className="m-0 mt-0.5 text-xs text-muted-foreground">
+                  {t("Luna Runtime")}
+                </p>
+              )}
+            </div>
+          </div>
+
+          <div className="flex shrink-0 flex-wrap items-center gap-2">
             <RuntimeStatusBadge
               error={runtimeError}
               loading={runtimeLoading}
@@ -99,99 +228,320 @@ export function HomeOverview({
               status={runtimeStatus}
             />
           </div>
+        </section>
+
+        {/* 4 Pure Summary KPI Cards */}
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          <MetricSummaryCard
+            label={t("Active tasks")}
+            icon={BriefcaseBusiness}
+            iconTone="ochre"
+            value={tasksLoading ? "–" : String(taskStats.openCount)}
+            caption={
+              tasksLoading ? (
+                t("Loading")
+              ) : taskStats.openCount > 0 ? (
+                locale === "zh-CN" ? (
+                  `${taskStats.running} 运行中 · ${taskStats.waiting} 待反馈`
+                ) : (
+                  `${taskStats.running} running · ${taskStats.waiting} waiting`
+                )
+              ) : (
+                t("Queue idle")
+              )
+            }
+          />
+
+          <MetricSummaryCard
+            label={t("Completed")}
+            icon={CircleCheck}
+            iconTone="sage"
+            value={tasksLoading ? "–" : String(taskStats.completed)}
+            caption={
+              tasksLoading ? (
+                t("Loading")
+              ) : (
+                <span className="inline-flex items-center gap-1.5">
+                  <UiText>{`${taskStats.total} total`}</UiText>
+                  {taskStats.attention > 0 ? (
+                    <>
+                      <span>·</span>
+                      <span className="font-medium text-[#b5544a] dark:text-[#dc7a70]">
+                        {locale === "zh-CN"
+                          ? `${taskStats.attention} 异常`
+                          : `${taskStats.attention} failed`}
+                      </span>
+                    </>
+                  ) : null}
+                </span>
+              )
+            }
+          />
+
+          <MetricSummaryCard
+            label={t("Sessions")}
+            icon={MessagesSquare}
+            iconTone="slate"
+            value={sessionsLoading ? "–" : String(sessionStats.total)}
+            caption={
+              sessionsLoading
+                ? t("Loading")
+                : locale === "zh-CN"
+                  ? `${sessionStats.groups} 群聊 · ${sessionStats.direct} 私聊 · ${sessionStats.local} 本地`
+                  : `${sessionStats.groups} groups · ${sessionStats.direct} direct · ${sessionStats.local} local`
+            }
+          />
+
+          <MetricSummaryCard
+            label={t("Channels")}
+            icon={Radio}
+            iconTone="neutral"
+            value={
+              runtimeLoading
+                ? "–"
+                : channels.length > 0
+                  ? `${connectedChannels} / ${channels.length}`
+                  : "0"
+            }
+            caption={
+              runtimeLoading
+                ? t("Loading")
+                : channels.length === 0
+                  ? t("Local conversation only")
+                  : connectedChannels === channels.length
+                    ? t("All channels connected")
+                    : `${connectedChannels} ${t("channels connected")}`
+            }
+          />
         </div>
-      </div>
 
-      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-        <MetricCard
-          label={t("Active tasks")}
-          value={tasksLoading ? "-" : String(activeTasks)}
-          detail={`${tasks.length} total`}
-          icon={BriefcaseBusiness}
-        />
-        <MetricCard
-          label={t("Sessions")}
-          value={sessionsLoading ? "-" : String(sessions.length)}
-          detail="linked channel surfaces"
-          icon={MessagesSquare}
-        />
-        <MetricCard
-          label={t("Runner work")}
-          value={tasksLoading ? "-" : String(runningWork)}
-          detail="active task sessions"
-          icon={Waypoints}
-        />
-        <MetricCard
-          label={t("Queue")}
-          value={runningWork > 0 ? "Busy" : "Idle"}
-          detail="task-scoped serial work"
-          icon={Clock3}
-        />
-      </div>
-
-      <div className="grid gap-5 xl:grid-cols-[1.4fr_0.8fr]">
-        <Card className="min-h-0 rounded-lg">
-          <CardHeader className="border-b pb-4">
-            <div className="flex items-center justify-between gap-3">
+        {/* 2 Calm Aggregate Breakdown Panels (No Subpage Lists or Action Buttons) */}
+        <div className="grid gap-4 lg:grid-cols-2">
+          {/* Task Status Distribution */}
+          <section className={cn(cardSurfaceClass, "p-6")}>
+            <div className="flex items-baseline justify-between gap-2">
               <div>
-                <CardTitle>{t("Task Intake")}</CardTitle>
-                <CardDescription>{t("Current task load by latest run state.")}</CardDescription>
+                <h2 className="m-0 text-sm font-semibold text-foreground">
+                  {t("Task Status Breakdown")}
+                </h2>
+                <p className="m-0 mt-0.5 text-xs text-muted-foreground">
+                  {t("Current task load by latest run state.")}
+                </p>
               </div>
-              <DashboardLink
-                href={`${base}/tasks`}
-
-              >{t("Open tasks")}<ArrowRight className="size-4" />
-              </DashboardLink>
+              <span className="text-xs tabular-nums text-muted-foreground">
+                <UiText>{`${taskStats.total} total`}</UiText>
+              </span>
             </div>
-          </CardHeader>
-          <CardContent className="grid gap-3 p-4 md:grid-cols-3">
-            <StatusTile label={t("New")} value={countByStatus(tasks, "new")} />
-            <StatusTile
-              label={t("Running")}
-              value={countByStatus(tasks, "running")}
-              tone="blue"
-            />
-            <StatusTile
-              label={t("Completed")}
-              value={
-                countByStatus(tasks, "completed")
-              }
-            />
-          </CardContent>
-        </Card>
 
-        <Card className="rounded-lg">
-          <CardHeader className="border-b pb-4">
-            <CardTitle>{t("Latest Activity")}</CardTitle>
-            <CardDescription>{t("Most recent persisted task signal.")}</CardDescription>
-          </CardHeader>
-          <CardContent className="p-4">
-            {latestTask ? (
-              <div className="space-y-3">
-                <Badge variant="secondary"><UiText>{latestTask.status}</UiText></Badge>
-                <div>
-                  <div className="line-clamp-2 text-sm font-medium">
-                    {latestTask.title}
-                  </div>
-                  <div className="mt-1 text-xs text-muted-foreground">
-                    {formatTime(latestTask.last_activity_at)}
-                  </div>
+            {tasksLoading ? (
+              <div className="mt-5 space-y-3">
+                <Skeleton className="h-2.5 w-full rounded-full" />
+                <div className="grid grid-cols-2 gap-3 pt-1">
+                  <Skeleton className="h-14 rounded-xl" />
+                  <Skeleton className="h-14 rounded-xl" />
+                  <Skeleton className="h-14 rounded-xl" />
+                  <Skeleton className="h-14 rounded-xl" />
                 </div>
-                <DashboardLink
-                  href={`${base}/tasks/${encodeURIComponent(latestTask.id)}`}
-
-                >{t("View timeline")}<ArrowRight className="size-4" />
-                </DashboardLink>
               </div>
             ) : (
-              <div className="flex min-h-32 flex-col justify-center rounded-md border border-dashed bg-muted/20 p-4">
-                <CircleCheck className="size-5 text-green-500" />
-                <div className="mt-3 text-sm font-medium">{t("No active tasks")}</div>
-                <div className="mt-1 text-xs text-muted-foreground">{t("Queue idle.")}</div>
-              </div>
+              <>
+                <div className="mt-5 flex h-2 w-full overflow-hidden rounded-full bg-secondary">
+                  {taskStats.total > 0 ? (
+                    <>
+                      {taskStats.running > 0 ? (
+                        <div
+                          className="bg-[#b07d4f] transition-all dark:bg-[#d1a273]"
+                          style={{
+                            width: `${(taskStats.running / taskStats.total) * 100}%`,
+                          }}
+                        />
+                      ) : null}
+                      {taskStats.waiting > 0 ? (
+                        <div
+                          className="bg-[#5c7c99] transition-all dark:bg-[#86a3be]"
+                          style={{
+                            width: `${(taskStats.waiting / taskStats.total) * 100}%`,
+                          }}
+                        />
+                      ) : null}
+                      {taskStats.completed > 0 ? (
+                        <div
+                          className="bg-[#5b8a72] transition-all dark:bg-[#7fb096]"
+                          style={{
+                            width: `${(taskStats.completed / taskStats.total) * 100}%`,
+                          }}
+                        />
+                      ) : null}
+                      {taskStats.attention > 0 ? (
+                        <div
+                          className="bg-[#b5544a] transition-all dark:bg-[#dc7a70]"
+                          style={{
+                            width: `${(taskStats.attention / taskStats.total) * 100}%`,
+                          }}
+                        />
+                      ) : null}
+                    </>
+                  ) : null}
+                </div>
+
+                <div className="mt-4 grid grid-cols-2 gap-3">
+                  <DistributionStatTile
+                    dotClass="bg-[#b07d4f] dark:bg-[#d1a273]"
+                    label={t("Running")}
+                    count={taskStats.running}
+                    total={taskStats.total}
+                  />
+                  <DistributionStatTile
+                    dotClass="bg-[#5c7c99] dark:bg-[#86a3be]"
+                    label={t("Waiting")}
+                    count={taskStats.waiting}
+                    total={taskStats.total}
+                  />
+                  <DistributionStatTile
+                    dotClass="bg-[#5b8a72] dark:bg-[#7fb096]"
+                    label={t("Completed")}
+                    count={taskStats.completed}
+                    total={taskStats.total}
+                  />
+                  <DistributionStatTile
+                    dotClass="bg-[#b5544a] dark:bg-[#dc7a70]"
+                    label={t("Failed / Cancelled")}
+                    count={taskStats.attention}
+                    total={taskStats.total}
+                  />
+                </div>
+              </>
             )}
-          </CardContent>
-        </Card>
+          </section>
+
+          {/* Surface & Channel Health Summary */}
+          <section className={cn(cardSurfaceClass, "flex flex-col justify-between p-6")}>
+            <div>
+              <div className="flex items-baseline justify-between gap-2">
+                <div>
+                  <h2 className="m-0 text-sm font-semibold text-foreground">
+                    {t("Channel & Surface Summary")}
+                  </h2>
+                  <p className="m-0 mt-0.5 text-xs text-muted-foreground">
+                    {t("Active conversation surfaces and inbound channel health.")}
+                  </p>
+                </div>
+                {sessionStats.listening > 0 ? (
+                  <span className="rounded-full bg-[#5b8a72]/12 px-2.5 py-0.5 text-[11px] font-medium text-[#5b8a72] dark:bg-[#7fb096]/16 dark:text-[#7fb096]">
+                    {sessionStats.listening} {t("Listening")}
+                  </span>
+                ) : null}
+              </div>
+
+              {sessionsLoading ? (
+                <div className="mt-5 space-y-3">
+                  <Skeleton className="h-2.5 w-full rounded-full" />
+                  <Skeleton className="h-14 w-full rounded-xl" />
+                </div>
+              ) : (
+                <>
+                  <div className="mt-5 flex h-2 w-full overflow-hidden rounded-full bg-secondary">
+                    {sessionStats.surfaceTotal > 0 ? (
+                      <>
+                        {sessionStats.groups > 0 ? (
+                          <div
+                            className="bg-[#5c7c99] dark:bg-[#86a3be]"
+                            style={{
+                              width: `${(sessionStats.groups / sessionStats.surfaceTotal) * 100}%`,
+                            }}
+                          />
+                        ) : null}
+                        {sessionStats.direct > 0 ? (
+                          <div
+                            className="bg-[#5b8a72] dark:bg-[#7fb096]"
+                            style={{
+                              width: `${(sessionStats.direct / sessionStats.surfaceTotal) * 100}%`,
+                            }}
+                          />
+                        ) : null}
+                        {sessionStats.local > 0 ? (
+                          <div
+                            className="bg-[#a39e93] dark:bg-[#78746c]"
+                            style={{
+                              width: `${(sessionStats.local / sessionStats.surfaceTotal) * 100}%`,
+                            }}
+                          />
+                        ) : null}
+                      </>
+                    ) : null}
+                  </div>
+
+                  <div className="mt-4 grid grid-cols-3 gap-2.5">
+                    <SurfaceMiniStat
+                      dotClass="bg-[#5c7c99] dark:bg-[#86a3be]"
+                      label={t("Group chat")}
+                      count={sessionStats.groups}
+                    />
+                    <SurfaceMiniStat
+                      dotClass="bg-[#5b8a72] dark:bg-[#7fb096]"
+                      label={t("Direct chat")}
+                      count={sessionStats.direct}
+                    />
+                    <SurfaceMiniStat
+                      dotClass="bg-[#a39e93] dark:bg-[#78746c]"
+                      label={t("Local chat")}
+                      count={sessionStats.local}
+                    />
+                  </div>
+                </>
+              )}
+            </div>
+
+            <div className="mt-4 border-t border-border/70 pt-3.5">
+              {runtimeLoading ? (
+                <Skeleton className="h-8 w-full rounded-lg" />
+              ) : channels.length === 0 ? (
+                <div className="flex items-center justify-between text-xs text-muted-foreground">
+                  <span>{t("Inbound channels")}</span>
+                  <span>{t("No external channels configured")}</span>
+                </div>
+              ) : (
+                <div className="flex flex-wrap items-center gap-2">
+                  {channels.map((channel) => {
+                    const state = channel.inbound?.state ?? "connected";
+                    const isConnected = state === "connected";
+                    return (
+                      <div
+                        key={channel.id}
+                        className="inline-flex items-center gap-2 rounded-lg border border-border/80 bg-background/60 px-2.5 py-1.5 text-xs"
+                      >
+                        <span
+                          className={cn(
+                            "size-1.5 shrink-0 rounded-full",
+                            isConnected
+                              ? "bg-[#5b8a72] dark:bg-[#7fb096]"
+                              : "bg-[#b07d4f] dark:bg-[#d1a273]",
+                          )}
+                        />
+                        <span className="font-medium text-foreground">
+                          <UiText>{formatChannelType(channel.type)}</UiText>
+                        </span>
+                        <span className="font-mono text-[11px] text-muted-foreground">
+                          {channel.id}
+                        </span>
+                        <span
+                          className={cn(
+                            "text-[11px] font-medium",
+                            isConnected
+                              ? "text-[#5b8a72] dark:text-[#7fb096]"
+                              : "text-[#b07d4f] dark:text-[#d1a273]",
+                          )}
+                        >
+                          <UiText>{state}</UiText>
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          </section>
+        </div>
       </div>
     </div>
   );
@@ -219,8 +569,99 @@ export function HomeOverviewForTest({
       runtimeStatus={runtimeStatus}
       runtimeLoading={runtimeLoading}
       runtimeError={runtimeError}
-
     />
+  );
+}
+
+function MetricSummaryCard({
+  label,
+  value,
+  caption,
+  icon: Icon,
+  iconTone,
+}: {
+  readonly label: string;
+  readonly value: string;
+  readonly caption: ReactNode;
+  readonly icon: typeof Activity;
+  readonly iconTone: "ochre" | "sage" | "slate" | "neutral";
+}) {
+  return (
+    <div className={cn(cardSurfaceClass, "flex flex-col justify-between p-5")}>
+      <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
+        <span className="font-medium">{label}</span>
+        <span
+          className={cn(
+            "inline-grid size-7 place-items-center rounded-lg",
+            iconTone === "ochre" &&
+              "bg-[#b07d4f]/12 text-[#b07d4f] dark:bg-[#d1a273]/15 dark:text-[#d1a273]",
+            iconTone === "sage" &&
+              "bg-[#5b8a72]/12 text-[#5b8a72] dark:bg-[#7fb096]/15 dark:text-[#7fb096]",
+            iconTone === "slate" &&
+              "bg-[#5c7c99]/12 text-[#5c7c99] dark:bg-[#86a3be]/15 dark:text-[#86a3be]",
+            iconTone === "neutral" && "bg-muted text-muted-foreground",
+          )}
+        >
+          <Icon className="size-3.5" />
+        </span>
+      </div>
+      <div className="mt-3 text-[28px] leading-none font-semibold tracking-tight tabular-nums text-foreground">
+        {value}
+      </div>
+      <div className="mt-2.5 truncate text-xs text-muted-foreground">
+        {caption}
+      </div>
+    </div>
+  );
+}
+
+function DistributionStatTile({
+  dotClass,
+  label,
+  count,
+  total,
+}: {
+  readonly dotClass: string;
+  readonly label: string;
+  readonly count: number;
+  readonly total: number;
+}) {
+  const pct = total > 0 ? Math.round((count / total) * 100) : 0;
+  return (
+    <div className="flex items-center justify-between gap-2 rounded-xl border border-border/70 bg-background/50 px-3.5 py-2.5">
+      <div className="flex min-w-0 items-center gap-2">
+        <span className={cn("size-2 shrink-0 rounded-full", dotClass)} />
+        <span className="truncate text-xs text-muted-foreground">{label}</span>
+      </div>
+      <div className="flex shrink-0 items-baseline gap-1.5 tabular-nums">
+        <span className="text-sm font-semibold text-foreground">{count}</span>
+        {total > 0 ? (
+          <span className="text-[11px] text-muted-foreground">{pct}%</span>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+function SurfaceMiniStat({
+  dotClass,
+  label,
+  count,
+}: {
+  readonly dotClass: string;
+  readonly label: string;
+  readonly count: number;
+}) {
+  return (
+    <div className="rounded-xl border border-border/70 bg-background/50 px-3 py-2.5">
+      <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+        <span className={cn("size-2 shrink-0 rounded-full", dotClass)} />
+        <span className="truncate">{label}</span>
+      </div>
+      <div className="mt-1.5 text-base font-semibold tabular-nums text-foreground">
+        {count}
+      </div>
+    </div>
   );
 }
 
@@ -235,29 +676,28 @@ function RuntimeStatusBadge({
 }) {
   const tone = runtimeTone(status, loading, error);
   return (
-    <Badge
-      variant="outline"
+    <span
       className={cn(
-        "gap-1.5",
+        "inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium",
         tone === "ok"
-          ? "border-green-500/30"
+          ? "bg-[#5b8a72]/13 text-[#5b8a72] dark:bg-[#7fb096]/16 dark:text-[#7fb096]"
           : tone === "warn"
-            ? "border-amber-500/40"
-            : "border-red-500/40",
+            ? "bg-[#b07d4f]/14 text-[#b07d4f] dark:bg-[#d1a273]/16 dark:text-[#d1a273]"
+            : "bg-[#b5544a]/14 text-[#b5544a] dark:bg-[#dc7a70]/16 dark:text-[#dc7a70]",
       )}
     >
       <span
         className={cn(
-          "size-2 rounded-full",
+          "size-1.5 rounded-full",
           tone === "ok"
-            ? "bg-green-500"
+            ? "bg-[#5b8a72] dark:bg-[#7fb096]"
             : tone === "warn"
-              ? "bg-amber-500"
-              : "bg-red-500",
+              ? "bg-[#b07d4f] dark:bg-[#d1a273]"
+              : "bg-[#b5544a] dark:bg-[#dc7a70]",
         )}
       />
       <UiText>{runtimeLabel(status, loading, error)}</UiText>
-    </Badge>
+    </span>
   );
 }
 
@@ -271,10 +711,10 @@ function ChannelStatusBadge({
   readonly error: unknown;
 }) {
   return (
-    <Badge variant="outline" className="gap-1.5">
-      <Waypoints className="size-3" />
+    <span className="inline-flex items-center gap-1.5 rounded-full border border-border bg-background px-2.5 py-1 text-xs font-medium text-foreground">
+      <Waypoints className="size-3 text-muted-foreground" />
       <UiText>{channelStatusLabel(status, loading, error)}</UiText>
-    </Badge>
+    </span>
   );
 }
 
@@ -288,10 +728,10 @@ function AgentStatusBadge({
   readonly error: unknown;
 }) {
   return (
-    <Badge variant="outline" className="gap-1.5">
+    <span className="inline-flex items-center gap-1.5 rounded-full border border-border bg-background px-2.5 py-1 text-xs font-medium text-muted-foreground">
       <ShieldCheck className="size-3" />
       <UiText>{agentStatusLabel(status, loading, error)}</UiText>
-    </Badge>
+    </span>
   );
 }
 
@@ -307,7 +747,8 @@ function runtimeTone(
     return "warn";
   }
   return status.channels.every(
-    (channel) => channel.inbound?.state === undefined ||
+    (channel) =>
+      channel.inbound?.state === undefined ||
       channel.inbound.state === "connected",
   )
     ? "ok"
@@ -343,7 +784,7 @@ function channelStatusLabel(
   if (primary === undefined) {
     return "No channels";
   }
-  const primaryState = primary.inbound?.state ?? "unknown";
+  const primaryState = primary.inbound?.state ?? "connected";
   const channelCount =
     status.channels.length === 1
       ? "1 channel"
@@ -371,84 +812,15 @@ function formatChannelType(type: string): string {
     : `${type.slice(0, 1).toUpperCase()}${type.slice(1)}`;
 }
 
-function DashboardLink({ children, href }: { children: ReactNode; href: string }) {
-  return <a href={href} className="inline-flex items-center gap-1.5 text-sm font-medium text-primary hover:underline">
-    {children}
-  </a>;
-}
-
-function MetricCard({
-  label,
-  value,
-  detail,
-  icon: Icon,
-}: {
-  label: string;
-  value: string;
-  detail: string;
-  icon: typeof Activity;
-}) {
-  return (
-    <Card className="luna-metric rounded-lg py-6">
-      <CardContent className="flex items-center justify-between gap-4 px-4">
-        <div className="min-w-0">
-          <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-            <UiText>{label}</UiText>
-          </div>
-          <div className="mt-3 text-4xl font-semibold tracking-tight">
-            <UiText>{value}</UiText>
-          </div>
-          <div className="mt-1 truncate text-xs text-muted-foreground">
-            <UiText>{detail}</UiText>
-          </div>
-        </div>
-        <div className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-muted">
-          <Icon className="size-5 text-muted-foreground" />
-        </div>
-      </CardContent>
-    </Card>
-  );
-}
-
-function StatusTile({
-  label,
-  value,
-  tone = "neutral",
-}: {
-  label: string;
-  value: number;
-  tone?: "neutral" | "blue" | "amber";
-}) {
-  return (
-    <div className="rounded-md border bg-background p-4">
-      <div className="flex items-center justify-between">
-        <div className="text-sm font-medium"><UiText>{label}</UiText></div>
-        <span
-          className={cn(
-            "size-2 rounded-full",
-            tone === "blue" && "bg-blue-500",
-            tone === "amber" && "bg-yellow-500",
-            tone === "neutral" && "bg-muted-foreground",
-          )}
-        />
-      </div>
-      <div className="mt-4 text-2xl font-semibold tracking-tight"><UiText>{value}</UiText></div>
-    </div>
-  );
-}
-
-function countByStatus(
-  tasks: readonly DashboardTask[],
-  status: string,
-): number {
-  return tasks.filter((task) => task.status === status).length;
-}
-
-function formatTime(timestamp: number): string {
-  return new Intl.DateTimeFormat(undefined, {
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-  }).format(new Date(timestamp));
+function formatUptime(seconds: number): string {
+  const safe = Math.max(0, Math.floor(seconds));
+  if (safe < 60) return `${safe}s`;
+  const mins = Math.floor(safe / 60);
+  if (mins < 60) return `${mins}m`;
+  const hours = Math.floor(mins / 60);
+  const remMins = mins % 60;
+  if (hours < 24) return remMins > 0 ? `${hours}h ${remMins}m` : `${hours}h`;
+  const days = Math.floor(hours / 24);
+  const remHours = hours % 24;
+  return remHours > 0 ? `${days}d ${remHours}h` : `${days}d`;
 }
