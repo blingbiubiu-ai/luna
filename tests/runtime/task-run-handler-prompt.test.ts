@@ -23,6 +23,9 @@ describe("Task Runner prompt builder", () => {
       facts: ["用户确认 spec 使用中文。"], assumptions: ["计划文件写入 docs/superpowers/plans。"],
     });
     expect(block(prompt, "user_input")).toBe("请按中文 spec 写 plan。");
+    expect(block(prompt, "report_sections")).toContain("luna tasks report --stdin");
+    expect(block(prompt, "report_sections")).not.toContain("--request-id");
+    expect(block(prompt, "report_sections")).not.toContain("LUNA_NOTHING_TO_SEND");
     expect(block(prompt, "report_sections")).toContain("Completed work");
     expect(block(prompt, "report_sections")).toContain("Verification");
     expect(prompt).not.toContain("Likely cause");

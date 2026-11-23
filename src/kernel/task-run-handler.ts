@@ -592,7 +592,7 @@ export function buildTaskRunPrompt(input: BuildTaskRunPromptInput): string {
     update.length ? dataBlock("update_context", { json: update }) : "",
     dataBlock("user_input", { text: input.pendingText }),
     promptBlock("report_sections", [
-      "Submit a report with these sections through `luna task report --request-id final-report --stdin`, then end with LUNA_NOTHING_TO_SEND:",
+      "Submit a report with these sections through `luna tasks report --stdin`:",
       ..._outputRequirements(input.taskType),
     ].join("\n")),
   ]);

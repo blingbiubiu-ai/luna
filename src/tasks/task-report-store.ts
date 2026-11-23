@@ -19,10 +19,8 @@ export function taskInvocations(db: DrizzleDB): Map<string, TaskInvocation> {
   return registry;
 }
 
-export function requireTaskReportCompletion(db: DrizzleDB, taskRunId: string, terminalText: string) {
-  if (terminalText.trim() !== "LUNA_NOTHING_TO_SEND")
-    throw new Error("Task must submit its report through luna task report and end with LUNA_NOTHING_TO_SEND");
+export function requireTaskReportCompletion(db: DrizzleDB, taskRunId: string, _terminalText?: string) {
   const report = taskReportForRun(db, taskRunId);
-  if (!report) throw new Error("Task completed without submitting a report command");
+  if (!report) throw new Error("Task completed without submitting a report command (luna tasks report)");
   return {finalReportArtifactId: report.reportArtifactId};
 }

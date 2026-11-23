@@ -52,10 +52,11 @@ function fixture() {
   const service=new TaskReportService(db,async () => {published++;});
   return {db,store,run,context,controller,claims,service,finishJob,published:()=>published};
 }
-test("report commits before process exit; identical retries are idempotent and terminal prose is not a report",()=>{
+test("report commits before process exit; identical retries are idempotent and terminal prose is ignored once submitted",()=>{
   const f=fixture();
   f.db.insert(schema.taskSubscriptions).values({id:"sub",task_id:"task",session_id:"session",channel_type:"test",channel_id:"test",visibility:"full",created_at:1,updated_at:1}).run();
-  expect(()=>requireTaskReportCompletion(f.db,f.run.id,"LUNA_NOTHING_TO_SEND")).toThrow("without submitting");
+  expect(()=>requireTaskReportCompletion(f.db,f.run.id,"")).toThrow("without submitting");
+  expect(()=>requireTaskReportCompletion(f.db,f.run.id,"report prose")).toThrow("without submitting");
   const receipt=f.service.submit(f.claims,"final","2+2=4");
   expect(f.published()).toBe(1);
   expect(f.store.listRunsForTask("task")[0]?.status).toBe("running");
@@ -66,8 +67,8 @@ test("report commits before process exit; identical retries are idempotent and t
   expect(f.db.select().from(schema.taskReportCommands).all()).toHaveLength(1);
   expect(()=>f.service.submit(f.claims,"final","changed")).toThrow("already has");
   expect(()=>f.service.submit(f.claims,"another","2+2=4")).toThrow("already has");
-  expect(()=>requireTaskReportCompletion(f.db,f.run.id,"report prose")).toThrow("must submit");
-  expect(requireTaskReportCompletion(f.db,f.run.id,"LUNA_NOTHING_TO_SEND")).toEqual({finalReportArtifactId:receipt.reportArtifactId});
+  expect(requireTaskReportCompletion(f.db,f.run.id,"Report submitted.")).toEqual({finalReportArtifactId:receipt.reportArtifactId});
+  expect(requireTaskReportCompletion(f.db,f.run.id,"")).toEqual({finalReportArtifactId:receipt.reportArtifactId});
 });
 test("Task report capability rejects other roles, wrong runs, missing artifacts, revoked tokens and late calls",()=>{
   const f=fixture();

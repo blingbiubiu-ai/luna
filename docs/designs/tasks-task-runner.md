@@ -232,32 +232,33 @@ subscription in the current conversation.
 
 ## Task report command and execution completion
 
-Task calls `luna task report --request-id ID --stdin` with plain report text;
-`--text REPORT` is also supported. `luna task report status COMMAND_ID`
-reads its receipt. These use `POST /api/runner/task-reports` and
-`GET /api/runner/task-reports/:id`. Only the current active Task invocation
-may submit or inspect its report; Main and Work cannot use this capability.
+Task calls `luna tasks report --stdin` with plain report text (`--text REPORT`
+is also supported; CLI derives `Idempotency-Key` automatically). `luna commands status COMMAND_ID`
+reads its receipt (`POST /api/runner/task-reports` and `GET /api/runner/commands/:id`).
+Only the current active Task invocation may submit or inspect its report; Main
+and Work cannot use this capability.
 
 A transaction persists the managed report artifact, task artifact, immutable
 `task_report_commands` receipt, run report reference and per-subscription
-task-result outbox entries. One report is accepted per run; identical request
-ID and text retries return the same receipt, while changes conflict.
+task-result outbox entries. One report is accepted per run; identical retries
+return the same receipt, while changes conflict.
 The publisher wakes Main immediately after commit, before Task process exit.
 Task still cannot address users. Main sends the user-facing message.
 
-Task ends with `LUNA_NOTHING_TO_SEND`. A sentinel without an accepted report
-fails execution; terminal prose never becomes a report. The run stays running
-until process settlement. Once accepted, the report survives later process
-errors and startup recovery completes the run from its durable receipt.
-Existing notification deduplication prevents a second delivery on settlement.
-A superseded run cannot publish over the current run.
+Task terminal output is ignored (`terminalOutputMode: "ignored_use_tasks_report"`—no
+`LUNA_NOTHING_TO_SEND` sentinel is required). Completing a run without an
+accepted `luna tasks report` fails execution; terminal prose never becomes a
+report. The run stays running until process settlement. Once accepted, the
+report survives later process errors and startup recovery completes the run
+from its durable receipt. Existing notification deduplication prevents a second
+delivery on settlement. A superseded run cannot publish over the current run.
 
 Missing information is included in this final command report. Main asks the
 user, receives the answer and starts a new run with `tasks update`. Mid-run
 question/suspend/resume is not implemented.
 
 A report that asks for an answer the Task needs before it can continue is
-submitted with `luna task report --waiting` (`waiting: true` on
+submitted with `luna tasks report --waiting` (`waiting: true` on
 `POST /api/runner/task-reports`). Acceptance sets `tasks.block_reason` to
 `waiting_user` in the report transaction, and the task result delivered to Main
 carries `waitingForInput: true`. The run still settles as `completed`; status
