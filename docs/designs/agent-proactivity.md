@@ -24,6 +24,12 @@ Every proactivity parameter is configured at the platform level
 
 - `heartbeatIntervalMs` (default `30m`, `0` disables): minimum interval between
   Shadow heartbeat turns.
+- `heartbeatApprovalRequired` (default `true`): requires Heartbeat proactive
+  follow-ups targeting other sessions to obtain Agent owner approval via an
+  interactive `luna asks create --to owner` card before Service permits
+  `luna handoff` (or cross-session asks/schedules). Exposed live in
+  `<capabilities>.outboundGovernance.heartbeatApprovalRequired` and toggleable
+  per-Platform or per-Agent once an Agent's proactive judgment stabilizes.
 - `outboundPerSessionPerHour` (default `3`, `0` unlimited): proactive outbound
   cap per target session per rolling hour.
 - `outboundPerRecipientPerDay` (default `10`, `0` unlimited): proactive direct

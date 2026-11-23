@@ -153,6 +153,7 @@ test("proactivity settings resolve Agent overrides over live Platform defaults",
 
   expect(resolveProactivitySettings(db.db, scope.agentId)).toEqual({
     heartbeatIntervalMs: 30 * MIN,
+    heartbeatApprovalRequired: true,
     outboundPerSessionPerHour: 3,
     outboundPerRecipientPerDay: 10,
     outboundDedupWindowMs: 24 * 60 * MIN,

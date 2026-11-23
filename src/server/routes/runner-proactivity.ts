@@ -16,6 +16,7 @@ import {
   sessions,
 } from "@/data/schema";
 import { deleteDashboardSchedule } from "@/dashboard-api/task-deletion";
+import { assertHeartbeatOutboundApproved } from "@/messaging/correlated-request-service";
 import { resolveMessageTarget } from "@/messaging/delivery-target";
 import { resolveLunaAddress } from "@/messaging/luna-address";
 import { RunnerMessageService } from "@/messaging/runner-message-service";
@@ -248,6 +249,9 @@ export function createRunnerProactivityRoutes(
                 true,
               )
             : body.targetSessionId ?? existing.targetSessionId;
+        if (targetSessionId !== actor.currentSessionId) {
+          assertHeartbeatOutboundApproved(db(), actor);
+        }
 
         const nextAction = body.action
           ? body.action.kind === "task.run"

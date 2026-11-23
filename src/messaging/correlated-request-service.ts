@@ -19,6 +19,7 @@ import {
   sessionCommands,
   sessions,
   shadowBotBindings,
+  shadowHeartbeats,
   userIdentityLinks,
   users,
 } from "@/data/schema";
@@ -169,6 +170,84 @@ function queueReturnToOrigin(
   }
 }
 
+const HEARTBEAT_NEGATIVE_VERDICT_RE =
+  /^(婉拒|拒绝|驳回|取消|忽略|暂不|不发|不要|不处理|跳过|decline|reject|no|cancel|skip|ignore)/i;
+
+export function isHeartbeatTurnOrSession(
+  db: DrizzleDB,
+  actor: { readonly currentSessionId: string; readonly originId: string },
+): boolean {
+  if (actor.originId.startsWith(SELF_ROUTINE_ORIGINS.heartbeat)) return true;
+  return Boolean(
+    db
+      .select({ shadowId: shadowHeartbeats.shadowId })
+      .from(shadowHeartbeats)
+      .where(eq(shadowHeartbeats.sessionId, actor.currentSessionId))
+      .get(),
+  );
+}
+
+export function hasHeartbeatOwnerApproval(
+  db: DrizzleDB,
+  actor: {
+    readonly agentId: string;
+    readonly shadowId: string;
+    readonly currentSessionId: string;
+    readonly originId: string;
+  },
+  ownerUserId: string,
+): boolean {
+  if (!actor.originId.startsWith("request-result:")) return false;
+  const reqId = actor.originId.slice("request-result:".length);
+  const req = db
+    .select()
+    .from(correlatedRequests)
+    .where(eq(correlatedRequests.id, reqId))
+    .get();
+  if (
+    !req ||
+    req.kind !== "ask" ||
+    req.status !== "answered" ||
+    req.shadowId !== actor.shadowId ||
+    req.originSessionId !== actor.currentSessionId ||
+    req.resolvedByUserId !== ownerUserId
+  ) {
+    return false;
+  }
+  const res = req.resultJson ?? {};
+  const verdict = String(res.selectedOption ?? res.answer ?? "").trim();
+  if (!verdict || HEARTBEAT_NEGATIVE_VERDICT_RE.test(verdict)) return false;
+  return true;
+}
+
+export function assertHeartbeatOutboundApproved(
+  db: DrizzleDB,
+  actor: {
+    readonly agentId: string;
+    readonly shadowId: string;
+    readonly currentSessionId: string;
+    readonly originId: string;
+  },
+  options?: { readonly allowOwnerAskTargetUserId?: string | undefined },
+): void {
+  if (!isHeartbeatTurnOrSession(db, actor)) return;
+  const proactivity = resolveProactivitySettings(db, actor.agentId);
+  if (!proactivity.heartbeatApprovalRequired) return;
+  const ownerUserId = new AgentStore(db).ownerUserId(actor.agentId);
+  if (
+    options?.allowOwnerAskTargetUserId &&
+    options.allowOwnerAskTargetUserId === ownerUserId
+  ) {
+    return;
+  }
+  if (hasHeartbeatOwnerApproval(db, actor, ownerUserId)) return;
+  throw new GatewayError(
+    "heartbeat_approval_required",
+    "Heartbeat proactive follow-up requires owner approval first: send an approval card via `luna asks create --to owner --options '[\"同意跟进\",\"暂不发送\"]' ...` and wait for `request_result` before dispatching to another session.",
+    403,
+  );
+}
+
 export class CorrelatedRequestService {
   constructor(
     private readonly db: DrizzleDB,
@@ -220,6 +299,9 @@ export class CorrelatedRequestService {
         400,
       );
     }
+    assertHeartbeatOutboundApproved(this.db, input.actor, {
+      allowOwnerAskTargetUserId: resolved.targetUserId,
+    });
 
     const requestId = deterministicRequestId(
       input.actor.sourceSessionId,
@@ -494,6 +576,7 @@ export class CorrelatedRequestService {
         409,
       );
     }
+    assertHeartbeatOutboundApproved(this.db, input.actor);
     const requestId = deterministicRequestId(
       input.actor.sourceSessionId,
       input.actor.originId,

@@ -5,7 +5,10 @@ import { eq } from "drizzle-orm";
 import { sessionSchedules } from "@/data/schema";
 import { AgentError } from "@/agents/agent-store";
 import { sessionCommandsFor } from "@/messaging/session-command-service";
-import { CorrelatedRequestService } from "@/messaging/correlated-request-service";
+import {
+  assertHeartbeatOutboundApproved,
+  CorrelatedRequestService,
+} from "@/messaging/correlated-request-service";
 import { resolveMessageTarget } from "@/messaging/delivery-target";
 import { resolveLunaAddress } from "@/messaging/luna-address";
 import { Hono } from "hono";
@@ -65,6 +68,7 @@ export function createRunnerMessageRoutes(options: {
         const target = parsed.data.to
             ? resolveLunaAddress(db, { agentId: actor.agentId, shadowId: actor.shadowId, currentSessionId: actor.currentSessionId }, parsed.data.to, { create: true }).sessionId
             : resolveMessageTarget(db, parsed.data.target!, actor.currentSessionId, true);
+        assertHeartbeatOutboundApproved(db, actor);
         const row = await svc.send(claims, key, text, parsed.data.purpose, target, parsed.data.reply, parsed.data.mentionBotUserId);
         return c.json({ commandId: row.id, kind: "message.send", status: row.status, deliveryStatus: row.status, sessionId: row.sessionId, messageId: row.messageId, providerMessageId: row.providerMessageId, result: { sessionId: row.sessionId, messageId: row.messageId, providerMessageId: row.providerMessageId }, error: row.error }, ["pending", "running", "deferred"].includes(row.status) ? 202 : 200);
     })
@@ -136,6 +140,9 @@ export function createRunnerMessageRoutes(options: {
         const target = body.address
             ? resolveLunaAddress(db, { agentId: actor.agentId, shadowId: actor.shadowId, currentSessionId: actor.currentSessionId }, body.address, { create: true }).sessionId
             : resolveMessageTarget(db, body.target!, actor.currentSessionId, true);
+        if (target !== actor.currentSessionId) {
+            assertHeartbeatOutboundApproved(db, actor);
+        }
         const normalizedAction = body.action.kind === "task.run"
             ? { kind: "task.run" as const, taskId: body.action.taskId, content: (body.action.content ?? body.action.instruction)! }
             : body.action;

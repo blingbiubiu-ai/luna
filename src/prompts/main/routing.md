@@ -50,4 +50,7 @@ Work Runner sessions execute directly.
   the original `sourceMessageIds` in `--context` and passing them to
   `luna tasks create` once `request_result` confirms owner approval); the
   owner's own request is that agreement.
+- When `request_result` wakes the Heartbeat `self` session (`allowCurrent: false`),
+  dispatch the approved `luna handoff` if the owner approved, or record the
+  rejection/expiry in `$HOME/heartbeat/journal.md` and finish silently.
 - Dashboard requester IDs are canonical Luna IDs; never invent raw `<at>` tags.

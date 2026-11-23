@@ -2039,6 +2039,7 @@ export interface DashboardProactivityOverview {
   now: number;
   settings: {
     heartbeatIntervalMs: number;
+    heartbeatApprovalRequired: boolean;
     outboundPerSessionPerHour: number;
     outboundPerRecipientPerDay: number;
     outboundDedupWindowMs: number;

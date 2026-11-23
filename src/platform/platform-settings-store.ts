@@ -170,6 +170,7 @@ export const PlatformProactivitySettings = z
       .min(0)
       .max(30 * 86_400_000)
       .default(30 * 60 * 1000),
+    heartbeatApprovalRequired: z.boolean().default(true),
     outboundPerSessionPerHour: z.number().int().min(0).max(1_000).default(3),
     outboundPerRecipientPerDay: z.number().int().min(0).max(1_000).default(10),
     outboundDedupWindowMs: z

@@ -8,6 +8,7 @@ import type { DrizzleDB } from "@/data";
 import {
   scheduleOccurrences,
   sessionCommands,
+  shadowHeartbeats,
   taskRuns,
 } from "@/data/schema";
 import type { MainRunnerInput } from "@/main-runner/types";
@@ -249,13 +250,23 @@ export function buildMainCapabilities(
   }
 
   const isRoutine = originKind === "self_routine";
-  const allowSilent = isRoutine ? true : resolveMainAllowSilent(db, input);
-  const terminalOutputMode: TerminalOutputMode = isRoutine
+  const isHeartbeatSession = db
+    ? Boolean(
+        db
+          .select({ shadowId: shadowHeartbeats.shadowId })
+          .from(shadowHeartbeats)
+          .where(eq(shadowHeartbeats.sessionId, sessionId))
+          .get(),
+      )
+    : false;
+  const ignoreTerminal = isRoutine || isHeartbeatSession;
+  const allowSilent = ignoreTerminal ? true : resolveMainAllowSilent(db, input);
+  const terminalOutputMode: TerminalOutputMode = ignoreTerminal
     ? "ignored"
     : "reply_current_session";
 
   const commands =
-    routineKind === "heartbeat"
+    routineKind === "heartbeat" || isHeartbeatSession
       ? HEARTBEAT_COMMANDS
       : routineKind === "reflection" || routineKind === "consolidation"
         ? MEMORY_ROUTINE_COMMANDS
@@ -281,7 +292,7 @@ export function buildMainCapabilities(
     },
     commands,
     addressScope: {
-      allowCurrent: !isRoutine,
+      allowCurrent: !ignoreTerminal,
       allowSelf: !isMemoryOnly,
       allowOwner: !isMemoryOnly,
       allowSession: !isMemoryOnly,

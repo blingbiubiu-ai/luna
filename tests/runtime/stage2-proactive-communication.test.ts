@@ -272,7 +272,10 @@ test("overdue pending ask is expired by routine and handoff returns done/decline
       .get()?.status,
   ).toBe("expired");
 
-  // 2. Handoff from Heartbeat session to group-session settles automatically on target turn completion.
+  // 2. Handoff from Heartbeat session to group-session settles automatically on target turn completion (with approval toggle turned off).
+  new AgentSettingsStore(db.db).save("alice", scope.agentId, {
+    proactivity: { heartbeatApprovalRequired: false },
+  });
   const selfAddr = resolveLunaAddress(
     db.db,
     { agentId: scope.agentId, shadowId: scope.shadowId },
@@ -629,4 +632,160 @@ test("owner-targeted approval ask resolves `--to owner` server-side, rejects non
       sendStatusCard: false,
     }),
   ).rejects.toThrow("must belong to this session");
+});
+
+test("heartbeatApprovalRequired blocks direct heartbeat handoffs/asks until owner approves card, and can be disabled per Agent", async () => {
+  const commands = new SessionCommandService({ db: db.db, channelFor: () => undefined });
+  registerSessionCommands(db.db, commands);
+  const reqSvc = new CorrelatedRequestService(db.db, () => undefined);
+
+  const selfAddr = resolveLunaAddress(
+    db.db,
+    { agentId: scope.agentId, shadowId: scope.shadowId },
+    "self",
+  );
+  const hbOrigin = `${SELF_ROUTINE_ORIGINS.heartbeat}${scope.shadowId}:${NOW}`;
+
+  // 1. Default `heartbeatApprovalRequired` is `true`: direct handoff or non-owner ask from Heartbeat is blocked!
+  expect(() =>
+    reqSvc.createHandoff({
+      actor: {
+        userId: "user:alice",
+        agentId: scope.agentId,
+        shadowId: scope.shadowId,
+        sourceSessionId: selfAddr.sessionId,
+        currentSessionId: selfAddr.sessionId,
+        originId: hbOrigin,
+      },
+      key: "unapproved-hb-1",
+      targetSessionId: "group-session",
+      targetAddress: "session:group-session",
+      instruction: "跟进昨日告警",
+      now: NOW,
+    }),
+  ).toThrow("requires owner approval first");
+
+  expect(() =>
+    reqSvc.createAsk({
+      actor: {
+        userId: "user:alice",
+        agentId: scope.agentId,
+        shadowId: scope.shadowId,
+        sourceSessionId: selfAddr.sessionId,
+        currentSessionId: selfAddr.sessionId,
+        originId: hbOrigin,
+      },
+      key: "unapproved-group-ask",
+      toAddress: "session:group-session",
+      question: "昨日告警解决了吗？",
+      now: NOW,
+    }),
+  ).toThrow("requires owner approval first");
+
+  // 2. Sending an approval card `--to owner` from Heartbeat IS allowed!
+  const rejectedAsk = reqSvc.createAsk({
+    actor: {
+      userId: "user:alice",
+      agentId: scope.agentId,
+      shadowId: scope.shadowId,
+      sourceSessionId: selfAddr.sessionId,
+      currentSessionId: selfAddr.sessionId,
+      originId: hbOrigin,
+    },
+    key: "hb-owner-ask-reject",
+    toAddress: "owner",
+    question: "准备在群里跟进昨日告警，是否发送？",
+    options: ["同意跟进", "暂不发送"],
+    now: NOW,
+  });
+  reqSvc.answerAsk({
+    requestId: rejectedAsk.id,
+    answer: "暂不发送",
+    selectedOption: "暂不发送",
+    resolvedByUserId: "user:alice",
+    source: "dashboard",
+    now: NOW + 1_000,
+  });
+
+  // Negative verdict ("暂不发送") STILL blocks handoff in the return turn!
+  expect(() =>
+    reqSvc.createHandoff({
+      actor: {
+        userId: "user:alice",
+        agentId: scope.agentId,
+        shadowId: scope.shadowId,
+        sourceSessionId: selfAddr.sessionId,
+        currentSessionId: selfAddr.sessionId,
+        originId: `request-result:${rejectedAsk.id}`,
+      },
+      key: "after-reject-hb",
+      targetSessionId: "group-session",
+      targetAddress: "session:group-session",
+      instruction: "跟进昨日告警",
+      now: NOW + 2_000,
+    }),
+  ).toThrow("requires owner approval first");
+
+  // 3. Positive owner approval unlocks `createHandoff` in the `request-result:` turn on Heartbeat `self` session!
+  const approvedAsk = reqSvc.createAsk({
+    actor: {
+      userId: "user:alice",
+      agentId: scope.agentId,
+      shadowId: scope.shadowId,
+      sourceSessionId: selfAddr.sessionId,
+      currentSessionId: selfAddr.sessionId,
+      originId: hbOrigin,
+    },
+    key: "hb-owner-ask-approve",
+    toAddress: "owner",
+    question: "准备在群里跟进构建修复进度，是否发送？",
+    options: ["同意跟进", "暂不发送"],
+    now: NOW + 3_000,
+  });
+  const { request: answeredReq } = reqSvc.answerAsk({
+    requestId: approvedAsk.id,
+    answer: "同意跟进",
+    selectedOption: "同意跟进",
+    resolvedByUserId: "user:alice",
+    source: "dashboard",
+    now: NOW + 4_000,
+  });
+
+  // Capabilities on `request_result` turn in Heartbeat `self` session retain Heartbeat scope (`ignored` terminal output, no `say`, `heartbeatApprovalRequired: true`).
+  const hbReturnCaps = buildMainCapabilities(
+    db.db,
+    {
+      type: "session_trigger",
+      triggerId: answeredReq.returnCommandId!,
+      sourceSessionId: selfAddr.sessionId,
+      requesterUserId: "user:alice",
+      instruction: "result",
+      artifactRefs: [],
+      correlationId: approvedAsk.id,
+      hops: 2,
+      context: { sessionId: selfAddr.sessionId, candidateOpenTasks: [] },
+    },
+    { agentId: scope.agentId, shadowId: scope.shadowId, actorUserId: "user:alice" },
+  );
+  expect(hbReturnCaps.turn.terminalOutputMode).toBe("ignored");
+  expect(hbReturnCaps.addressScope.allowCurrent).toBe(false);
+  expect(hbReturnCaps.commands).not.toContain("say");
+  expect(hbReturnCaps.outboundGovernance?.heartbeatApprovalRequired).toBe(true);
+
+  const { command: approvedHandoff } = reqSvc.createHandoff({
+    actor: {
+      userId: "user:alice",
+      agentId: scope.agentId,
+      shadowId: scope.shadowId,
+      sourceSessionId: selfAddr.sessionId,
+      currentSessionId: selfAddr.sessionId,
+      originId: `request-result:${approvedAsk.id}`,
+    },
+    key: "approved-hb-1",
+    targetSessionId: "group-session",
+    targetAddress: "session:group-session",
+    instruction: "跟进构建修复进度",
+    now: NOW + 5_000,
+  });
+  expect(approvedHandoff.sessionId).toBe("group-session");
 });

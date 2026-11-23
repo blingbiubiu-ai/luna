@@ -18,6 +18,7 @@ export interface QuietHoursWindow {
 }
 export interface ProactivitySettings {
   heartbeatIntervalMs?: number | null;
+  heartbeatApprovalRequired?: boolean | null;
   outboundPerSessionPerHour?: number | null;
   outboundPerRecipientPerDay?: number | null;
   outboundDedupWindowMs?: number | null;
@@ -27,6 +28,7 @@ export interface ProactivitySettings {
 }
 export interface ProactivityDefaults {
   heartbeatIntervalMs: number;
+  heartbeatApprovalRequired: boolean;
   outboundPerSessionPerHour: number;
   outboundPerRecipientPerDay: number;
   outboundDedupWindowMs: number;
@@ -46,6 +48,7 @@ export interface AgentSettings {
 
 const FALLBACK_PROACTIVITY_DEFAULTS: ProactivityDefaults = {
   heartbeatIntervalMs: 30 * 60_000,
+  heartbeatApprovalRequired: true,
   outboundPerSessionPerHour: 3,
   outboundPerRecipientPerDay: 10,
   outboundDedupWindowMs: 24 * 3_600_000,
@@ -54,7 +57,10 @@ const FALLBACK_PROACTIVITY_DEFAULTS: ProactivityDefaults = {
   scheduleFailureNotifyIntervalMs: 24 * 3_600_000,
 };
 
-type NumericProactivitySetting = Exclude<keyof ProactivitySettings, "quietHours">;
+type NumericProactivitySetting = Exclude<
+  keyof ProactivitySettings,
+  "quietHours" | "heartbeatApprovalRequired"
+>;
 const PROACTIVITY_FIELDS: Record<
   NumericProactivitySetting,
   { label: string; hint: string; unit: string; scale: number; min: number; max: number; step: number }
@@ -725,6 +731,37 @@ function ProactivitySection({
           />
         ),
       )}
+
+      <div className="pt-1">
+        <Row
+          label="心跳主动跟进需 Owner 审批"
+          hint="开启后，心跳准备去群聊或私聊主动搭话跟进前，必须先向 Owner 发送审批卡片确认；后期跑稳后可关闭。"
+        >
+          <SelectField
+            aria-label="心跳主动跟进审批策略"
+            align="end"
+            value={
+              proactivity.heartbeatApprovalRequired === true
+                ? "enabled"
+                : proactivity.heartbeatApprovalRequired === false
+                  ? "disabled"
+                  : "inherit"
+            }
+            onValueChange={mode => {
+              if (mode === "inherit") setField("heartbeatApprovalRequired", undefined);
+              else setField("heartbeatApprovalRequired", mode === "enabled");
+            }}
+            options={[
+              {
+                value: "inherit",
+                label: `继承平台默认（当前：${defaults.heartbeatApprovalRequired ? "需审批" : "免审直发"}）`,
+              },
+              { value: "enabled", label: "开启（先发审批卡片）" },
+              { value: "disabled", label: "关闭（直接交办发言）" },
+            ]}
+          />
+        </Row>
+      </div>
 
       <div className="space-y-2 pt-1">
         <Row

@@ -150,6 +150,7 @@ function ProactivityPage() {
         data.settings.heartbeatIntervalMs > 0
           ? `心跳每 ${Math.round(data.settings.heartbeatIntervalMs / 60_000)} 分钟`
           : "周期心跳已关闭",
+        data.settings.heartbeatApprovalRequired ? "心跳跟进需审批" : "心跳免审直发",
         data.settings.outboundPerSessionPerHour > 0
           ? `单会话 ${data.settings.outboundPerSessionPerHour} 条/时`
           : "单会话不限",

@@ -42,6 +42,7 @@ export interface OutboundGovernanceDecision {
 }
 
 export interface OutboundQuotaSnapshot {
+  readonly heartbeatApprovalRequired: boolean;
   readonly sessionHourlyLimit: number;
   readonly sessionHourlyUsed: number;
   readonly sessionHourlyRemaining: number | null;
@@ -429,6 +430,7 @@ export function inspectOutboundQuota(
   }
 
   return {
+    heartbeatApprovalRequired: settings.heartbeatApprovalRequired,
     sessionHourlyLimit: settings.outboundPerSessionPerHour,
     sessionHourlyUsed: used,
     sessionHourlyRemaining:

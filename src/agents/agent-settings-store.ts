@@ -138,6 +138,7 @@ export const AgentSettings = z.object({
    */
   proactivity: z.object({
     heartbeatIntervalMs: z.number().int().min(0).max(30 * 86_400_000).nullable().optional(),
+    heartbeatApprovalRequired: z.boolean().nullable().optional(),
     outboundPerSessionPerHour: z.number().int().min(0).max(1_000).nullable().optional(),
     outboundPerRecipientPerDay: z.number().int().min(0).max(1_000).nullable().optional(),
     outboundDedupWindowMs: z.number().int().min(0).max(30 * 86_400_000).nullable().optional(),
@@ -158,6 +159,8 @@ export function resolveProactivitySettings(
   const own = new AgentSettingsStore(db).get(agentId).proactivity;
   return {
     heartbeatIntervalMs: own.heartbeatIntervalMs ?? defaults.heartbeatIntervalMs,
+    heartbeatApprovalRequired:
+      own.heartbeatApprovalRequired ?? defaults.heartbeatApprovalRequired,
     outboundPerSessionPerHour: own.outboundPerSessionPerHour ?? defaults.outboundPerSessionPerHour,
     outboundPerRecipientPerDay: own.outboundPerRecipientPerDay ?? defaults.outboundPerRecipientPerDay,
     outboundDedupWindowMs: own.outboundDedupWindowMs ?? defaults.outboundDedupWindowMs,

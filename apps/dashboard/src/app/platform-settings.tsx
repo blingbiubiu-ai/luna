@@ -73,6 +73,7 @@ export interface QuietHoursWindow {
 
 export interface PlatformProactivitySettings {
   heartbeatIntervalMs: number;
+  heartbeatApprovalRequired: boolean;
   outboundPerSessionPerHour: number;
   outboundPerRecipientPerDay: number;
   outboundDedupWindowMs: number;
@@ -101,6 +102,7 @@ export interface PlatformRuntimeSettingsPatch {
 
 const DEFAULT_PLATFORM_PROACTIVITY: PlatformProactivitySettings = {
   heartbeatIntervalMs: 30 * 60_000,
+  heartbeatApprovalRequired: true,
   outboundPerSessionPerHour: 3,
   outboundPerRecipientPerDay: 10,
   outboundDedupWindowMs: 24 * 3_600_000,
@@ -1136,6 +1138,9 @@ export function ProactivitySettingsForm({
   const [failNotifyHours, setFailNotifyHours] = useState(
     String(Math.round(settings.scheduleFailureNotifyIntervalMs / 3_600_000)),
   );
+  const [heartbeatApprovalRequired, setHeartbeatApprovalRequired] = useState(
+    settings.heartbeatApprovalRequired ?? true,
+  );
   const [quietEnabled, setQuietEnabled] = useState(settings.quietHours !== null);
   const [quietStart, setQuietStart] = useState(
     settings.quietHours?.start ?? "23:00",
@@ -1285,6 +1290,21 @@ export function ProactivitySettingsForm({
           </span>
         </label>
       </div>
+      <div className="flex items-center justify-between gap-3 rounded-md border p-3">
+        <div>
+          <p className="text-sm font-medium">心跳主动跟进需先经 Owner 审批</p>
+          <p className="text-xs text-muted-foreground">
+            开启后，分身心跳准备去群聊或私聊主动跟进前，必须先向 Owner 发送审批卡片确认；关闭后可直接交办发言。
+          </p>
+        </div>
+        <Switch
+          aria-label="启用心跳主动跟进需先经 Owner 审批"
+          checked={heartbeatApprovalRequired}
+          disabled={disabled}
+          data-testid="platform-heartbeat-approval-required"
+          onCheckedChange={edit(setHeartbeatApprovalRequired)}
+        />
+      </div>
       <div className="space-y-3 rounded-md border p-3">
         <div className="flex items-center justify-between gap-3">
           <div>
@@ -1338,6 +1358,7 @@ export function ProactivitySettingsForm({
         onSave={() =>
           onSave({
             heartbeatIntervalMs: pHeartbeat! * 60_000,
+            heartbeatApprovalRequired,
             outboundPerSessionPerHour: pPerSession!,
             outboundPerRecipientPerDay: pPerRecipient!,
             outboundDedupWindowMs: pDedup! * 3_600_000,
