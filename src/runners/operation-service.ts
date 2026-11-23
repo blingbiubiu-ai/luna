@@ -10,6 +10,7 @@ import {
   sessions,
   users,
 } from "@/data/schema";
+import { isHeartbeatSession } from "@/messaging/correlated-request-service";
 import { runnerActorUserId, type LunaAccessTokenClaims } from "@/server/auth/access-token-service";
 import { GatewayError } from "@/server/gateway-error";
 import { SessionDispatcher } from "@/sessions/session-dispatcher";
@@ -59,6 +60,13 @@ export class RunnerOperationService {
     const active = this.active(claims);
     const input = active.input;
     if (input.type === "task_result") throw new GatewayError("unsupported_source", "Task result invocations only report through messages", 409);
+    if (isHeartbeatSession(this.db, input.context.sessionId)) {
+      throw new GatewayError(
+        "heartbeat_operation_forbidden",
+        "Heartbeat self session cannot create or mutate Tasks or threads directly; delegate to the target session via luna handoff",
+        403,
+      );
+    }
     if (kind === "session.create_thread" && input.type === "user_messages" && value && typeof value === "object" &&
         !Array.isArray(value) && !("anchorMessageId" in value)) {
       const anchorMessageId = input.messages.at(-1)?.messageId;

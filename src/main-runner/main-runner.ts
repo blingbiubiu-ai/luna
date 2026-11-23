@@ -14,8 +14,8 @@ import { randomUUID } from "node:crypto";
 import { mainInvocations, mainMessageOrigin } from "@/runners/main-invocation-registry";
 import type { AgentExecutionSnapshot } from "@/agent-config";
 import type { DrizzleDB } from "@/data";
-import { channelSurfaces, runnerOperations, sessions, shadowHeartbeats, tasks } from "@/data/schema";
-import { CorrelatedRequestService, type CorrelatedRequestRow } from "@/messaging/correlated-request-service";
+import { channelSurfaces, runnerOperations, sessions, tasks } from "@/data/schema";
+import { CorrelatedRequestService, isHeartbeatSession, type CorrelatedRequestRow } from "@/messaging/correlated-request-service";
 import {
   buildMainCapabilities,
   isMainSelfRoutineInput,
@@ -228,16 +228,9 @@ export class MainRunner {
     memory?.commit();
     const db = this._options.serviceAuthDb;
     if (input.signal?.aborted) throw new Error("Runner was cancelled before final reply");
-    const isHeartbeatSession = db
-      ? Boolean(
-          db
-            .select({ shadowId: shadowHeartbeats.shadowId })
-            .from(shadowHeartbeats)
-            .where(eq(shadowHeartbeats.sessionId, input.input.context.sessionId))
-            .get(),
-        )
-      : false;
-    const ignoreTerminalOutput = isMainSelfRoutineInput(db, input.input) || isHeartbeatSession;
+    const ignoreTerminalOutput =
+      isMainSelfRoutineInput(db, input.input) ||
+      (db ? isHeartbeatSession(db, input.input.context.sessionId) : false);
     try {
       if (db && !ignoreTerminalOutput) finalizeRunnerReply(db, {
         sessionId: input.input.context.sessionId, originId: mainMessageOrigin(input),

@@ -565,13 +565,17 @@ test("owner-targeted approval ask resolves `--to owner` server-side, rejects non
   });
   expect(strangerClick?.toast?.type).toBe("warning");
 
-  // Owner clicking the card succeeds and queues `request_result` back to `group-session` with owner actor & role.
+  // Owner clicking the card succeeds and queues `request_result` back to `group-session` with owner actor, role, and `settledCard`.
   const ownerClick = await reqSvc.handleCardAction({
     channel: { id: "ch-1", type: "feishu" },
     actionValue: { requestId: ask.id, option: "同意执行" },
     operatorIdentity: { externalId: "ou_alice", kind: "user", displayName: "Alice" },
   });
   expect(ownerClick?.toast?.type).toBe("success");
+  expect(ownerClick?.settledCard).toMatchObject({
+    selectedOption: "同意执行",
+    isNegative: false,
+  });
 
   const settled = db.db
     .select()
@@ -698,7 +702,7 @@ test("heartbeatApprovalRequired blocks direct heartbeat handoffs/asks until owne
     options: ["同意跟进", "暂不发送"],
     now: NOW,
   });
-  reqSvc.answerAsk({
+  const { request: rejectedReq } = reqSvc.answerAsk({
     requestId: rejectedAsk.id,
     answer: "暂不发送",
     selectedOption: "暂不发送",
@@ -707,7 +711,7 @@ test("heartbeatApprovalRequired blocks direct heartbeat handoffs/asks until owne
     now: NOW + 1_000,
   });
 
-  // Negative verdict ("暂不发送") STILL blocks handoff in the return turn!
+  // Negative verdict ("暂不发送") STILL blocks handoff in the return turn (`originId = returnCommandId`)!
   expect(() =>
     reqSvc.createHandoff({
       actor: {
@@ -716,7 +720,7 @@ test("heartbeatApprovalRequired blocks direct heartbeat handoffs/asks until owne
         shadowId: scope.shadowId,
         sourceSessionId: selfAddr.sessionId,
         currentSessionId: selfAddr.sessionId,
-        originId: `request-result:${rejectedAsk.id}`,
+        originId: rejectedReq.returnCommandId!,
       },
       key: "after-reject-hb",
       targetSessionId: "group-session",
@@ -772,6 +776,7 @@ test("heartbeatApprovalRequired blocks direct heartbeat handoffs/asks until owne
   expect(hbReturnCaps.commands).not.toContain("say");
   expect(hbReturnCaps.outboundGovernance?.heartbeatApprovalRequired).toBe(true);
 
+  // Real `RunnerMessageService.actor` passes `turnId` (`answeredReq.returnCommandId!`, a `session_commands.id` UUID) as `originId`.
   const { command: approvedHandoff } = reqSvc.createHandoff({
     actor: {
       userId: "user:alice",
@@ -779,7 +784,7 @@ test("heartbeatApprovalRequired blocks direct heartbeat handoffs/asks until owne
       shadowId: scope.shadowId,
       sourceSessionId: selfAddr.sessionId,
       currentSessionId: selfAddr.sessionId,
-      originId: `request-result:${approvedAsk.id}`,
+      originId: answeredReq.returnCommandId!,
     },
     key: "approved-hb-1",
     targetSessionId: "group-session",
@@ -788,4 +793,24 @@ test("heartbeatApprovalRequired blocks direct heartbeat handoffs/asks until owne
     now: NOW + 5_000,
   });
   expect(approvedHandoff.sessionId).toBe("group-session");
+
+  // Heartbeat `self` session is also forbidden from calling `task.create` directly!
+  const hbClaims = mintClaims(selfAddr.sessionId, "user:alice", answeredReq.returnCommandId!);
+  const opSvc = new RunnerOperationService(
+    db.db,
+    new TaskRunSupervisor({
+      db: db.db,
+      runnerType: "mock",
+      executeRun: async () => ({ finalReportArtifactId: "art_hb" }),
+    }),
+  );
+  await expect(
+    opSvc.execute(hbClaims, "task.create", "hb-rogue-task", {
+      title: "不应由心跳直接创建的任务",
+      summary: "禁止",
+      facts: [],
+      sessionId: "group-session",
+      sendStatusCard: false,
+    }),
+  ).rejects.toThrow("Heartbeat self session cannot create or mutate Tasks");
 });

@@ -155,6 +155,13 @@ export interface ChannelCardActionResult {
   } | undefined;
   readonly updatedMarkdown?: string | undefined;
   readonly updatedTitle?: string | undefined;
+  readonly settledCard?: {
+    readonly bodyMarkdown: string;
+    readonly options: readonly string[];
+    readonly selectedOption: string;
+    readonly actorLabel: string;
+    readonly isNegative: boolean;
+  } | undefined;
 }
 
 // Adapters isolate provider SDK lifecycle from Luna's provider-neutral runtime.

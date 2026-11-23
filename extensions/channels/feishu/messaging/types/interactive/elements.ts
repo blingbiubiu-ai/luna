@@ -110,10 +110,26 @@ export interface CollapsiblePanel extends BaseContainer<"collapsible_panel"> {
   };
 }
 
+export interface HrElement extends BaseElement<"hr"> {
+  tag: "hr";
+  margin?: string;
+}
+
 export interface ButtonElement extends BaseElement<"button"> {
   tag: "button";
   text: PlainTextElement;
-  type?: "default" | "primary" | "danger";
+  type?:
+    | "default"
+    | "primary"
+    | "danger"
+    | "text"
+    | "primary_text"
+    | "danger_text"
+    | "primary_filled"
+    | "danger_filled";
+  size?: "tiny" | "small" | "medium" | "large";
+  disabled?: boolean;
+  disabled_tips?: PlainTextElement;
   behaviors?: readonly {
     readonly type: "callback";
     readonly value: Record<string, unknown>;
@@ -140,6 +156,7 @@ export type Element =
   | CollapsiblePanel
   | ColumnSetElement
   | DivElement
+  | HrElement
   | IconElement
   | ImageElement
   | MarkdownElement

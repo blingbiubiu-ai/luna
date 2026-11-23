@@ -623,9 +623,12 @@ export class FeishuMessageChannel
       if (result.toast) {
         response.toast = result.toast;
       }
-      if (result.updatedMarkdown) {
+      if (result.settledCard || result.updatedMarkdown) {
+        const markdownText = result.settledCard
+          ? result.settledCard.bodyMarkdown
+          : result.updatedMarkdown!;
         const updatedCard = await renderMessageCard(
-          [{ type: "text", text: result.updatedMarkdown }],
+          [{ type: "text", text: markdownText }],
           {
             streaming: false,
             uploadImage: async () => {
@@ -633,13 +636,82 @@ export class FeishuMessageChannel
             },
           },
         );
-        if (result.updatedTitle) {
+        updatedCard.config!.streaming_mode = false;
+        if (result.settledCard) {
+          const { options, selectedOption, actorLabel, isNegative } =
+            result.settledCard;
+          updatedCard.config!.width_mode = "compact";
+          updatedCard.header = {
+            icon: {
+              tag: "standard_icon",
+              token: isNegative ? "close_outlined" : "yes_outlined",
+              color: isNegative ? "grey" : "green",
+            },
+            title: {
+              tag: "plain_text",
+              content: result.updatedTitle ?? (isNegative ? "已跳过" : "已确认"),
+            },
+            template: isNegative ? "grey" : "green",
+          };
+          updatedCard.body.elements.push({ tag: "hr", margin: "8px 0 4px 0" });
+          updatedCard.body.elements.push({
+            tag: "column_set",
+            flex_mode: "none",
+            horizontal_spacing: "small",
+            margin: "4px 0 0 0",
+            columns: options.map(opt => {
+              const isSelected = opt === selectedOption;
+              return {
+                tag: "column" as const,
+                width: "auto" as const,
+                elements: [
+                  {
+                    tag: "button" as const,
+                    text: {
+                      tag: "plain_text" as const,
+                      content: isSelected ? `✓ ${opt}` : opt,
+                    },
+                    type: isSelected
+                      ? isNegative
+                        ? ("default" as const)
+                        : ("primary_filled" as const)
+                      : ("default" as const),
+                    disabled: true,
+                  },
+                ],
+              };
+            }),
+          });
+          updatedCard.body.elements.push({
+            tag: "div",
+            margin: "6px 0 0 0",
+            text: {
+              tag: "plain_text",
+              text_color: "grey",
+              text_size: "notation",
+              content: `已由 ${actorLabel} 选择「${selectedOption}」`,
+            },
+          });
+        } else if (result.updatedTitle) {
           updatedCard.header = {
             title: { tag: "plain_text", content: result.updatedTitle },
             template: "green",
           };
         }
         response.card = { type: "raw", data: updatedCard };
+        if (providerMessageId) {
+          void this._client.im.message
+            .patch({
+              path: { message_id: providerMessageId },
+              data: { content: JSON.stringify(updatedCard) },
+            })
+            .catch(err => {
+              this._logger.warn(
+                { err, providerMessageId },
+                "Fallback patch after card callback failed",
+              );
+            });
+        }
       }
       return response;
     } catch (error) {
@@ -3288,27 +3360,52 @@ export class FeishuMessageChannel
           throw new ProviderDeliveryRejected(`Image artifact is unavailable: ${block.artifactRef}`);
       }
       if (reply.presentation === "card") {
-        const nonActionReply = reply.content.some(b => b.type === "actions")
-          ? { ...reply, content: reply.content.filter(b => b.type !== "actions") }
-          : undefined;
-        const bodyText = nonActionReply && nonActionReply.content.length > 0
-          ? this._signOutboundArtifactLinks(replyMarkdown(nonActionReply))
-          : this._operationContent(operation);
-        const card = await renderMessageCard([{ type: "text", text: bodyText }],
-          { streaming: false, ...this._imageRenderOptions(operation) });
+        const hasActions = reply.content.some(b => b.type === "actions");
+        const contentWithoutActions = hasActions
+          ? reply.content.filter(b => b.type !== "actions")
+          : reply.content;
+        const bodyText =
+          contentWithoutActions.length > 0
+            ? this._signOutboundArtifactLinks(
+                replyMarkdown({
+                  ...reply,
+                  ...(reply.title ? { title: undefined } : {}),
+                  content: contentWithoutActions,
+                }),
+              )
+            : this._operationContent(operation);
+        const card = await renderMessageCard(
+          [{ type: "text", text: bodyText }],
+          { streaming: false, ...this._imageRenderOptions(operation) },
+        );
+        card.config!.streaming_mode = false;
+        if (hasActions) {
+          card.config!.width_mode = "compact";
+        }
         if (reply.title) {
-          card.header = {
-            title: { tag: "plain_text", content: reply.title },
-            template: reply.template === "result" ? "blue" : "indigo",
-          };
+          card.header = hasActions
+            ? {
+                icon: {
+                  tag: "standard_icon",
+                  token: "bell_outlined",
+                  color: "blue",
+                },
+                title: { tag: "plain_text", content: reply.title },
+                template: "wathet",
+              }
+            : {
+                title: { tag: "plain_text", content: reply.title },
+                template: reply.template === "result" ? "blue" : "indigo",
+              };
         }
         for (const block of reply.content) {
           if (block.type !== "actions") continue;
+          card.body.elements.push({ tag: "hr", margin: "8px 0 4px 0" });
           card.body.elements.push({
             tag: "column_set",
             flex_mode: "none",
             horizontal_spacing: "small",
-            margin: "8px 0 0 0",
+            margin: "4px 0 0 0",
             columns: block.options.map((option, idx) => ({
               tag: "column" as const,
               width: "auto" as const,
@@ -3318,8 +3415,8 @@ export class FeishuMessageChannel
                   text: { tag: "plain_text" as const, content: option },
                   type:
                     idx === 0
-                      ? ("primary" as const)
-                      : /^(婉拒|拒绝|驳回|取消|decline|reject)$/i.test(option.trim())
+                      ? ("primary_filled" as const)
+                      : /^(婉拒|拒绝|驳回|decline|reject)$/i.test(option.trim())
                         ? ("danger" as const)
                         : ("default" as const),
                   behaviors: [

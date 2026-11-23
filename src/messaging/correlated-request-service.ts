@@ -173,51 +173,48 @@ function queueReturnToOrigin(
 const HEARTBEAT_NEGATIVE_VERDICT_RE =
   /^(婉拒|拒绝|驳回|取消|忽略|暂不|不发|不要|不处理|跳过|decline|reject|no|cancel|skip|ignore)/i;
 
-export function isHeartbeatTurnOrSession(
-  db: DrizzleDB,
-  actor: { readonly currentSessionId: string; readonly originId: string },
-): boolean {
-  if (actor.originId.startsWith(SELF_ROUTINE_ORIGINS.heartbeat)) return true;
+export function isHeartbeatSession(db: DrizzleDB, sessionId: string): boolean {
   return Boolean(
     db
       .select({ shadowId: shadowHeartbeats.shadowId })
       .from(shadowHeartbeats)
-      .where(eq(shadowHeartbeats.sessionId, actor.currentSessionId))
+      .where(eq(shadowHeartbeats.sessionId, sessionId))
       .get(),
   );
 }
 
+/**
+ * Checks whether the current Heartbeat turn (`turnId = actor.originId`) is the
+ * return invocation (`correlated_requests.return_command_id`) of an owner-approved ask.
+ */
 export function hasHeartbeatOwnerApproval(
   db: DrizzleDB,
   actor: {
-    readonly agentId: string;
     readonly shadowId: string;
     readonly currentSessionId: string;
     readonly originId: string;
   },
   ownerUserId: string,
 ): boolean {
-  if (!actor.originId.startsWith("request-result:")) return false;
-  const reqId = actor.originId.slice("request-result:".length);
+  if (!actor.originId) return false;
   const req = db
     .select()
     .from(correlatedRequests)
-    .where(eq(correlatedRequests.id, reqId))
+    .where(
+      and(
+        eq(correlatedRequests.returnCommandId, actor.originId),
+        eq(correlatedRequests.kind, "ask"),
+        eq(correlatedRequests.status, "answered"),
+        eq(correlatedRequests.shadowId, actor.shadowId),
+        eq(correlatedRequests.originSessionId, actor.currentSessionId),
+        eq(correlatedRequests.resolvedByUserId, ownerUserId),
+      ),
+    )
     .get();
-  if (
-    !req ||
-    req.kind !== "ask" ||
-    req.status !== "answered" ||
-    req.shadowId !== actor.shadowId ||
-    req.originSessionId !== actor.currentSessionId ||
-    req.resolvedByUserId !== ownerUserId
-  ) {
-    return false;
-  }
+  if (!req) return false;
   const res = req.resultJson ?? {};
   const verdict = String(res.selectedOption ?? res.answer ?? "").trim();
-  if (!verdict || HEARTBEAT_NEGATIVE_VERDICT_RE.test(verdict)) return false;
-  return true;
+  return Boolean(verdict && !HEARTBEAT_NEGATIVE_VERDICT_RE.test(verdict));
 }
 
 export function assertHeartbeatOutboundApproved(
@@ -230,7 +227,7 @@ export function assertHeartbeatOutboundApproved(
   },
   options?: { readonly allowOwnerAskTargetUserId?: string | undefined },
 ): void {
-  if (!isHeartbeatTurnOrSession(db, actor)) return;
+  if (!isHeartbeatSession(db, actor.currentSessionId)) return;
   const proactivity = resolveProactivitySettings(db, actor.agentId);
   if (!proactivity.heartbeatApprovalRequired) return;
   const ownerUserId = new AgentStore(db).ownerUserId(actor.agentId);
@@ -895,24 +892,44 @@ export class CorrelatedRequestService {
       };
     }
 
-    const { alreadyResolved } = this.answerAsk({
+    const { request: settledReq, alreadyResolved } = this.answerAsk({
       requestId: req.id,
       answer: option,
       selectedOption: option,
       resolvedByUserId: resolvedUserId,
       source: "card",
     });
+    const finalOption = String(
+      settledReq.resultJson?.selectedOption ??
+        settledReq.resultJson?.answer ??
+        option,
+    );
+    const isNegative = HEARTBEAT_NEGATIVE_VERDICT_RE.test(finalOption.trim());
+    const actorLabel = displayName ?? resolvedUserId;
+    const settledCard = {
+      bodyMarkdown: req.instruction,
+      options: req.optionsJson?.length ? req.optionsJson : [finalOption],
+      selectedOption: finalOption,
+      actorLabel,
+      isNegative,
+    };
     if (alreadyResolved) {
       return {
         toast: { type: "info", content: "该请求已被处理，无需重复操作。" },
+        updatedTitle: isNegative ? "已跳过" : "已确认",
+        updatedMarkdown: `${req.instruction}\n\n---\n${isNegative ? "⏭️" : "✅"} 已选择：**${finalOption}**`,
+        settledCard,
       };
     }
 
-    const actorLabel = displayName ?? resolvedUserId;
     return {
-      toast: { type: "success", content: `已确认：${option}` },
-      updatedTitle: "已确认",
-      updatedMarkdown: `${req.instruction}\n\n---\n✅ 已由 **${actorLabel}** 选择：**${option}**`,
+      toast: {
+        type: "success",
+        content: isNegative ? `已跳过：${option}` : `已确认：${option}`,
+      },
+      updatedTitle: isNegative ? "已跳过" : "已确认",
+      updatedMarkdown: `${req.instruction}\n\n---\n${isNegative ? "⏭️" : "✅"} 已由 **${actorLabel}** 选择：**${option}**`,
+      settledCard,
     };
   }
 

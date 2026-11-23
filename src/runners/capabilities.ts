@@ -8,10 +8,10 @@ import type { DrizzleDB } from "@/data";
 import {
   scheduleOccurrences,
   sessionCommands,
-  shadowHeartbeats,
   taskRuns,
 } from "@/data/schema";
 import type { MainRunnerInput } from "@/main-runner/types";
+import { isHeartbeatSession } from "@/messaging/correlated-request-service";
 import {
   inspectOutboundQuota,
   type OutboundQuotaSnapshot,
@@ -250,23 +250,15 @@ export function buildMainCapabilities(
   }
 
   const isRoutine = originKind === "self_routine";
-  const isHeartbeatSession = db
-    ? Boolean(
-        db
-          .select({ shadowId: shadowHeartbeats.shadowId })
-          .from(shadowHeartbeats)
-          .where(eq(shadowHeartbeats.sessionId, sessionId))
-          .get(),
-      )
-    : false;
-  const ignoreTerminal = isRoutine || isHeartbeatSession;
+  const inHeartbeatSession = db ? isHeartbeatSession(db, sessionId) : false;
+  const ignoreTerminal = isRoutine || inHeartbeatSession;
   const allowSilent = ignoreTerminal ? true : resolveMainAllowSilent(db, input);
   const terminalOutputMode: TerminalOutputMode = ignoreTerminal
     ? "ignored"
     : "reply_current_session";
 
   const commands =
-    routineKind === "heartbeat" || isHeartbeatSession
+    routineKind === "heartbeat" || inHeartbeatSession
       ? HEARTBEAT_COMMANDS
       : routineKind === "reflection" || routineKind === "consolidation"
         ? MEMORY_ROUTINE_COMMANDS
