@@ -145,3 +145,22 @@ test("the owner lists entries waiting for confirmation and confirms one, which s
   expect((await dashboard("bob")("POST", `/${claim.id}/confirm`, {expectedRevision: 2})).status).toBe(403);
   expect((await call("GET", `/${claim.id}/history`)).body.revisions.map((row: any) => [row.changeKind, row.snapshot.trusted])).toEqual([["owner", true], ["inline", false]]);
 });
+
+test("owner PUT accepts partial replace and rejects body+replace", async () => {
+  const call = dashboard("alice");
+  const created = (await call("POST", "", {...note, type: "persona", shadowId: a.shadowId, body: "我是景小白，数字员工。\n\n保留段落。"})).body.memory;
+  expect((await call("PUT", `/${created.id}`, {
+    expectedRevision: 1,
+    body: "x",
+    replace: [{old: "景小白", new: ""}],
+  }))).toMatchObject({status: 400, body: {code: "invalid_request"}});
+  const edited = await call("PUT", `/${created.id}`, {
+    expectedRevision: 1,
+    reason: "正文不重复写名字",
+    replace: [{old: "我是景小白，数字员工。", new: "我是数字员工。"}],
+  });
+  expect(edited).toMatchObject({
+    status: 200,
+    body: {memory: {revision: 2, body: "我是数字员工。\n\n保留段落。"}},
+  });
+});

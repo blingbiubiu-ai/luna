@@ -24,6 +24,7 @@ test("memory CLI maps commands to Runner memory routes and rejects invalid input
       [["delete", "m1", "--expected-revision", "3", "--superseded-by", "m2", "--reason", "与 m2 重复"]],
       [["search", "--type", "feedback", "周报", "--archived", "格式"]],
       [["update", "m1", "--expected-revision", "2", "--type", "project", "--subject", "none"]],
+      [["update", "m1", "--expected-revision", "3", "--reason", "局部替换", "--replace-old", "我是景小白，", "--replace-new", "我是", "--replace-old", "旧句", "--replace-new", ""]],
     ] as [string[], string?][]) expect((await run(args, stdin)).status).toBe("ok");
     expect(requests).toEqual([
       {method: "GET", path: "/api/runner/memory?type=feedback&limit=50", body: undefined},
@@ -38,13 +39,19 @@ test("memory CLI maps commands to Runner memory routes and rejects invalid input
       {method: "DELETE", path: `/api/runner/memory/m1?expectedRevision=3&supersededBy=m2&reason=${encodeURIComponent("与 m2 重复").replace(/%20/g, "+")}`, body: undefined},
       {method: "GET", path: `/api/runner/memory/search?q=${encodeURIComponent("周报 格式").replace(/%20/g, "+")}&type=feedback&archived=true`, body: undefined},
       {method: "PUT", path: "/api/runner/memory/m1", body: {type: "project", subjectId: null, expectedRevision: 2}},
+      {method: "PUT", path: "/api/runner/memory/m1", body: {replace: [{old: "我是景小白，", new: "我是"}, {old: "旧句", new: ""}], reason: "局部替换", expectedRevision: 3}},
     ]);
     for (const args of [
       ["search"], ["search", "--type", "feedback"], ["get"], ["update", "m1", "--body", "x"], ["update", "m1", "--expected-revision", "0"],
       ["delete", "m1"], ["add", "--body", "a", "--stdin"], ["unknown"], ["restore", "m1"],
       ["update", "m1", "--expected-revision", "1", "--expires", "soon"], ["update", "m1", "--expected-revision", "1", "--core", "yes"],
+      ["update", "m1", "--expected-revision", "1", "--body", "full", "--replace-old", "a", "--replace-new", "b"],
+      ["update", "m1", "--expected-revision", "1", "--stdin", "--replace-old", "a", "--replace-new", "b"],
+      ["update", "m1", "--expected-revision", "1", "--replace-old", "a"],
+      ["update", "m1", "--expected-revision", "1", "--replace-old", "", "--replace-new", "b"],
+      ["add", "--type", "project", "--title", "t", "--description", "d", "--replace-old", "a", "--replace-new", "b"],
     ]) expect(await run(args)).toMatchObject({status: "error", code: "invalid_memory_command"});
-    expect(requests).toHaveLength(12);
+    expect(requests).toHaveLength(13);
     const before = Date.now();
     expect((await run(["timeline", "--since", "7d"])).status).toBe("ok");
     const since = Number(new URL("http://x" + requests.at(-1)!.path).searchParams.get("since"));

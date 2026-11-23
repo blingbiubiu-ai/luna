@@ -533,3 +533,46 @@ test("a reference must say where it is found and a project needs no date; the re
   const steps = store.add(owner(), {type: "procedure", title: "排查步骤", description: "VQoS 拿不到数据怎么查", body: "先看 auth status"});
   expectRefused(() => store.update(owner(), {agentId: a.agentId, all: true}, steps.id, {expectedRevision: 1, type: "reference"}), "memory_reference_location_missing", "--type");
 });
+
+test("partial replace updates exact single matches in order, enforces persona ownership, and records history", () => {
+  const forOwner = (shadowId = a.shadowId): MemoryWriter => ({...owner(shadowId), owner: true, reason: "去名字并补环境"});
+  const soul = store.add(forOwner(), {
+    type: "persona",
+    title: "我的岗位：数字员工",
+    description: "客户端开发",
+    body: "我是景小白，数字员工。\n\n工作放在哪里做：\n- 私聊直接做。\n\n写飞书文档：\n- 先用 bot 建再转 owner。",
+  });
+  // Non-owner is blocked by memory_protected before body matching can leak content.
+  expect(() => store.update(owner(), viewer(a.shadowId), soul.id, {
+    expectedRevision: 1,
+    replace: [{old: "不存在的句子", new: "x"}],
+  })).toThrow("memory_protected");
+  expect(() => store.update(forOwner(), viewer(a.shadowId), soul.id, {
+    expectedRevision: 1,
+    body: "全文",
+    replace: [{old: "我是景小白，", new: "我是"}],
+  })).toThrow("invalid_request");
+  expect(() => store.update(forOwner(), viewer(a.shadowId), soul.id, {
+    expectedRevision: 1,
+    replace: [{old: "不存在的句子", new: "x"}],
+  })).toThrow("memory_replace_not_found");
+  expect(() => store.update(forOwner(), viewer(a.shadowId), soul.id, {
+    expectedRevision: 1,
+    replace: [{old: "\n- ", new: "\n* "}],
+  })).toThrow("memory_replace_ambiguous");
+
+  const updated = store.update(forOwner(), viewer(a.shadowId), soul.id, {
+    expectedRevision: 1,
+    replace: [
+      {old: "我是景小白，数字员工。", new: "我是数字员工。"},
+      {old: "- 私聊直接做。", new: "- 私聊直接做。\n- 工作区：~/nimbus-workspace"},
+    ],
+  });
+  expect(updated).toMatchObject({
+    revision: 2,
+    body: "我是数字员工。\n\n工作放在哪里做：\n- 私聊直接做。\n- 工作区：~/nimbus-workspace\n\n写飞书文档：\n- 先用 bot 建再转 owner。",
+  });
+  const history = store.history(a.agentId, soul.id);
+  expect(history).toHaveLength(2);
+  expect(history[0]).toMatchObject({revision: 2, snapshot: {body: updated.body, reason: "去名字并补环境"}});
+});

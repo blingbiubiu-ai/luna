@@ -26,7 +26,9 @@ const addBody = z.object({...fields, shadowId: z.string().min(1).max(128).option
 const revision = z.number().int().positive();
 /** The owner may say why; a revert without one records which revision it went back to. */
 const reason = z.string().max(1000).optional();
-const updateBody = z.object(fields).partial().extend({expectedRevision: revision, reason}).strict();
+const replaceField = z.array(z.object({old: z.string().min(1), new: z.string()}).strict()).min(1).max(50).optional();
+const updateBody = z.object(fields).partial().extend({expectedRevision: revision, reason, replace: replaceField}).strict()
+  .refine(value => value.body === undefined || value.replace === undefined, {message: "Use either body or replace, not both."});
 const revertBody = z.object({revision, expectedRevision: revision, reason}).strict();
 
 /** Mounted under /api/agents. The Agent owner reviews, corrects and restores every memory entry. */

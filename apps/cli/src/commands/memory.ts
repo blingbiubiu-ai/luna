@@ -8,7 +8,7 @@ const usage = [
   "luna memory timeline [--since 7d|YYYY-MM-DD] [--until YYYY-MM-DD] [--shadow SHADOW_ID] [--with USER_ID] [--limit N] [--archived]   # what happened, newest first",
   "luna memory get <id>",
   "luna memory add --type T --title TITLE --description DESC [--subject USER_ID] [--visibility agent|shadow] [--expires YYYY-MM-DD] [--core true] [--force] (--body TEXT | --stdin)",
-  "luna memory update <id> --expected-revision N --reason WHY [--type T] [--title TITLE] [--description DESC] [--subject USER_ID|none] [--visibility agent|shadow] [--expires YYYY-MM-DD|none] [--core true|false] [--body TEXT | --stdin]",
+  "luna memory update <id> --expected-revision N --reason WHY [--type T] [--title TITLE] [--description DESC] [--subject USER_ID|none] [--visibility agent|shadow] [--expires YYYY-MM-DD|none] [--core true|false] [--body TEXT | --stdin | --replace-old OLD --replace-new NEW ...]",
   "luna memory restore <id> --expected-revision N --reason WHY   # bring a forgotten entry back",
   "luna memory delete <id> --expected-revision N --reason WHY [--superseded-by ID]",
   "  --reason is one line on why you change the entry, kept with the version it writes, e.g. \"the user moved the launch to 2026-12-05\"",
@@ -23,6 +23,12 @@ const usage = [
   "  persona    who this Shadow is (Agent owner only); episode is written by memory reflection",
 ].join("\n");
 const SEARCH_VALUE_OPTIONS = new Set(["--type", "--subject", "--limit"]);
+const KNOWN_FLAGS = new Set([
+  "--type", "--title", "--description", "--subject", "--visibility", "--expires", "--core",
+  "--body", "--stdin", "--force", "--expected-revision", "--reason", "--superseded-by",
+  "--replace-old", "--replace-new", "--since", "--until", "--shadow", "--with", "--limit",
+  "--archived", "--help", "-h",
+]);
 
 /** Agent memory for the current invocation; Service derives scope and write authority from the token. */
 export async function runMemoryCli(argv: readonly string[], env: Env, readStdin: () => Promise<string> = () => Bun.stdin.text()): Promise<CliResult> {
@@ -37,7 +43,7 @@ export async function runMemoryCli(argv: readonly string[], env: Env, readStdin:
     };
     const revision = () => {
       const value = Number(option("--expected-revision"));
-      if (!Number.isInteger(value) || value < 1) throw new Error("--expected-revision must be the revision returned by get, list or search");
+      if (!Number.isInteger(value) || value < 1) throw new Error("--expected-revision is required; before changing a body, read the full entry with luna memory get <id>");
       return value;
     };
     /** A date expires at the end of that day (UTC); `none` clears the expiry. */
@@ -59,13 +65,38 @@ export async function runMemoryCli(argv: readonly string[], env: Env, readStdin:
       const value = option("--subject");
       return value === "none" ? null : value;
     };
-    const fields = async () => {
+    const replacements = () => {
+      const olds: string[] = [];
+      const news: string[] = [];
+      for (let index = 1; index < argv.length; index++) {
+        const arg = argv[index]!;
+        if (arg !== "--replace-old" && arg !== "--replace-new") continue;
+        const next = argv[index + 1];
+        if (next === undefined || KNOWN_FLAGS.has(next)) throw new Error(`missing value for ${arg}`);
+        index++;
+        if (arg === "--replace-old") {
+          if (!next) throw new Error("--replace-old must be non-empty");
+          olds.push(next);
+        } else {
+          news.push(next);
+        }
+      }
+      if (olds.length !== news.length) throw new Error("each --replace-old requires a matching --replace-new");
+      return olds.length ? olds.map((oldText, idx) => ({old: oldText, new: news[idx]!})) : undefined;
+    };
+    const fields = async (allowReplace = false) => {
       if (hasFlag(argv, "--stdin") && option("--body") !== undefined) throw new Error("use either --body or --stdin, not both");
+      const replace = replacements();
+      if (replace && !allowReplace) throw new Error("--replace-old/--replace-new is only valid with luna memory update");
+      if (replace && (hasFlag(argv, "--stdin") || option("--body") !== undefined)) {
+        throw new Error("use either --replace-old/--replace-new or --body/--stdin, not both");
+      }
       return bodyWithDefinedValues({
         expiresAt: expires(), core: core(),
         type: option("--type"), title: option("--title"), description: option("--description"),
         subjectId: subject(), visibility: option("--visibility"),
         body: hasFlag(argv, "--stdin") ? await readStdin() : option("--body"),
+        replace,
       });
     };
     if (command === "list") return callUnifiedService(env, {method: "GET", path: servicePathWithQuery("/api/runner/memory", {type: option("--type"), limit: option("--limit")})});
@@ -98,7 +129,7 @@ export async function runMemoryCli(argv: readonly string[], env: Env, readStdin:
     if (command === "get") return callUnifiedService(env, {method: "GET", path: id()});
     if (command === "add") return callUnifiedService(env, {method: "POST", path: "/api/runner/memory", body: {...await fields(), ...(hasFlag(argv, "--force") ? {force: true} : {})}});
     if (command === "restore") return callUnifiedService(env, {method: "POST", path: `${id()}/restore`, body: bodyWithDefinedValues({expectedRevision: revision(), reason: option("--reason")})});
-    if (command === "update") return callUnifiedService(env, {method: "PUT", path: id(), body: {...await fields(), ...bodyWithDefinedValues({reason: option("--reason")}), expectedRevision: revision()}});
+    if (command === "update") return callUnifiedService(env, {method: "PUT", path: id(), body: {...await fields(true), ...bodyWithDefinedValues({reason: option("--reason")}), expectedRevision: revision()}});
     if (command === "delete") return callUnifiedService(env, {method: "DELETE", path: servicePathWithQuery(id(), {expectedRevision: String(revision()), supersededBy: option("--superseded-by"), reason: option("--reason")})});
     throw new Error(usage);
   } catch (error) {

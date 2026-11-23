@@ -1,6 +1,6 @@
-import {and, desc, eq, or, sql} from "drizzle-orm";
+import {and, asc, desc, eq, or, sql} from "drizzle-orm";
 import type {DrizzleDB} from "@/data";
-import {agentMemories, lunaAgents, memoryConsolidations, memoryReflectionCheckpoints, sessionCommands} from "@/data/schema";
+import {agentMemories, lunaAgents, memoryConsolidations, memoryReflectionCheckpoints, sessionCommands, sessions} from "@/data/schema";
 import {AgentMemoryStore, type MemoryRecord} from "./agent-memory-store";
 import {AgentStore} from "./agent-store";
 import type {SessionCommand, SessionCommandService} from "@/messaging/session-command-service";
@@ -29,10 +29,10 @@ const RUN_EXPIRES_MS = 60 * 60 * 1000;
  * when what happened since is how it turned out, such as a Task it started that has now finished.
  */
 const reflectionInstruction = (previous: Pick<MemoryRecord, "id" | "revision" | "title" | "description"> | undefined,
-  known: readonly MemoryRecord[] = []) => `Memory reflection. This is an internal Luna maintenance turn, not a message from a user.
+  known: readonly MemoryRecord[] = [], personas: readonly MemoryRecord[] = []) => `Memory reflection. This is an internal Luna maintenance turn, not a message from a user.
 
 Review this conversation since your last memory reflection and decide whether it produced anything worth keeping in Agent long-term memory, following the Long-Term Memory rules in your instructions:
-- who the Agent owner says you are: your role and responsibilities, what you may do yourself and what needs their approval first (a \`persona\` entry, not \`project\` or \`feedback\`);
+- who the Agent owner says you are: your role and responsibilities, what you may do yourself and what needs their approval first (a \`persona\` entry, not \`project\` or \`feedback\`; your name comes from \`<soul>\`, so do not write your own name in a \`persona\` body and do not edit \`persona\` when the Shadow is renamed);
 - a durable fact about a person in this conversation, their role or how they like to work;
 - a correction or confirmation of how you should work;
 - a decision, constraint or deadline that later conversations will need;
@@ -40,8 +40,12 @@ Review this conversation since your last memory reflection and decide whether it
 
 For each candidate run \`luna memory search\` first, then update the existing entry or add a new one. Most conversations produce nothing to save, and saving nothing is a correct result. Do not save what the memory index already says.
 
-An entry answers one question and grows with what is learned about it. When something belongs to the question of an existing entry, update that entry instead of adding another, and change its title and description too when the answer changed. Put the current conclusion first in the body and rewrite it; do not leave a conclusion that no longer holds with a dated note under it. When unsure whether it is the same question, add a new entry.
-${known.length ? `
+An entry answers one question and grows with what is learned about it. When something belongs to the question of an existing entry, update that entry instead of adding another, and change its title and description too when the answer changed. For a small edit use \`luna memory update <id> --expected-revision N --reason WHY --replace-old OLD --replace-new NEW\`; before replacing the whole body with \`--body\`/\`--stdin\`, read the full \`.body\` with \`luna memory get <id>\` (never strip \`.body\` in a pipeline) and keep every paragraph that still holds. Put the current conclusion first in the body and rewrite what no longer holds; do not leave a conclusion that no longer holds with a dated note under it. When merging two entries, read both full bodies, write their union into the kept entry, then retire the other with \`luna memory delete <id> --expected-revision N --superseded-by <kept id> --reason WHY\`. When unsure whether it is the same question, add a new entry.
+${personas.length ? `
+Your persona entries (together they are your \`<soul>\`):
+${personas.map(row => `- [${row.id}] (persona, revision ${row.revision}) ${inert(row.title)}: ${inert(row.description)}`).join("\n")}
+New content goes into the persona entry it belongs to. Do not copy one persona entry's content into another; to merge two, read both full bodies with \`luna memory get\`, write their union into one, then retire the other with \`luna memory delete <id> --expected-revision N --superseded-by <kept id> --reason WHY\`.
+` : ""}${known.length ? `
 Entries this conversation wrote or was shown:
 ${known.map(row => `- [${row.id}] (${row.type}, revision ${row.revision}) ${inert(row.title)}: ${inert(row.description)}`).join("\n")}
 Check each against what happened since. When the conversation showed one wrong or out of date, read it with \`luna memory get\` and update it. When one holds who the Agent owner says you are but is not \`persona\`, add it as a persona entry and delete the old one with \`--superseded-by <persona id>\`.
@@ -77,6 +81,18 @@ function conversationEntries(db: DrizzleDB, sessionId: string): MemoryRecord[] {
   )).orderBy(desc(agentMemories.updatedAt)).limit(KNOWN_ENTRY_LIMIT).all();
 }
 
+/** Active persona entries of the session's Shadow, in `<soul>` order, shown only to owner-triggered reflection. */
+function shadowPersonas(db: DrizzleDB, sessionId: string): MemoryRecord[] {
+  const session = db.select({agentId: sessions.agent_id, shadowId: sessions.shadow_id}).from(sessions).where(eq(sessions.id, sessionId)).get();
+  if (!session) return [];
+  return db.select().from(agentMemories).where(and(
+    eq(agentMemories.agentId, session.agentId),
+    eq(agentMemories.originShadowId, session.shadowId),
+    eq(agentMemories.type, "persona"),
+    eq(agentMemories.status, "active"),
+  )).orderBy(asc(agentMemories.createdAt), asc(agentMemories.id)).all();
+}
+
 /**
  * Memory text is shown to a Runner inside a Service-queued instruction. A
  * Service instruction's `artifact:` references are authorized as context and
@@ -89,6 +105,7 @@ export const inert = (text: string) => text.replace(/artifact:/g, "artifact\u223
 interface ReflectionCandidate {
   readonly sessionId: string;
   readonly actorUserId: string;
+  readonly isOwner: boolean;
   readonly latestMessageId: string;
   readonly latestCreatedAt: number;
 }
@@ -154,7 +171,7 @@ export function createMemoryReflectionRoutine(idleMs: number): SelfRoutine<Refle
         const latest = unreflected.at(-1)!;
         if (now - latest.createdAt < idleMs || sessionBusy(db, sessionId)) continue;
         const actorUserId = unreflected.findLast(row => row.senderUserId !== latest.ownerUserId)?.senderUserId ?? latest.ownerUserId;
-        candidates.push({sessionId, actorUserId, latestMessageId: latest.messageId, latestCreatedAt: latest.createdAt});
+        candidates.push({sessionId, actorUserId, isOwner: actorUserId === latest.ownerUserId, latestMessageId: latest.messageId, latestCreatedAt: latest.createdAt});
       }
       return candidates;
     },
@@ -165,7 +182,7 @@ export function createMemoryReflectionRoutine(idleMs: number): SelfRoutine<Refle
       const previous = db.select({id: agentMemories.id, revision: agentMemories.revision, title: agentMemories.title, description: agentMemories.description})
         .from(agentMemories).where(and(eq(agentMemories.type, "episode"), eq(agentMemories.status, "active"), eq(agentMemories.originSessionId, candidate.sessionId)))
         .orderBy(desc(agentMemories.occurredAt)).get();
-      return reflectionInstruction(previous, conversationEntries(db, candidate.sessionId));
+      return reflectionInstruction(previous, conversationEntries(db, candidate.sessionId), candidate.isOwner ? shadowPersonas(db, candidate.sessionId) : []);
     },
     onFailed(_ctx, candidate, error) {
       console.warn("memory reflection was not queued", {sessionId: candidate.sessionId, error: String(error)});

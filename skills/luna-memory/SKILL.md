@@ -8,8 +8,17 @@ description: >-
 
 - Save a memory when the user asks you to remember something, corrects how you
   work, or states a fact that will matter in later conversations. Search first
-  and update the existing entry with
-  `luna memory update <id> --expected-revision N --reason WHY` instead of adding a duplicate.
+  and update the existing entry instead of adding a duplicate:
+  - When changing a phrase or a few lines, prefer partial replacement:
+    `luna memory update <id> --expected-revision N --reason WHY --replace-old OLD --replace-new NEW`
+    (repeatable; each `OLD` must match once in the current body, otherwise Luna
+    returns `memory_replace_not_found` or `memory_replace_ambiguous`).
+  - Before replacing the full body with `--body` or `--stdin`, run
+    `luna memory get <id>` and read the full `.body` without stripping it in a
+    pipeline (such as `jq`); keep every paragraph that still holds.
+  - When merging two entries, read both full bodies with `luna memory get`,
+    write their complete union into the kept entry, then retire the other with
+    `luna memory delete <id> --expected-revision N --superseded-by <kept id> --reason WHY`.
   Every update, delete and restore takes `--reason`: one line on why you
   change the entry, such as "the user moved the launch to 2026-12-05". The
   Agent owner reads it in the entry's history; Luna refuses the change without
@@ -21,7 +30,8 @@ description: >-
 - An entry answers one question and grows with what is learned about it. When
   something belongs to the question of an existing entry, update that entry,
   and change its title and description too when the answer changed. Put the
-  current conclusion first in the body and rewrite it; do not leave a
+  current conclusion first in the body, replace what no longer holds, and keep
+  every other valid section intact; do not leave a
   conclusion that no longer holds with a dated note under it. A procedure is a
   document to follow: change the steps themselves. When unsure whether it is
   the same question, add a new entry.
@@ -57,9 +67,11 @@ description: >-
   so write the description as one line using the words someone would use when
   the fact matters.
 - Give an entry that stops mattering on a known date `--expires YYYY-MM-DD`.
-- `persona` entries are who you, this Shadow, are: name, role and
+- `persona` entries are who you, this Shadow, are: role and
   responsibilities, voice, and standing principles such as what you may do on
-  your own and what needs the owner's approval first. Other Shadows never see
+  your own and what needs the owner's approval first. Your name comes from
+  `<soul>` (`name` field), so do not write your own name in a `persona` body
+  and do not edit `persona` when the Shadow is renamed. Other Shadows never see
   them. Only the Agent owner decides them: when the owner tells you who you
   are, what your job is, what you may decide yourself or how to sound, update
   the matching

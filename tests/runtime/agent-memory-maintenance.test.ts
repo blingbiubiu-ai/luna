@@ -404,7 +404,31 @@ test("reflection rechecks the entries this conversation wrote or was shown, and 
 
 test("a conversation that wrote and was shown nothing gets no entry list", () => {
   ask("user:alice", 40 * MIN);
-  expect(String(command(schedule()[0]!).payload.content)).not.toContain("Entries this conversation wrote or was shown");
+  const prompt = String(command(schedule()[0]!).payload.content);
+  expect(prompt).not.toContain("Entries this conversation wrote or was shown");
+  expect(prompt).not.toContain("Your persona entries");
+});
+
+test("owner-triggered reflection sees the Shadow's persona list in <soul> order, while member-triggered reflection omits it", () => {
+  const store = new AgentMemoryStore(db.db);
+  const p1 = store.add({...writer("owner"), owner: true}, {type: "persona", title: "我的岗位", description: "数字员工职责", body: "岗位职责正文"});
+  const p2 = store.add({...writer("owner"), owner: true}, {type: "persona", title: "我的工作手册", description: "改码前确认与文档规则", body: "工作手册正文"});
+  ask("user:alice", 40 * MIN);
+  const ownerReflect = command(schedule()[0]!);
+  const ownerPrompt = String(ownerReflect.payload.content);
+  expect(ownerPrompt).toContain("Your persona entries (together they are your `<soul>`):");
+  const i1 = ownerPrompt.indexOf(`[${p1.id}] (persona, revision 1) 我的岗位: 数字员工职责`);
+  const i2 = ownerPrompt.indexOf(`[${p2.id}] (persona, revision 1) 我的工作手册: 改码前确认与文档规则`);
+  expect(i1).toBeGreaterThan(-1);
+  expect(i2).toBeGreaterThan(i1);
+  expect(ownerPrompt).not.toContain("岗位职责正文");
+
+  db.db.update(schema.sessionCommands).set({status: "completed"}).where(eq(schema.sessionCommands.id, ownerReflect.id)).run();
+  ask("bob", -5 * MIN);
+  const memberReflect = command(schedule(NOW + 40 * MIN)[0]!);
+  expect(memberReflect.actorUserId).toBe("bob");
+  expect(String(memberReflect.payload.content)).not.toContain("Your persona entries");
+  expect(String(memberReflect.payload.content)).not.toContain(p1.id);
 });
 
 test("Main reflection and inline triggers do not re-inject <history> into an existing provider session", async () => {

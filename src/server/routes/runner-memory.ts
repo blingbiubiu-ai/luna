@@ -23,9 +23,11 @@ const fields = {
   occurredAt: z.number().int().positive().nullable().optional(),
 };
 const reasonField = z.string().max(1000).optional();
+const replaceField = z.array(z.object({old: z.string().min(1), new: z.string()}).strict()).min(1).max(50).optional();
 const time = z.coerce.number().int().positive();
 const addBody = z.object({...fields, force: z.boolean().optional()}).strict();
-const updateBody = z.object(fields).partial().extend({expectedRevision: z.number().int().positive(), reason: reasonField}).strict();
+const updateBody = z.object(fields).partial().extend({expectedRevision: z.number().int().positive(), reason: reasonField, replace: replaceField}).strict()
+  .refine(value => value.body === undefined || value.replace === undefined, {message: "Use either body or replace, not both."});
 const revision = z.coerce.number().int().positive();
 /** A Runner says why it changes an entry, so the owner can follow its history; adding needs none, the entry is its own reason. */
 const requireReason = (reason: string | undefined) => {
@@ -63,8 +65,16 @@ export function createRunnerMemoryRoutes(options: {db?: DrizzleDB} = {}) {
       if (error instanceof MemoryDuplicateError) return c.json({error: error.code, candidates: summaries(error.candidates),
         message: "An existing entry already says this. Update a candidate with `luna memory update`, or repeat with --force if this is a different fact."}, 409);
       if (error instanceof MemoryTypeFactsError) return c.json({error: error.code, message: error.hint}, 400);
-      if (error instanceof AgentError) return c.json({error: error.code, ...(error.code === "invalid_memory_body"
-        ? {message: `The body must be non-empty and at most ${MEMORY_BODY_LIMIT} bytes. Keep the current conclusion and drop what no longer matters, or split a separate question into its own entry.`} : {})}, error.status);
+      if (error instanceof AgentError) {
+        const message = error.code === "invalid_memory_body"
+          ? `The body must be non-empty and at most ${MEMORY_BODY_LIMIT} bytes. Keep the current conclusion and drop what no longer matters, or split a separate question into its own entry.`
+          : error.code === "memory_replace_not_found"
+            ? "--replace-old was not found in the current body. Read the full body with `luna memory get <id>` first."
+            : error.code === "memory_replace_ambiguous"
+              ? "--replace-old matched more than once in the current body. Include surrounding text so it matches once."
+              : undefined;
+        return c.json({error: error.code, ...(message ? {message} : {})}, error.status);
+      }
       if (error instanceof GatewayError) return c.json({error: error.code, message: error.message}, error.status as 400);
       if (error instanceof z.ZodError) return c.json({error: "invalid_request", details: error.issues}, 400);
       throw error;

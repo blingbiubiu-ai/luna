@@ -261,3 +261,33 @@ test("each change records where in the conversation it was made, and get shows h
   expect(sources[1].read).toBe(`luna sessions timeline --session session:${f.session.id} --before-entry-id ${entryOf(later.id).id} --limit 20`);
   expect(sources[0].read).toContain("--before-entry-id");
 });
+
+test("Runner PUT supports exact partial replace and rejects body+replace or ambiguous matches", async () => {
+  const f = fixture();
+  const added = (await f.call("POST", "", { ...project, body: "第一段：2026-11-20 前不合并。\n\n第二段：紧急修复走白名单。" })).body.memory;
+  expect(await f.call("PUT", `/${added.id}`, {
+    expectedRevision: 1,
+    reason: "同时传了 body 和 replace",
+    body: "全文",
+    replace: [{ old: "11-20", new: "11-25" }],
+  })).toMatchObject({ status: 400, body: { error: "invalid_request" } });
+  expect(await f.call("PUT", `/${added.id}`, {
+    expectedRevision: 1,
+    reason: "没匹配到",
+    replace: [{ old: "12-01", new: "12-05" }],
+  })).toMatchObject({ status: 409, body: { error: "memory_replace_not_found" } });
+  expect(await f.call("PUT", `/${added.id}`, {
+    expectedRevision: 1,
+    reason: "多处匹配",
+    replace: [{ old: "段：", new: "节：" }],
+  })).toMatchObject({ status: 409, body: { error: "memory_replace_ambiguous" } });
+  const ok = await f.call("PUT", `/${added.id}`, {
+    expectedRevision: 1,
+    reason: "推迟到 11-25",
+    replace: [{ old: "2026-11-20", new: "2026-11-25" }],
+  });
+  expect(ok).toMatchObject({
+    status: 200,
+    body: { memory: { revision: 2, body: "第一段：2026-11-25 前不合并。\n\n第二段：紧急修复走白名单。" } },
+  });
+});

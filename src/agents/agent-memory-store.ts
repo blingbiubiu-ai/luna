@@ -56,6 +56,10 @@ interface MemoryFields {
 }
 type Optional<T> = {[K in keyof T]?: T[K] | undefined};
 export type MemoryInput = Pick<MemoryFields, "type" | "title" | "description" | "body"> & Optional<Omit<MemoryFields, "type" | "title" | "description" | "body">>;
+export interface MemoryReplace {
+  readonly old: string;
+  readonly new: string;
+}
 type Db = Pick<DrizzleDB, "select" | "insert" | "update" | "run" | "transaction">;
 
 export class MemoryConflictError extends AgentError {
@@ -282,18 +286,31 @@ export class AgentMemoryStore {
    * tells how the event turned out, so the episode is dated to now unless the
    * caller says otherwise.
    */
-  update(writer: MemoryWriter, viewer: MemoryViewer, id: string, input: Optional<MemoryFields> & {expectedRevision: number},
+  update(writer: MemoryWriter, viewer: MemoryViewer, id: string,
+    input: Optional<MemoryFields> & {expectedRevision: number; replace?: readonly MemoryReplace[] | undefined},
     options: {participants?: readonly string[]} = {}): MemoryRecord {
+    if (input.replace !== undefined && (input.body !== undefined || !input.replace.length || input.replace.some(step => !step.old))) {
+      throw new AgentError("invalid_request", 400);
+    }
     return this.change(writer, viewer, id, input.expectedRevision, current => {
       // A forgotten entry is brought back with restore first; editing it in place would leave the edit archived.
       if (current.status !== "active") throw new AgentError("memory_not_active", 409);
       // Persona and episode entries are different kinds of thing; neither is made from, or turned into, an ordinary entry.
       if (input.type !== undefined && input.type !== current.type && [input.type, current.type].some(type => type === "persona" || type === "episode")) throw new AgentError("invalid_memory_type", 400);
+      let body = input.body ?? current.body;
+      if (input.replace) {
+        for (const step of input.replace) {
+          const first = body.indexOf(step.old);
+          if (first === -1) throw new AgentError("memory_replace_not_found", 409);
+          if (body.indexOf(step.old, first + 1) !== -1) throw new AgentError("memory_replace_ambiguous", 409);
+          body = body.slice(0, first) + step.new + body.slice(first + step.old.length);
+        }
+      }
       return requireTypeFacts(this.validate(writer, {
       type: input.type ?? current.type,
       title: input.title ?? current.title,
       description: input.description ?? current.description,
-      body: input.body ?? current.body,
+      body,
       subjectId: subjectFor(writer, input.type ?? current.type, input.subjectId, current),
       visibility: input.visibility ?? (input.type === "chat" && current.type !== "chat" ? "shadow" : current.visibility),
       core: input.core ?? current.core,

@@ -76,10 +76,11 @@ forgetting records whether the entry expired, went unused or aged out.
 
 ### Persona entries
 
-A `persona` entry says who one Shadow is: its name, role and
-responsibilities, voice, and standing principles such as what it may do on its
-own and what needs the owner's approval first. It replaces the per-Shadow USER
-and SOUL documents.
+A `persona` entry says who one Shadow is: its role and responsibilities, voice,
+and standing principles such as what it may do on its own and what needs the
+owner's approval first. The Shadow's name comes from `<soul>` (`agent_shadows.name`),
+not from a `persona` body, so renaming a Shadow needs no `persona` edit. It
+replaces the per-Shadow USER and SOUL documents.
 
 - It is always `visibility=shadow`: only its Shadow, the Agent owner and
   consolidation ever see it.
@@ -201,6 +202,11 @@ grant them `memory.write`.
 An untrusted writer can update, delete or restore only entries they wrote
 themselves, never a trusted entry or another member's. Changes require
 `expectedRevision`; a stale value returns 409 with the current revision.
+An update may pass `replace: [{old, new}, ...]` instead of a full `body` (the
+two are mutually exclusive and passing both returns 400 `invalid_request`).
+Replacements are applied in order to the current revision's `body`; each `old`
+must match once in the body at that step, otherwise Service returns 409
+`memory_replace_not_found` or `memory_replace_ambiguous`.
 Deletes are soft and an entry cannot supersede itself. A forgotten entry is
 restored before it is edited (`memory_not_active`).
 
@@ -278,7 +284,7 @@ luna memory search <keywords> [--type T] [--subject USER_ID] [--archived]
 luna memory timeline [--since 7d|YYYY-MM-DD] [--until YYYY-MM-DD] [--shadow SHADOW_ID] [--with USER_ID] [--limit N] [--archived]
 luna memory get <id>
 luna memory add --type T --title TITLE --description DESC [--subject USER_ID] [--visibility agent|shadow] [--expires YYYY-MM-DD] [--core true] [--force] (--body TEXT | --stdin)
-luna memory update <id> --expected-revision N --reason WHY [--title ...] [--description ...] [--type ...] [--subject USER_ID|none] [--visibility ...] [--expires YYYY-MM-DD|none] [--core true|false] [--body TEXT | --stdin]
+luna memory update <id> --expected-revision N --reason WHY [--title ...] [--description ...] [--type ...] [--subject USER_ID|none] [--visibility ...] [--expires YYYY-MM-DD|none] [--core true|false] [--body TEXT | --stdin | --replace-old OLD --replace-new NEW ...]
 luna memory restore <id> --expected-revision N --reason WHY
 luna memory delete <id> --expected-revision N --reason WHY [--superseded-by ID]
 ```
@@ -316,7 +322,12 @@ running turn or a pending Service-queued turn waits for the next pass.
 Reflection runs as the Agent owner only when the owner is the only human whose
 reflectable messages arrived since the last reflection; otherwise it runs as
 the latest other such speaker, so nothing a member said becomes a trusted
-entry. Sessions whose last reflectable message is older than 24 hours are
+entry. When reflection runs as the Agent owner, its instruction also lists the
+Shadow's active `persona` entries (`[id] (persona, revision N) title: description`)
+in `<soul>` order, so the model sees how `<soul>` is divided across entries and
+does not copy one persona's body into another without retiring the duplicate;
+non-owner reflections cannot write `persona` and omit that list. Sessions whose
+last reflectable message is older than 24 hours are
 skipped, so enabling memory does not replay history.
 `memory_reflection_checkpoints` records how far each session has been
 reflected on; it advances when the turn is queued, so reflection is best
