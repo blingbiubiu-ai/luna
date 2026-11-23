@@ -348,10 +348,15 @@ describe("luna dashboard api", () => {
     });
   });
 
-  test("/api/sessions exposes launch context packs and seed records", async () => {
-    const sessions = await getJson<DashboardSession[]>("/api/sessions");
-    const primary = sessions.find((session) => session.id === "conv-primary");
-    const secondary = sessions.find((session) => session.id === "conv-secondary");
+  test("/api/sessions/:id exposes launch context packs and seed records while /api/sessions stays summary-only", async () => {
+    const listSessions = await getJson<DashboardSession[]>("/api/sessions");
+    expect(listSessions.find((s) => s.id === "conv-primary")?.contextPacks).toEqual([]);
+    expect(listSessions.find((s) => s.id === "conv-secondary")?.launchContextPacks).toEqual([]);
+
+    const [primary, secondary] = await Promise.all([
+      getJson<DashboardSession>("/api/sessions/conv-primary"),
+      getJson<DashboardSession>("/api/sessions/conv-secondary"),
+    ]);
 
     expect(primary).toMatchObject({
       id: "conv-primary",
@@ -469,8 +474,7 @@ describe("luna dashboard api", () => {
     );
 
     try {
-      const sessions = await getJson<DashboardSession[]>("/api/sessions");
-      const primary = sessions.find((session) => session.id === "conv-primary");
+      const primary = await getJson<DashboardSession>("/api/sessions/conv-primary");
       const pack = primary?.contextPacks.find(
         (item) => item.id === "session-group-activation-pack",
       );
@@ -6166,6 +6170,40 @@ describe("luna dashboard api", () => {
           reason: "initial",
           runnerType: "mock",
           finalReportArtifactId: "artifact-report",
+          inputSnapshot: null,
+        }),
+      ],
+      timeline: [],
+      artifacts: [
+        {
+          id: "artifact-report",
+          type: "report",
+          name: "final-report.md",
+          mimeType: "text/markdown",
+          status: "active",
+          content: null,
+        },
+        {
+          id: "artifact-runner-log",
+          type: "raw_runner_log",
+          name: "raw-runner.log",
+          mimeType: "text/plain",
+          status: "active",
+          content: null,
+        },
+      ],
+      last_activity_at: now + 4_000,
+    });
+    expect(firstTask.linked_session_count).toBe(
+      firstTask.linked_sessions.length,
+    );
+
+    const detailTask = await getJson<typeof firstTask>("/api/tasks/task_1");
+    expect(detailTask).toMatchObject({
+      id: "task_1",
+      runs: [
+        expect.objectContaining({
+          id: "task-run-1",
           inputSnapshot: expect.objectContaining({
             evidencePath: join(
               fixtureHome,
@@ -6204,29 +6242,17 @@ describe("luna dashboard api", () => {
         },
       ],
       artifacts: [
-        {
+        expect.objectContaining({
           id: "artifact-report",
-          type: "report",
-          name: "final-report.md",
-          mimeType: "text/markdown",
-          status: "active",
           content: expect.stringContaining(longReportLine),
-        },
-        {
+        }),
+        expect.objectContaining({
           id: "artifact-runner-log",
-          type: "raw_runner_log",
-          name: "raw-runner.log",
-          mimeType: "text/plain",
-          status: "active",
           content: "RAW_RUNNER_LOG_LINE",
-        },
+        }),
       ],
-      last_activity_at: now + 4_000,
     });
-    expect(firstTask.linked_session_count).toBe(
-      firstTask.linked_sessions.length,
-    );
-    expect(JSON.stringify(tasks)).toContain(fixtureHome);
+    expect(JSON.stringify(detailTask)).toContain(fixtureHome);
   });
 
   test("/api/tasks/:id exposes task context packs, seed records, and run context summaries", async () => {
@@ -7846,11 +7872,10 @@ async function renderInteractiveSessionDetail(sessionId: string): Promise<{
   click: (selector: string) => Promise<void>;
   cleanup: () => void;
 }> {
-  const [sessions, timeline] = await Promise.all([
-    getJson<DashboardSession[]>("/api/sessions"),
+  const [session, timeline] = await Promise.all([
+    getJson<DashboardSession>(`/api/sessions/${sessionId}`),
     getJson<DashboardSessionTimelineItem[]>(`/api/sessions/${sessionId}/timeline`),
   ]);
-  const session = sessions.find((item) => item.id === sessionId);
   const { document, window } = parseHTML(
     "<!doctype html><html><body></body></html>",
   ) as unknown as { document: TestDocumentNode; window: TestWindowObject };

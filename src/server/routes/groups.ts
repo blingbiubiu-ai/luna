@@ -72,12 +72,26 @@ export function createGroupsRoutes(options: GroupsRouteOptions = {}) {
       const db = getDb();
       const agent = requireGroupDirectoryAgent(c, db);
       const agentId = agent.id;
+      const allGroupGrants = new AuthorizationRuleStore(db, {
+        kind: "agent",
+        agentId,
+      }).listGrants({ subjectType: "group" });
+      const grantsByGroupId = new Map<string, AuthorizationRuleRecord[]>();
+      for (const grant of allGroupGrants) {
+        const list = grantsByGroupId.get(grant.subjectId) ?? [];
+        list.push(grant);
+        grantsByGroupId.set(grant.subjectId, list);
+      }
       return c.json({
         status: "ok",
         canManageGroups: true,
-        groups: new GroupStore(db).listGroups(agentId).map((group) =>
-          toDashboardGroup(db, group),
-        ),
+        groups: new GroupStore(db).listGroups(agentId).map((group) => ({
+          ...group,
+          description: group.description ?? null,
+          avatarUrl: group.avatarUrl ?? null,
+          members: [],
+          directGrants: grantsByGroupId.get(group.id) ?? [],
+        })),
       });
     })
     .post("/", async (c) => {

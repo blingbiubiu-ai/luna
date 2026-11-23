@@ -17,6 +17,8 @@ Dashboard pages consume projections from Service routes:
 
 Projection code should prepare stable UI data while keeping authorization and signing in Service.
 
+List endpoints (`GET /api/sessions`, `GET /api/tasks`, `GET /api/users`, `GET /api/groups`) return lightweight summary projections computed from SQL aggregations and boundary rows without scanning full `messages` payloads or embedding detail subtrees. Heavy detail payloads — session `contextPacks` / `launchContextPacks` / `seedRecords`, task `timeline` / `contextPacks` / `runContextSummaries` / full `runs` (`materializedPrompt`, `inputSnapshot`) / inline `artifacts.content` / `subscriptions`, user group memberships and authorization grants, and group `members` — are returned only by their respective `/:id` detail endpoints.
+
 ## Platform Shell
 
 Every page shows a platform rail at the far left: the Luna brand, Agents (`/`; also

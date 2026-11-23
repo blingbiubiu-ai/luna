@@ -18,8 +18,6 @@ import {
   channelIdentities,
   channelSurfaces,
   directRecipients,
-  messages,
-  sessionTimelineEntries,
   sessions,
   userIdentityLinks,
   identityObservations,
@@ -35,9 +33,14 @@ import type { AuthorizationSubjectType } from "../policy/authorization-subject";
 import {
   type DirectRecipientRow,
   resolveSessionDisplayTitle,
+  type SessionDisplayTitleMessage,
   type UserIdentityLinkRow as RawUserIdentityLinkRow,
 } from "@/dashboard-api/session-display-title";
 import { isGuardResponse, requireDashboardOnly } from "../auth/guards";
+import {
+  selectSessionDisplayTitleMessages,
+  selectUserActivitySummaries,
+} from "./dashboard-message-summaries";
 import { getKernel } from "./kernel";
 import { AgentUserStore, type ManagedUserStatus } from "@/identity/agent-user-store";
 
@@ -51,13 +54,6 @@ type ChannelIdentityRow = typeof channelIdentities.$inferSelect;
 type UserRow = typeof users.$inferSelect;
 type UserIdentityLinkRow = typeof userIdentityLinks.$inferSelect & {channelIdentityId: string | null};
 type SessionRow = typeof sessions.$inferSelect;
-type MessageRow = typeof messages.$inferSelect;
-type SessionTimelineEntryRow = typeof sessionTimelineEntries.$inferSelect;
-
-type TimelineMessageRow = {
-  readonly entry: SessionTimelineEntryRow;
-  readonly message: MessageRow;
-};
 
 export interface DashboardUserIdentityLink {
   readonly id: string;
@@ -114,15 +110,15 @@ export interface DashboardIndirectOperationGrant extends AuthorizationRuleRecord
 }
 
 type UserActivitySummary = {
-  messageCount: number;
-  readonly sessionIds: Set<string>;
-  latestSession: SessionRow | null;
-  latestActivityAt: number;
+  readonly messageCount: number;
+  readonly sessionCount: number;
+  readonly latestSession: SessionRow | null;
 };
 
 type DashboardUserContext = {
   readonly agentId: string;
   readonly ownerAccountId: string;
+  readonly summaryOnly: boolean;
   readonly groupStore: GroupStore;
   readonly grantStore: AuthorizationRuleStore;
   readonly userRows: readonly DisplayUserRow[];
@@ -130,7 +126,7 @@ type DashboardUserContext = {
   readonly channelIdentityRows: readonly ChannelIdentityRow[];
   readonly directRecipientRows: readonly DirectRecipientRow[];
   readonly rawIdentityLinkRows: readonly RawUserIdentityLinkRow[];
-  readonly timelineRows: readonly TimelineMessageRow[];
+  readonly displayTitleMessages: readonly SessionDisplayTitleMessage[];
   readonly linksByUserId: ReadonlyMap<string, readonly UserIdentityLinkRow[]>;
   readonly channelIdentityById: ReadonlyMap<string, ChannelIdentityRow>;
   readonly activityByUserId: ReadonlyMap<string, UserActivitySummary>;
@@ -169,7 +165,7 @@ export function createUsersRoutes(options: UsersRouteOptions = {}) {
         .where(and(eq(users.agentId, agentId), inArray(users.status, ["active", "blocked"]), notExists(hiddenShadows)))
         .orderBy(desc(users.updatedAt), asc(users.displayName), asc(users.id))
         .all();
-      const context = loadDashboardUserContext(db, agentId);
+      const context = loadDashboardUserContext(db, agentId, true);
 
       return c.json({
         users: userRows.map((row) =>
@@ -346,7 +342,11 @@ function requireUserDirectoryAgent(c: Context, db: DrizzleDB) {
   return new AgentStore(db).requireOwner(requesterAccountIdFromContext(c)!, agentId);
 }
 
-function loadDashboardUserContext(db: DrizzleDB, agentId: string): DashboardUserContext {
+function loadDashboardUserContext(
+  db: DrizzleDB,
+  agentId: string,
+  summaryOnly = false,
+): DashboardUserContext {
   const userRows = loadDashboardUserRows(db, agentId);
   const channelIds = db.select({id: channelConfigs.id}).from(channelConfigs).where(eq(channelConfigs.agentId, agentId));
   // The shared Dashboard channel names each Agent's own users.
@@ -368,11 +368,30 @@ function loadDashboardUserContext(db: DrizzleDB, agentId: string): DashboardUser
       channelIdentityId,
     }));
   const sessionRows = db.select().from(sessions).where(eq(sessions.agent_id, agentId)).all();
-  const timelineRows = selectTimelineMessageRows(db, agentId);
+  const sessionById = new Map(sessionRows.map((s) => [s.id, s]));
+  const sqlActivities = selectUserActivitySummaries(db, agentId);
+  const activityByUserId = new Map<string, UserActivitySummary>();
+  const latestSessionIds = new Set<string>();
+  for (const [userId, item] of sqlActivities) {
+    const latestSession = sessionById.get(item.latestSessionId) ?? null;
+    if (latestSession !== null) {
+      latestSessionIds.add(latestSession.id);
+    }
+    activityByUserId.set(userId, {
+      messageCount: item.messageCount,
+      sessionCount: item.sessionCount,
+      latestSession,
+    });
+  }
+  const displayTitleMessages = selectSessionDisplayTitleMessages(
+    db,
+    [...latestSessionIds],
+  );
 
   return {
     agentId,
     ownerAccountId: new AgentStore(db).get(agentId).ownerAccountId,
+    summaryOnly,
     groupStore: new GroupStore(db),
     grantStore: new AuthorizationRuleStore(db, {kind: "agent", agentId}),
     userRows,
@@ -380,15 +399,12 @@ function loadDashboardUserContext(db: DrizzleDB, agentId: string): DashboardUser
     channelIdentityRows,
     directRecipientRows: db.select().from(directRecipients).all(),
     rawIdentityLinkRows: db.select().from(userIdentityLinks).where(eq(userIdentityLinks.agentId, agentId)).all(),
-    timelineRows,
+    displayTitleMessages,
     linksByUserId: groupLinksByUserId(linkRows),
     channelIdentityById: new Map(
       channelIdentityRows.map((row) => [row.id, row]),
     ),
-    activityByUserId: buildActivityByUserId({
-      sessionRows,
-      timelineRows,
-    }),
+    activityByUserId,
   };
 }
 
@@ -400,24 +416,25 @@ function toDashboardUser(
   const display = context.userRows.find(user => user.id === row.id);
   const latestSession = activity?.latestSession ?? null;
   const messageCount = activity?.messageCount ?? 0;
-  const sessionCount = activity?.sessionIds.size ?? 0;
+  const sessionCount = activity?.sessionCount ?? 0;
   const latestSessionId = latestSession?.id ?? null;
   const latestSessionTitle = latestSession === null
     ? null
     : resolveSessionDisplayTitle({
         row: latestSession,
         surfaceRows: context.surfaceRows,
-        messageRows: context.timelineRows.map((timelineRow) =>
-          toDisplayTitleMessage(timelineRow, context.channelIdentityRows),
-        ),
+        messageRows: context.displayTitleMessages,
         identityRows: context.channelIdentityRows,
         directRecipientRows: context.directRecipientRows,
         userIdentityLinkRows: context.rawIdentityLinkRows,
         userRows: context.userRows,
       });
-  const userGroups = context.groupStore.listUserGroups(row.id)
-    .filter(group => group.agentId === context.agentId)
-    .map(toDashboardUserGroup);
+  const userGroups = context.summaryOnly
+    ? []
+    : context.groupStore
+        .listUserGroups(row.id)
+        .filter(group => group.agentId === context.agentId)
+        .map(toDashboardUserGroup);
 
   return {
     id: row.id,
@@ -436,16 +453,20 @@ function toDashboardUser(
     latestSessionId,
     latestSessionTitle,
     groups: userGroups,
-    directGrants: context.grantStore.listGrants({
-      subjectType: "user",
-      subjectId: row.id,
-    }),
-    indirectGrants: context.grantStore.getIndirectGrantsForUser(row.id)
-      .map((grant) => ({
-        ...grant,
-        sourceGroup: userGroups.find((group) => group.id === grant.subjectId) ??
-          toDashboardUserGroup(context.groupStore.requireGroup(grant.subjectId)),
-      })),
+    directGrants: context.summaryOnly
+      ? []
+      : context.grantStore.listGrants({
+          subjectType: "user",
+          subjectId: row.id,
+        }),
+    indirectGrants: context.summaryOnly
+      ? []
+      : context.grantStore.getIndirectGrantsForUser(row.id)
+          .map((grant) => ({
+            ...grant,
+            sourceGroup: userGroups.find((group) => group.id === grant.subjectId) ??
+              toDashboardUserGroup(context.groupStore.requireGroup(grant.subjectId)),
+          })),
   };
 }
 
@@ -461,47 +482,6 @@ function requireUserRow(db: DrizzleDB, id: string, includeDeleted = false): User
     });
   }
   return row;
-}
-
-function buildActivityByUserId(input: {
-  readonly sessionRows: readonly SessionRow[];
-  readonly timelineRows: readonly TimelineMessageRow[];
-}): Map<string, UserActivitySummary> {
-  const sessionById = new Map(
-    input.sessionRows.map((session) => [session.id, session]),
-  );
-  const activityByUserId = new Map<string, UserActivitySummary>();
-  for (const timelineRow of input.timelineRows) {
-    const message = timelineRow.message;
-    if (timelineRow.entry.entryKind !== "message") {
-      continue;
-    }
-    if (isInternalMessage(message)) {
-      continue;
-    }
-    const session = sessionById.get(timelineRow.entry.sessionId);
-    if (session === undefined) {
-      continue;
-    }
-
-    let summary = activityByUserId.get(message.senderUserId);
-    if (summary === undefined) {
-      summary = {
-        messageCount: 0,
-        sessionIds: new Set<string>(),
-        latestSession: null,
-        latestActivityAt: Number.NEGATIVE_INFINITY,
-      };
-      activityByUserId.set(message.senderUserId, summary);
-    }
-    summary.messageCount += 1;
-    summary.sessionIds.add(session.id);
-    if (message.occurredAt > summary.latestActivityAt) {
-      summary.latestSession = session;
-      summary.latestActivityAt = message.occurredAt;
-    }
-  }
-  return activityByUserId;
 }
 
 function groupLinksByUserId(
@@ -557,58 +537,6 @@ function toDashboardUserIdentityLinks(
             },
     };
   });
-}
-
-function isInternalMessage(row: MessageRow): boolean {
-  if (row.externalMessageId.startsWith("main-runner-action:") === true) {
-    return true;
-  }
-  const rawPayload = row.rawPayloadJson;
-  return (
-    typeof rawPayload === "object" &&
-    rawPayload !== null &&
-    "origin" in rawPayload &&
-    (rawPayload.origin === "main_runner_action_marker" ||
-      rawPayload.origin === "main_runner_action_reply_marker" ||
-      rawPayload.origin === "task_result_event")
-  );
-}
-
-function selectTimelineMessageRows(db: DrizzleDB, agentId: string): TimelineMessageRow[] {
-  return db
-    .select({ entry: sessionTimelineEntries, message: messages })
-    .from(sessionTimelineEntries)
-    .innerJoin(messages, eq(messages.id, sessionTimelineEntries.messageId))
-    .where(eq(messages.agentId, agentId))
-    .orderBy(
-      asc(messages.occurredAt),
-      asc(sessionTimelineEntries.createdAt),
-      asc(sessionTimelineEntries.id),
-    )
-    .all();
-}
-
-function toDisplayTitleMessage(
-  row: TimelineMessageRow,
-  identityRows: readonly ChannelIdentityRow[],
-): {
-  readonly id: string;
-  readonly sessionId: string;
-  readonly role: string;
-  readonly senderExternalId: string | null;
-  readonly createdAt: number;
-} {
-  const sender = row.message.senderIdentityId === null
-    ? null
-    : identityRows.find((identity) => identity.id === row.message.senderIdentityId)
-      ?.externalId ?? null;
-  return {
-    id: row.message.id,
-    sessionId: row.entry.sessionId,
-    role: row.message.role,
-    senderExternalId: sender,
-    createdAt: row.message.occurredAt,
-  };
 }
 
 async function readBody(request: Request): Promise<Record<string, unknown>> {

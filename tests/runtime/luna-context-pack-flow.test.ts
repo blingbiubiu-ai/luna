@@ -152,8 +152,7 @@ describe("Luna context pack FakeFeishu flow", () => {
       }),
     ]);
 
-    const sessionsResponse = await getJson<DashboardSession[]>("/api/sessions");
-    const session = sessionsResponse.find((row) => row.id === pack.ownerId);
+    const session = await getJson<DashboardSession>(`/api/sessions/${pack.ownerId}`);
     expect(session?.launchContextPacks.map((item) => item.id)).not.toContain(
       pack.id,
     );
@@ -260,8 +259,7 @@ describe("Luna context pack FakeFeishu flow", () => {
       ]),
     );
 
-    const sessionsResponse = await getJson<DashboardSession[]>("/api/sessions");
-    const apiThread = sessionsResponse.find((row) => row.id === pack.ownerId);
+    const apiThread = await getJson<DashboardSession>(`/api/sessions/${pack.ownerId}`);
     expect(apiThread?.launchContextPacks).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
@@ -436,7 +434,7 @@ describe("Luna context pack FakeFeishu flow", () => {
     );
 
     const taskList = await getJson<DashboardTask[]>("/api/tasks");
-    expect(taskList[0]?.contextPacks.map((item) => item.id)).toContain(pack.id);
+    expect(taskList[0]).toMatchObject({ id: taskDetail.id, contextPacks: [], timeline: [] });
   });
 });
 

@@ -4,7 +4,7 @@ import {ResourceRouteAccess} from "../policy/resource-route-access";
 import {AgentError} from "@/agents/agent-store";
 import { deleteDashboardTask } from "@/dashboard-api/task-deletion";
 import { loadDashboardUserRows } from "@/dashboard-api/user-display";
-import { asc, desc, eq, sql } from "drizzle-orm";
+import { asc, desc, eq, inArray, sql } from "drizzle-orm";
 import { Hono, type Context } from "hono";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
 import { HTTPException } from "hono/http-exception";
@@ -36,6 +36,7 @@ import {
   lunaAccessTokenClaimsFromContext,
 } from "@/server/auth";
 import { selectDashboardContextBundleRows } from "./dashboard-context-selection";
+import { selectSessionDisplayTitleMessages } from "./dashboard-message-summaries";
 import { getKernel } from "./kernel";
 
 /**
@@ -83,12 +84,11 @@ export function createTasksRoutes(options: TasksRouteOptions = {}) {
         return c.json(sessionTasks(db, sessionId));
       }
       const artifactSigner = dashboardArtifactSignerForContext(c, db);
-      const summaryOnly = c.req.query("view") === "summary";
       const taskRows = selectDashboardTaskRows(db,access(c).listPredicate(c,"task"));
       return c.json(
         buildDashboardTasks(
           taskRows,
-          selectDashboardTaskProjectionRows(db, taskRows, { artifactSigner, summaryOnly }),
+          selectDashboardTaskProjectionRows(db, taskRows, { artifactSigner, summaryOnly: true }),
         ),
       );
     })
@@ -262,34 +262,80 @@ function selectDashboardTaskProjectionRows(
   },
 ): DashboardTasksProjectionRows {
   const summaryOnly = input.summaryOnly === true;
+  const taskIds = taskRows.map((row) => row.id);
+  if (summaryOnly && taskIds.length === 0) {
+    return {
+      participantRows: [],
+      identityRows: [],
+      userRows: [],
+      channelUserBindingRows: [],
+      directRecipientRows: [],
+      userIdentityLinkRows: [],
+      sourceContextItems: [],
+      subscriptionRows: [],
+      sessionRows: [],
+      surfaceRows: [],
+      messageRows: [],
+      displayTitleMessages: [],
+      turnEntryRows: [],
+      runRows: [],
+      timelineRows: [],
+      artifactRows: [],
+      contextBundleRows: selectDashboardContextBundleRows(db, "task", []),
+      artifactSigner: input.artifactSigner,
+      summaryOnly: true,
+    };
+  }
+  const sessionRows = db.select().from(sessions).all();
   return {
-    participantRows: db
-      .select()
-      .from(taskParticipants)
-      .orderBy(asc(taskParticipants.created_at))
-      .all(),
+    participantRows: summaryOnly
+      ? db
+          .select()
+          .from(taskParticipants)
+          .where(inArray(taskParticipants.task_id, taskIds))
+          .orderBy(asc(taskParticipants.created_at), asc(sql`rowid`))
+          .all()
+      : db
+          .select()
+          .from(taskParticipants)
+          .orderBy(asc(taskParticipants.created_at), asc(sql`rowid`))
+          .all(),
     identityRows: db.select().from(channelIdentities).all(),
     userRows: loadDashboardUserRows(db),
     channelUserBindingRows: db.select().from(channelUserBindings).all(),
     directRecipientRows: db.select().from(directRecipients).all(),
     userIdentityLinkRows: db.select().from(userIdentityLinks).all(),
     sourceContextItems: new ContextPackStore(db).listTaskSourceItems(),
-    subscriptionRows: db.select().from(taskSubscriptions).all(),
-    sessionRows: db.select().from(sessions).all(),
+    subscriptionRows: summaryOnly
+      ? db
+          .select()
+          .from(taskSubscriptions)
+          .where(inArray(taskSubscriptions.task_id, taskIds))
+          .all()
+      : db.select().from(taskSubscriptions).all(),
+    sessionRows,
     surfaceRows: db.select().from(channelSurfaces).all(),
-    messageRows: selectTimelineMessageRows(db),
+    messageRows: summaryOnly ? [] : selectTimelineMessageRows(db),
+    displayTitleMessages: summaryOnly
+      ? selectSessionDisplayTitleMessages(
+          db,
+          sessionRows.map((s) => s.id),
+        )
+      : undefined,
     turnEntryRows: summaryOnly ? [] : selectDashboardSessionTurnEntryRows(db),
-    runRows: summaryOnly ? selectDashboardTaskRunSummaryRows(db) : selectDashboardTaskRunRows(db),
+    runRows: summaryOnly
+      ? selectDashboardTaskRunSummaryRows(db, taskIds)
+      : selectDashboardTaskRunRows(db),
     timelineRows: summaryOnly
       ? []
       : taskRows.flatMap(row=>selectDashboardTimelineEventRowsForTask(db,row.id)),
     artifactRows: summaryOnly
-      ? selectDashboardArtifactSummaryRows(db)
+      ? selectDashboardArtifactSummaryRows(db, taskIds)
       : selectDashboardArtifactRows(db),
     contextBundleRows: selectDashboardContextBundleRows(
       db,
       "task",
-      summaryOnly ? [] : taskRows.map((row) => row.id),
+      summaryOnly ? [] : taskIds,
     ),
     artifactSigner: input.artifactSigner,
     summaryOnly,
@@ -315,8 +361,12 @@ function dashboardTaskRunSelection() {
   };
 }
 
-function selectDashboardTaskRunSummaryRows(db: DrizzleDB): TaskRunRow[] {
-  return db
+function selectDashboardTaskRunSummaryRows(
+  db: DrizzleDB,
+  taskIds: readonly string[],
+): TaskRunRow[] {
+  if (taskIds.length === 0) return [];
+  const rows = db
     .select({
       id: taskRuns.id,
       task_id: taskRuns.task_id,
@@ -335,8 +385,17 @@ function selectDashboardTaskRunSummaryRows(db: DrizzleDB): TaskRunRow[] {
       final_report_artifact_id: taskRuns.final_report_artifact_id,
     })
     .from(taskRuns)
-    .orderBy(asc(taskRuns.task_id), asc(taskRuns.run_index))
+    .where(inArray(taskRuns.task_id, taskIds))
+    .orderBy(asc(taskRuns.task_id), desc(taskRuns.run_index))
     .all();
+  // List view only uses the latest run per task; full run history comes from GET /api/tasks/:id.
+  const latestByTaskId = new Map<string, TaskRunRow>();
+  for (const row of rows) {
+    if (!latestByTaskId.has(row.task_id)) {
+      latestByTaskId.set(row.task_id, row);
+    }
+  }
+  return [...latestByTaskId.values()];
 }
 
 function selectDashboardTaskRunRows(db: DrizzleDB): TaskRunRow[] {
@@ -436,7 +495,11 @@ function selectDashboardArtifactRows(db: DrizzleDB): ArtifactRow[] {
     .all();
 }
 
-function selectDashboardArtifactSummaryRows(db: DrizzleDB): ArtifactRow[] {
+function selectDashboardArtifactSummaryRows(
+  db: DrizzleDB,
+  taskIds: readonly string[],
+): ArtifactRow[] {
+  if (taskIds.length === 0) return [];
   return db
     .select({
       id: artifacts.id,
@@ -453,6 +516,7 @@ function selectDashboardArtifactSummaryRows(db: DrizzleDB): ArtifactRow[] {
       created_at: artifacts.created_at,
     })
     .from(artifacts)
+    .where(inArray(artifacts.task_id, taskIds))
     .orderBy(asc(artifacts.created_at))
     .all();
 }

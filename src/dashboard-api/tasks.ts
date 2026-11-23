@@ -24,6 +24,7 @@ import {
 import {
   type DirectRecipientRow,
   resolveSessionDisplayTitle,
+  type SessionDisplayTitleMessage,
   type UserIdentityLinkRow,
 } from "./session-display-title";
 
@@ -304,6 +305,7 @@ export interface DashboardTasksProjectionRows {
   readonly channelUserBindingRows: readonly ChannelUserBindingRow[];
   readonly directRecipientRows?: readonly DirectRecipientRow[] | undefined;
   readonly userIdentityLinkRows?: readonly UserIdentityLinkRow[] | undefined;
+  readonly displayTitleMessages?: readonly SessionDisplayTitleMessage[] | undefined;
   readonly contextBundleRows: DashboardContextBundleRows;
   readonly artifactSigner: DashboardArtifactSigner;
   readonly summaryOnly?: boolean | undefined;
@@ -313,9 +315,11 @@ export function buildDashboardTasks(
   taskRows: readonly TaskRow[],
   input: DashboardTasksProjectionRows,
 ): DashboardTask[] {
-  const displayTitleMessages = input.messageRows.map((message) =>
-    toDisplayTitleMessage(message, input.identityRows),
-  );
+  const displayTitleMessages =
+    input.displayTitleMessages ??
+    input.messageRows.map((message) =>
+      toDisplayTitleMessage(message, input.identityRows),
+    );
   return taskRows.map((row) => toDashboardTask(row, input, displayTitleMessages));
 }
 
@@ -369,15 +373,17 @@ export function toDashboardTask(
     readonly channelUserBindingRows: readonly ChannelUserBindingRow[];
     readonly directRecipientRows?: readonly DirectRecipientRow[] | undefined;
     readonly userIdentityLinkRows?: readonly UserIdentityLinkRow[] | undefined;
+    readonly displayTitleMessages?: readonly SessionDisplayTitleMessage[] | undefined;
     readonly contextBundleRows: DashboardContextBundleRows;
     readonly artifactSigner: DashboardArtifactSigner;
     readonly summaryOnly?: boolean | undefined;
   },
-  precomputedDisplayTitleMessages?: ReturnType<typeof toDisplayTitleMessage>[],
+  precomputedDisplayTitleMessages?: readonly SessionDisplayTitleMessage[],
 ): DashboardTask {
   const linkedSessionIds = linkedSessionIdsForTask(row.id, input);
   const displayTitleMessages =
     precomputedDisplayTitleMessages ??
+    input.displayTitleMessages ??
     input.messageRows.map((message) =>
       toDisplayTitleMessage(message, input.identityRows),
     );
@@ -504,9 +510,11 @@ export function toDashboardTask(
           artifactSigner: input.artifactSigner,
         })
       ),
-    subscriptions: input.subscriptionRows.filter(
-      (subscription) => subscription.task_id === row.id,
-    ),
+    subscriptions: isSummary
+      ? []
+      : input.subscriptionRows.filter(
+          (subscription) => subscription.task_id === row.id,
+        ),
     workSession,
     created_at: row.created_at,
     updated_at: row.updated_at,

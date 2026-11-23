@@ -24,6 +24,7 @@ import {
 import { RunnerArtifactGrantStore } from "@/server/auth/runner-artifact-grant-store";
 
 import { selectDashboardContextBundleRows } from "./dashboard-context-selection";
+import { selectDashboardSessionListMessageData } from "./dashboard-message-summaries";
 import { getKernel } from "./kernel";
 
 export interface SessionsRouteOptions {
@@ -55,14 +56,13 @@ export function createSessionsRoutes(options: SessionsRouteOptions = {}) {
   .get("/", (c) => {
     const db = routeDb();
     const artifactSigner = dashboardArtifactSignerForContext(c, db);
-    const summaryOnly = c.req.query("view") === "summary";
     const sessionRows = db
       .select()
       .from(sessions)
       .where(access(c).listPredicate(c,"session"))
       .orderBy(desc(sessions.updated_at))
       .all();
-    return c.json(dashboardSessionRows(db, sessionRows, artifactSigner, summaryOnly));
+    return c.json(dashboardSessionRows(db, sessionRows, artifactSigner, true));
   })
   .get("/:id", c => {
     const db = routeDb();
@@ -376,7 +376,12 @@ function dashboardSessionRows(
   const bindingStatuses = new Map(bindingIds.length ? db.select({
     id: shadowBotBindings.id, status: shadowBotBindings.status,
   }).from(shadowBotBindings).where(inArray(shadowBotBindings.id, bindingIds)).all().map(row => [row.id, row.status]) : []);
-  const timelineRows = selectDashboardTimelineRows(db);
+  const listMessageData = summaryOnly
+    ? selectDashboardSessionListMessageData(db, allSessionRows)
+    : undefined;
+  const timelineRows = listMessageData
+    ? listMessageData.boundaryTimelineRows
+    : selectDashboardTimelineRows(db);
   const surfaceRows = db.select().from(channelSurfaces).all();
   const identityRows = db.select().from(channelIdentities).all();
   const userRows = loadDashboardUserRows(db);
@@ -457,6 +462,10 @@ function dashboardSessionRows(
       latestTurnFailed: latestNonAmbientTurnStatus.get(row.id) === "failed",
       sessionRows: allSessionRows,
       timelineRows,
+      displayTitleMessages: listMessageData?.displayTitleMessages,
+      messageCount: listMessageData
+        ? (listMessageData.messageCountBySessionId.get(row.id) ?? 0)
+        : undefined,
       surfaceRows,
       identityRows,
       userRows,

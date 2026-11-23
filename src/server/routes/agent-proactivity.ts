@@ -35,6 +35,7 @@ import { inspectOutboundQuota } from "@/messaging/outbound-governance";
 import { sessionCommandsFor } from "@/messaging/session-command-service";
 import { PlatformSettingsStore } from "@/platform/platform-settings-store";
 import { isGuardResponse, requireDashboardOnly } from "../auth/guards";
+import { selectSessionDisplayTitleMessages } from "./dashboard-message-summaries";
 import { GatewayError } from "../gateway-error";
 import { getKernel } from "./kernel";
 
@@ -191,29 +192,10 @@ export function createAgentProactivityRoutes(
       );
 
       const allAgentSessionIds = allAgentSessions.map(s => s.id);
-      const displayTitleMessages = allAgentSessionIds.length
-        ? d
-            .select({
-              id: messages.id,
-              sessionId: sessionTimelineEntries.sessionId,
-              role: messages.role,
-              senderIdentityId: messages.senderIdentityId,
-              createdAt: messages.occurredAt,
-            })
-            .from(sessionTimelineEntries)
-            .innerJoin(messages, eq(messages.id, sessionTimelineEntries.messageId))
-            .where(inArray(sessionTimelineEntries.sessionId, allAgentSessionIds))
-            .all()
-            .map(item => ({
-              id: item.id,
-              sessionId: item.sessionId,
-              role: item.role,
-              senderExternalId: item.senderIdentityId
-                ? (identityExternalById.get(item.senderIdentityId) ?? null)
-                : null,
-              createdAt: item.createdAt,
-            }))
-        : [];
+      const displayTitleMessages = selectSessionDisplayTitleMessages(
+        d,
+        allAgentSessionIds,
+      );
       const titleLookup: Omit<SessionDisplayTitleInput, "row"> = {
         surfaceRows: surfaces,
         messageRows: displayTitleMessages,

@@ -115,25 +115,8 @@ describe("Luna context pack service acceptance", () => {
     const taskList = await tasksResponse.json() as DashboardTask[];
     expect(taskList).toHaveLength(1);
     const [task] = taskList;
-    const taskPackIds = task!.contextPacks.map((pack) => pack.id);
-    const taskLaunchPack = task!.contextPacks.find(
-      (pack) => pack.kind === "task_launch",
-    );
-    expect(taskLaunchPack).toBeDefined();
-    expect(taskLaunchPack?.items).toEqual(expect.arrayContaining([
-      expect.objectContaining({
-        role: "source",
-        messagePreview:
-          "@Luna 帮我建个修复任务，播放失败 did=4453477614363128",
-      }),
-    ]));
-    expect(task!.runs[0]?.materializedPrompt).toContain("<launch_context>");
-    expect(task!.runs[0]?.materializedPrompt).toContain(
-      "播放失败 did=4453477614363128",
-    );
-    expect(task!.runs[0]?.contextPacks.map((pack) => pack.id)).toEqual(
-      expect.arrayContaining(taskPackIds),
-    );
+    expect(task!.contextPacks).toEqual([]);
+    expect(task!.runs[0]?.materializedPrompt).toBe("");
 
     const sessionsResponse = await requestApi("/api/sessions");
     expect(sessionsResponse.status).toBe(200);
@@ -147,7 +130,23 @@ describe("Luna context pack service acceptance", () => {
     const taskDetailResponse = await requestApi(`/api/tasks/${task!.id}`);
     expect(taskDetailResponse.status).toBe(200);
     const taskDetail = await taskDetailResponse.json() as DashboardTask;
-    expect(taskDetail.contextPacks.map((pack) => pack.id)).toEqual(
+    const taskPackIds = taskDetail.contextPacks.map((pack) => pack.id);
+    const taskLaunchPack = taskDetail.contextPacks.find(
+      (pack) => pack.kind === "task_launch",
+    );
+    expect(taskLaunchPack).toBeDefined();
+    expect(taskLaunchPack?.items).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        role: "source",
+        messagePreview:
+          "@Luna 帮我建个修复任务，播放失败 did=4453477614363128",
+      }),
+    ]));
+    expect(taskDetail.runs[0]?.materializedPrompt).toContain("<launch_context>");
+    expect(taskDetail.runs[0]?.materializedPrompt).toContain(
+      "播放失败 did=4453477614363128",
+    );
+    expect(taskDetail.runs[0]?.contextPacks.map((pack) => pack.id)).toEqual(
       expect.arrayContaining(taskPackIds),
     );
     expect(JSON.stringify(taskDetail)).toContain("task_launch");

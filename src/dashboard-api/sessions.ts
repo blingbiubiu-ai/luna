@@ -27,6 +27,7 @@ import {
   p2pUserForSession,
   resolveChannelSurfaceKind,
   resolveSessionDisplayTitle,
+  type SessionDisplayTitleMessage,
   type UserIdentityLinkRow,
 } from "./session-display-title";
 
@@ -382,6 +383,8 @@ export function toDashboardSession(
     readonly latestTurnFailed?: boolean;
     readonly sessionRows: readonly SessionRow[];
     readonly timelineRows: readonly DashboardMessageProjection[];
+    readonly displayTitleMessages?: readonly SessionDisplayTitleMessage[] | undefined;
+    readonly messageCount?: number | undefined;
     readonly surfaceRows: readonly ChannelSurfaceRow[];
     readonly identityRows: readonly ChannelIdentityRow[];
     readonly userRows: readonly UserRow[];
@@ -398,9 +401,11 @@ export function toDashboardSession(
 ): DashboardSession {
   const linkedTasks = taskBadgesForSession(row.id, input);
   const surface = channelSurfaceForSession(row, input.surfaceRows, input.directRecipientRows);
-  const displayTitleMessages = input.timelineRows.map((item) =>
-    toDisplayTitleMessage(item, input.identityRows),
-  );
+  const displayTitleMessages =
+    input.displayTitleMessages ??
+    input.timelineRows.map((item) =>
+      toDisplayTitleMessage(item, input.identityRows),
+    );
   const displayTitle = resolveSessionDisplayTitle({
     row,
     surfaceRows: input.surfaceRows,
@@ -520,9 +525,11 @@ export function toDashboardSession(
     listening: input.listening ?? null,
     attentionState,
     surface,
-    message_count: input.timelineRows.filter(
-      (item) => item.entry.sessionId === row.id && !isInternalMessage(item.row),
-    ).length,
+    message_count:
+      input.messageCount ??
+      input.timelineRows.filter(
+        (item) => item.entry.sessionId === row.id && !isInternalMessage(item.row),
+      ).length,
     thread_anchor_preview: threadAnchorPreview,
     threadAnchorPreview,
     latest_message_preview: latestMessagePreview,
@@ -614,7 +621,7 @@ function sessionAvatarUrlForRow(
   row: SessionRow,
   input: {
     readonly surface: DashboardSurface | null;
-    readonly displayTitleMessages: ReturnType<typeof toDisplayTitleMessage>[];
+    readonly displayTitleMessages: readonly SessionDisplayTitleMessage[];
     readonly identityRows: readonly ChannelIdentityRow[];
     readonly channelUserBindingRows: readonly ChannelUserBindingRow[];
     readonly userRows: readonly UserRow[];
