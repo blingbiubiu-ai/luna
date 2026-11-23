@@ -2023,6 +2023,7 @@ export interface DashboardCorrelatedRequestItem {
   targetSessionTitle: string;
   targetUserId: string | null;
   targetUserName: string | null;
+  canAnswer?: boolean;
   instruction: string;
   contextSummary: string | null;
   options: string[];
@@ -2112,6 +2113,36 @@ export function useCancelProactivityRequest(agentId: string) {
       ),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ["luna", "proactivity"] });
+    },
+  });
+}
+
+export function useAnswerProactivityRequest(agentId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (input: {
+      requestId: string;
+      answer: string;
+      selectedOption?: string;
+    }) =>
+      apiFetch<{
+        ok: boolean;
+        alreadyResolved: boolean;
+      }>(
+        `/proactivity/requests/${encodeURIComponent(input.requestId)}/answer?agentId=${encodeURIComponent(agentId)}`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            answer: input.answer,
+            ...(input.selectedOption ? { selectedOption: input.selectedOption } : {}),
+          }),
+        },
+      ),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["luna", "proactivity"] });
+      void queryClient.invalidateQueries({ queryKey: ["luna", "tasks"] });
+      void queryClient.invalidateQueries({ queryKey: ["luna", "users"] });
+      void queryClient.invalidateQueries({ queryKey: ["luna", "sessions"] });
     },
   });
 }

@@ -15,6 +15,7 @@ const ASKS_USAGE = [
   "  luna asks answer <request-id> (--answer <text> | --stdin) [--option <selected-option>]",
   "  luna asks cancel <request-id>",
   "  luna asks list [--status pending|answered|done|declined|cancelled|expired] [--limit <n>]",
+  "Addresses: owner, current, user:<id>, session:<id>, group:<id>",
 ].join("\n");
 
 export async function runAsksCli(

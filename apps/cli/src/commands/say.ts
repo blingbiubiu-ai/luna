@@ -28,7 +28,7 @@ const LEGACY_TARGET_FLAGS = [
 ] as const;
 
 const SAY_USAGE =
-  "Usage: luna say [--to <address>] (--text <text> | --stdin) [--json] [--purpose progress|answer|notification] [--repeat]\nAddresses: current (default), user:<id>, session:<id>, group:<id>";
+  "Usage: luna say [--to <address>] (--text <text> | --stdin) [--json] [--purpose progress|answer|notification] [--repeat]\nAddresses: current (default), owner, user:<id>, session:<id>, group:<id>";
 
 function parseMessageJson(text: string) {
   const input: unknown = JSON.parse(text);

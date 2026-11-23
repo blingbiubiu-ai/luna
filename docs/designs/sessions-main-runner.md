@@ -40,8 +40,13 @@ it forwards questions about what the request means, in full, to the person who
 asked for the work; and it takes irreversible changes to shared systems,
 unverifiable results and major technical trade-offs to the Agent owner. Work a
 non-owner requests that would write to outside systems under the owner's
-identity is dispatched only after the owner agrees. These are instruction-file
-rules (`src/prompts/main/routing.md`); Service does not enforce them. A
+identity, add standing duties, or match an owner-defined approval rule in
+`persona` / `chat` memory is dispatched only after the owner agrees via
+`luna asks create --to owner` (`src/prompts/main/routing.md`). When
+the owner approves and `request_result` wakes the session, `RunnerOperationService`
+permits `task.create` to link the requester's original `sourceMessageIds` from
+that session's timeline so requester identity, attachments and thread anchors
+are preserved. A
 task-result turn requires an answer message except for a quiet run or when Main
 already sent the Task on in that turn; see
 [Tasks and Task Runner](tasks-task-runner.md#quiet-runs-and-results-without-a-reply).

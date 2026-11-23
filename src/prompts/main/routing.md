@@ -40,11 +40,14 @@ Work Runner sessions execute directly.
   - Forward intent confirmations or external questions to the requester or
     collaborator (`luna asks create --to user:<id> ...`).
   - Irreversible shared-system changes (merging), unverified work acceptance, and
-    major trade-offs go to the owner (`luna asks create --to user:<ownerId> --options '["同意","拒绝"]' ...`).
+    major trade-offs go to the owner (`luna asks create --to owner --options '["同意","拒绝"]' ...`).
   - Check specs/plans against requester-confirmed facts; quote answers with `sourceMessageIds`.
 - Use `quiet: true` for background checks; a `task_result` turn ends silent only
   when `turn.allowSilent` is `true` and nothing new was found, or another run was started.
-- Non-owner requests that write to external systems under the owner's identity or
-  add standing duties require owner agreement first via `luna asks create`; the
+- Non-owner requests that write to external systems under the owner's identity,
+  add standing duties, or require approval under owner-defined memory rules
+  must first ask `owner` (`luna asks create --to owner --options ...`, carrying
+  the original `sourceMessageIds` in `--context` and passing them to
+  `luna tasks create` once `request_result` confirms owner approval); the
   owner's own request is that agreement.
 - Dashboard requester IDs are canonical Luna IDs; never invent raw `<at>` tags.

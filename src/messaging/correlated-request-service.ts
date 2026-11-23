@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { and, desc, eq, inArray, lte, sql } from "drizzle-orm";
+import { and, desc, eq, lte, sql } from "drizzle-orm";
 import { AgentStore } from "@/agents/agent-store";
 import { resolveProactivitySettings } from "@/agents/agent-settings-store";
 import {
@@ -12,6 +12,7 @@ import type { ChannelCardAction, ChannelCardActionResult } from "@/channels/type
 import type { ReplyChannel } from "@/channels/outbound";
 import type { DrizzleDB } from "@/data";
 import {
+  accountIdentityClaims,
   channelIdentities,
   channelUserBindings,
   correlatedRequests,
@@ -42,6 +43,7 @@ export interface RequestResultEnvelope {
   readonly targetAddress: string;
   readonly targetSessionId: string;
   readonly resolvedByUserId: string | null;
+  readonly resolvedByRole?: "owner" | "member" | null | undefined;
   readonly result: Record<string, unknown> | null;
 }
 
@@ -64,9 +66,43 @@ export function formatRequestResultInstruction(env: RequestResultEnvelope): stri
     `Target: ${env.targetAddress} (session:${env.targetSessionId})`,
     `Original ${env.kind === "ask" ? "question" : "instruction"}: ${env.instruction}`,
     ...(env.contextSummary ? [`Context: ${env.contextSummary}`] : []),
-    ...(env.resolvedByUserId ? [`Resolved by: ${env.resolvedByUserId}`] : []),
+    ...(env.resolvedByUserId
+      ? [
+          `Resolved by: ${env.resolvedByUserId}${env.resolvedByRole ? ` (${env.resolvedByRole})` : ""}`,
+        ]
+      : []),
     ...(env.result ? [`Result: ${JSON.stringify(env.result)}`] : []),
   ].join("\n");
+}
+
+function resolveReturnActorUserId(
+  db: DrizzleDB,
+  req: CorrelatedRequestRow,
+  ownerUserId: string,
+): string {
+  const outboundActorUserId = req.outboundCommandId
+    ? db
+        .select({ actorUserId: sessionCommands.actorUserId })
+        .from(sessionCommands)
+        .where(eq(sessionCommands.id, req.outboundCommandId))
+        .get()?.actorUserId
+    : undefined;
+  const candidate = req.resolvedByUserId ?? outboundActorUserId;
+  if (candidate) {
+    const active = db
+      .select({ id: users.id })
+      .from(users)
+      .where(
+        and(
+          eq(users.id, candidate),
+          eq(users.agentId, req.agentId),
+          eq(users.status, "active"),
+        ),
+      )
+      .get();
+    if (active) return active.id;
+  }
+  return ownerUserId;
 }
 
 function queueReturnToOrigin(
@@ -84,21 +120,12 @@ function queueReturnToOrigin(
   if (!originSession || originSession.status !== "active") return null;
 
   const ownerUserId = new AgentStore(db).ownerUserId(req.agentId);
-  const actorUserId = req.resolvedByUserId ?? ownerUserId;
-  // Ensure actor is active in this Agent; fall back to owner if resolvedByUserId is missing/inactive.
-  const validActor = db
-    .select({ id: users.id })
-    .from(users)
-    .where(
-      and(
-        eq(users.id, actorUserId),
-        eq(users.agentId, req.agentId),
-        eq(users.status, "active"),
-      ),
-    )
-    .get()
-    ? actorUserId
-    : ownerUserId;
+  const validActor = resolveReturnActorUserId(db, req, ownerUserId);
+  const resolvedByRole = req.resolvedByUserId
+    ? req.resolvedByUserId === ownerUserId
+      ? "owner"
+      : "member"
+    : null;
 
   const envelope: RequestResultEnvelope = {
     requestId: req.id,
@@ -109,6 +136,7 @@ function queueReturnToOrigin(
     targetAddress: req.targetAddress,
     targetSessionId: req.targetSessionId,
     resolvedByUserId: req.resolvedByUserId,
+    resolvedByRole,
     result: req.resultJson,
   };
 
@@ -171,6 +199,10 @@ export class CorrelatedRequestService {
     if (!question) {
       throw new GatewayError("invalid_question", "Question cannot be empty", 400);
     }
+    const ownerUserId = new AgentStore(this.db).ownerUserId(input.actor.agentId);
+    const trimmedTo = input.toAddress.trim();
+    const allowLocalFallback =
+      trimmedTo === "owner" || trimmedTo === `user:${ownerUserId}`;
     const resolved = resolveLunaAddress(
       this.db,
       {
@@ -179,7 +211,7 @@ export class CorrelatedRequestService {
         currentSessionId: input.actor.currentSessionId,
       },
       input.toAddress,
-      { create: true },
+      { create: true, allowLocalFallback },
     );
     if (resolved.kind === "self") {
       throw new GatewayError(
@@ -289,7 +321,7 @@ export class CorrelatedRequestService {
     readonly answer: string;
     readonly selectedOption?: string | undefined;
     readonly resolvedByUserId: string;
-    readonly source: "runner" | "card";
+    readonly source: "runner" | "card" | "dashboard";
     readonly expectedShadowId?: string | undefined;
     readonly expectedTargetSessionId?: string | undefined;
     readonly now?: number | undefined;
@@ -326,6 +358,16 @@ export class CorrelatedRequestService {
         throw new GatewayError(
           "ask_session_mismatch",
           "Ask does not target the current session",
+          403,
+        );
+      }
+      if (
+        existing.targetUserId &&
+        input.resolvedByUserId !== existing.targetUserId
+      ) {
+        throw new GatewayError(
+          "ask_forbidden",
+          "Ask targets another user",
           403,
         );
       }
@@ -748,9 +790,9 @@ export class CorrelatedRequestService {
       req.agentId,
       action,
     );
-    if (req.targetUserId && userId && req.targetUserId !== userId) {
+    if (req.targetUserId && userId !== req.targetUserId) {
       return {
-        toast: { type: "warning", content: "该确认仅限指定对象操作。" },
+        toast: { type: "warning", content: "该确认仅限指定负责人操作。" },
       };
     }
 
@@ -795,10 +837,19 @@ export class CorrelatedRequestService {
     agentId: string,
     action: ChannelCardAction,
   ): { userId: string | null; displayName: string | null } {
-    const openId =
-      action.operatorIdentity.providerIds?.open_id ??
-      action.operatorIdentity.externalId;
-    if (openId) {
+    const candidateIds = [
+      ...new Set(
+        [
+          action.operatorIdentity.providerIds?.open_id,
+          action.operatorIdentity.providerIds?.union_id,
+          action.operatorIdentity.providerIds?.user_id,
+          action.operatorIdentity.externalId,
+        ]
+          .map(v => (typeof v === "string" ? v.trim() : ""))
+          .filter(Boolean),
+      ),
+    ];
+    for (const candidateId of candidateIds) {
       // Check channelUserBindings first.
       const bound = this.db
         .select({
@@ -816,7 +867,10 @@ export class CorrelatedRequestService {
             eq(channelIdentities.channelId, action.channel.id),
             eq(users.agentId, agentId),
             eq(users.status, "active"),
-            sql`(${channelIdentities.externalId} = ${openId} OR json_extract(${channelIdentities.providerIdsJson}, '$.open_id') = ${openId})`,
+            sql`(${channelIdentities.externalId} = ${candidateId}
+              OR json_extract(${channelIdentities.providerIdsJson}, '$.open_id') = ${candidateId}
+              OR json_extract(${channelIdentities.providerIdsJson}, '$.union_id') = ${candidateId}
+              OR json_extract(${channelIdentities.providerIdsJson}, '$.user_id') = ${candidateId})`,
           ),
         )
         .get();
@@ -832,12 +886,31 @@ export class CorrelatedRequestService {
           and(
             eq(users.agentId, agentId),
             eq(users.status, "active"),
-            eq(userIdentityLinks.identityValue, openId),
+            eq(userIdentityLinks.identityValue, candidateId),
           ),
         )
         .get();
       if (linked) {
         return { userId: linked.userId, displayName: linked.displayName };
+      }
+      // Check accountIdentityClaims (e.g. Feishu OAuth owner account).
+      const accountLinked = this.db
+        .select({ userId: users.id, displayName: users.displayName })
+        .from(accountIdentityClaims)
+        .innerJoin(users, eq(users.accountId, accountIdentityClaims.accountId))
+        .where(
+          and(
+            eq(users.agentId, agentId),
+            eq(users.status, "active"),
+            eq(accountIdentityClaims.identityValue, candidateId),
+          ),
+        )
+        .get();
+      if (accountLinked) {
+        return {
+          userId: accountLinked.userId,
+          displayName: accountLinked.displayName,
+        };
       }
     }
     return {
@@ -953,7 +1026,12 @@ export function createCorrelatedRequestExpiryRoutine(): SelfRoutine<CorrelatedRe
       return candidates;
     },
     resolveSessionId: (_ctx, req) => req.originSessionId,
-    actorUserId: ({ db }, req) => new AgentStore(db).ownerUserId(req.agentId),
+    actorUserId: ({ db }, req) =>
+      resolveReturnActorUserId(
+        db,
+        req,
+        new AgentStore(db).ownerUserId(req.agentId),
+      ),
     originId: (_ctx, req) => `${SELF_ROUTINE_ORIGINS.request_expiry}${req.id}`,
     instruction({ now }, req) {
       const envelope: RequestResultEnvelope = {

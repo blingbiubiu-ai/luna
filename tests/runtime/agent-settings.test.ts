@@ -65,7 +65,11 @@ test("the settings API is the owner's: read, save, reject others and invalid inp
   }).route("/agents", createPlatformAgentRoutes(connection.db));
   const call = (actor: string, method = "GET", body?: unknown) => app.request(`/agents/${agentId}/settings`, {
     method, headers: { "Test-Actor": actor, "content-type": "application/json" }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
-  expect(await (await call("owner")).json()).toEqual({ settings: DEFAULT_AGENT_SETTINGS, messageDefaults: messageDefaults(DEFAULT_SESSION_CONFIG) });
+  expect(await (await call("owner")).json()).toEqual({
+    settings: DEFAULT_AGENT_SETTINGS,
+    messageDefaults: messageDefaults(DEFAULT_SESSION_CONFIG),
+    proactivityDefaults: new PlatformSettingsStore(connection.db).get().proactivity,
+  });
   const saved = await call("owner", "PUT", { main: { taskProgressCard: { send: false, style: "card" } } });
   expect(saved.status).toBe(200);
   expect(((await saved.json()) as { settings: typeof DEFAULT_AGENT_SETTINGS }).settings.main.taskProgressCard).toEqual({ send: false, style: "card" });

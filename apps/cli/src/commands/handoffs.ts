@@ -9,7 +9,7 @@ import {
 } from "@luna/cli-support/service-client";
 
 const HANDOFF_USAGE =
-  "Usage: luna handoff --to <address> (--text <instruction> | --stdin) [--expires-in <duration>] [--repeat]\nAddresses: self, user:<id>, session:<id>, group:<id>";
+  "Usage: luna handoff --to <address> (--text <instruction> | --stdin) [--expires-in <duration>] [--repeat]\nAddresses: self, owner, user:<id>, session:<id>, group:<id>";
 
 const HANDOFFS_USAGE =
   "Usage: luna handoffs resolve <request-id> (--summary <text> | --declined --reason <text>)";

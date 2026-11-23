@@ -55,6 +55,7 @@ export interface RunnerCapabilitiesManifest {
   readonly addressScope: {
     readonly allowCurrent: boolean;
     readonly allowSelf: boolean;
+    readonly allowOwner: boolean;
     readonly allowSession: boolean;
     readonly allowGroup: boolean;
     readonly allowUser: boolean;
@@ -282,6 +283,7 @@ export function buildMainCapabilities(
     addressScope: {
       allowCurrent: !isRoutine,
       allowSelf: !isMemoryOnly,
+      allowOwner: !isMemoryOnly,
       allowSession: !isMemoryOnly,
       allowGroup: !isMemoryOnly,
       allowUser: !isMemoryOnly,
@@ -324,6 +326,7 @@ export function buildWorkCapabilities(
     addressScope: {
       allowCurrent: !isRoutine,
       allowSelf: !isRoutine,
+      allowOwner: !isRoutine,
       allowSession: !isRoutine,
       allowGroup: !isRoutine,
       allowUser: !isRoutine,
@@ -361,6 +364,7 @@ export function buildTaskCapabilities(options: {
     addressScope: {
       allowCurrent: false,
       allowSelf: false,
+      allowOwner: false,
       allowSession: false,
       allowGroup: false,
       allowUser: false,

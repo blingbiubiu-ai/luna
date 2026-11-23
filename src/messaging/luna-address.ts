@@ -13,13 +13,16 @@ import {
   userIdentityLinks,
   users,
 } from "@/data/schema";
+import { ownerUserId } from "@/identity/account-store";
 import { GatewayError } from "@/server/gateway-error";
+import { SessionStore } from "@/sessions/session-store";
 import { resolveMessageTarget } from "./delivery-target";
 import { feishuRecipientClaims, type FeishuRecipientIdType } from "./feishu-recipient";
 
 export type ParsedLunaAddress =
   | { readonly kind: "self" }
   | { readonly kind: "current" }
+  | { readonly kind: "owner" }
   | { readonly kind: "user"; readonly userId: string }
   | { readonly kind: "session"; readonly sessionId: string }
   | { readonly kind: "group"; readonly groupId: string };
@@ -32,7 +35,7 @@ export interface LunaAddressScope {
 
 export interface ResolvedLunaAddress {
   readonly address: string;
-  readonly kind: ParsedLunaAddress["kind"];
+  readonly kind: Exclude<ParsedLunaAddress["kind"], "owner">;
   readonly sessionId: string;
   readonly targetUserId?: string | undefined;
   readonly channelId?: string | undefined;
@@ -43,6 +46,7 @@ export function parseLunaAddress(raw: string): ParsedLunaAddress {
   const trimmed = raw.trim();
   if (trimmed === "self") return { kind: "self" };
   if (trimmed === "current") return { kind: "current" };
+  if (trimmed === "owner") return { kind: "owner" };
   if (trimmed.startsWith("user:")) {
     const userId = trimmed.slice("user:".length).trim();
     if (!userId) throw new GatewayError("invalid_address", "Empty user address", 400);
@@ -60,7 +64,7 @@ export function parseLunaAddress(raw: string): ParsedLunaAddress {
   }
   throw new GatewayError(
     "invalid_address",
-    "Address must be 'self', 'current', 'user:<id>', 'session:<id>', or 'group:<id>'",
+    "Address must be 'self', 'current', 'owner', 'user:<id>', 'session:<id>', or 'group:<id>'",
     400,
   );
 }
@@ -85,7 +89,10 @@ export function resolveLunaAddress(
   db: DrizzleDB,
   scope: LunaAddressScope,
   rawAddress: string,
-  options: { readonly create?: boolean | undefined } = {},
+  options: {
+    readonly create?: boolean | undefined;
+    readonly allowLocalFallback?: boolean | undefined;
+  } = {},
 ): ResolvedLunaAddress {
   const create = options.create ?? true;
   const parsed = parseLunaAddress(rawAddress);
@@ -186,11 +193,13 @@ export function resolveLunaAddress(
     };
   }
 
-  // `user:<userId>`
+  // `owner` or `user:<userId>`
+  const targetUserId =
+    parsed.kind === "owner" ? ownerUserId(db, scope.agentId) : parsed.userId;
   const user = db
     .select()
     .from(users)
-    .where(and(eq(users.id, parsed.userId), eq(users.agentId, scope.agentId)))
+    .where(and(eq(users.id, targetUserId), eq(users.agentId, scope.agentId)))
     .get();
   if (!user || user.status !== "active") {
     throw new GatewayError("user_not_found", "User not found in Agent directory", 404);
@@ -205,7 +214,7 @@ export function resolveLunaAddress(
     .innerJoin(userIdentityLinks, eq(userIdentityLinks.id, directRecipients.claimId))
     .where(
       and(
-        eq(userIdentityLinks.userId, parsed.userId),
+        eq(userIdentityLinks.userId, targetUserId),
         eq(sessions.shadow_id, scope.shadowId),
         eq(sessions.status, "active"),
         channelId ? eq(sessions.channel_id, channelId) : undefined,
@@ -231,7 +240,7 @@ export function resolveLunaAddress(
         eq(sessions.status, "active"),
         eq(channelSurfaces.surfaceKind, "p2p"),
         eq(sessionTimelineEntries.entryKind, "message"),
-        eq(messages.senderUserId, parsed.userId),
+        eq(messages.senderUserId, targetUserId),
         channelId ? eq(sessions.channel_id, channelId) : undefined,
       ),
     )
@@ -251,10 +260,10 @@ export function resolveLunaAddress(
       .where(eq(sessions.id, candidateIds[0]!))
       .get()!;
     return {
-      address: `user:${parsed.userId}`,
+      address: `user:${targetUserId}`,
       kind: "user",
       sessionId: resolved.id,
-      targetUserId: parsed.userId,
+      targetUserId,
       channelId: resolved.channel_id,
       ...(resolved.group_id ? { chatId: resolved.group_id } : {}),
     };
@@ -269,7 +278,7 @@ export function resolveLunaAddress(
 
   if (create && channelId) {
     const claims = feishuRecipientClaims(db, channelId, "open_id", {
-      userId: parsed.userId,
+      userId: targetUserId,
     });
     if (claims.length === 1) {
       const sessionId = resolveMessageTarget(
@@ -284,13 +293,53 @@ export function resolveLunaAddress(
         true,
       );
       return {
-        address: `user:${parsed.userId}`,
+        address: `user:${targetUserId}`,
         kind: "user",
         sessionId,
-        targetUserId: parsed.userId,
+        targetUserId,
         channelId,
       };
     }
+  }
+
+  if (options.allowLocalFallback) {
+    const existingLocal = db
+      .select()
+      .from(sessions)
+      .where(
+        and(
+          eq(sessions.agent_id, scope.agentId),
+          eq(sessions.shadow_id, scope.shadowId),
+          eq(sessions.channel_type, "dashboard"),
+          eq(sessions.kind, "main"),
+          eq(sessions.status, "active"),
+          eq(sessions.created_by_user_id, targetUserId),
+          eq(sessions.title, "审批与通知"),
+        ),
+      )
+      .get();
+    if (existingLocal) {
+      return {
+        address: `user:${targetUserId}`,
+        kind: "user",
+        sessionId: existingLocal.id,
+        targetUserId,
+      };
+    }
+    const created = new SessionStore(db).createLocalSession(targetUserId, {
+      agentId: scope.agentId,
+      shadowId: scope.shadowId,
+    });
+    db.update(sessions)
+      .set({ title: "审批与通知", updated_at: Date.now() })
+      .where(eq(sessions.id, created.id))
+      .run();
+    return {
+      address: `user:${targetUserId}`,
+      kind: "user",
+      sessionId: created.id,
+      targetUserId,
+    };
   }
 
   throw new GatewayError(

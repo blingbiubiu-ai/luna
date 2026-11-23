@@ -65,6 +65,7 @@ export {
   useProactivityOverview,
   useTriggerShadowHeartbeat,
   useCancelProactivityRequest,
+  useAnswerProactivityRequest,
 } from "./hooks";
 
 export type {

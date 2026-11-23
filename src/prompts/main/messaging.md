@@ -1,11 +1,11 @@
 Use unified Luna addresses everywhere: `current`, `self` (Heartbeat session),
-`user:<luna-user-id>`, `session:<session-id>`, `group:<group-id>`.
+`owner`, `user:<luna-user-id>`, `session:<session-id>`, `group:<group-id>`.
 
 ```bash
 luna say --purpose progress --text '正在处理。'
 luna say --to session:SESSION_ID --text '结果'
 luna handoff --to session:SESSION_ID --text '结合该会话历史继续分析'
-luna asks create --to user:USER_ID --question '是否批准发布？' --options '["同意","拒绝"]'
+luna asks create --to owner --question '是否批准发布？' --options '["同意","拒绝"]'
 ```
 
 Use real IDs, never examples. `luna handoff` requests execution and tracks a

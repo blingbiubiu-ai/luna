@@ -1,10 +1,12 @@
 import { and, desc, eq, inArray, sql } from "drizzle-orm";
 import { Hono, type Context } from "hono";
 import { HTTPException } from "hono/http-exception";
+import { z } from "zod";
 import { AgentError, AgentStore } from "@/agents/agent-store";
 import { resolveProactivitySettings } from "@/agents/agent-settings-store";
 import { queryShadowActivity } from "@/agents/shadow-activity";
 import { triggerShadowHeartbeatNow } from "@/agents/shadow-heartbeat";
+import type { ReplyChannel } from "@/channels/outbound";
 import type { DrizzleDB } from "@/data";
 import {
   agentShadows,
@@ -19,6 +21,7 @@ import {
   shadowHeartbeats,
   users,
 } from "@/data/schema";
+import { CorrelatedRequestService } from "@/messaging/correlated-request-service";
 import { inspectOutboundQuota } from "@/messaging/outbound-governance";
 import { sessionCommandsFor } from "@/messaging/session-command-service";
 import { PlatformSettingsStore } from "@/platform/platform-settings-store";
@@ -46,12 +49,30 @@ function resolveSessionDisplayTitle(
   return row.channel_type === "dashboard" ? "本地会话" : row.id.slice(0, 8);
 }
 
+const answerRequestBodySchema = z
+  .object({
+    answer: z.string().trim().min(1).max(20_000),
+    selectedOption: z.string().trim().min(1).max(64).optional(),
+  })
+  .strict();
+
 export function createAgentProactivityRoutes(
-  options: { db?: DrizzleDB } = {},
+  options: {
+    db?: DrizzleDB;
+    channelFor?: (id: string) => ReplyChannel | undefined;
+  } = {},
 ) {
   const db = () => options.db ?? getKernel().database.db;
-  const service = () =>
-    sessionCommandsFor(db(), id => getKernel().replyChannel(id));
+  const channelFor =
+    options.channelFor ??
+    ((id: string) => {
+      try {
+        return getKernel().replyChannel(id);
+      } catch {
+        return undefined;
+      }
+    });
+  const service = () => sessionCommandsFor(db(), channelFor);
 
   function ownerScope(c: Context): ProactivityOwnerScope {
     const auth = requireDashboardOnly(c);
@@ -281,6 +302,10 @@ export function createAgentProactivityRoutes(
         targetUserName: req.targetUserId
           ? (userNameById.get(req.targetUserId) ?? req.targetUserId)
           : null,
+        canAnswer:
+          req.kind === "ask" &&
+          req.status === "pending" &&
+          (!req.targetUserId || req.targetUserId === scope.actorUserId),
         instruction: req.instruction,
         contextSummary: req.contextSummary,
         options: req.optionsJson ?? [],
@@ -460,5 +485,44 @@ export function createAgentProactivityRoutes(
         }
       }
       return c.json({ ok: true, status: "cancelled", alreadySettled: false });
+    })
+    .post("/requests/:requestId/answer", async c => {
+      const scope = ownerScope(c);
+      const requestId = c.req.param("requestId");
+      const body = answerRequestBodySchema.parse(
+        await c.req.json().catch(() => null),
+      );
+      const d = db();
+      const existing = d
+        .select()
+        .from(correlatedRequests)
+        .where(
+          and(
+            eq(correlatedRequests.id, requestId),
+            eq(correlatedRequests.agentId, scope.agentId),
+          ),
+        )
+        .get();
+      if (!existing || existing.kind !== "ask") {
+        throw new GatewayError("ask_not_found", "Ask request not found", 404);
+      }
+      if (existing.targetUserId && existing.targetUserId !== scope.actorUserId) {
+        throw new GatewayError(
+          "ask_forbidden",
+          "This confirmation is addressed to another specific user",
+          403,
+        );
+      }
+      const { request, alreadyResolved } = new CorrelatedRequestService(
+        d,
+        channelFor,
+      ).answerAsk({
+        requestId,
+        answer: body.answer,
+        selectedOption: body.selectedOption,
+        resolvedByUserId: scope.actorUserId,
+        source: "dashboard",
+      });
+      return c.json({ ok: true, request, alreadyResolved });
     });
 }

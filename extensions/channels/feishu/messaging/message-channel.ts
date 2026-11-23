@@ -3316,7 +3316,12 @@ export class FeishuMessageChannel
                 {
                   tag: "button" as const,
                   text: { tag: "plain_text" as const, content: option },
-                  type: idx === 0 ? ("primary" as const) : ("default" as const),
+                  type:
+                    idx === 0
+                      ? ("primary" as const)
+                      : /^(婉拒|拒绝|驳回|取消|decline|reject)$/i.test(option.trim())
+                        ? ("danger" as const)
+                        : ("default" as const),
                   behaviors: [
                     {
                       type: "callback" as const,

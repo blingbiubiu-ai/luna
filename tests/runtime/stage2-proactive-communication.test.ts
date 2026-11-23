@@ -21,11 +21,15 @@ import {
   registerSessionCommands,
 } from "@/messaging/session-command-service";
 import { SessionStore } from "@/sessions/session-store";
+import { MessageStore } from "@/sessions/message-store";
 import { SessionTimelineEventStore } from "@/sessions/session-timeline-event-store";
+import { buildMainCapabilities } from "@/runners/capabilities";
 import { InvocationStore } from "@/runners/invocation-store";
 import { encodeInvocation } from "@/runners/invocation-codec";
 import { mainInvocations } from "@/runners/main-invocation-registry";
+import { RunnerOperationService } from "@/runners/operation-service";
 import { RunnerContextStore } from "@/runners/runner-context-store";
+import { TaskRunSupervisor } from "@/tasks/task-run-supervisor";
 import type { LunaAccessTokenClaims } from "@/server/auth/access-token-service";
 import { createRunnerMessageRoutes } from "@/server/routes/runner-messages";
 import { createRunnerRequestRoutes } from "@/server/routes/runner-requests";
@@ -419,4 +423,210 @@ test("outbound governance throttles duplicate/excess proactive sends, defers dur
   // Once wall-clock reaches `deferredCmd.availableAt`, `releaseDeferredOutboundCommands` promotes it to `pending`.
   expect(releaseDeferredOutboundCommands(db.db, deferredCmd.availableAt + 1)).toBe(1);
   expect(commands.get(deferredCmd.id)?.status).toBe("pending");
+});
+
+test("owner-targeted approval ask resolves `--to owner` server-side, rejects non-owner answers/clicks, preserves non-owner actor on expiry, and links original sourceMessageIds", async () => {
+  const commands = new SessionCommandService({ db: db.db, channelFor: () => undefined });
+  registerSessionCommands(db.db, commands);
+  const reqSvc = new CorrelatedRequestService(db.db, () => undefined);
+
+  // 1. Capabilities advertise `addressScope.allowOwner` without exposing raw owner UUID.
+  const caps = buildMainCapabilities(
+    db.db,
+    {
+      type: "session_trigger",
+      triggerId: "trig-cap",
+      sourceSessionId: "group-session",
+      requesterUserId: "colleague",
+      instruction: "check",
+      artifactRefs: [],
+      correlationId: "corr-1",
+      hops: 1,
+      context: { sessionId: "group-session", candidateOpenTasks: [] },
+    },
+    { agentId: scope.agentId, shadowId: scope.shadowId, actorUserId: "colleague" },
+  );
+  expect(caps.addressScope.allowOwner).toBe(true);
+  expect("ownerUserId" in caps.identity).toBe(false);
+
+  // 2. Group member (`colleague`) posts a request message in `group-session`.
+  const groupMsg = new MessageStore(db.db).appendOnce({
+    sessionId: "group-session",
+    channelMessageKey: "om_colleague_req",
+    role: "user",
+    senderUserId: "colleague",
+    channel: { id: "luna-dashboard", type: "dashboard" },
+    content: [{ type: "text", text: "帮我排查一下线上告警并出报告" }],
+  }).row;
+
+  // 3. Main sends an approval card to `--to owner` (server resolves `user:alice` and falls back to local session if needed).
+  const ask = reqSvc.createAsk({
+    actor: {
+      userId: "colleague",
+      agentId: scope.agentId,
+      shadowId: scope.shadowId,
+      sourceSessionId: "group-session",
+      currentSessionId: "group-session",
+      originId: "turn-colleague-1",
+    },
+    key: "owner-approval-1",
+    toAddress: "owner",
+    question: "群成员 colleague 请求排查线上告警，是否执行？",
+    contextSummary: `sourceMessageId=${groupMsg.id}`,
+    options: ["同意执行", "同意（后续免审）", "暂不处理"],
+    expiresInMs: 3_600_000,
+    now: NOW,
+  });
+  expect(ask.targetUserId).toBe("user:alice");
+  expect(ask.targetAddress).toBe("user:user:alice");
+
+  // Direct `answerAsk` by a non-target user is rejected with 403 `ask_forbidden`!
+  expect(() =>
+    reqSvc.answerAsk({
+      requestId: ask.id,
+      answer: "同意执行",
+      selectedOption: "同意执行",
+      resolvedByUserId: "colleague",
+      source: "runner",
+      expectedShadowId: scope.shadowId,
+      expectedTargetSessionId: ask.targetSessionId,
+    }),
+  ).toThrow("Ask targets another user");
+
+  // Overdue ask originated by `colleague` keeps `colleague` as return `actorUserId` (does NOT escalate to owner)!
+  const expiringAsk = reqSvc.createAsk({
+    actor: {
+      userId: "colleague",
+      agentId: scope.agentId,
+      shadowId: scope.shadowId,
+      sourceSessionId: "group-session",
+      currentSessionId: "group-session",
+      originId: "turn-colleague-exp",
+    },
+    key: "owner-approval-exp",
+    toAddress: "owner",
+    question: "是否批准？",
+    expiresInMs: 60_000,
+    now: NOW,
+  });
+  const [expiredCmdId] = runSelfRoutine(
+    { db: db.db, commands, now: NOW + 120_000 },
+    createCorrelatedRequestExpiryRoutine(),
+  );
+  expect(expiredCmdId).toBeTruthy();
+  expect(commands.get(expiredCmdId!)?.actorUserId).toBe("colleague");
+
+  // Bind Feishu identities for `colleague` (`ou_colleague`) and `user:alice` (`ou_alice`) to test card operator guard.
+  db.db.insert(schema.userIdentityLinks)
+    .values([
+      {
+        id: "link_colleague",
+        agentId: scope.agentId,
+        userId: "colleague",
+        identityNamespace: "feishu",
+        identityKind: "open_id",
+        identityValue: "ou_colleague",
+        identityScope: "app:test",
+        confidence: "verified",
+        createdAt: "1",
+        updatedAt: "1",
+      },
+      {
+        id: "link_owner",
+        agentId: scope.agentId,
+        userId: "user:alice",
+        identityNamespace: "feishu",
+        identityKind: "open_id",
+        identityValue: "ou_alice",
+        identityScope: "app:test",
+        confidence: "verified",
+        createdAt: "1",
+        updatedAt: "1",
+      },
+    ])
+    .run();
+
+  // Non-owner clicking the card is rejected!
+  const rejectedClick = await reqSvc.handleCardAction({
+    channel: { id: "ch-1", type: "feishu" },
+    actionValue: { requestId: ask.id, option: "同意执行" },
+    operatorIdentity: { externalId: "ou_colleague", kind: "user", displayName: "Colleague" },
+  });
+  expect(rejectedClick?.toast?.type).toBe("warning");
+
+  // Unbound stranger (`userId === null`) clicking the card is also rejected!
+  const strangerClick = await reqSvc.handleCardAction({
+    channel: { id: "ch-1", type: "feishu" },
+    actionValue: { requestId: ask.id, option: "同意执行" },
+    operatorIdentity: { externalId: "ou_stranger", kind: "user", displayName: "Stranger" },
+  });
+  expect(strangerClick?.toast?.type).toBe("warning");
+
+  // Owner clicking the card succeeds and queues `request_result` back to `group-session` with owner actor & role.
+  const ownerClick = await reqSvc.handleCardAction({
+    channel: { id: "ch-1", type: "feishu" },
+    actionValue: { requestId: ask.id, option: "同意执行" },
+    operatorIdentity: { externalId: "ou_alice", kind: "user", displayName: "Alice" },
+  });
+  expect(ownerClick?.toast?.type).toBe("success");
+
+  const settled = db.db
+    .select()
+    .from(schema.correlatedRequests)
+    .where(eq(schema.correlatedRequests.id, ask.id))
+    .get()!;
+  expect(settled.returnCommandId).toBeTruthy();
+  const approvedReturnCmd = commands.get(settled.returnCommandId!)!;
+  expect(approvedReturnCmd.actorUserId).toBe("user:alice");
+  expect(
+    (approvedReturnCmd.payload as { requestResult?: { resolvedByRole?: string } })
+      .requestResult?.resolvedByRole,
+  ).toBe("owner");
+
+  // 4. In the `request_result` (`session_trigger`) turn on `group-session`, Main dispatches `task.create`
+  // referencing `groupMsg.id` — preserving `colleague` as requester and rejecting foreign message IDs!
+  const triggerClaims = mintClaims("group-session", "user:alice", `request-result:${ask.id}`);
+  const supervisor = new TaskRunSupervisor({
+    db: db.db,
+    runnerType: "mock",
+    executeRun: async () => ({ finalReportArtifactId: "art_1" }),
+  });
+  const opSvc = new RunnerOperationService(db.db, supervisor);
+
+  const taskReceipt = await opSvc.execute(triggerClaims, "task.create", "approved-task-1", {
+    title: "排查线上告警",
+    summary: "Owner 已同意执行",
+    facts: ["来自群聊请求"],
+    sourceMessageIds: [groupMsg.id],
+    sendStatusCard: false,
+  });
+  expect(taskReceipt.status).toBe("applied");
+  await supervisor.waitForIdle();
+
+  const createdTask = db.db
+    .select()
+    .from(schema.tasks)
+    .where(eq(schema.tasks.id, taskReceipt.taskIds[0]!))
+    .get()!;
+  expect(createdTask.creator_user_id).toBe("colleague");
+  expect(createdTask.source_message_id).toBe(groupMsg.id);
+
+  // Foreign message ID not in `group-session` timeline is still rejected!
+  const otherMsg = new MessageStore(db.db).appendOnce({
+    sessionId: ownerDirectSessionId,
+    channelMessageKey: "om_private_other",
+    role: "user",
+    senderUserId: "user:alice",
+    channel: { id: "luna-dashboard", type: "dashboard" },
+    content: [{ type: "text", text: "private" }],
+  }).row;
+  await expect(
+    opSvc.execute(triggerClaims, "task.create", "foreign-msg-attempt", {
+      title: "越权引用消息",
+      summary: "不应允许",
+      facts: [],
+      sourceMessageIds: [otherMsg.id],
+      sendStatusCard: false,
+    }),
+  ).rejects.toThrow("must belong to this session");
 });

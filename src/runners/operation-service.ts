@@ -1,9 +1,15 @@
 import { InvocationService } from "./invocation-service";
 import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
-import { and, eq, inArray } from "drizzle-orm";
+import { and, eq, inArray, isNull } from "drizzle-orm";
 import type { DrizzleDB } from "@/data";
-import { runnerOperations, sessions, users } from "@/data/schema";
+import {
+  messages,
+  runnerOperations,
+  sessionTimelineEntries,
+  sessions,
+  users,
+} from "@/data/schema";
 import { runnerActorUserId, type LunaAccessTokenClaims } from "@/server/auth/access-token-service";
 import { GatewayError } from "@/server/gateway-error";
 import { SessionDispatcher } from "@/sessions/session-dispatcher";
@@ -25,6 +31,18 @@ export class OperationExecutionError extends Error {
 
 type Operation = typeof runnerOperations.$inferSelect;
 const lanes = new WeakMap<DrizzleDB, SessionDispatcher>();
+
+function extractPlainText(contentJson: unknown): string | undefined {
+  if (!Array.isArray(contentJson)) return undefined;
+  const parts: string[] = [];
+  for (const item of contentJson) {
+    if (item && typeof item === "object" && "text" in item && typeof item.text === "string") {
+      parts.push(item.text);
+    }
+  }
+  const joined = parts.join("\n").trim();
+  return joined || undefined;
+}
 
 /** Authenticated transport and durable operation lifecycle, separate from task domain logic. */
 export class RunnerOperationService {
@@ -61,16 +79,87 @@ export class RunnerOperationService {
       }
       const session = this.db.select().from(sessions).where(eq(sessions.id, sessionId)).get();
       if (!session || session.status !== "active") throw new GatewayError("session_unavailable", "Session unavailable", 409);
+
       const availableIds = input.type === "user_messages" ? input.messages.map(row => row.messageId) : [];
       const selectedIds = "sourceMessageIds" in payload && payload.sourceMessageIds ? payload.sourceMessageIds : availableIds;
-      if (selectedIds.some(id => !availableIds.includes(id))) throw new GatewayError("invalid_source", "Source messages must belong to the current invocation", 403);
-      const context: OperationContext = {sessionId, originId, actorUserId: runnerActorUserId(claims!), sourceMessageIds: [...new Set(selectedIds)],
-        inbound: input.type === "user_messages" ? (input.messages.find(row => row.messageId === selectedIds.at(-1))?.rawMessage ?? input.latestMessage) : {
-          id: session.root_message_key ?? `trigger:${input.triggerId}`,
-          channel: {type: session.channel_type, id: session.channel_id}, surface: {externalId: session.group_id ?? session.channel_id, kind: "unknown"},
-          sender: {kind: "user", externalId: runnerActorUserId(claims!), requesterIdentity: {provider: "local", externalUserId: runnerActorUserId(claims!), canonicalUserId: runnerActorUserId(claims!)}},
-          text: input.instruction, mentions: [], addressing: {addressedToBot: true, reason: "p2p"},
-          ...(session.thread_key ? {thread: {externalId: session.thread_key, ...(session.root_message_key ? {rootMessageExternalId: session.root_message_key} : {})}} : {})}};
+      if (input.type === "user_messages") {
+        if (selectedIds.some(id => !availableIds.includes(id))) {
+          throw new GatewayError("invalid_source", "Source messages must belong to the current invocation", 403);
+        }
+      } else if (selectedIds.length > 0) {
+        // In a trigger turn (e.g. `request_result` after Owner approves a group member's request),
+        // allow linking earlier non-deleted messages visible in THIS session's timeline.
+        const uniqueSelected = [...new Set(selectedIds)];
+        const visibleRows = this.db
+          .select({ messageId: sessionTimelineEntries.messageId })
+          .from(sessionTimelineEntries)
+          .innerJoin(messages, eq(messages.id, sessionTimelineEntries.messageId))
+          .where(
+            and(
+              eq(sessionTimelineEntries.sessionId, sessionId),
+              inArray(sessionTimelineEntries.messageId, uniqueSelected),
+              isNull(messages.deletedAt),
+            ),
+          )
+          .all();
+        const visibleSet = new Set(visibleRows.map(r => r.messageId).filter((v): v is string => Boolean(v)));
+        if (uniqueSelected.some(id => !visibleSet.has(id))) {
+          throw new GatewayError("invalid_source", "Source messages must belong to this session", 403);
+        }
+      }
+
+      const triggerAnchorMsg =
+        input.type !== "user_messages" && selectedIds.length > 0
+          ? (() => {
+              const rowsById = new Map(
+                this.db
+                  .select()
+                  .from(messages)
+                  .where(inArray(messages.id, [...new Set(selectedIds)]))
+                  .all()
+                  .map(m => [m.id, m] as const),
+              );
+              const ordered = selectedIds
+                .map(id => rowsById.get(id))
+                .filter((m): m is NonNullable<typeof m> => Boolean(m));
+              return [...ordered].reverse().find(m => m.role === "user") ?? ordered.at(-1);
+            })()
+          : undefined;
+
+      const context: OperationContext = {
+        sessionId,
+        originId,
+        actorUserId: runnerActorUserId(claims!),
+        sourceMessageIds: [...new Set(selectedIds)],
+        inbound:
+          input.type === "user_messages"
+            ? (input.messages.find(row => row.messageId === selectedIds.at(-1))?.rawMessage ?? input.latestMessage)
+            : {
+                id: triggerAnchorMsg?.externalMessageId ?? session.root_message_key ?? `trigger:${input.triggerId}`,
+                channel: { type: session.channel_type, id: session.channel_id },
+                surface: { externalId: session.group_id ?? session.channel_id, kind: session.group_id ? "group" : "unknown" },
+                sender: {
+                  kind: "user",
+                  externalId: triggerAnchorMsg?.senderUserId ?? runnerActorUserId(claims!),
+                  requesterIdentity: {
+                    provider: "local",
+                    externalUserId: triggerAnchorMsg?.senderUserId ?? runnerActorUserId(claims!),
+                    canonicalUserId: triggerAnchorMsg?.senderUserId ?? runnerActorUserId(claims!),
+                  },
+                },
+                text: (triggerAnchorMsg ? extractPlainText(triggerAnchorMsg.contentJson) : undefined) ?? input.instruction,
+                mentions: [],
+                addressing: { addressedToBot: true, reason: session.group_id ? "mention" : "p2p" },
+                ...(session.thread_key
+                  ? {
+                      thread: {
+                        externalId: session.thread_key,
+                        ...(session.root_message_key ? { rootMessageExternalId: session.root_message_key } : {}),
+                      },
+                    }
+                  : {}),
+              },
+      };
       const now = Date.now();
       const row: Operation = {id: randomUUID(), sessionId, originId, requestId, request, context, status: "accepted", result: null, error: null, createdAt: now, updatedAt: now};
       this.db.insert(runnerOperations).values(row).run();

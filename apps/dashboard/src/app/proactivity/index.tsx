@@ -19,6 +19,7 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useAgentBasePath, useRouteAgent } from "@/lib/agent-route";
 import {
+  useAnswerProactivityRequest,
   useCancelProactivityRequest,
   useProactivityOverview,
   useTriggerShadowHeartbeat,
@@ -83,6 +84,7 @@ function ProactivityPage() {
   const overviewQuery = useProactivityOverview(selection.scope);
   const triggerHeartbeat = useTriggerShadowHeartbeat(agent.id);
   const cancelRequest = useCancelProactivityRequest(agent.id);
+  const answerRequest = useAnswerProactivityRequest(agent.id);
 
   const [ledgerTab, setLedgerTab] = useState<LedgerTab>("requests");
   const [requestFilter, setRequestFilter] = useState<RequestFilter>("all");
@@ -493,7 +495,19 @@ function ProactivityPage() {
                           ? (cancelRequest.variables ?? null)
                           : null
                       }
+                      answeringKey={
+                        answerRequest.isPending && answerRequest.variables
+                          ? `${answerRequest.variables.requestId}:${answerRequest.variables.selectedOption ?? answerRequest.variables.answer}`
+                          : null
+                      }
                       onCancel={id => cancelRequest.mutate(id)}
+                      onAnswer={(requestId, opt) =>
+                        answerRequest.mutate({
+                          requestId,
+                          answer: opt,
+                          selectedOption: opt,
+                        })
+                      }
                     />
                   ) : (
                     <GovernanceLedgerPanel
@@ -831,7 +845,9 @@ function RequestsLedgerPanel({
   now,
   timezone,
   cancellingId,
+  answeringKey,
   onCancel,
+  onAnswer,
 }: {
   readonly items: readonly DashboardCorrelatedRequestItem[];
   readonly hasFilter: boolean;
@@ -839,7 +855,9 @@ function RequestsLedgerPanel({
   readonly now: number;
   readonly timezone: string;
   readonly cancellingId: string | null;
+  readonly answeringKey: string | null;
   readonly onCancel: (id: string) => void;
+  readonly onAnswer: (requestId: string, option: string) => void;
 }) {
   if (items.length === 0) {
     return (
@@ -952,26 +970,49 @@ function RequestsLedgerPanel({
               {item.instruction}
             </p>
 
-            {/* Options Chips */}
+            {/* Options Action Buttons (when pending) or Chips (once settled) */}
             {item.options.length > 0 && (
-              <div className="mt-2 flex flex-wrap items-center gap-1.5">
-                {item.options.map(opt => {
-                  const chosen = selectedOption === opt;
-                  return (
-                    <span
-                      key={opt}
-                      className={cn(
-                        "inline-flex items-center gap-1 rounded-full border px-2.5 py-0.5 text-xs",
-                        chosen
-                          ? "border-[#5b8a72]/35 bg-[#5b8a72]/14 font-medium text-[#5b8a72] dark:border-[#7fb096]/35 dark:bg-[#7fb096]/16 dark:text-[#7fb096]"
-                          : "border-border bg-muted/45 text-muted-foreground",
-                      )}
-                    >
-                      {chosen && <Check className="size-3" />}
-                      {opt}
-                    </span>
-                  );
-                })}
+              <div className="mt-2.5 flex flex-wrap items-center gap-2">
+                {item.kind === "ask" && item.status === "pending" && item.canAnswer !== false
+                  ? item.options.map((opt, idx) => {
+                      const isReject = /^(婉拒|拒绝|驳回|取消|decline|reject)$/i.test(
+                        opt.trim(),
+                      );
+                      const isSubmitting = answeringKey === `${item.id}:${opt}`;
+                      return (
+                        <Button
+                          key={opt}
+                          type="button"
+                          size="xs"
+                          variant={idx === 0 ? "default" : "outline"}
+                          disabled={answeringKey !== null || cancellingId === item.id}
+                          onClick={() => onAnswer(item.id, opt)}
+                          className={cn(
+                            isReject &&
+                              "border-[#b5544a]/35 text-[#b5544a] hover:bg-[#b5544a]/10 hover:text-[#b5544a] dark:border-[#dc7a70]/35 dark:text-[#dc7a70]",
+                          )}
+                        >
+                          {isSubmitting ? "处理中…" : opt}
+                        </Button>
+                      );
+                    })
+                  : item.options.map(opt => {
+                      const chosen = selectedOption === opt;
+                      return (
+                        <span
+                          key={opt}
+                          className={cn(
+                            "inline-flex items-center gap-1 rounded-full border px-2.5 py-0.5 text-xs",
+                            chosen
+                              ? "border-[#5b8a72]/35 bg-[#5b8a72]/14 font-medium text-[#5b8a72] dark:border-[#7fb096]/35 dark:bg-[#7fb096]/16 dark:text-[#7fb096]"
+                              : "border-border bg-muted/45 text-muted-foreground",
+                          )}
+                        >
+                          {chosen && <Check className="size-3" />}
+                          {opt}
+                        </span>
+                      );
+                    })}
               </div>
             )}
 

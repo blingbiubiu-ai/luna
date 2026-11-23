@@ -94,6 +94,7 @@ All Runner commands address conversations uniformly via `src/messaging/luna-addr
 
 - `current` — the invocation's current session
 - `self` — this Shadow's dedicated `"心跳"` local session
+- `owner` — server-resolved direct (`p2p` or local) session for the Agent owner (derived from the signed `LUNA_ACCESS_TOKEN` Agent scope without exposing or trusting caller-supplied UUIDs)
 - `user:<luna-user-id>` — direct (`p2p` or local) session with that user in this Shadow
 - `session:<session-id>` — an existing session in this Shadow
 - `group:<group-id>` — group session for a directory surface in this Shadow
@@ -112,8 +113,21 @@ All Runner commands address conversations uniformly via `src/messaging/luna-addr
   (or `--declined --reason ...`).
 - Whenever an `ask` or `handoff` settles (`answered`, `done`, `declined`,
   `expired`), `CorrelatedRequestService` queues a `session.invoke` carrying
-  `requestResult` back to `originSessionId`, delivered as a `request_result`
-  event in `<events>`.
+  `requestResult` (including `resolvedByRole: "owner" | "member"`) back to
+  `originSessionId`, delivered as a `request_result` event in `<events>`. When
+  `resolvedByUserId` is absent (e.g. `expired` or `handoff` return), the return
+  trigger preserves the originating outbound command's `actorUserId` rather than
+  escalating to `ownerUserId`.
+- **Memory-Driven Owner Approval Loop**: when the Agent owner instructs the Agent
+  in natural language (saved in `persona` / `chat` memory, e.g. asking before
+  taking group requests) or when a non-owner requests external writes or standing
+  duties, Main Runner sends an interactive Feishu card (`luna asks create --to owner --options '[...]'`).
+  `CorrelatedRequestService` enforces `targetUserId` across Feishu card clicks,
+  Dashboard actions, and `answerAsk`, updates the card in-place, and returns
+  `request_result` (under the resolver's `actorUserId`) to the group session;
+  `RunnerOperationService` allows that trigger turn's `luna tasks create` to link
+  the original requester's `sourceMessageIds` from the session timeline so
+  attachments, thread anchors, and requester attribution are preserved.
 
 ## Outbound Governance
 

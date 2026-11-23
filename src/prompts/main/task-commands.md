@@ -26,4 +26,4 @@ Task payloads contain only domain fields; send acknowledgments as your final rep
 Mutations take `--stdin` or `--json '<object>'` (idempotency derived automatically)
 and return `commandId`, `status: "applied"`, `taskIds`, `runId`. Acknowledge only
 after `applied`. Issue separate `create` calls for multiple tasks, selecting
-`sourceMessageIds` per task when needed.
+`sourceMessageIds` from this session when needed (including in trigger turns).
