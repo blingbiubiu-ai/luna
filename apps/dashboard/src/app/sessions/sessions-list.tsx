@@ -26,7 +26,15 @@ import {
   SessionAvatar,
 } from "./session-avatar";
 
-type SideFilter = "all" | "group" | "direct" | "listening";
+type SideFilter = "all" | "group" | "direct" | "listening" | "routine";
+
+function isSelfRoutineSession(session: DashboardSession): boolean {
+  return (
+    session.channel_type === "dashboard" &&
+    !session.group_id &&
+    (session.title === "心跳" || session.title === "记忆整理")
+  );
+}
 
 const FIRST_TOPICS = 3;
 const TOPIC_STEP = 10;
@@ -115,6 +123,7 @@ export function SessionsList({
         if (sideFilter === "group") return item.kind === "group";
         if (sideFilter === "direct") return item.kind === "direct";
         if (sideFilter === "listening") return item.root.listening === true;
+        if (sideFilter === "routine") return isSelfRoutineSession(item.root);
         return true;
       })
       .filter((item) => {
@@ -221,6 +230,7 @@ export function SessionsList({
               ["group", "群聊"],
               ["direct", "私聊"],
               ["listening", "旁听中"],
+              ["routine", "自驱"],
             ] as const
           ).map(([key, label]) => (
             <button
@@ -266,7 +276,9 @@ export function SessionsList({
                     ? "暂无历史绑定会话"
                     : sideFilter === "listening"
                       ? "暂无开启旁听的群聊"
-                      : t("No sessions")}
+                      : sideFilter === "routine"
+                        ? "暂无自驱会话（心跳或记忆整理触发后自动生成）"
+                        : t("No sessions")}
               </EmptyTitle>
               {!normalizedQuery && !showHistory && sideFilter === "all" ? (
                 <EmptyDescription>
@@ -350,6 +362,11 @@ export function SessionsList({
                       {root.kind === "work" ? (
                         <span className="shrink-0 rounded-[4px] bg-[#7d6b91]/16 px-[5px] text-[10.5px] leading-[17px] font-medium text-[#7d6b91] dark:text-[#b2a1c7]">
                           工作
+                        </span>
+                      ) : null}
+                      {isSelfRoutineSession(root) ? (
+                        <span className="shrink-0 rounded-[4px] bg-amber-500/18 px-[5px] text-[10.5px] leading-[17px] font-medium text-amber-700 dark:text-amber-300">
+                          自驱
                         </span>
                       ) : null}
                     </div>

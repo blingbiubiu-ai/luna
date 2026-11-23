@@ -81,3 +81,35 @@ export function addressingFacts(latest: NormalizedInboundMessage) {
   const others = latest.addressing?.reason === "activation_followup" ? (latest.mentions ?? []).length > 0 : undefined;
   return compact({ addressed: latest.addressing.addressedToBot, reason: latest.addressing.reason, latestMentionsOthers: others });
 }
+
+export type TurnEventKind =
+  | "message"
+  | "pending_ask"
+  | "task_result"
+  | "schedule_fired"
+  | "handoff"
+  | "request_result"
+  | "routine"
+  | "clarification";
+
+export interface TurnEventEnvelope {
+  readonly id: string;
+  readonly kind: TurnEventKind;
+  readonly time: string;
+  readonly source: string;
+  readonly actor?: string | null | undefined;
+  readonly correlationId?: string | undefined;
+  readonly payload: Record<string, unknown>;
+}
+
+export function turnEvent(input: TurnEventEnvelope): Partial<TurnEventEnvelope> {
+  return compact({
+    id: input.id,
+    kind: input.kind,
+    time: input.time,
+    source: input.source,
+    actor: input.actor ?? undefined,
+    correlationId: input.correlationId,
+    payload: input.payload,
+  });
+}

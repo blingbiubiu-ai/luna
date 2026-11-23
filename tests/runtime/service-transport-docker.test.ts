@@ -205,7 +205,7 @@ test.skipIf(process.env.LUNA_PROVIDER_INTEGRATION !== "1")("Real Service transpo
         const workSession = sessionStore.getById(created.id)!;
         const answer = `WORK_${crypto.randomUUID().replaceAll("-", "")}`;
         const message = new MessageStore(db).append({ sessionId: workSession.id, senderUserId: "user:user", role: "user",
-          content: [{ type: "text", text: `Send exactly ${answer} to this session using luna messages send --text ${answer} --request-id work-${mode} --purpose answer. Use the shell command bun /app/luna-cli/cli.js messages send if luna is not on PATH. Do not read files or do any other work.` }] });
+          content: [{ type: "text", text: `Send exactly ${answer} to this session using luna say --text ${answer} --purpose answer. Use the shell command bun /app/luna-cli/cli.js say if luna is not on PATH. Do not read files or do any other work.` }] });
         const entry = new SessionTimelineStore(db).appendMessage({ sessionId: workSession.id, messageId: message.id });
         const inbox = new SessionInboxStore(db).enqueueOnce({ sessionId: workSession.id, entryId: entry.id, message });
         const work = new WorkRunner({ db, runnerType: profile.agentType, channelForMessage: channelFor, createRunner: () => {

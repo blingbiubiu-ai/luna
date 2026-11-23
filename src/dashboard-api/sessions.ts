@@ -277,8 +277,13 @@ export interface DashboardSessionConversationControlEvent {
   readonly id: string;
   readonly entryId: string;
   readonly eventType: "conversation_control";
-  readonly controlKind: "followup_interrupted";
-  readonly reasonKind: "focus_shifted";
+  readonly controlKind: "followup_interrupted" | "outbound_throttled" | "outbound_deferred";
+  readonly reasonKind:
+    | "focus_shifted"
+    | "duplicate_content"
+    | "session_hourly_limit"
+    | "recipient_daily_limit"
+    | "quiet_hours";
   readonly summary: string;
   readonly sourceMessageId: string;
   readonly anchorMessageId: string;
@@ -1209,8 +1214,27 @@ export function toDashboardSessionTimeline(input: {
       ? item.messages.map((message) => ({ type: "message" as const, message }))
       : [item],
   );
+  const renderedTurnIds = new Set(
+    items.flatMap((item) => (item.type === "turn" ? [item.turn.id] : [])),
+  );
+  const standaloneTurns: DashboardSessionTimelineItem[] = input.turns
+    .filter(
+      (turn) =>
+        !renderedTurnIds.has(turn.id) &&
+        turn.messageIds.length === 0 &&
+        (turn.materializedPrompt !== null ||
+          turn.runnerAttempts.length > 0 ||
+          turn.status === "running" ||
+          turn.status === "failed"),
+    )
+    .map((turn) => ({
+      type: "turn" as const,
+      turn: toDashboardSessionTimelineTurn(turn, 0),
+      messages: [],
+    }));
   const timelineItems = [
     ...groupedItems,
+    ...standaloneTurns,
     ...(input.events ?? []).map((event) => ({ type: "event" as const, event })),
   ];
   return timelineItems.sort(compareDashboardSessionTimelineItems);
@@ -1257,8 +1281,8 @@ export function toDashboardSessionConversationControlEvent(
     id: row.id,
     entryId: row.entryId,
     eventType: "conversation_control",
-    controlKind: "followup_interrupted",
-    reasonKind: "focus_shifted",
+    controlKind: (row.controlKind as DashboardSessionConversationControlEvent["controlKind"]) ?? "followup_interrupted",
+    reasonKind: (row.reasonKind as DashboardSessionConversationControlEvent["reasonKind"]) ?? "focus_shifted",
     summary: row.summary,
     sourceMessageId: row.sourceMessageId,
     anchorMessageId: row.anchorMessageId,

@@ -1,61 +1,207 @@
 import type { CliResult, Env } from "@luna/cli-support/types";
-import { readOption } from "@luna/cli-support/options";
-import { callUnifiedService } from "@luna/cli-support/service-client";
-export async function runGroupsCli(argv: readonly string[], env: Env): Promise<CliResult> {
-  if (argv.includes("--json") || argv.includes("--stdin")) {
-    try {
-      const action = argv[0];
-      if (action !== "create" && action !== "invite") throw new Error("JSON input is available for groups create and invite");
-      const stdin = argv.includes("--stdin");
+import { hasFlag, readOption } from "@luna/cli-support/options";
+import {
+  assertNoLegacyRequestId,
+  callUnifiedService,
+  deriveCommandIdempotencyKey,
+  submitAndWaitCommand,
+} from "@luna/cli-support/service-client";
+
+const GROUPS_USAGE = [
+  "Usage:",
+  "  luna groups search [--query <name>] [--user <user:<id>>] [--limit <n>] [--offset <n>]",
+  "  luna groups get <group-id>",
+  "  luna groups lookup --channel-id <id> --chat-id <id>",
+  "  luna groups create --name <name> --member user:<id> [--member user:<id>...] [--context-message <luna-message-id>...] [--repeat]",
+  "  luna groups invite [--to group:<id>] --member user:<id> [--member user:<id>...] [--repeat]",
+  "  luna groups create|invite (--json '<object>' | --stdin) [--repeat]",
+].join("\n");
+
+export async function runGroupsCli(
+  argv: readonly string[],
+  env: Env,
+): Promise<CliResult> {
+  const action = argv[0];
+  if (
+    !action ||
+    action === "help" ||
+    hasFlag(argv, "--help") ||
+    hasFlag(argv, "-h")
+  ) {
+    return { status: "ok", output: GROUPS_USAGE };
+  }
+  try {
+    assertNoLegacyRequestId(argv);
+    if (action === "status") {
+      return {
+        status: "error",
+        code: "legacy_status_removed",
+        message:
+          "Per-domain status subcommands are removed in Protocol v2; use `luna commands status <id>` or `luna commands wait <id>`",
+      };
+    }
+
+    if (argv.includes("--json") || hasFlag(argv, "--stdin")) {
+      if (action !== "create" && action !== "invite") {
+        throw new Error("JSON input is available for groups create and invite");
+      }
+      const stdin = hasFlag(argv, "--stdin");
       const jsonIndex = argv.indexOf("--json");
       const inline = jsonIndex === -1 ? undefined : argv[jsonIndex + 1];
       const jsonValue = inline && !inline.startsWith("--") ? inline : undefined;
-      if (!argv.includes("--json") || (!stdin && !jsonValue) || (stdin && jsonValue))
-        throw new Error("Use --json --stdin or --json '<object>'");
-      const key = readOption(argv, "--request-id");
-      const options = argv.slice(1).filter((_, index) => {
-        const position = index + 1;
-        return (!jsonValue || position !== jsonIndex + 1) && (key === undefined || position !== argv.indexOf("--request-id") + 1);
+      if ((!stdin && !jsonValue) || (stdin && jsonValue)) {
+        throw new Error("Use --stdin or --json '<object>'");
+      }
+      const body: unknown = JSON.parse(jsonValue ?? (await Bun.stdin.text()));
+      if (!body || typeof body !== "object" || Array.isArray(body)) {
+        throw new Error("Expected a JSON object");
+      }
+      const key = deriveCommandIdempotencyKey(
+        env,
+        `groups.${action}`,
+        body,
+        { repeat: hasFlag(argv, "--repeat") },
+      );
+      return await submitAndWaitCommand(env, {
+        method: "POST",
+        path:
+          action === "create"
+            ? "/api/runner/groups"
+            : "/api/runner/groups/invite",
+        idempotencyKey: key,
+        body: body as Record<string, unknown>,
       });
-      const allowed = ["--json", ...(stdin ? ["--stdin"] : []), ...(key ? ["--request-id"] : [])];
-      if (options.length !== allowed.length || allowed.some(flag => !options.includes(flag)))
-        throw new Error("Put group fields in JSON when using --json");
-      const body: unknown = JSON.parse(jsonValue ?? await Bun.stdin.text());
-      if (!body || typeof body !== "object" || Array.isArray(body)) throw new Error("Expected a JSON object");
-      return await callUnifiedService(env, { method: "POST", path: action === "create" ? "/api/runner/groups" : "/api/runner/groups/invite",
-        idempotencyKey: key ?? crypto.randomUUID(), body: body as Record<string, unknown> });
-    } catch (error) {
-      return { status: "error", code: "invalid_group_command", message: String(error) };
     }
-  }
-  const channelId = readOption(argv, "--channel-id");
-  const params = new URLSearchParams();
-  if (channelId) params.set("channelId", channelId);
-  if (argv[0] === "search") {
-    for (const [key, flag] of [["q", "--query"], ["userId", "--user-id"], ["limit", "--limit"], ["offset", "--offset"]] as const) {
-      const value = readOption(argv, flag);
-      if (value !== undefined) params.set(key, value);
+
+    if (action === "search") {
+      const params = new URLSearchParams();
+      const rawUser =
+        readOption(argv, "--user") ?? readOption(argv, "--user-id");
+      const userId = rawUser?.startsWith("user:")
+        ? rawUser.slice("user:".length)
+        : rawUser;
+      if (userId !== undefined) params.set("userId", userId);
+      for (const [key, flag] of [
+        ["q", "--query"],
+        ["limit", "--limit"],
+        ["offset", "--offset"],
+      ] as const) {
+        const value = readOption(argv, flag);
+        if (value !== undefined) params.set(key, value);
+      }
+      const qs = params.toString();
+      return await callUnifiedService(env, {
+        method: "GET",
+        path: qs ? `/api/runner/groups?${qs}` : "/api/runner/groups",
+      });
     }
-    return callUnifiedService(env, { method: "GET", path: `/api/runner/groups?${params}` });
+
+    if (action === "get" && argv[1] && !argv[1].startsWith("--")) {
+      const rawId = argv[1];
+      const groupId = rawId.startsWith("group:")
+        ? rawId.slice("group:".length)
+        : rawId;
+      return await callUnifiedService(env, {
+        method: "GET",
+        path: `/api/runner/groups/${encodeURIComponent(groupId)}`,
+      });
+    }
+
+    if (action === "lookup") {
+      const channelId = readOption(argv, "--channel-id");
+      const chatId = readOption(argv, "--chat-id");
+      if (!channelId || !chatId) {
+        return {
+          status: "error",
+          code: "invalid_group_command",
+          message: "Usage: luna groups lookup --channel-id <id> --chat-id <id>",
+        };
+      }
+      const params = new URLSearchParams({ channelId, chatId });
+      return await callUnifiedService(env, {
+        method: "GET",
+        path: `/api/runner/groups/lookup?${params}`,
+      });
+    }
+
+    for (const legacyFlag of ["--channel-id", "--chat-id", "--id-type"]) {
+      if (argv.includes(legacyFlag)) {
+        return {
+          status: "error",
+          code: "legacy_target_removed",
+          message: `${legacyFlag} is removed on groups ${action} in Protocol v2; pass unified addresses (--member user:<id>, --to group:<id>)`,
+        };
+      }
+    }
+
+    const memberIds = argv.flatMap((arg, i) =>
+      arg === "--member" && argv[i + 1] && !argv[i + 1]!.startsWith("--")
+        ? [argv[i + 1]!]
+        : [],
+    );
+
+    if (action === "invite" && memberIds.length > 0) {
+      const to = readOption(argv, "--to")?.trim();
+      const body = {
+        ...(to ? { to } : {}),
+        memberIds,
+      };
+      const key = deriveCommandIdempotencyKey(env, "groups.invite", body, {
+        repeat: hasFlag(argv, "--repeat"),
+      });
+      return await submitAndWaitCommand(env, {
+        method: "POST",
+        path: "/api/runner/groups/invite",
+        idempotencyKey: key,
+        body,
+      });
+    }
+
+    if (action === "create") {
+      const name = readOption(argv, "--name")?.trim();
+      const contextMessageIds: string[] = [];
+      for (let i = 0; i < argv.length; i++) {
+        if (argv[i] === "--context-message") {
+          const id = argv[i + 1];
+          if (!id || id.startsWith("--")) {
+            return {
+              status: "error",
+              code: "invalid_group_context",
+              message: "--context-message requires a Luna message ID",
+            };
+          }
+          contextMessageIds.push(id);
+        }
+      }
+      if (!name || memberIds.length === 0) {
+        return {
+          status: "error",
+          code: "invalid_group_command",
+          message: GROUPS_USAGE,
+        };
+      }
+      const body = { name, memberIds, contextMessageIds };
+      const key = deriveCommandIdempotencyKey(env, "groups.create", body, {
+        repeat: hasFlag(argv, "--repeat"),
+      });
+      return await submitAndWaitCommand(env, {
+        method: "POST",
+        path: "/api/runner/groups",
+        idempotencyKey: key,
+        body,
+      });
+    }
+
+    return {
+      status: "error",
+      code: "invalid_group_command",
+      message: GROUPS_USAGE,
+    };
+  } catch (error) {
+    return {
+      status: "error",
+      code: "invalid_group_command",
+      message: error instanceof Error ? error.message : String(error),
+    };
   }
-  if (argv[0] === "get" && argv[1]) return callUnifiedService(env, { method: "GET", path: `/api/runner/groups/${encodeURIComponent(argv[1])}` });
-  if (argv[0] === "status" && argv[1]) return callUnifiedService(env, { method: "GET", path: `/api/runner/commands/${encodeURIComponent(argv[1])}` });
-  const chatId = readOption(argv, "--chat-id");
-  if (argv[0] === "lookup" && channelId && chatId) {
-    params.set("chatId", chatId); return callUnifiedService(env, { method: "GET", path: `/api/runner/groups/lookup?${params}` });
-  }
-  const name = readOption(argv, "--name"), key = readOption(argv, "--request-id");
-  const memberIds = argv.flatMap((arg, i) => arg === "--member" && argv[i+1] && !argv[i+1]!.startsWith("--") ? [argv[i+1]!] : []);
-  if (argv[0] === "invite" && channelId && chatId && key && memberIds.length) return callUnifiedService(env, { method: "POST", path: "/api/runner/groups/invite", idempotencyKey: key,
-    body: { channelId, chatId, idType: readOption(argv, "--id-type") ?? "open_id", memberIds } });
-  const contextMessageIds: string[] = [];
-  for (let i = 0; i < argv.length; i++) if (argv[i] === "--context-message") {
-    const id = argv[i + 1];
-    if (!id || id.startsWith("--")) return {status: "error", code: "invalid_group_context", message: "--context-message requires a Luna message ID"};
-    contextMessageIds.push(id);
-  }
-  if (contextMessageIds.length && argv[0] !== "create") return {status: "error", code: "invalid_group_context", message: "Context messages belong to group creation"};
-  if (argv[0] === "create" && channelId && name && key && memberIds.length) return callUnifiedService(env, { method: "POST", path: "/api/runner/groups", idempotencyKey: key,
-    body: { channelId, name, idType: readOption(argv, "--id-type") ?? "open_id", memberIds, contextMessageIds } });
-  return { status: "error", code: "invalid_group_command", message: "Usage: luna groups search [--query <name>] [--user-id <Luna-user-id>]; get <group-id>; lookup --channel-id <id> --chat-id <id>; create --channel-id <id> --name <name> --member <provider-user-id> [--member <id>] [--context-message <luna-message-id>] --request-id <key> [--id-type open_id|user_id|union_id]; invite --channel-id <id> --chat-id <id> --member <provider-user-id> --request-id <key>; status <command-id>" };
 }

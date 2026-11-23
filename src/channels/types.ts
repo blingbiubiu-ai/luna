@@ -140,6 +140,23 @@ export interface RegisteredChannelRuntimeStatus
   readonly type: string;
 }
 
+export interface ChannelCardAction {
+  readonly channel: ChannelRef;
+  readonly providerMessageId?: string | undefined;
+  readonly chatId?: string | undefined;
+  readonly actionValue: Record<string, unknown>;
+  readonly operatorIdentity: ChannelIdentity;
+}
+
+export interface ChannelCardActionResult {
+  readonly toast?: {
+    readonly type: "info" | "success" | "warning" | "error";
+    readonly content: string;
+  } | undefined;
+  readonly updatedMarkdown?: string | undefined;
+  readonly updatedTitle?: string | undefined;
+}
+
 // Adapters isolate provider SDK lifecycle from Luna's provider-neutral runtime.
 export interface ChannelAdapter extends ReplyChannel {
   readonly id: string;
@@ -148,6 +165,9 @@ export interface ChannelAdapter extends ReplyChannel {
   stop?(): Promise<void>;
   getStatus?(): ChannelAdapterRuntimeStatus;
   subscribeInbound(handler: (message: NormalizedInboundMessage) => Promise<void>): Promise<void>;
+  subscribeCardActions?(
+    handler: (action: ChannelCardAction) => Promise<ChannelCardActionResult | undefined>,
+  ): Promise<void>;
 }
 
 export interface ChannelAdapterFactory {

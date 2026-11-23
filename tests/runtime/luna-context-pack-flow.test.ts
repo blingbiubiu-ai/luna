@@ -184,7 +184,7 @@ describe("Luna context pack FakeFeishu flow", () => {
     expect(turnItem.messages).toHaveLength(1);
     expect(kernel.database.db.select().from(sessionCommands).all()).toMatchObject([{kind: "message.send", payload: {content: "收到，我会结合群聊上下文处理。"}}]);
     expect(turnItem.turn.materializedPrompt).toContain(
-      "<messages>\n",
+      "<events>\n",
     );
     expect(turnItem.turn.materializedPrompt).toContain("@Luna 帮忙处理一下");
   });

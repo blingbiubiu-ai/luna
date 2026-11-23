@@ -3,6 +3,7 @@ import { encodeInvocation } from "../../src/runners/invocation-codec";
 import { InvocationStore } from "../../src/runners/invocation-store";
 import { eq } from "drizzle-orm";
 import { createRunnerGroupRoutes } from "../../src/server/routes/runner-groups";
+import { createRunnerProtocolV2Routes } from "../../src/server/routes/runner-protocol-v2";
 import { createRunnerUserRoutes } from "../../src/server/routes/runner-users";
 import { ChannelDirectoryStore } from "../../src/channels/directory-store";
 import { sessionCommandsFor } from "../../src/messaging/session-command-service";
@@ -29,7 +30,13 @@ import { feishuIdentityMetadata } from "../../src/identity/feishu-identity-scope
 
 let home: string;
 let connection: DataConnection<typeof schema>;
-afterEach(() => { connection?.close(); if (home) rmSync(home, { recursive: true, force: true }); });
+afterEach(async () => {
+  if (connection) {
+    await sessionCommandsFor(connection.db, () => undefined).stop();
+    connection.close();
+  }
+  if (home) rmSync(home, { recursive: true, force: true });
+});
 
 function fixture(withActiveJob = true, runnerKind: "main" | "work" = "main", botLookup?: ReplyChannel["listGroupBots"]) {
   home = mkdtempSync(join(tmpdir(), "luna-message-api-")); setLunaHome(home);
@@ -54,10 +61,16 @@ function fixture(withActiveJob = true, runnerKind: "main" | "work" = "main", bot
     registerTestRunnerJob(db, "invocation", claims, snapshot, "logical-turn");
   }
   let sends = 0;
-  sessionCommandsFor(db, () => ({ send: async (_inbound, operation) => { sends++; return { ...operation, id: `out-${sends}`, channelId: "test" }; } }));
+  const testChannel = {
+    send: async (_inbound: unknown, operation: Record<string, unknown>) => { sends++; return { ...operation, id: `out-${sends}`, channelId: "test" } as never; },
+    createGroup: async () => ({ externalId: "oc_created", kind: "group" as const }),
+    inviteGroupMembers: async () => ({ acceptedMemberIds: [], invalidMemberIds: [], notExistedMemberIds: [], pendingApprovalMemberIds: [] }),
+  };
+  sessionCommandsFor(db, () => testChannel);
   const app = new Hono<{ Variables: { lunaAccessTokenClaims: LunaAccessTokenClaims } }>();
   app.use("*", async (c, next) => { c.set("lunaAccessTokenClaims", claims); await next(); });
-  app.route("/api/runner", createRunnerMessageRoutes({ db, channelFor: () => ({ send: async (_inbound, operation) => { sends++; return { ...operation, id: `out-${sends}`, channelId: "test" }; } }) }));
+  app.route("/api/runner", createRunnerProtocolV2Routes({ db, channelFor: () => testChannel }));
+  app.route("/api/runner", createRunnerMessageRoutes({ db, channelFor: () => testChannel }));
   app.route("/api/runner", createRunnerUserRoutes({ db, channelFor: channelId => ({ send: async () => { throw Error("unexpected send"); }, ...(botLookup ? { listGroupBots: botLookup } : {}), lookupUser: async (_type, id) => ({ externalId: id, kind: "user", displayName: "New Recipient", providerIds: { open_id: id }, ...feishuIdentityMetadata({environment: "feishu", appId: `test:feishu:${channelId}`}, {open_id: id}) }) }) }));
   app.route("/api/runner", createRunnerGroupRoutes({ db, channelFor: () => ({ send: async () => { throw Error("unexpected send"); }, lookupGroup: async id => ({ externalId: id, kind: "group", displayName: "Project Group" }) }) }));
   const send = (text = "progress", key = "stable", target: unknown = { kind: "current_session" }) => app.request("/api/runner/messages", { method: "POST", headers: { "Content-Type": "application/json", "Idempotency-Key": key }, body: JSON.stringify({ target, content: [{ type: "text", text }] }) });
@@ -177,15 +190,15 @@ test("the message CLI accepts JSON mentions for both human and bot Luna user IDs
   const f = fixture(true, "main", async () => []);
   const db = connection.db;
   const directory = new ChannelDirectoryStore(db);
-  const {runMessagesCli} = await import("@luna/cli/commands/messages");
+  const {runSayCli} = await import("@luna/cli/commands/say");
   const server = Bun.serve({port: 0, fetch: request => f.app.fetch(request)});
   const commands = sessionCommandsFor(db, () => undefined);
   commands.start();
   try {
-    const env = {LUNA_SERVICE_URL: server.url.origin, LUNA_ACCESS_TOKEN: "test"};
+    const env = {LUNA_SERVICE_URL: server.url.origin, LUNA_ACCESS_TOKEN: "test", LUNA_INVOCATION_ID: "invocation"};
     for (const flag of ["--mention", "--mention-bot"]) {
-      const result = await runMessagesCli(["send", flag, "user", "--text", "Check this"], env);
-      expect(result.code).toBe("invalid_message_command");
+      const result = await runSayCli([flag, "user", "--text", "Check this"], env);
+      expect(result.code).toBe("invalid_say_command");
     }
     expect(f.sends()).toBe(0);
     for (const kind of ["user", "bot"] as const) {
@@ -197,7 +210,7 @@ test("the message CLI accepts JSON mentions for both human and bot Luna user IDs
       const binding = db.select().from(schema.channelUserBindings)
         .where(eq(schema.channelUserBindings.channelIdentityId, identity.id)).get()!;
       const reply = JSON.stringify([{mention: binding.userId}, {text: " Check this"}]);
-      const result = await runMessagesCli(["send", "--json", "--text", reply], env);
+      const result = await runSayCli(["--json", "--text", reply], env);
       expect(result.status).toBe("ok");
       const {commandId} = JSON.parse(result.output!);
       expect(db.select().from(schema.sessionCommands).where(eq(schema.sessionCommands.id, commandId)).get()?.payload.reply)
@@ -462,7 +475,7 @@ test("CLI calendar creation reaches Runner API and matches dashboard recurrence 
     .route("/", createSessionCommandAdminRoutes({ db }));
   const server = Bun.serve({ port: 0, fetch: app.fetch });
   try {
-    const result = await runSchedulesCli(["create","--repeat","monthly","--month-days","1,15","--time","09:00","--start-date","2026-01-01","--timezone","Asia/Singapore","--text","shared calendar","--invoke","--request-id","cli-e2e"],{LUNA_SERVICE_URL:`http://127.0.0.1:${server.port}`,LUNA_ACCESS_TOKEN:"test"});
+    const result = await runSchedulesCli(["create","--frequency","monthly","--month-days","1,15","--time","09:00","--start-date","2026-01-01","--timezone","Asia/Singapore","--text","shared calendar","--invoke"],{LUNA_SERVICE_URL:`http://127.0.0.1:${server.port}`,LUNA_ACCESS_TOKEN:"test",LUNA_INVOCATION_ID:invocationId});
     expect(result.status).toBe("ok");
     const runner = JSON.parse(result.output!) as typeof schema.sessionSchedules.$inferSelect;
     const response = await app.request(`/schedule-editor?agentId=${scope.agentId}&shadowId=${scope.shadowId}`,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({title:"dashboard parity",targetSessionId:runner.targetSessionId,action:{kind:"session.invoke",content:"shared calendar"},timezone:runner.timezone,intervalMs:null,recurrence:runner.recurrence})});
@@ -479,18 +492,18 @@ test("Work commands deliver during invocation, deduplicate, and expire with the 
   (f.claims as { runnerKind: string }).runnerKind = "main";
   expect((await f.send()).status).toBe(409);
   (f.claims as { runnerKind: string }).runnerKind = "work";
-  const { runMessagesCli } = await import("@luna/cli/commands/messages");
+  const { runSayCli } = await import("@luna/cli/commands/say");
   const service = sessionCommandsFor(connection.db, () => undefined);
   const server = Bun.serve({ port: 0, fetch: req => f.app.fetch(req) });
   service.start();
   try {
-    const args = ["send", "--text", "Work answer before exit", "--purpose", "answer", "--request-id", "work-answer"];
-    const env = { LUNA_SERVICE_URL: `http://127.0.0.1:${server.port}`, LUNA_ACCESS_TOKEN: "test" };
-    const result = await runMessagesCli(args, env);
+    const args = ["--text", "Work answer before exit", "--purpose", "answer"];
+    const env = { LUNA_SERVICE_URL: `http://127.0.0.1:${server.port}`, LUNA_ACCESS_TOKEN: "test", LUNA_INVOCATION_ID: "invocation" };
+    const result = await runSayCli(args, env);
     expect(result, JSON.stringify(result)).toMatchObject({ status: "ok" });
     expect(JSON.parse(result.output!)).toMatchObject({ deliveryStatus: "sent", providerMessageId: "out-1" });
     expect(f.sends()).toBe(1);
-    expect((await runMessagesCli(args, env)).status).toBe("ok");
+    expect((await runSayCli(args, env)).status).toBe("ok");
     expect(f.sends()).toBe(1);
     f.controller.abort();
     expect((await f.send("late", "late")).status).toBe(409);
@@ -534,11 +547,11 @@ test("message CLI reads stdin and waits for the delivery receipt", async () => {
   const service = sessionCommandsFor(connection.db, () => undefined);
   const server = Bun.serve({port: 0, fetch: req => f.app.fetch(req)});
   service.start();
-  const modulePath = import.meta.resolve("@luna/cli/commands/messages");
-  const script = `import {runMessagesCli} from ${JSON.stringify(modulePath)}; console.log(JSON.stringify(await runMessagesCli(["send","--stdin","--purpose","answer","--request-id","stdin-answer"],process.env)));`;
+  const modulePath = import.meta.resolve("@luna/cli/commands/say");
+  const script = `import {runSayCli} from ${JSON.stringify(modulePath)}; console.log(JSON.stringify(await runSayCli(["--stdin","--purpose","answer"],process.env)));`;
   try {
     const proc = Bun.spawn([process.execPath, "-e", script], {
-      env: {...process.env, LUNA_SERVICE_URL: `http://127.0.0.1:${server.port}`, LUNA_ACCESS_TOKEN: "test"},
+      env: {...process.env, LUNA_SERVICE_URL: `http://127.0.0.1:${server.port}`, LUNA_ACCESS_TOKEN: "test", LUNA_INVOCATION_ID: "invocation"},
       stdin: new Blob(["First line\n第二行\n"]), stdout: "pipe", stderr: "pipe",
     });
     const result = JSON.parse(await new Response(proc.stdout).text());
@@ -555,7 +568,9 @@ test("task command creates and dispatches before Main exits, returns receipt and
   const f = fixture();
   const { RunnerOperationService } = await import("../../src/runners/operation-service");
   const { createRunnerOperationRoutes } = await import("../../src/server/routes/runner-operations");
-  const { runRunnerOperationsCli } = await import("@luna/cli/commands/runner-operations");
+  const { runTasksCli } = await import("@luna/cli/commands/tasks");
+  const { runSessionsCli } = await import("@luna/cli/commands/sessions");
+  const { runCommandsCli } = await import("@luna/cli/commands/commands");
   const { TaskRunStore } = await import("../../src/tasks/task-run-store");
   const { SessionStateStore } = await import("../../src/main-runner/session-state-store");
   const active = mainInvocations(connection.db).get("invocation")!;
@@ -573,9 +588,9 @@ test("task command creates and dispatches before Main exits, returns receipt and
   const service = new RunnerOperationService(connection.db, supervisor);
   f.app.route("/api/runner", createRunnerOperationRoutes(service));
   const server = Bun.serve({port: 0, fetch: req => f.app.fetch(req)});
-  const env = {LUNA_SERVICE_URL: `http://127.0.0.1:${server.port}`, LUNA_ACCESS_TOKEN: "test"};
+  const env = {LUNA_SERVICE_URL: `http://127.0.0.1:${server.port}`, LUNA_ACCESS_TOKEN: "test", LUNA_INVOCATION_ID: "invocation"};
   const body = {title: "Command task", summary: "Investigate issue", facts: ["Known fact"]};
-  const call = (value = body) => runRunnerOperationsCli("task", ["create", "--json", JSON.stringify(value), "--request-id", "create-1"], env);
+  const call = (value = body, extraFlags: string[] = []) => runTasksCli(["create", "--json", JSON.stringify(value), ...extraFlags], env);
   try {
     const first = await call();
     expect(first.status).toBe("ok");
@@ -589,36 +604,41 @@ test("task command creates and dispatches before Main exits, returns receipt and
     expect(replay).toMatchObject({status: "ok"});
     expect(JSON.parse(replay.output!)).toEqual(receipt);
     expect(dispatches).toBe(1);
-    expect((await call({...body, title: "Conflict"})).status).toBe("error");
-    const status = await runRunnerOperationsCli("task", ["status", receipt.commandId], env);
-    expect(JSON.parse(status.output!)).toEqual(receipt);
-    const attachArgs = ["update", "--json", JSON.stringify({taskId: receipt.taskIds[0], updateSummary: "Additional evidence"}), "--request-id", "attach-1"];
-    const attached = await runRunnerOperationsCli("task", attachArgs, env);
+    // Reusing an explicit idempotency key with conflicting payload returns 409.
+    const conflictKey = connection.db.select().from(schema.runnerOperations).where(eq(schema.runnerOperations.id, receipt.commandId)).get()!.requestId;
+    expect((await f.app.request("/api/runner/tasks/create", {
+      method: "POST",
+      headers: {"Content-Type": "application/json", "Idempotency-Key": conflictKey},
+      body: JSON.stringify({...body, title: "Conflict"}),
+    })).status).toBe(409);
+    const status = await runCommandsCli(["status", receipt.commandId], env);
+    expect(JSON.parse(status.output!)).toMatchObject({commandId: receipt.commandId, status: "applied", taskIds: receipt.taskIds});
+    const attachArgs = ["update", "--json", JSON.stringify({taskId: receipt.taskIds[0], updateSummary: "Additional evidence"})];
+    const attached = await runTasksCli(attachArgs, env);
     expect(attached).toMatchObject({status: "ok"});
     expect(JSON.parse(attached.output!).taskIds).toEqual(receipt.taskIds);
-    expect((await runRunnerOperationsCli("task", attachArgs, env)).status).toBe("ok");
+    expect((await runTasksCli(attachArgs, env)).status).toBe("ok");
     expect(new TaskRunStore(connection.db).listRunsForTask(receipt.taskIds[0])).toHaveLength(2);
     const taskBeforeRestart = connection.db.select().from(schema.tasks).all()[0]!;
-    const restart = await runRunnerOperationsCli("task", ["restart", "--json", JSON.stringify({taskId: receipt.taskIds[0]}), "--request-id", "retry-1"], env);
+    const restart = await runTasksCli(["restart", "--json", JSON.stringify({taskId: receipt.taskIds[0]})], env);
     expect(restart.status).toBe("ok");
     const taskAfterRestart = connection.db.select().from(schema.tasks).all()[0]!;
     expect(taskAfterRestart.summary).toBe(taskBeforeRestart.summary);
     expect(taskAfterRestart.context_json).toEqual(taskBeforeRestart.context_json);
     expect(new TaskRunStore(connection.db).listRunsForTask(receipt.taskIds[0])).toHaveLength(3);
-    expect((await runRunnerOperationsCli("task", ["restart", "--json", JSON.stringify({taskId: receipt.taskIds[0], updatedTaskSummary: "not allowed"}), "--request-id", "bad-retry"], env)).status).toBe("error");
+    expect((await runTasksCli(["restart", "--json", JSON.stringify({taskId: receipt.taskIds[0], updatedTaskSummary: "not allowed"})], env)).status).toBe("error");
     expect((await f.app.request("/api/runner/tasks/attach", {method: "POST"})).status).toBe(404);
-    const clarification = await runRunnerOperationsCli("session", ["clarify", "--request-id", "clarify-1", "--json", JSON.stringify({pendingIntent: "question", missingFields: ["time"], collectedFacts: ["fact"], question: "When?", reason: "Missing time"})], env);
+    const clarification = await runSessionsCli(["clarify", "--json", JSON.stringify({pendingIntent: "question", missingFields: ["time"], collectedFacts: ["fact"], question: "When?", reason: "Missing time"})], env);
     expect(clarification.status).toBe("ok");
     expect(new SessionStateStore(connection.db).getClarification(f.session.id)?.missingFields).toEqual(["time"]);
     expect((await f.app.request("/api/runner/actions", {method: "POST"})).status).toBe(404);
-    const obsolete = await runRunnerOperationsCli("task", ["create", "--request-id", "obsolete", "--json", JSON.stringify({...body, action: "create_task_and_dispatch"})], env);
+    const obsolete = await runTasksCli(["create", "--json", JSON.stringify({...body, action: "create_task_and_dispatch"})], env);
     expect(obsolete.status).toBe("error");
-    const second = await runRunnerOperationsCli("task", ["create", "--request-id", "create-2", "--json", JSON.stringify(body)], env);
+    const second = await call(body, ["--repeat"]);
     expect(second.status).toBe("ok");
     expect(JSON.parse(second.output!).taskIds[0]).not.toBe(receipt.taskIds[0]);
     expect(connection.db.select().from(schema.tasks).all()).toHaveLength(2);
     // Simulate a crash after dispatch but before recording the operation receipt.
-    const { eq } = await import("drizzle-orm");
     connection.db.update(schema.runnerOperations).set({status: "prepared"}).where(eq(schema.runnerOperations.id, receipt.commandId)).run();
     expect(await new RunnerOperationService(connection.db, supervisor).recoverPending()).toBe(1);
     expect(new TaskRunStore(connection.db).listRunsForTask(receipt.taskIds[0])).toHaveLength(3);
@@ -728,15 +748,25 @@ test("task command source selection preserves the selected message rather than t
 
 test("group CLI supplements creation context without changing handoff", async () => {
   const f = fixture();
+  const db = connection.db;
+  const directory = new ChannelDirectoryStore(db);
+  const memberIdentity = directory.upsertIdentity({
+    channel: f.inbound.channel,
+    identity: { kind: "user", externalId: "ou_member", providerIds: { open_id: "ou_member" } },
+  });
+  const memberUserId = db.select().from(schema.channelUserBindings)
+    .where(eq(schema.channelUserBindings.channelIdentityId, memberIdentity.id)).get()!.userId;
   const {runGroupsCli} = await import("@luna/cli/commands/groups");
   const row = connection.db.select().from(schema.messages).where(eq(schema.messages.ownerSessionId, f.session.id)).get()!;
+  const commands = sessionCommandsFor(db, () => undefined);
+  commands.start();
   const server = Bun.serve({port: 0, fetch: req => f.app.fetch(req)});
-  const env = {LUNA_SERVICE_URL: `http://127.0.0.1:${server.port}`, LUNA_ACCESS_TOKEN: "test"};
+  const env = {LUNA_SERVICE_URL: `http://127.0.0.1:${server.port}`, LUNA_ACCESS_TOKEN: "test", LUNA_INVOCATION_ID: "invocation"};
   try {
-    const args = ["create", "--channel-id", "test", "--name", "Context group", "--member", "ou_member", "--request-id", "context-cli", "--context-message", row.id, "--context-message", row.id];
+    const args = ["create", "--name", "Context group", "--member", `user:${memberUserId}`, "--context-message", row.id, "--context-message", row.id];
     const result = await runGroupsCli(args, env);
     expect(result.status).toBe("ok");
-    const command = sessionCommandsFor(connection.db, () => undefined).get(JSON.parse(result.output!).commandId)!;
+    const command = commands.get(JSON.parse(result.output!).commandId)!;
     expect(command.payload.contextMessageIds).toEqual([row.id]);
     expect(command.payload.launchMessageIds).toEqual([row.id]);
     expect(command.payload.launchAnchorMessageId).toBe(row.id);
@@ -745,30 +775,32 @@ test("group CLI supplements creation context without changing handoff", async ()
       name: "JSON group", memberIds: ["ou_two", "ou_member"], contextMessageIds: [row.id],
     })], env);
     expect(json.status).toBe("ok");
-    const jsonCommand = sessionCommandsFor(connection.db, () => undefined).get(JSON.parse(json.output!).commandId)!;
+    const jsonCommand = commands.get(JSON.parse(json.output!).commandId)!;
     expect(jsonCommand.payload).toMatchObject({
       group: { channelId: "test", idType: "open_id", memberIds: ["ou_member", "ou_two"] },
       contextMessageIds: [row.id], launchAnchorMessageId: row.id,
     });
     expect((await runGroupsCli([...args, "--context-message"], env)).status).toBe("error");
     expect(f.sends()).toBe(0);
-  } finally {server.stop(true);}
+  } finally {await commands.stop(); server.stop(true);}
 });
 
 test("invite JSON defaults to the current Feishu group and rejects another channel", async () => {
   const f = fixture(true, "main", async () => []);
+  const commands = sessionCommandsFor(connection.db, () => undefined);
+  commands.start();
   const server = Bun.serve({ port: 0, fetch: req => f.app.fetch(req) });
   try {
     const { runGroupsCli } = await import("@luna/cli/commands/groups");
-    const env = { LUNA_SERVICE_URL: `http://127.0.0.1:${server.port}`, LUNA_ACCESS_TOKEN: "test" };
+    const env = { LUNA_SERVICE_URL: `http://127.0.0.1:${server.port}`, LUNA_ACCESS_TOKEN: "test", LUNA_INVOCATION_ID: "invocation" };
     const invite = { memberIds: ["ou_one", "ou_two"] };
     const result = await runGroupsCli(["invite", "--json", JSON.stringify(invite)], env);
     expect(result.status).toBe("ok");
-    const command = sessionCommandsFor(connection.db, () => undefined).get(JSON.parse(result.output!).commandId)!;
+    const command = commands.get(JSON.parse(result.output!).commandId)!;
     expect(command.payload.invitation).toEqual({ ...invite, channelId: "test", chatId: "chat", idType: "open_id" });
     const wrongChannel = await runGroupsCli(["invite", "--json", JSON.stringify({ ...invite, channelId: "private" })], env);
     expect(wrongChannel.status).toBe("error");
     expect(wrongChannel.code).toBe("http_403");
     expect(JSON.parse(wrongChannel.output!)).toMatchObject({ error: "channel_forbidden" });
-  } finally { server.stop(true); }
+  } finally { await commands.stop(); server.stop(true); }
 });

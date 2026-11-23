@@ -2,6 +2,11 @@ import { eq } from "drizzle-orm";
 import { z } from "zod";
 import type { DrizzleDB } from "@/data";
 import { agentSettings, sessions } from "@/data/schema";
+import {
+  PlatformSettingsStore,
+  QuietHoursWindow,
+  type PlatformProactivitySettings,
+} from "@/platform/platform-settings-store";
 import type { SessionConfig } from "@/shared";
 import { AgentError, AgentStore } from "./agent-store";
 
@@ -127,8 +132,46 @@ export const AgentSettings = z.object({
     /** Most listening turns one chat gets in an hour. */
     maxTurnsPerHour: z.number().int().min(1).max(120).default(12),
   }).strict().default({ defaultEnabled: false, quietMs: 30_000, batchSize: 10, maxWaitMs: 180_000, backoffMaxMs: 600_000, maxTurnsPerHour: 12 }),
+  /**
+   * Proactivity overrides: `null` or omitted inherits `PlatformRuntimeSettings.proactivity`.
+   * For `quietHours`, `false` explicitly disables quiet hours even when platform defaults enable them.
+   */
+  proactivity: z.object({
+    heartbeatIntervalMs: z.number().int().min(0).max(30 * 86_400_000).nullable().optional(),
+    outboundPerSessionPerHour: z.number().int().min(0).max(1_000).nullable().optional(),
+    outboundPerRecipientPerDay: z.number().int().min(0).max(1_000).nullable().optional(),
+    outboundDedupWindowMs: z.number().int().min(0).max(30 * 86_400_000).nullable().optional(),
+    quietHours: z.union([QuietHoursWindow, z.literal(false)]).nullable().optional(),
+    askDefaultExpiresMs: z.number().int().min(60_000).max(30 * 86_400_000).nullable().optional(),
+    scheduleFailureNotifyIntervalMs: z.number().int().min(0).max(30 * 86_400_000).nullable().optional(),
+  }).strict().default({}),
 }).strict();
 export type AgentSettings = z.infer<typeof AgentSettings>;
+
+/** Resolves effective proactivity settings for an Agent (`Agent override ?? Platform default`). */
+export function resolveProactivitySettings(
+  db: DrizzleDB,
+  agentId: string | null | undefined,
+): PlatformProactivitySettings {
+  const defaults = new PlatformSettingsStore(db).get().proactivity;
+  if (!agentId) return defaults;
+  const own = new AgentSettingsStore(db).get(agentId).proactivity;
+  return {
+    heartbeatIntervalMs: own.heartbeatIntervalMs ?? defaults.heartbeatIntervalMs,
+    outboundPerSessionPerHour: own.outboundPerSessionPerHour ?? defaults.outboundPerSessionPerHour,
+    outboundPerRecipientPerDay: own.outboundPerRecipientPerDay ?? defaults.outboundPerRecipientPerDay,
+    outboundDedupWindowMs: own.outboundDedupWindowMs ?? defaults.outboundDedupWindowMs,
+    quietHours:
+      own.quietHours === false
+        ? null
+        : own.quietHours !== undefined && own.quietHours !== null
+          ? own.quietHours
+          : defaults.quietHours,
+    askDefaultExpiresMs: own.askDefaultExpiresMs ?? defaults.askDefaultExpiresMs,
+    scheduleFailureNotifyIntervalMs:
+      own.scheduleFailureNotifyIntervalMs ?? defaults.scheduleFailureNotifyIntervalMs,
+  };
+}
 
 export const DEFAULT_AGENT_SETTINGS: AgentSettings = AgentSettings.parse({});
 

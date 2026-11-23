@@ -13,7 +13,7 @@ export class RunnerMessageService {
           const { invocation, snapshot } = new InvocationService(this.db).requireActive(claims!, claims!.runnerKind as "main" | "work");
           if (snapshot.kind === "task") throw new GatewayError("runner_required", "Main or Work required", 403);
           const source = snapshot.kind === "main" && snapshot.input.input.type === "session_trigger" ? snapshot.input.input : undefined;
-          return { userId: invocation.actorUserId, sourceSessionId: invocation.sessionId!, currentSessionId: invocation.sessionId!, originId: invocation.originId,
+          return { userId: invocation.actorUserId, agentId: invocation.agentId, shadowId: invocation.shadowId, invocationId: invocation.id, sourceSessionId: invocation.sessionId!, currentSessionId: invocation.sessionId!, originId: invocation.originId,
               ...(snapshot.kind === "main" && snapshot.input.input.type === "user_messages"
                 ? {triggerMessageId: snapshot.input.input.messages.at(-1)?.messageId} : {}),
               contextBefore: invocation.createdAt,

@@ -11,6 +11,7 @@ import {
   BriefcaseBusinessIcon,
   CheckIcon,
   ChevronsUpDownIcon,
+  HeartPulseIcon,
   KeyRoundIcon,
   MessagesSquareIcon,
   PlusIcon,
@@ -49,6 +50,7 @@ import type { DashboardAgentChoice } from "@/lib/api/hooks";
 const navGroups = [
   { title: "Operate", items: [
     { title: "Overview", icon: LayoutDashboardIcon, to: "/$agentId/" },
+    { title: "Proactivity", icon: HeartPulseIcon, to: "/$agentId/proactivity" },
     { title: "Sessions", icon: MessagesSquareIcon, to: "/$agentId/sessions" },
     { title: "Terminals", icon: TerminalSquareIcon, to: "/$agentId/terminals" },
     { title: "Tasks", icon: BriefcaseBusinessIcon, to: "/$agentId/tasks" },

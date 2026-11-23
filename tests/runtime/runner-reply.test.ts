@@ -157,30 +157,30 @@ test.each(["image", "message", "card"])("Feishu %s renders image blocks in order
 });
 
 test("CLI JSON and text use the same purpose-independent message endpoint", async () => {
-  const { runMessagesCli } = await import("@luna/cli/commands/messages");
+  const { runSayCli } = await import("@luna/cli/commands/say");
   const requests: Record<string, unknown>[] = [];
   const keys: (string | null)[] = [];
   const server = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request) {
     keys.push(request.headers.get("Idempotency-Key"));
     requests.push(await request.json() as Record<string, unknown>);
-    return Response.json({ commandId: "cmd", deliveryStatus: "sent" });
+    return Response.json({ commandId: "cmd", status: "sent", deliveryStatus: "sent" });
   } });
   try {
-    const env = { LUNA_SERVICE_URL: `http://127.0.0.1:${server.port}`, LUNA_ACCESS_TOKEN: "test" };
+    const env = { LUNA_SERVICE_URL: `http://127.0.0.1:${server.port}`, LUNA_ACCESS_TOKEN: "test", LUNA_INVOCATION_ID: "inv-reply" };
     for (const purpose of ["answer", "progress", "notification"]) {
       const reply = { type: "luna.reply", version: 1, presentation: "card", content: [{ type: "image", artifactRef: "artifact:img" }] };
-      const result = await runMessagesCli(["send", "--purpose", purpose, "--request-id", purpose, "--json", "--text", JSON.stringify(reply)], env);
+      const result = await runSayCli(["--purpose", purpose, "--json", "--text", JSON.stringify(reply)], env);
       expect(result.status).toBe("ok");
-      expect(requests.at(-1)).toMatchObject({ purpose, reply });
+      expect(requests.at(-1)).toMatchObject({ to: "current", purpose, reply });
     }
-    expect((await runMessagesCli(["send", "--text", "hello", "--request-id", "plain"], env)).status).toBe("ok");
-    expect(requests.at(-1)).toMatchObject({ content: [{ type: "text", text: "hello" }] });
-    expect((await runMessagesCli(["send", "--json", "--text", '[{"text":"请 "},{"mention":"peer"},{"text":" 看一下"}]'], env)).status).toBe("ok");
-    expect(requests.at(-1)).toMatchObject({ target: {kind: "current_session"}, purpose: "progress", reply: {
+    expect((await runSayCli(["--text", "hello"], env)).status).toBe("ok");
+    expect(requests.at(-1)).toMatchObject({ to: "current", content: [{ type: "text", text: "hello" }] });
+    expect((await runSayCli(["--json", "--text", '[{"text":"请 "},{"mention":"peer"},{"text":" 看一下"}]'], env)).status).toBe("ok");
+    expect(requests.at(-1)).toMatchObject({ to: "current", purpose: "progress", reply: {
       type: "luna.reply", version: 1, presentation: "message",
       content: [{type: "text", text: "请 "}, {type: "mention", userId: "peer"}, {type: "text", text: " 看一下"}],
     } });
-    expect(keys.at(-1)).toMatch(/^[\w-]+$/);
+    expect(keys.at(-1)).toMatch(/^v2_[0-9a-f]{32}$/);
   } finally { server.stop(true); }
 });
 

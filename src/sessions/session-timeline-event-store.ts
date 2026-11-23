@@ -5,8 +5,16 @@ import { sessionTimelineEvents } from "@/data/schema";
 import { uuid } from "@/shared";
 
 export type SessionConversationControlEventType = "conversation_control";
-export type SessionConversationControlKind = "followup_interrupted";
-export type SessionConversationControlReasonKind = "focus_shifted";
+export type SessionConversationControlKind =
+  | "followup_interrupted"
+  | "outbound_throttled"
+  | "outbound_deferred";
+export type SessionConversationControlReasonKind =
+  | "focus_shifted"
+  | "duplicate_content"
+  | "session_hourly_limit"
+  | "recipient_daily_limit"
+  | "quiet_hours";
 
 export type SessionTimelineEventRow =
   typeof sessionTimelineEvents.$inferSelect;

@@ -18,6 +18,7 @@ import { ShadowWorkerRoutingStore } from "@/agents/shadow-worker-routing-store";
 import { ShadowModelSelectionStore } from "@/agents/shadow-model-selection-store";
 import { AuthorizationRuleStore } from "../policy/authorization-rule-store";
 import { AgentSettingsStore, messageDefaults } from "@/agents/agent-settings-store";
+import { PlatformSettingsStore } from "@/platform/platform-settings-store";
 import { ChatListeningStore } from "@/sessions/chat-listening-store";
 import { AgentWorkerAccessStore } from "@/agents/agent-worker-access-store";
 import { isGuardResponse, requireDashboardOnly } from "../auth/guards";
@@ -102,8 +103,12 @@ export function createPlatformAgentRoutes(db: DrizzleDB, registry?:PluginRegistr
       const shadow = store.renameShadow(actor(c), {agentId, shadowId}, z.object({name: z.string().trim().max(100)}).strict().parse(await c.req.json()));
       return c.json({shadow});
     })
-    // `messageDefaults` is what a message setting the Agent leaves unset follows: the built-in session defaults.
-    .get("/:agentId/settings", c => c.json({settings: new AgentSettingsStore(db).read(actor(c), c.req.param("agentId")), messageDefaults: messageDefaults(DEFAULT_SESSION_CONFIG)}))
+    // `messageDefaults` and `proactivityDefaults` are what settings the Agent leaves unset follow.
+    .get("/:agentId/settings", c => c.json({
+      settings: new AgentSettingsStore(db).read(actor(c), c.req.param("agentId")),
+      messageDefaults: messageDefaults(DEFAULT_SESSION_CONFIG),
+      proactivityDefaults: new PlatformSettingsStore(db).get().proactivity,
+    }))
     .put("/:agentId/settings", async c => {
       const accountId = actor(c);
       const agentId = c.req.param("agentId");
@@ -127,7 +132,11 @@ export function createPlatformAgentRoutes(db: DrizzleDB, registry?:PluginRegistr
           ));
         } catch { /* runtime detached or uninitialized in standalone unit tests */ }
       })();
-      return c.json({settings: saved, messageDefaults: messageDefaults(DEFAULT_SESSION_CONFIG)});
+      return c.json({
+        settings: saved,
+        messageDefaults: messageDefaults(DEFAULT_SESSION_CONFIG),
+        proactivityDefaults: new PlatformSettingsStore(db).get().proactivity,
+      });
     })
     // Listening for the group chat of one session, on its Dashboard page; `listening: null` when the session has no group chat.
     .get("/:agentId/sessions/:sessionId/listening", c => {

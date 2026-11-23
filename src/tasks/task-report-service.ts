@@ -92,6 +92,6 @@ export class TaskReportService {
   }
 
   private receipt(row: typeof taskReportCommands.$inferSelect) {
-    return {commandId: row.id, status: "accepted", taskId: row.taskId, taskRunId: row.taskRunId, reportArtifactId: row.reportArtifactId};
+    return {commandId: row.id, kind: "task.report" as const, status: "accepted" as const, result: {taskId: row.taskId, taskRunId: row.taskRunId, reportArtifactId: row.reportArtifactId}, taskId: row.taskId, taskRunId: row.taskRunId, reportArtifactId: row.reportArtifactId, error: null};
   }
 }

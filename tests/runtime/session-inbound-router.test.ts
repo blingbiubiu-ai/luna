@@ -377,7 +377,7 @@ describe("session inbound router", () => {
     await router.waitForIdle();
 
     const turn = database.db.select().from(sessionTurns).get();
-    expect(turn?.materialized_prompt).toContain("<messages>\n");
+    expect(turn?.materialized_prompt).toContain("<events>\n");
     expect(turn?.materialized_prompt).toContain("广州明天天气怎么样");
     expect(turn?.materialized_prompt).not.toContain("Allowed Action Contract");
   });
@@ -952,7 +952,7 @@ describe("session inbound router", () => {
       attemptKind: "primary",
       attemptIndex: 0,
       status: "parsed",
-      inputPrompt: expect.stringContaining("<messages>\n"),
+      inputPrompt: expect.stringContaining("<events>\n"),
       rawOutput: "LUNA_NOTHING_TO_SEND",
       rawOutputTruncated: false,
       parsedActionJson: expect.objectContaining({ status: "completed", followupReleased: false }),
@@ -2849,12 +2849,14 @@ function extractMainRunnerTurnInputJson(prompt: string): {
   readonly orderedMessages: readonly { readonly text: string }[];
 } {
   const block = (tag: string) => prompt.match(new RegExp(`<${tag}>\\n([\\s\\S]*?)\\n</${tag}>`))?.[1];
-  const messages = block("messages");
-  expect(messages).toBeString();
+  const eventsRaw = block("events");
+  expect(eventsRaw).toBeString();
+  const events = JSON.parse(eventsRaw!) as { kind: string; payload: { text?: string } }[];
+  const msgEvents = events.filter(e => e.kind === "message");
   const history = block("history");
   return {
     context: { launchSeed: history ? JSON.parse(history).launchSeed : undefined },
-    orderedMessages: JSON.parse(messages!).items,
+    orderedMessages: msgEvents.map(e => ({ text: e.payload.text ?? "" })),
   } as {
     readonly context: {
       readonly launchSeed?: {

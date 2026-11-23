@@ -1,9 +1,10 @@
 import { createFileRoute } from "@tanstack/react-router";
 
 import { ShadowPicker, useShadowScope } from "@/components/shadow-picker";
-import { useRouteAgent } from "@/lib/agent-route";
+import { useAgentBasePath, useRouteAgent } from "@/lib/agent-route";
 import {
   useAgentConfigStatus,
+  useProactivityOverview,
   useRuntimeStatus,
   useSessions,
   useTasks,
@@ -15,10 +16,12 @@ export const Route = createFileRoute("/$agentId/")({ component: AgentOverview })
 
 function AgentOverview() {
   const agent = useRouteAgent();
+  const base = useAgentBasePath();
   const selection = useShadowScope();
   const { scope } = selection;
   const { data: tasks = [], isLoading: tasksLoading } = useTasks(scope);
   const { data: sessions = [], isLoading: sessionsLoading } = useSessions(scope);
+  const { data: proactivity } = useProactivityOverview(scope);
   const {
     data: runtimeStatus,
     isLoading: runtimeLoading,
@@ -47,6 +50,8 @@ function AgentOverview() {
       runtimeStatus={runtimeStatus}
       runtimeLoading={runtimeLoading}
       runtimeError={runtimeError}
+      proactivity={proactivity}
+      proactivityHref={`${base}/proactivity`}
     />
   );
 }

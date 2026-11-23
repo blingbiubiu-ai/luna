@@ -373,8 +373,13 @@ export interface DashboardSessionConversationControlEvent {
   id: string;
   entryId: string;
   eventType: "conversation_control";
-  controlKind: "followup_interrupted";
-  reasonKind: "focus_shifted";
+  controlKind: "followup_interrupted" | "outbound_throttled" | "outbound_deferred";
+  reasonKind:
+    | "focus_shifted"
+    | "duplicate_content"
+    | "session_hourly_limit"
+    | "recipient_daily_limit"
+    | "quiet_hours";
   summary: string;
   sourceMessageId: string;
   anchorMessageId: string;
@@ -1975,4 +1980,138 @@ export function useDeleteAgentProfile(agentId: string) {
     apiFetch(agentConfigPath(agentId, `profiles/${encodeURIComponent(profileId)}`), {
       method: "DELETE",
     }));
+}
+
+// --- Agent Proactivity Center ---
+
+export interface DashboardShadowHeartbeatItem {
+  shadowId: string;
+  shadowName: string;
+  isDefault: boolean;
+  sessionId: string | null;
+  cursorAt: number | null;
+  lastQueuedAt: number | null;
+  nextEligibleAt: number | null;
+  latestCommand: {
+    id: string;
+    status: string;
+    error: string | null;
+    summary?: string | null;
+    createdAt: number;
+    updatedAt: number;
+  } | null;
+  pendingActivity: {
+    hasWakeActivity: boolean;
+    messageSessions: number;
+    messageCount: number;
+    taskRunCount: number;
+    scheduleOccurrenceCount: number;
+    correlatedRequestCount: number;
+  };
+}
+
+export interface DashboardCorrelatedRequestItem {
+  id: string;
+  kind: "ask" | "handoff";
+  status: "pending" | "answered" | "done" | "declined" | "expired" | "failed" | "cancelled";
+  shadowId: string;
+  shadowName: string;
+  originSessionId: string;
+  originSessionTitle: string;
+  targetAddress: string;
+  targetSessionId: string;
+  targetSessionTitle: string;
+  targetUserId: string | null;
+  targetUserName: string | null;
+  instruction: string;
+  contextSummary: string | null;
+  options: string[];
+  result: Record<string, unknown> | null;
+  resolvedByUserId: string | null;
+  resolvedByUserName: string | null;
+  expiresAt: number | null;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface DashboardProactivityOverview {
+  now: number;
+  settings: {
+    heartbeatIntervalMs: number;
+    outboundPerSessionPerHour: number;
+    outboundPerRecipientPerDay: number;
+    outboundDedupWindowMs: number;
+    quietHours: { start: string; end: string } | null;
+    askDefaultExpiresMs: number;
+    scheduleFailureNotifyIntervalMs: number;
+    timezone: string;
+    inQuietHours: boolean;
+    quietHoursEndsAt: number | null;
+  };
+  heartbeats: DashboardShadowHeartbeatItem[];
+  requests: DashboardCorrelatedRequestItem[];
+  governance: {
+    sentLast24h: number;
+    deferredQueue: {
+      id: string;
+      sessionId: string;
+      sessionTitle: string;
+      contentPreview: string;
+      availableAt: number;
+      createdAt: number;
+    }[];
+    recentEvents: {
+      id: string;
+      sessionId: string;
+      sessionTitle: string;
+      controlKind: string;
+      reasonKind: string;
+      summary: string;
+      createdAt: number;
+    }[];
+  };
+}
+
+export function useProactivityOverview(scope?: DashboardResourceScope) {
+  const agentId = scope?.agentId;
+  const shadowId = scope?.shadowId;
+  return useQuery({
+    queryKey: ["luna", "proactivity", "overview", agentId, shadowId],
+    queryFn: ({ signal }) => {
+      const query = new URLSearchParams({ agentId: agentId! });
+      if (shadowId) query.set("shadowId", shadowId);
+      return apiFetch<DashboardProactivityOverview>(`/proactivity/overview?${query}`, { signal });
+    },
+    enabled: Boolean(agentId),
+    refetchInterval: 10_000,
+  });
+}
+
+export function useTriggerShadowHeartbeat(agentId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (shadowId: string) =>
+      apiFetch<{ ok: boolean; commandId: string; sessionId: string; alreadyRunning: boolean }>(
+        `/proactivity/heartbeats/${encodeURIComponent(shadowId)}/trigger?agentId=${encodeURIComponent(agentId)}`,
+        { method: "POST" },
+      ),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["luna", "proactivity"] });
+      void queryClient.invalidateQueries({ queryKey: ["luna", "sessions"] });
+    },
+  });
+}
+
+export function useCancelProactivityRequest(agentId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (requestId: string) =>
+      apiFetch<{ ok: boolean; status: string; alreadySettled: boolean }>(
+        `/proactivity/requests/${encodeURIComponent(requestId)}/cancel?agentId=${encodeURIComponent(agentId)}`,
+        { method: "POST" },
+      ),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["luna", "proactivity"] });
+    },
+  });
 }

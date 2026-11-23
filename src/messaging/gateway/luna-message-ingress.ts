@@ -16,6 +16,7 @@ import { MainRunner } from "@/main-runner/main-runner";
 import { DEFAULT_SESSION_CONFIG, type SessionConfig } from "@/shared";
 import { SessionTurnProcessor, SessionInboundRouter } from "@/sessions/inbound/session-inbound-router";
 import { WorkRunner } from "@/work/work-runner";
+import { CorrelatedRequestService } from "@/messaging/correlated-request-service";
 import { InboundCommandRouter } from "./inbound-command-router";
 
 /**
@@ -116,7 +117,16 @@ export class LunaMessageIngress {
       }
       guard.assertCurrent(message.channel);
       await router.route(message);
-    }); } catch (error) { guard.retire(); throw error; }
+    });
+    if (channel.subscribeCardActions) {
+      await channel.subscribeCardActions(async action => {
+        guard.assertCurrent(action.channel);
+        return new CorrelatedRequestService(
+          this._db,
+          id => this._channels.get(id),
+        ).handleCardAction(action);
+      });
+    } } catch (error) { guard.retire(); throw error; }
     this._channels.set(channel.id, channel);
   }
 

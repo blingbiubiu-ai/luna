@@ -1,4 +1,4 @@
-import {ResourceRouteAccess} from "../policy/resource-route-access";
+import {ResourceRouteAccess, activeShadowRoutineScope} from "../policy/resource-route-access";
 import {AgentError} from "@/agents/agent-store";
 import { deletedTaskReferences } from "@/dashboard-api/deleted-task-references";
 import { deleteDashboardSession } from "@/dashboard-api/deletion";
@@ -137,7 +137,8 @@ export function createSessionsRoutes(options: SessionsRouteOptions = {}) {
     if (
       claims?.source === "runner" &&
       claims.role === "runner" &&
-      claims.sessionId !== sessionId
+      claims.sessionId !== sessionId &&
+      !activeShadowRoutineScope(db, claims)
     ) {
       throw new HTTPException(403, {
         message: "runner session access denied",

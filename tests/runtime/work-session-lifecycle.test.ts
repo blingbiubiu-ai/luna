@@ -818,7 +818,7 @@ describe("work session lifecycle", () => {
 
     // A first turn without earlier messages carries no empty history block.
     expect(capturedPrompt).not.toContain("<history>");
-    expect(capturedPrompt).toContain("<messages>");
+    expect(capturedPrompt).toContain("<events>");
     expect(capturedPrompt).toContain("写一个 hello world");
     expect(capturedPrompt).not.toContain("Work Runner Runtime Prompt");
     expect(capturedPrompt).not.toContain("Do not output anything outside the JSON object");
@@ -1038,13 +1038,13 @@ describe("work session lifecycle", () => {
     expect(options[0]?.runnerSessionId).toBeUndefined();
     expect(prompts[0]).toContain("<history>");
     expect(prompts[0]).toContain("启动前上下文：先做 Python 版本");
-    expect(prompts[0]).toContain("<messages>");
+    expect(prompts[0]).toContain("<events>");
     expect(prompts[0]).toContain("第一轮：改成 TypeScript 版本");
 
     expect(options[1]?.isNewSession).toBe(false);
     expect(options[1]?.runnerKind).toBe("work");
     expect(options[1]?.runnerSessionId).toBe("provider-work-session-1");
-    expect(prompts[1]).toContain("<messages>");
+    expect(prompts[1]).toContain("<events>");
     expect(prompts[1]).toContain("第二轮：只改输出文案");
     expect(prompts[1]).not.toContain("## Session Timeline");
     expect(prompts[1]).not.toContain("<history>");
@@ -1086,7 +1086,7 @@ describe("work session lifecycle", () => {
       }] as never,
     }, session);
 
-    expect(capturedPrompt).toContain("<messages>");
+    expect(capturedPrompt).toContain("<events>");
     expect(capturedPrompt).toContain("写一个 hello world");
     expect(capturedPrompt).not.toContain("#work");
     expect(capturedPrompt).not.toContain("@Luna");
@@ -1329,7 +1329,7 @@ describe("work session lifecycle", () => {
     }, session);
 
     expect(capturedPrompt).toContain("<history>");
-    expect(capturedPrompt).toContain("<messages>");
+    expect(capturedPrompt).toContain("<events>");
     expect(capturedPrompt).toContain("这轮改成 TypeScript 版本");
     expect(extractBlockJson(capturedPrompt, "history")).toMatchObject({
       launchContext: [
@@ -1355,7 +1355,20 @@ function setEnv(key: string, value: string): void {
 }
 
 function extractWorkTurnInputJson(prompt: string): Record<string, unknown> {
-  return extractBlockJson(prompt, "messages");
+  const nowBlock = extractBlockJson(prompt, "now");
+  const eventsRaw = prompt.match(/<events>\n([\s\S]*?)\n<\/events>/)?.[1];
+  expect(eventsRaw).toBeString();
+  const events = JSON.parse(eventsRaw!) as { id: string; kind: string; payload: Record<string, unknown> }[];
+  const items = events.map(e => {
+    const { addressing: _addr, ...rest } = e.payload;
+    return { id: e.id, ...rest };
+  });
+  const lastAddressing = events.at(-1)?.payload.addressing;
+  return {
+    ...nowBlock,
+    ...(lastAddressing ? { addressing: lastAddressing } : {}),
+    items,
+  };
 }
 
 function extractBlockJson(prompt: string, tag: string): Record<string, unknown> {
@@ -1402,7 +1415,9 @@ test("a memory maintenance turn runs silently in the Work session's provider con
 
   expect(received).toHaveLength(1);
   expect(received[0]).toMatchObject({ runnerSessionId: "provider-work-1", runnerKind: "work" });
-  expect(received[0]!.prompt).toStartWith("Memory reflection. Review this conversation.");
+  expect(received[0]!.prompt).toContain("<capabilities>");
+  expect(received[0]!.prompt).toContain("<events>");
+  expect(received[0]!.prompt).toContain("Memory reflection. Review this conversation.");
   // No status card, progress or reply reaches the thread.
   expect(channel.outbound).toEqual([]);
   expect(database.db.select().from(lunaSchema.messages).where(and(eq(lunaSchema.messages.ownerSessionId, session.id), eq(lunaSchema.messages.role, "assistant"))).all()).toEqual([]);

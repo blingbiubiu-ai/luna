@@ -95,9 +95,12 @@ export function deleteDashboardSession(db: DrizzleDB, id: string): void {
     tx.run(sql`DELETE FROM runner_contexts WHERE owner_type = 'session' AND owner_id = ${id}`);
     tx.run(sql`DELETE FROM managed_artifacts WHERE scope_type = 'session' AND scope_id = ${id}`);
     tx.run(sql`DELETE FROM notification_attempts WHERE subscription_id IN (SELECT id FROM task_subscriptions WHERE session_id = ${id})`);
+    tx.run(sql`DELETE FROM schedule_failure_notifications WHERE schedule_id IN (SELECT id FROM session_schedules WHERE source_session_id = ${id} AND target_session_id = ${id})`);
     tx.run(sql`DELETE FROM schedule_occurrences WHERE schedule_id IN (SELECT id FROM session_schedules WHERE source_session_id = ${id} AND target_session_id = ${id})`);
     tx.run(sql`DELETE FROM session_schedules WHERE source_session_id = ${id} AND target_session_id = ${id}`);
     tx.run(sql`UPDATE session_schedules SET enabled = 0, paused = 1 WHERE source_session_id = ${id} OR target_session_id = ${id}`);
+    tx.run(sql`DELETE FROM correlated_requests WHERE origin_session_id = ${id} AND target_session_id = ${id}`);
+    tx.run(sql`UPDATE correlated_requests SET status = 'cancelled', updated_at = ${Date.now()} WHERE (origin_session_id = ${id} OR target_session_id = ${id}) AND status = 'pending'`);
     tx.run(sql`DELETE FROM session_commands WHERE source_session_id = ${id} OR session_id = ${id}`);
     for (const table of [
       "session_inbox", "session_turn_entries", "session_turns", "session_runner_attempts",

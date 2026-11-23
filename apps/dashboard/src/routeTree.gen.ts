@@ -29,6 +29,7 @@ import { Route as SessionsIndexRouteImport } from './app/sessions/index'
 import { Route as TerminalsIndexRouteImport } from './app/terminals/index'
 import { Route as TasksIndexRouteImport } from './app/tasks/index'
 import { Route as SchedulesIndexRouteImport } from './app/schedules/index'
+import { Route as ProactivityIndexRouteImport } from './app/proactivity/index'
 import { Route as SessionsSessionIdRouteImport } from './app/sessions/$sessionId'
 import { Route as TasksTaskIdRouteImport } from './app/tasks/$taskId'
 
@@ -127,6 +128,11 @@ const SchedulesIndexRoute = SchedulesIndexRouteImport.update({
   path: '/schedules/',
   getParentRoute: () => AgentIdRoute,
 } as any)
+const ProactivityIndexRoute = ProactivityIndexRouteImport.update({
+  id: '/proactivity/',
+  path: '/proactivity/',
+  getParentRoute: () => AgentIdRoute,
+} as any)
 const SessionsSessionIdRoute = SessionsSessionIdRouteImport.update({
   id: '/sessions/$sessionId',
   path: '/sessions/$sessionId',
@@ -151,6 +157,7 @@ export interface FileRoutesByFullPath {
   '/$agentId/sessions/$sessionId': typeof SessionsSessionIdRoute
   '/$agentId/tasks/': typeof TasksIndexRoute
   '/$agentId/schedules/': typeof SchedulesIndexRoute
+  '/$agentId/proactivity/': typeof ProactivityIndexRoute
   '/$agentId/sessions/': typeof SessionsIndexRoute
   '/$agentId/terminals/': typeof TerminalsIndexRoute
   '/$agentId/memory/': typeof MemoryIndexRoute
@@ -174,6 +181,7 @@ export interface FileRoutesByTo {
   '/$agentId/sessions/$sessionId': typeof SessionsSessionIdRoute
   '/$agentId/tasks': typeof TasksIndexRoute
   '/$agentId/schedules': typeof SchedulesIndexRoute
+  '/$agentId/proactivity': typeof ProactivityIndexRoute
   '/$agentId/sessions': typeof SessionsIndexRoute
   '/$agentId/terminals': typeof TerminalsIndexRoute
   '/$agentId/memory': typeof MemoryIndexRoute
@@ -199,6 +207,7 @@ export interface FileRoutesById {
   '/$agentId/sessions/$sessionId': typeof SessionsSessionIdRoute
   '/$agentId/tasks/': typeof TasksIndexRoute
   '/$agentId/schedules/': typeof SchedulesIndexRoute
+  '/$agentId/proactivity/': typeof ProactivityIndexRoute
   '/$agentId/sessions/': typeof SessionsIndexRoute
   '/$agentId/terminals/': typeof TerminalsIndexRoute
   '/$agentId/memory/': typeof MemoryIndexRoute
@@ -225,6 +234,7 @@ export interface FileRouteTypes {
     | '/$agentId/sessions/$sessionId'
     | '/$agentId/tasks/'
     | '/$agentId/schedules/'
+    | '/$agentId/proactivity/'
     | '/$agentId/sessions/'
     | '/$agentId/terminals/'
     | '/$agentId/memory/'
@@ -248,6 +258,7 @@ export interface FileRouteTypes {
     | '/$agentId/sessions/$sessionId'
     | '/$agentId/tasks'
     | '/$agentId/schedules'
+    | '/$agentId/proactivity'
     | '/$agentId/sessions'
     | '/$agentId/terminals'
     | '/$agentId/memory'
@@ -272,6 +283,7 @@ export interface FileRouteTypes {
     | '/$agentId/sessions/$sessionId'
     | '/$agentId/tasks/'
     | '/$agentId/schedules/'
+    | '/$agentId/proactivity/'
     | '/$agentId/sessions/'
     | '/$agentId/terminals/'
     | '/$agentId/memory/'
@@ -296,6 +308,7 @@ interface AgentRouteChildren {
   SessionsSessionIdRoute: typeof SessionsSessionIdRoute
   TasksIndexRoute: typeof TasksIndexRoute
   SchedulesIndexRoute: typeof SchedulesIndexRoute
+  ProactivityIndexRoute: typeof ProactivityIndexRoute
   SessionsIndexRoute: typeof SessionsIndexRoute
   TerminalsIndexRoute: typeof TerminalsIndexRoute
   MemoryIndexRoute: typeof MemoryIndexRoute
@@ -356,6 +369,13 @@ declare module '@tanstack/react-router' {
       path: '/schedules'
       fullPath: '/$agentId/schedules/'
       preLoaderRoute: typeof SchedulesIndexRouteImport
+      parentRoute: typeof AgentIdRoute
+    }
+    '/$agentId/proactivity/': {
+      id: '/$agentId/proactivity/'
+      path: '/proactivity'
+      fullPath: '/$agentId/proactivity/'
+      preLoaderRoute: typeof ProactivityIndexRouteImport
       parentRoute: typeof AgentIdRoute
     }
     '/$agentId/sessions/': {
@@ -479,6 +499,7 @@ const agentRouteChildren: AgentRouteChildren = {
   SessionsSessionIdRoute: SessionsSessionIdRoute,
   TasksIndexRoute: TasksIndexRoute,
   SchedulesIndexRoute: SchedulesIndexRoute,
+  ProactivityIndexRoute: ProactivityIndexRoute,
   SessionsIndexRoute: SessionsIndexRoute,
   TerminalsIndexRoute: TerminalsIndexRoute,
   MemoryIndexRoute: MemoryIndexRoute,

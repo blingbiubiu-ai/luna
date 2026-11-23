@@ -6,6 +6,11 @@ export const replyBlockSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("mention"), userId: z.string().min(1).max(256), label: z.string().min(1).max(256).optional() }).strict(),
   z.object({ type: z.literal("image"), artifactRef, alt: z.string().max(500).optional() }).strict(),
   z.object({ type: z.literal("file"), artifactRef, name: z.string().max(500).optional() }).strict(),
+  z.object({
+    type: z.literal("actions"),
+    requestId: z.string().min(1).max(128),
+    options: z.array(z.string().trim().min(1).max(64)).min(1).max(8),
+  }).strict(),
 ]);
 export const replySchema = z.object({
   type: z.literal("luna.reply"), version: z.literal(1),
@@ -42,6 +47,7 @@ export function replyMarkdown(reply: ReplyDocument): string {
   const title = reply.title ? `**${reply.title.replace(/[\r\n]/g, " ").replace(/\*/g, "\\*")}**` : "";
   const blocks = reply.content.map(block => {
     if (block.type === "mention") return `@${label(block.label ?? block.userId)}`;
+    if (block.type === "actions") return `选项：${block.options.map(label).join(" / ")}`;
     return block.type === "text" ? block.text : block.type === "image"
       ? `![${label(block.alt ?? "图片")}](${block.artifactRef})`
       : `[${label(block.name ?? "文件")}](${block.artifactRef})`;

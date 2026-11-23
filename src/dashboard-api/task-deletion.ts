@@ -59,6 +59,7 @@ export function deleteDashboardTask(db: DrizzleDB, id: string): void {
     for (const table of ['task_run_notifications', 'notification_attempts', 'task_subscriptions', 'task_participants', 'task_runs', 'timeline_events', 'artifacts', 'operation_invocation_audits']) {
       tx.run(sql`DELETE FROM ${sql.raw(table)} WHERE task_id = ${id}`);
     }
+    tx.run(sql`UPDATE session_schedules SET enabled = 0, paused = 1 WHERE json_extract(action, '$.taskId') = ${id}`);
     tx.run(sql`DELETE FROM tasks WHERE id = ${id}`);
   });
   drainTaskFileCleanup(db, id);
@@ -78,6 +79,7 @@ export function deleteDashboardSchedule(db: DrizzleDB, id: string): void {
     tx.run(sql`DELETE FROM context_pack_items WHERE context_pack_id IN (SELECT id FROM context_packs WHERE created_for_invocation_id IN (SELECT id FROM session_commands WHERE id IN (${commands}) AND status = 'pending'))`);
     tx.run(sql`DELETE FROM context_packs WHERE created_for_invocation_id IN (SELECT id FROM session_commands WHERE id IN (${commands}) AND status = 'pending')`);
     tx.run(sql`DELETE FROM session_commands WHERE id IN (${commands})`);
+    tx.run(sql`DELETE FROM schedule_failure_notifications WHERE schedule_id = ${id}`);
     tx.run(sql`DELETE FROM schedule_occurrences WHERE schedule_id = ${id}`);
     tx.run(sql`DELETE FROM session_schedules WHERE id = ${id}`);
     tx.run(sql`INSERT INTO schedule_deletions (schedule_id, deleted_at) VALUES (${id}, ${Date.now()})`);

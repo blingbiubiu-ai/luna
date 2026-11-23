@@ -1,5 +1,6 @@
 import {
   Activity,
+  ArrowRight,
   BriefcaseBusiness,
   CircleCheck,
   MessagesSquare,
@@ -13,6 +14,7 @@ import { resolveSessionKindCategory } from "@/app/sessions/session-avatar";
 import { resolveTaskEffectiveState } from "@/app/tasks/task-visuals";
 import { Skeleton } from "@/components/ui/skeleton";
 import type {
+  DashboardProactivityOverview,
   DashboardRuntimeStatus,
   DashboardSession,
   DashboardTask,
@@ -38,6 +40,8 @@ export function HomeOverview({
   runtimeStatus,
   runtimeLoading,
   runtimeError,
+  proactivity,
+  proactivityHref,
 }: {
   readonly activeModelLabel?: string;
   readonly shadowCount?: number;
@@ -50,6 +54,8 @@ export function HomeOverview({
   readonly runtimeStatus: DashboardRuntimeStatus | undefined;
   readonly runtimeLoading: boolean;
   readonly runtimeError: unknown;
+  readonly proactivity?: DashboardProactivityOverview | undefined;
+  readonly proactivityHref?: string;
 }) {
   const { locale, t } = useTranslation();
   const tone = runtimeTone(runtimeStatus, runtimeLoading, runtimeError);
@@ -542,6 +548,68 @@ export function HomeOverview({
             </div>
           </section>
         </div>
+
+        {proactivity ? (
+          <section className={cn(cardSurfaceClass, "p-6")}>
+            <div className="flex flex-wrap items-baseline justify-between gap-3">
+              <div>
+                <h2 className="m-0 text-sm font-semibold text-foreground">
+                  {locale === "zh-CN" ? "主动巡检与协同" : "Proactivity & Coordination"}
+                </h2>
+                <p className="m-0 mt-0.5 text-xs text-muted-foreground">
+                  {locale === "zh-CN"
+                    ? "分身心跳动态、待响应追问与外发调控实况。"
+                    : "Shadow heartbeats, open follow-up requests, and outbound governance."}
+                </p>
+              </div>
+              {proactivityHref ? (
+                <a
+                  href={proactivityHref}
+                  className="inline-flex items-center gap-1 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground"
+                >
+                  <span>{locale === "zh-CN" ? "进入主动中心" : "Open Proactivity"}</span>
+                  <ArrowRight className="size-3.5" />
+                </a>
+              ) : null}
+            </div>
+
+            <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+              <SurfaceMiniStat
+                dotClass={
+                  proactivity.heartbeats.some(
+                    (h) => h.pendingActivity.hasWakeActivity,
+                  )
+                    ? "bg-[#b07d4f] dark:bg-[#d1a273]"
+                    : "bg-[#5b8a72] dark:bg-[#7fb096]"
+                }
+                label={locale === "zh-CN" ? "待巡检分身" : "Pending wakes"}
+                count={
+                  proactivity.heartbeats.filter(
+                    (h) => h.pendingActivity.hasWakeActivity,
+                  ).length
+                }
+              />
+              <SurfaceMiniStat
+                dotClass="bg-[#5c7c99] dark:bg-[#86a3be]"
+                label={locale === "zh-CN" ? "待响应请求" : "Open requests"}
+                count={
+                  proactivity.requests.filter((r) => r.status === "pending")
+                    .length
+                }
+              />
+              <SurfaceMiniStat
+                dotClass="bg-[#a39e93] dark:bg-[#78746c]"
+                label={locale === "zh-CN" ? "顺延待发消息" : "Deferred outbound"}
+                count={proactivity.governance.deferredQueue.length}
+              />
+              <SurfaceMiniStat
+                dotClass="bg-[#5b8a72] dark:bg-[#7fb096]"
+                label={locale === "zh-CN" ? "近 24h 主动发言" : "24h proactive sends"}
+                count={proactivity.governance.sentLast24h}
+              />
+            </div>
+          </section>
+        ) : null}
       </div>
     </div>
   );

@@ -1,37 +1,33 @@
 ---
 name: luna-users
 description: >-
-  Find people and bots and message them with `luna users` and `luna messages send`: look someone up by name or Feishu ID, send a first private message, or @-mention a person or bot in a group (including handing work to another bot). Use before mentioning anyone or messaging someone outside the current conversation.
+  Find people and bots and reach them with `luna users`, `luna say`, and `luna asks`: look someone up by name or Feishu ID, send a private message (`--to user:<id>`), ask a question with options, or @-mention a person or bot in a group. Use before mentioning anyone or messaging someone outside the current conversation.
 ---
 
 # Luna people and mentions
 
-Recipient discovery uses runner-only APIs through these commands:
+Discover people and bots in Luna's directory, then address them with unified `user:<luna-user-id>` addresses:
 
 ```bash
-luna users search --query '姓名' --channel-id CHANNEL
-luna users search --query '机器人名称' --channel-id CHANNEL
+luna users search --query '姓名'
+luna users search --query '机器人名称' --kind bot
 luna users get USER_ID
-luna users lookup --channel-id CHANNEL --feishu-user-id ou_xxx --id-type open_id
-luna messages send --channel-id CHANNEL --feishu-user-id ou_xxx --id-type open_id --text '消息内容' --request-id first-contact-1
+luna users lookup --channel-id CHANNEL_ID --feishu-user-id ou_xxx --id-type open_id
+
+# Send a private message using the unified user address:
+luna say --to user:USER_ID --text '消息内容'
+
+# Ask someone a tracked question (with optional Feishu interactive buttons):
+luna asks create --to user:USER_ID --question '请确认是否继续？' --options '["继续","暂缓"]'
 ```
 
-Name search uses Luna's visible local directory. In a group, a name search can
-refresh missing entries from the current channel adapter. For an explicit
-Feishu group handoff, use `luna messages send --json --stdin` in the current
-session with ordered blocks such as
-`[{"text":"请 "},{"mention":"LUNA_USER_ID"},{"text":" 检查这个方案。"}]`.
-Add `--purpose answer` when this message is the final answer.
-Use the Luna user ID returned by the search (or `from.id` / `requesterUserId`
-from the turn input). Service does not add quotes or `@`-mentions automatically:
-decide from context whether to set `replyTo` or include `mention` blocks (for
-example, quoting and mentioning the human asker in an interleaved group chat or
-delayed Task result, keeping direct `p2p` chats unmentioned, and omitting
-`replyTo` inside a topic `thread`). Do not mention yourself or the bot that sent
-the message; mention another bot only for a specific next step that the current task calls for. Do not mention a bot just to acknowledge,
-return results, or repeat a handoff it has already handled. Resolve ambiguous
-names with the user. Exact Feishu lookup needs contact
-permission; a lookup failure does not prove messaging is unavailable. Known
-Feishu IDs can be used without prior private chat; no authority ID is needed. Use the ID's actual type and application channel; do not
-reinterpret an ID. `--user-id` accepts a Luna canonical ID, whereas
-`--feishu-user-id` accepts a provider ID. Do not call administrator user APIs.
+- Name search queries Luna's visible directory (and in a group, refreshes missing bot/member entries from the current channel adapter). If a person has only a raw Feishu `open_id`/`user_id`/`union_id` and is not yet in the directory, import them once with `luna users lookup`, then use the returned Luna `user.id` (`--to user:<id>`) everywhere.
+- Never pass `--feishu-user-id`, `--chat-id`, or `--channel-id` to `luna say`, `luna handoff`, `luna asks`, or `luna groups create|invite`—only `users lookup` and `groups lookup` take raw channel identifiers.
+- For an explicit Feishu group `@`-mention or bot handoff in the current session, use `luna say --purpose answer --json --stdin` (or output a `luna.reply` document directly) with ordered blocks:
+  `[{"text":"请 "},{"mention":"LUNA_USER_ID"},{"text":" 检查这个方案。"}]`
+  Note: inside a `mention` block, `userId` / `mention` is the raw Luna user ID (`<id>`, without the `user:` address prefix).
+- Service does not add quotes or `@`-mentions automatically:
+  - `p2p`: keep direct chats unmentioned.
+  - `group`: quote (`replyTo`) and mention the human asker in interleaved group chats or delayed `task_result` replies.
+  - `thread`: omit `replyTo`; mention only to notify someone or hand off a concrete next step to another bot.
+- Never mention yourself or the bot that sent the message unless handing off a specific next step; resolve ambiguous names with the user first. Do not call administrator user APIs.

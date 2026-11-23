@@ -11,6 +11,7 @@ import {
   type MemoryOriginKind,
 } from "@/data/schema";
 import { memoryOriginOfTrigger, prepareMemoryConsolidationRun } from "@/agents/agent-memory-maintenance";
+import { CorrelatedRequestService } from "@/messaging/correlated-request-service";
 import { MainRunnerContextBuilder } from "@/main-runner/context-builder";
 import { MainRunnerFreshLaunchReplayRequiredError, type MainRunner } from "@/main-runner/main-runner";
 import type { SessionCommand } from "@/messaging/session-command-service";
@@ -269,14 +270,21 @@ export function createSessionTriggerExecutor(
         .set({ status: "failed", error: String(error), completed_at: Date.now(), updated_at: Date.now() })
         .where(eq(sessionTurns.id, command.id))
         .run();
+      new CorrelatedRequestService(db, () => undefined).settleHandoffFromTrigger(command, "failed", String(error));
       throw error;
     } finally {
       const turn = db.select().from(sessionTurns).where(eq(sessionTurns.id, command.id)).get();
       if (!detached && turn?.status === "running") {
+        const finalStatus = signal.aborted ? "failed" : "completed";
         db.update(sessionTurns)
-          .set({ status: signal.aborted ? "failed" : "completed", completed_at: Date.now(), updated_at: Date.now() })
+          .set({ status: finalStatus, completed_at: Date.now(), updated_at: Date.now() })
           .where(eq(sessionTurns.id, command.id))
           .run();
+        new CorrelatedRequestService(db, () => undefined).settleHandoffFromTrigger(
+          command,
+          finalStatus,
+          signal.aborted ? "Trigger cancelled" : null,
+        );
       }
     }
   };

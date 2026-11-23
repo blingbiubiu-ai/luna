@@ -1,43 +1,29 @@
 ```bash
-luna task create --request-id task-1 --stdin <<'EOF'
+luna tasks create --stdin <<'EOF'
 {"title":"调查播放异常","summary":"确认原因并提交结果","facts":["用户提供的已知事实"]}
 EOF
 ```
 
-Task payloads contain only the domain fields listed below. Send acknowledgments
-and summaries as your final reply. Supported commands:
+Task payloads contain only domain fields; send acknowledgments as your final reply:
 
-- `luna task create`: `title`, `summary`, `facts`; optional `taskType` (`task` or
-  `question`, default `task`), `assumptions` (at most five), `sourceMessageIds`,
-  `sessionId` (defaults to current session), `sendStatusCard` and `statusCardStyle` (`card` or `native`); leave both out to follow the Agent's settings unless the user asks for something else.
-- `luna task update`: `taskId`, `updateSummary`; optional `updatedTaskTitle`,
-  `updatedTaskSummary`, `assumptions`, `sourceMessageIds`, `sendStatusCard`
-  (progress card on or off from this run on), `quiet` (a background check).
-  Starts a new run with the supplemental facts, replacing the active run if needed.
-- `luna task cancel`: `taskId`, optional `reason` and `sourceMessageIds`. Stops
-  the current Run without creating another. For stop/cancel intent always use
-  this command; never send a stop instruction through `tasks update` or restart.
-  `/stop` follows the same task-targeting rule: use the clearly referenced task;
-  if several tasks are plausible, ask which one. Never cancel all by default.
-  `cancelled: true` means cancellation was recorded and process termination was
-  requested. `cancelled: false` means there was no running Run to cancel; do not
-  claim a completed task was cancelled. Return one concise final acknowledgment.
-- `luna task restart`: `taskId`; optional `sourceMessageIds`, `sendStatusCard`,
-  `quiet`. Retries with existing task information unchanged. Use update when
-  changing information.
-- `luna task status-card`: progress cards; see the `luna-status-card` skill.
-- `luna task list --session-id "$LUNA_SESSION_ID"`: this session's Tasks, newest first.
-  The receipt of `create` already gives the new Task's id in `taskIds`.
-- `luna task status COMMAND_ID`: inspect the operation receipt. To read a task's
-  progress use `luna task get --task-id TASK_ID`.
+- `luna tasks create`: `title`, `summary`, `facts`; optional `taskType` (`task` |
+  `question`), `assumptions` (max 5), `sourceMessageIds`, `sessionId`,
+  `sendStatusCard`, `statusCardStyle` (`card` | `native`).
+- `luna tasks update`: `taskId`, `updateSummary`; optional `updatedTaskTitle`,
+  `updatedTaskSummary`, `assumptions`, `sourceMessageIds`, `sendStatusCard`,
+  `quiet`. Starts a new run with supplemental facts.
+- `luna tasks cancel`: `taskId`, optional `reason`, `sourceMessageIds`. Always
+  use `cancel` for stop intent (`/stop` targets the referenced task; ask if
+  ambiguous; never cancel all by default). `cancelled: false` means no active Run
+  existed—do not claim a completed task was cancelled.
+- `luna tasks restart`: `taskId`; optional `sourceMessageIds`, `sendStatusCard`, `quiet`.
+- `luna tasks status-card`: progress cards (`luna-status-card` skill).
+- `luna tasks list --session current`: this session's Tasks (`create` receipt
+  already returns `taskIds`).
+- `luna tasks get --task-id <id>`: Task details/progress; `luna commands status <id>`
+  inspects operation receipts.
 
-Mutation commands require `--request-id ID` and one of `--stdin` or `--json JSON`.
-Receipts contain command ID, `status: applied`, task IDs and run ID. Applied means
-persisted and dispatched, not completed. Acknowledge creation only after success.
-Keep the same request ID and identical JSON on retry; changed payloads conflict.
-
-For multiple tasks, issue separate commands with distinct request IDs. There is
-no automatic batch summary card. Use `sourceMessageIds` to select
-the relevant message IDs from the current input when different messages request
-different tasks. Omission includes the current invocation's messages. Send one
-concise message summarizing the results when appropriate.
+Mutations take `--stdin` or `--json '<object>'` (idempotency derived automatically)
+and return `commandId`, `status: "applied"`, `taskIds`, `runId`. Acknowledge only
+after `applied`. Issue separate `create` calls for multiple tasks, selecting
+`sourceMessageIds` per task when needed.

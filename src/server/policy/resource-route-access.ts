@@ -4,17 +4,48 @@ import {HTTPException} from "hono/http-exception";
 import type {DrizzleDB} from "@/data";
 import {sessions,taskSubscriptions,tasks} from "@/data/schema";
 import {AgentError,AgentStore} from "@/agents/agent-store";
+import {selfRoutineKindOfTrigger} from "@/agents/self-routines";
 import {SessionAccessPolicy} from "@/agents/session-access";
 import {TaskAccessPolicy} from "@/agents/task-access";
+import {InvocationService} from "@/runners/invocation-service";
+import type {LunaAccessTokenClaims} from "../auth/access-token-service";
 import {requireAuthenticated,requireDashboardOnly,isGuardResponse} from "../auth/guards";
 import {actorFor} from "../auth/agent-actor";
 
 type ResourceType="session"|"task";
-type RunnerClaims={runnerKind?:string;sessionId?:string;taskId?:string};
+type RunnerClaims={tokenId?:string;runnerKind?:string;sessionId?:string;taskId?:string};
 
 /** Main and Work act for a session, so they may read the Tasks bound to it; a Task Runner reads only its own Task. */
 function sessionRunner(token:RunnerClaims):string|undefined{
   return (token.runnerKind==="main"||token.runnerKind==="work") ? token.sessionId : undefined;
+}
+
+export function activeShadowRoutineScope(
+  db: DrizzleDB,
+  token: RunnerClaims,
+): { agentId: string; shadowId: string; kind: "heartbeat" | "consolidation" } | undefined {
+  if (!token.tokenId || (token.runnerKind !== "main" && token.runnerKind !== "work")) return undefined;
+  try {
+    const { invocation, snapshot } = new InvocationService(db).requireActive(
+      token as LunaAccessTokenClaims,
+      token.runnerKind,
+    );
+    const triggerId =
+      snapshot.kind === "main"
+        ? snapshot.input.input.type === "session_trigger"
+          ? snapshot.input.input.triggerId
+          : undefined
+        : snapshot.kind === "work"
+          ? snapshot.input.turnId
+          : undefined;
+    const routine = triggerId ? selfRoutineKindOfTrigger(db, triggerId) : undefined;
+    if (routine === "heartbeat" || routine === "consolidation") {
+      return { agentId: invocation.agentId, shadowId: invocation.shadowId, kind: routine };
+    }
+  } catch {
+    return undefined;
+  }
+  return undefined;
 }
 
 const tasksOfSession=(sessionId:string)=>sql`${tasks.id} IN (SELECT ${taskSubscriptions.task_id} FROM ${taskSubscriptions} WHERE ${taskSubscriptions.session_id} = ${sessionId})`;
@@ -80,8 +111,14 @@ export class ResourceRouteAccess {
     const predicate=type==="session"?new SessionAccessPolicy(this.db).listPredicate(userId,agentId,options):new TaskAccessPolicy(this.db).listPredicate(userId,agentId,options);
     const shadowId=c.req.query("shadowId");
     if(shadowId)new AgentStore(this.db).requireScope(userId,{agentId,shadowId},options);
-    let runnerId:string|undefined,runnerSession:string|undefined;
-    if(auth.authKind==="luna-access-token"&&auth.token.source==="runner"&&type==="task"&&sessionRunner(auth.token)){
+    let runnerId:string|undefined,runnerSession:string|undefined,routineShadowId:string|undefined;
+    const routineScope = auth.authKind==="luna-access-token"&&auth.token.source==="runner"
+      ? activeShadowRoutineScope(this.db, auth.token)
+      : undefined;
+    if(routineScope){
+      if(routineScope.agentId!==agentId)throw new AgentError("scope_mismatch",403);
+      if(routineScope.kind==="heartbeat")routineShadowId=routineScope.shadowId;
+    }else if(auth.authKind==="luna-access-token"&&auth.token.source==="runner"&&type==="task"&&sessionRunner(auth.token)){
       runnerSession=sessionRunner(auth.token)!;
       const row=this.require(c,"session",runnerSession);
       if(row.agent_id!==agentId)throw new AgentError("scope_mismatch",403);
@@ -92,12 +129,23 @@ export class ResourceRouteAccess {
       if(row.agent_id!==agentId)throw new AgentError("scope_mismatch",403);
     }
     return and(predicate,shadowId?eq(type==="session"?sessions.shadow_id:tasks.shadow_id,shadowId):undefined,
+      routineShadowId?eq(type==="session"?sessions.shadow_id:tasks.shadow_id,routineShadowId):undefined,
       runnerId?eq(type==="session"?sessions.id:tasks.id,runnerId):undefined,
       runnerSession?tasksOfSession(runnerSession):undefined);
   }
   private runnerMayRead(token:RunnerClaims,type:ResourceType,id:string):boolean{
-    if(type==="session")return token.sessionId===id;
-    if(token.taskId===id)return true;
+    if(type==="session" && token.sessionId===id)return true;
+    if(type==="task" && token.taskId===id)return true;
+    const routineScope = activeShadowRoutineScope(this.db, token);
+    if(routineScope){
+      if(type==="session"){
+        const row = this.db.select({agentId:sessions.agent_id,shadowId:sessions.shadow_id}).from(sessions).where(eq(sessions.id,id)).get();
+        return Boolean(row && row.agentId===routineScope.agentId && (routineScope.kind==="consolidation" || row.shadowId===routineScope.shadowId));
+      }
+      const row = this.db.select({agentId:tasks.agent_id,shadowId:tasks.shadow_id}).from(tasks).where(eq(tasks.id,id)).get();
+      return Boolean(row && row.agentId===routineScope.agentId && (routineScope.kind==="consolidation" || row.shadowId===routineScope.shadowId));
+    }
+    if(type==="session")return false;
     const session=sessionRunner(token);
     return session!==undefined && Boolean(this.db.select({id:tasks.id}).from(tasks).where(and(eq(tasks.id,id),tasksOfSession(session))).get());
   }

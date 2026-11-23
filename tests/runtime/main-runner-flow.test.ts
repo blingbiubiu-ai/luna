@@ -1372,7 +1372,7 @@ test("Main Runner accepts sentinel completion and injects runtime context", asyn
   expect(prompt).toContain("clarification");
   expect(prompt).toContain("播放页竖屏");
   expect(prompt).toContain("uid");
-  expect(prompt).toContain("<messages>\n");
+  expect(prompt).toContain("<events>\n");
   expect(prompt).toContain("<memory>\n## Agent memory: always in effect");
   expect(prompt).toContain("(project) 发布冻结: 2026-11-20 前冻结发布");
   expect(prompt).not.toContain("memory body is fetched on demand");

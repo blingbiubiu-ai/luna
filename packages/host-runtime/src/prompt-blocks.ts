@@ -8,6 +8,7 @@ export const RESERVED_BLOCK_TAGS = [
   "soul", "luna_runtime", "identity", "role", "hard_rules", "routing", "reply_protocol",
   "task_commands", "session_commands", "input_rules", "messaging", "memory_rules", "artifacts",
   "evidence", "environment",
+  "capabilities", "events",
   "messages", "memory", "history", "tasks", "clarification", "task_result", "trigger",
   "task", "launch_context", "update_context", "user_input", "report_sections", "now",
 ] as const;
