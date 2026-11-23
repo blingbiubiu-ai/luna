@@ -70,7 +70,7 @@ function TasksPage() {
   return (
     <TasksWorkspaceView
       tasks={tasks ?? []}
-      loading={isLoading || selection.loading}
+      loading={isLoading}
       error={error ?? selection.error}
       shadowControl={
         selection.availableShadows.length > 1 ? (

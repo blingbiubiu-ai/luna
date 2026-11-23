@@ -626,7 +626,7 @@ function useDashboardResourceList<T>(resource: "sessions" | "tasks", scope?: Das
   return useQuery({
     queryKey: ["luna", resource, "list", agentId, shadowId],
     queryFn: ({ signal }) => {
-      const query = new URLSearchParams({ agentId: agentId! });
+      const query = new URLSearchParams({ agentId: agentId!, view: "summary" });
       if (shadowId) query.set("shadowId", shadowId);
       return apiFetch<T[]>(`/${resource}?${query}`, { signal });
     },

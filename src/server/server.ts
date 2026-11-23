@@ -96,8 +96,41 @@ function createApp(
 ) {
   return (
     new Hono()
-      // CORS middleware
+      // CORS & gzip compression middleware
       .use("/api/*", cors({ origin: "*" }))
+      .use("/api/*", async (c, next) => {
+        await next();
+        if (c.req.method !== "GET" && c.req.method !== "HEAD") return;
+        if (!(c.req.header("accept-encoding") ?? "").includes("gzip")) return;
+        const res = c.res;
+        if (!res || res.headers.has("content-encoding")) return;
+        const ct = (res.headers.get("content-type") ?? "").toLowerCase();
+        if (
+          !ct.startsWith("application/json") &&
+          !(ct.startsWith("text/") && !ct.startsWith("text/event-stream"))
+        ) {
+          return;
+        }
+        const bytes = new Uint8Array(await res.arrayBuffer());
+        if (bytes.byteLength < 1024) {
+          c.res = new Response(c.req.method === "HEAD" ? null : bytes, {
+            status: res.status,
+            statusText: res.statusText,
+            headers: res.headers,
+          });
+          return;
+        }
+        const gz = Bun.gzipSync(bytes);
+        const headers = new Headers(res.headers);
+        headers.set("content-encoding", "gzip");
+        headers.set("content-length", String(gz.byteLength));
+        headers.append("vary", "Accept-Encoding");
+        c.res = new Response(c.req.method === "HEAD" ? null : gz, {
+          status: res.status,
+          statusText: res.statusText,
+          headers,
+        });
+      })
       .use(
         "*",
         createDashboardAuthMiddleware(auth, db === undefined ? {} : { db }),

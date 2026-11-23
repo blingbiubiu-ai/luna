@@ -55,13 +55,14 @@ export function createSessionsRoutes(options: SessionsRouteOptions = {}) {
   .get("/", (c) => {
     const db = routeDb();
     const artifactSigner = dashboardArtifactSignerForContext(c, db);
+    const summaryOnly = c.req.query("view") === "summary";
     const sessionRows = db
       .select()
       .from(sessions)
       .where(access(c).listPredicate(c,"session"))
       .orderBy(desc(sessions.updated_at))
       .all();
-    return c.json(dashboardSessionRows(db, sessionRows, artifactSigner));
+    return c.json(dashboardSessionRows(db, sessionRows, artifactSigner, summaryOnly));
   })
   .get("/:id", c => {
     const db = routeDb();
@@ -347,7 +348,12 @@ function selectCommandReplyToMap(
   return map;
 }
 
-function dashboardSessionRows(db: DrizzleDB, sessionRows: SessionRow[], artifactSigner: ReturnType<typeof dashboardArtifactSignerForContext>) {
+function dashboardSessionRows(
+  db: DrizzleDB,
+  sessionRows: SessionRow[],
+  artifactSigner: ReturnType<typeof dashboardArtifactSignerForContext>,
+  summaryOnly = false,
+) {
   if (sessionRows.length === 0) return [];
   const sessionIdSet = new Set(sessionRows.map((row) => row.id));
   const missingParentIds = [...new Set(
@@ -385,7 +391,7 @@ function dashboardSessionRows(db: DrizzleDB, sessionRows: SessionRow[], artifact
   const contextBundleRows = selectDashboardContextBundleRows(
     db,
     "session",
-    sessionIds,
+    summaryOnly ? [] : sessionIds,
   );
   const listeningStore = new ChatListeningStore(db);
   const clarificationSessionIds = new Set(

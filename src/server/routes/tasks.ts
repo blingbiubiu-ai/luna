@@ -83,11 +83,12 @@ export function createTasksRoutes(options: TasksRouteOptions = {}) {
         return c.json(sessionTasks(db, sessionId));
       }
       const artifactSigner = dashboardArtifactSignerForContext(c, db);
+      const summaryOnly = c.req.query("view") === "summary";
       const taskRows = selectDashboardTaskRows(db,access(c).listPredicate(c,"task"));
       return c.json(
         buildDashboardTasks(
           taskRows,
-          selectDashboardTaskProjectionRows(db, taskRows, { artifactSigner }),
+          selectDashboardTaskProjectionRows(db, taskRows, { artifactSigner, summaryOnly }),
         ),
       );
     })
@@ -255,8 +256,12 @@ function selectDashboardTaskRowById(
 function selectDashboardTaskProjectionRows(
   db: DrizzleDB,
   taskRows: readonly TaskRow[],
-  input: { readonly artifactSigner: DashboardArtifactSigner },
+  input: {
+    readonly artifactSigner: DashboardArtifactSigner;
+    readonly summaryOnly?: boolean | undefined;
+  },
 ): DashboardTasksProjectionRows {
+  const summaryOnly = input.summaryOnly === true;
   return {
     participantRows: db
       .select()
@@ -273,16 +278,21 @@ function selectDashboardTaskProjectionRows(
     sessionRows: db.select().from(sessions).all(),
     surfaceRows: db.select().from(channelSurfaces).all(),
     messageRows: selectTimelineMessageRows(db),
-    turnEntryRows: selectDashboardSessionTurnEntryRows(db),
-    runRows: selectDashboardTaskRunRows(db),
-    timelineRows: taskRows.flatMap(row=>selectDashboardTimelineEventRowsForTask(db,row.id)),
-    artifactRows: selectDashboardArtifactRows(db),
+    turnEntryRows: summaryOnly ? [] : selectDashboardSessionTurnEntryRows(db),
+    runRows: summaryOnly ? selectDashboardTaskRunSummaryRows(db) : selectDashboardTaskRunRows(db),
+    timelineRows: summaryOnly
+      ? []
+      : taskRows.flatMap(row=>selectDashboardTimelineEventRowsForTask(db,row.id)),
+    artifactRows: summaryOnly
+      ? selectDashboardArtifactSummaryRows(db)
+      : selectDashboardArtifactRows(db),
     contextBundleRows: selectDashboardContextBundleRows(
       db,
       "task",
-      taskRows.map((row) => row.id),
+      summaryOnly ? [] : taskRows.map((row) => row.id),
     ),
     artifactSigner: input.artifactSigner,
+    summaryOnly,
   };
 }
 function dashboardTaskRunSelection() {
@@ -303,6 +313,30 @@ function dashboardTaskRunSelection() {
     error: taskRuns.error,
     final_report_artifact_id: taskRuns.final_report_artifact_id,
   };
+}
+
+function selectDashboardTaskRunSummaryRows(db: DrizzleDB): TaskRunRow[] {
+  return db
+    .select({
+      id: taskRuns.id,
+      task_id: taskRuns.task_id,
+      run_index: taskRuns.run_index,
+      status: taskRuns.status,
+      reason: taskRuns.reason,
+      input_snapshot: sql<string>`'null'`,
+      materialized_prompt: sql<string>`''`,
+      runner_type: taskRuns.runner_type,
+      runner_context_id: taskRuns.runner_context_id,
+      source_message_id: taskRuns.source_message_id,
+      started_at: taskRuns.started_at,
+      finished_at: taskRuns.finished_at,
+      cancel_reason: taskRuns.cancel_reason,
+      error: taskRuns.error,
+      final_report_artifact_id: taskRuns.final_report_artifact_id,
+    })
+    .from(taskRuns)
+    .orderBy(asc(taskRuns.task_id), asc(taskRuns.run_index))
+    .all();
 }
 
 function selectDashboardTaskRunRows(db: DrizzleDB): TaskRunRow[] {
@@ -397,6 +431,27 @@ function dashboardArtifactSelection() {
 function selectDashboardArtifactRows(db: DrizzleDB): ArtifactRow[] {
   return db
     .select(dashboardArtifactSelection())
+    .from(artifacts)
+    .orderBy(asc(artifacts.created_at))
+    .all();
+}
+
+function selectDashboardArtifactSummaryRows(db: DrizzleDB): ArtifactRow[] {
+  return db
+    .select({
+      id: artifacts.id,
+      task_id: artifacts.task_id,
+      timeline_event_id: artifacts.timeline_event_id,
+      type: artifacts.type,
+      name: artifacts.name,
+      mime_type: artifacts.mime_type,
+      path: artifacts.path,
+      content: sql<string | null>`NULL`,
+      metadata: sql<string | null>`NULL`,
+      status: artifacts.status,
+      retention_expires_at: artifacts.retention_expires_at,
+      created_at: artifacts.created_at,
+    })
     .from(artifacts)
     .orderBy(asc(artifacts.created_at))
     .all();

@@ -306,13 +306,17 @@ export interface DashboardTasksProjectionRows {
   readonly userIdentityLinkRows?: readonly UserIdentityLinkRow[] | undefined;
   readonly contextBundleRows: DashboardContextBundleRows;
   readonly artifactSigner: DashboardArtifactSigner;
+  readonly summaryOnly?: boolean | undefined;
 }
 
 export function buildDashboardTasks(
   taskRows: readonly TaskRow[],
   input: DashboardTasksProjectionRows,
 ): DashboardTask[] {
-  return taskRows.map((row) => toDashboardTask(row, input));
+  const displayTitleMessages = input.messageRows.map((message) =>
+    toDisplayTitleMessage(message, input.identityRows),
+  );
+  return taskRows.map((row) => toDashboardTask(row, input, displayTitleMessages));
 }
 
 export function buildDashboardTaskContextBundle(
@@ -367,9 +371,16 @@ export function toDashboardTask(
     readonly userIdentityLinkRows?: readonly UserIdentityLinkRow[] | undefined;
     readonly contextBundleRows: DashboardContextBundleRows;
     readonly artifactSigner: DashboardArtifactSigner;
+    readonly summaryOnly?: boolean | undefined;
   },
+  precomputedDisplayTitleMessages?: ReturnType<typeof toDisplayTitleMessage>[],
 ): DashboardTask {
   const linkedSessionIds = linkedSessionIdsForTask(row.id, input);
+  const displayTitleMessages =
+    precomputedDisplayTitleMessages ??
+    input.messageRows.map((message) =>
+      toDisplayTitleMessage(message, input.identityRows),
+    );
 
   const linkedSessions = input.sessionRows
     .filter((session) => linkedSessionIds.has(session.id))
@@ -377,9 +388,7 @@ export function toDashboardTask(
       const displayTitle = resolveSessionDisplayTitle({
         row: session,
         surfaceRows: input.surfaceRows,
-        messageRows: input.messageRows.map((message) =>
-          toDisplayTitleMessage(message, input.identityRows),
-        ),
+        messageRows: displayTitleMessages,
         identityRows: input.identityRows,
         directRecipientRows: input.directRecipientRows,
         userIdentityLinkRows: input.userIdentityLinkRows,
@@ -408,19 +417,19 @@ export function toDashboardTask(
   const workSession =
     linkedSessions.find((session) => session.id === row.primary_session_id) ??
     null;
-  const identitySessionRows = input.sessionRows.filter((session) =>
-    linkedSessionIds.has(session.id),
-  );
-  const sourceMessages = taskSourceMessages(row.id, input);
+  const isSummary = input.summaryOnly === true;
+  const sourceMessages = isSummary ? [] : taskSourceMessages(row.id, input);
 
   const taskContext = parseJsonOrNull(row.context_json);
-  const sourceTurnMessages = taskSourceTurnMessages(row.id, input);
-  const contextBundle = buildDashboardTaskContextBundle(row.id, {
-    contextBundleRows: input.contextBundleRows,
-    messageRows: input.messageRows,
-    userRows: input.userRows,
-    artifactSigner: input.artifactSigner,
-  });
+  const sourceTurnMessages = isSummary ? [] : taskSourceTurnMessages(row.id, input);
+  const contextBundle = isSummary
+    ? { contextPacks: [], seedRecords: [] }
+    : buildDashboardTaskContextBundle(row.id, {
+        contextBundleRows: input.contextBundleRows,
+        messageRows: input.messageRows,
+        userRows: input.userRows,
+        artifactSigner: input.artifactSigner,
+      });
   const taskRuns = input.runRows
     .filter((run) => run.task_id === row.id)
     .map((run) =>
@@ -465,25 +474,29 @@ export function toDashboardTask(
     taskContext,
     contextPacks: contextBundle.contextPacks,
     seedRecords: contextBundle.seedRecords,
-    runContextSummaries: input.runRows
-      .filter((run) => run.task_id === row.id)
-      .map((run) =>
-        toDashboardTaskRunContextSummary(run, {
-          contextPacks: contextBundle.contextPacks,
-          seedRecords: contextBundle.seedRecords,
-        }),
-      ),
+    runContextSummaries: isSummary
+      ? []
+      : input.runRows
+          .filter((run) => run.task_id === row.id)
+          .map((run) =>
+            toDashboardTaskRunContextSummary(run, {
+              contextPacks: contextBundle.contextPacks,
+              seedRecords: contextBundle.seedRecords,
+            }),
+          ),
     sourceMessages,
     sourceTurnMessages,
     runs: taskRuns,
-    timeline: input.timelineRows
-      .filter((event) => event.task_id === row.id)
-      .map((event) =>
-        toDashboardTimelineEvent(event, {
-          userRows: input.userRows,
-          artifactSigner: input.artifactSigner,
-        }),
-      ),
+    timeline: isSummary
+      ? []
+      : input.timelineRows
+          .filter((event) => event.task_id === row.id)
+          .map((event) =>
+            toDashboardTimelineEvent(event, {
+              userRows: input.userRows,
+              artifactSigner: input.artifactSigner,
+            }),
+          ),
     artifacts: input.artifactRows
       .filter((artifact) => artifact.task_id === row.id)
       .map((artifact) =>
