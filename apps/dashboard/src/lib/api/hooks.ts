@@ -2034,26 +2034,6 @@ export interface DashboardCorrelatedRequestItem {
   updatedAt: number;
 }
 
-export interface DashboardDutyScheduleItem {
-  id: string;
-  title: string;
-  instruction: string;
-  enabled: boolean;
-  nextAt: number;
-  intervalMs: number | null;
-  recurrence: Record<string, unknown> | null;
-  timezone: string;
-  taskId: string;
-  taskTitle: string;
-  taskStatus: string;
-  targetSessionId: string;
-  targetSessionTitle: string;
-  lastFailure: {
-    failedAt: number;
-    reason: string;
-  } | null;
-}
-
 export interface DashboardProactivityOverview {
   now: number;
   settings: {
@@ -2070,7 +2050,6 @@ export interface DashboardProactivityOverview {
   };
   heartbeats: DashboardShadowHeartbeatItem[];
   requests: DashboardCorrelatedRequestItem[];
-  duties: DashboardDutyScheduleItem[];
   governance: {
     sentLast24h: number;
     deferredQueue: {

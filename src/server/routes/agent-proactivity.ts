@@ -12,14 +12,11 @@ import {
   correlatedRequests,
   lunaAgents,
   memoryConsolidations,
-  scheduleFailureNotifications,
   sessionCommands,
   sessionRunnerAttempts,
-  sessionSchedules,
   sessions,
   sessionTimelineEvents,
   shadowHeartbeats,
-  tasks,
   users,
 } from "@/data/schema";
 import { inspectOutboundQuota } from "@/messaging/outbound-governance";
@@ -297,71 +294,10 @@ export function createAgentProactivityRoutes(
         updatedAt: req.updatedAt,
       }));
 
-      // 3. Scheduled `task.run` duties
+      // 3. Outbound governance stats, deferred queue & recent control events
       const scopedSessionIds = allAgentSessions
         .filter(s => !scope.shadowId || s.shadow_id === scope.shadowId)
         .map(s => s.id);
-
-      const taskMap = new Map(
-        d
-          .select({ id: tasks.id, title: tasks.title, status: tasks.status })
-          .from(tasks)
-          .where(eq(tasks.agent_id, scope.agentId))
-          .all()
-          .map(t => [t.id, t] as const),
-      );
-
-      const failureMap = new Map(
-        d
-          .select()
-          .from(scheduleFailureNotifications)
-          .all()
-          .map(f => [f.scheduleId, f] as const),
-      );
-
-      const duties = scopedSessionIds.length
-        ? d
-            .select()
-            .from(sessionSchedules)
-            .where(inArray(sessionSchedules.sourceSessionId, scopedSessionIds))
-            .all()
-            .filter(row => row.action.kind === "task.run")
-            .map(row => {
-              const taskId =
-                "taskId" in row.action && typeof row.action.taskId === "string"
-                  ? row.action.taskId
-                  : "";
-              const taskInfo = taskMap.get(taskId);
-              const fail = failureMap.get(row.id);
-              const contentText = String(row.action.content ?? "");
-              return {
-                id: row.id,
-                title: row.title || contentText.slice(0, 60),
-                instruction: contentText,
-                enabled: row.enabled,
-                nextAt: row.nextAt,
-                intervalMs: row.intervalMs,
-                recurrence: row.recurrence,
-                timezone: row.timezone,
-                taskId,
-                taskTitle: taskInfo?.title ?? (taskId || "未知任务"),
-                taskStatus: taskInfo?.status ?? "unknown",
-                targetSessionId: row.targetSessionId,
-                targetSessionTitle: resolveSessionDisplayTitle(
-                  sessionById.get(row.targetSessionId),
-                  surfaceTitleByKey,
-                ),
-                lastFailure: fail
-                  ? {
-                      failedAt: fail.lastFailedAt,
-                      reason: fail.lastReason,
-                    }
-                  : null,
-              };
-            })
-        : [];
-
-      // 4. Outbound governance stats, deferred queue & recent control events
       let sentLast24h = 0;
       let deferredQueue: {
         id: string;
@@ -465,7 +401,6 @@ export function createAgentProactivityRoutes(
         },
         heartbeats,
         requests,
-        duties,
         governance: {
           sentLast24h,
           deferredQueue,

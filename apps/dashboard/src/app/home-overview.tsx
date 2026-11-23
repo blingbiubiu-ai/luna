@@ -205,7 +205,7 @@ export function HomeOverview({
               <div>
                 <CardTitle>主动巡检与协同</CardTitle>
                 <CardDescription>
-                  分身心跳动态、待响应追问与值班巡检实况。
+                  分身心跳动态、待响应追问与外发调控实况。
                 </CardDescription>
               </div>
               <DashboardLink href={`${base}/proactivity`}>
@@ -238,8 +238,8 @@ export function HomeOverview({
               tone="blue"
             />
             <StatusTile
-              label="启用中的值班巡检"
-              value={proactivity.duties.filter((d) => d.enabled).length}
+              label="顺延待发消息"
+              value={proactivity.governance.deferredQueue.length}
             />
             <StatusTile
               label="近 24h 主动发言"

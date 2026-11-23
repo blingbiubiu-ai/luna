@@ -158,6 +158,5 @@ export type {
   CreateAgentProfileInput,
   DashboardShadowHeartbeatItem,
   DashboardCorrelatedRequestItem,
-  DashboardDutyScheduleItem,
   DashboardProactivityOverview,
 } from "./hooks";

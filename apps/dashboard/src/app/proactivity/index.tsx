@@ -1,9 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import {
-  AlertCircle,
   ArrowRight,
   BellOff,
-  CalendarClock,
   Check,
   CheckCircle2,
   GitPullRequestArrow,
@@ -25,7 +23,6 @@ import {
   useProactivityOverview,
   useTriggerShadowHeartbeat,
   type DashboardCorrelatedRequestItem,
-  type DashboardDutyScheduleItem,
   type DashboardProactivityOverview,
   type DashboardShadowHeartbeatItem,
 } from "@/lib/api";
@@ -35,7 +32,7 @@ export const Route = createFileRoute("/$agentId/proactivity/")({
   component: ProactivityPage,
 });
 
-type LedgerTab = "requests" | "duties" | "governance";
+type LedgerTab = "requests" | "governance";
 type RequestFilter = "all" | "pending" | "ask" | "handoff";
 
 function formatHeartbeatError(raw: string): string {
@@ -110,11 +107,10 @@ function ProactivityPage() {
   const openRequestsCount = (data?.requests ?? []).filter(
     r => r.status === "pending",
   ).length;
-  const enabledDutiesCount = (data?.duties ?? []).filter(d => d.enabled).length;
-  const failedDutiesCount = (data?.duties ?? []).filter(
-    d => d.lastFailure !== null,
-  ).length;
   const deferredCount = data?.governance.deferredQueue.length ?? 0;
+  const throttledCount = (data?.governance.recentEvents ?? []).filter(
+    e => e.controlKind === "outbound_throttled",
+  ).length;
   const governanceTotal =
     deferredCount + (data?.governance.recentEvents.length ?? 0);
 
@@ -137,16 +133,6 @@ function ProactivityPage() {
       ].some(v => v.toLowerCase().includes(normalizedSearch));
     });
   }, [data?.requests, requestFilter, normalizedSearch]);
-
-  const filteredDuties = useMemo(() => {
-    const list = data?.duties ?? [];
-    if (!normalizedSearch) return list;
-    return list.filter(item =>
-      [item.title, item.instruction, item.taskTitle, item.targetSessionTitle].some(
-        v => v.toLowerCase().includes(normalizedSearch),
-      ),
-    );
-  }, [data?.duties, normalizedSearch]);
 
   async function handleTriggerHeartbeat(hb: DashboardShadowHeartbeatItem) {
     const res = await triggerHeartbeat.mutateAsync(hb.shadowId);
@@ -214,7 +200,7 @@ function ProactivityPage() {
 
               <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[13px] text-muted-foreground">
                 <span>
-                  {policySummary || "管理数字分身的周期自检、主动追问协同、值班巡检与免打扰调控"}
+                  {policySummary || "管理数字分身的周期心跳自检、主动追问协同与免打扰调控"}
                 </span>
                 <a
                   href={`${base}/settings/general`}
@@ -267,38 +253,29 @@ function ProactivityPage() {
                 }}
               />
               <KpiTile
-                label="值班职责"
-                value={data ? enabledDutiesCount : "-"}
+                label="顺延待发"
+                value={data ? deferredCount : "-"}
                 sub={
-                  failedDutiesCount > 0
-                    ? `${failedDutiesCount} 项执行异常`
-                    : data
-                      ? `共 ${data.duties.length} 项巡检`
-                      : ""
+                  throttledCount > 0
+                    ? `近期 ${throttledCount} 次限流拦截`
+                    : "免打扰暂存队列"
                 }
                 tone={
-                  failedDutiesCount > 0
-                    ? "terra"
-                    : enabledDutiesCount > 0
-                      ? "sage"
+                  throttledCount > 0
+                    ? "ochre"
+                    : deferredCount > 0
+                      ? "plum"
                       : "neutral"
                 }
-                active={ledgerTab === "duties"}
-                withSageBar={ledgerTab === "duties"}
-                onClick={() => setLedgerTab("duties")}
+                active={ledgerTab === "governance"}
+                withSageBar={ledgerTab === "governance" || deferredCount > 0}
+                onClick={() => setLedgerTab("governance")}
               />
               <KpiTile
                 label="24h 主动发言"
                 value={data ? data.governance.sentLast24h : "-"}
-                sub={
-                  deferredCount > 0
-                    ? `${deferredCount} 条顺延待发`
-                    : "外发顺畅"
-                }
-                tone={deferredCount > 0 ? "plum" : "neutral"}
-                active={ledgerTab === "governance"}
-                withSageBar={ledgerTab === "governance" || deferredCount > 0}
-                onClick={() => setLedgerTab("governance")}
+                sub="被动回复不计入配额"
+                tone="neutral"
               />
             </div>
           </div>
@@ -390,7 +367,7 @@ function ProactivityPage() {
               </section>
 
               {/* Section 2: Unified Tabbed Activity & Governance Workspace */}
-              <section aria-label="主动协同与职责明细" className="space-y-3">
+              <section aria-label="主动协同与外发调控明细" className="space-y-3">
                 {/* Toolbar */}
                 <div className="flex flex-wrap items-center justify-between gap-2.5">
                   <div className="flex flex-wrap items-center gap-2">
@@ -409,17 +386,6 @@ function ProactivityPage() {
                               openRequestsCount > 0
                                 ? "bg-[#5c7c99] dark:bg-[#86a3be]"
                                 : null,
-                          },
-                          {
-                            key: "duties",
-                            label: "值班职责",
-                            count: data.duties.length,
-                            dot:
-                              failedDutiesCount > 0
-                                ? "bg-[#b5544a] dark:bg-[#dc7a70]"
-                                : enabledDutiesCount > 0
-                                  ? "bg-[#5b8a72] dark:bg-[#7fb096]"
-                                  : null,
                           },
                           {
                             key: "governance",
@@ -497,37 +463,23 @@ function ProactivityPage() {
                     )}
                   </div>
 
-                  <div className="flex flex-wrap items-center gap-2">
-                    {ledgerTab !== "governance" && (
-                      <label className="flex h-8 w-56 items-center gap-2 rounded-[8px] border border-border bg-card px-2.5 text-muted-foreground focus-within:border-ring">
-                        <Search className="size-3.5 shrink-0" />
-                        <input
-                          type="search"
-                          value={searchQuery}
-                          onChange={e => setSearchQuery(e.target.value)}
-                          placeholder={
-                            ledgerTab === "requests"
-                              ? "搜索提问、会话或对象…"
-                              : "搜索职责名称或任务…"
-                          }
-                          className="min-w-0 flex-1 border-0 bg-transparent text-xs text-foreground outline-none placeholder:text-muted-foreground"
-                        />
-                      </label>
-                    )}
-                    {ledgerTab === "duties" && (
-                      <Button asChild size="xs" variant="outline">
-                        <a href={`${base}/schedules`}>
-                          管理定时任务
-                          <ArrowRight className="ml-1 size-3" />
-                        </a>
-                      </Button>
-                    )}
-                  </div>
+                  {ledgerTab === "requests" && (
+                    <label className="flex h-8 w-56 items-center gap-2 rounded-[8px] border border-border bg-card px-2.5 text-muted-foreground focus-within:border-ring">
+                      <Search className="size-3.5 shrink-0" />
+                      <input
+                        type="search"
+                        value={searchQuery}
+                        onChange={e => setSearchQuery(e.target.value)}
+                        placeholder="搜索提问、会话或对象…"
+                        className="min-w-0 flex-1 border-0 bg-transparent text-xs text-foreground outline-none placeholder:text-muted-foreground"
+                      />
+                    </label>
+                  )}
                 </div>
 
                 {/* Tab Panel Surface */}
                 <div className="overflow-hidden rounded-[14px] border border-border bg-card shadow-[0_2px_5px_#00000003]">
-                  {ledgerTab === "requests" && (
+                  {ledgerTab === "requests" ? (
                     <RequestsLedgerPanel
                       items={filteredRequests}
                       hasFilter={
@@ -543,17 +495,7 @@ function ProactivityPage() {
                       }
                       onCancel={id => cancelRequest.mutate(id)}
                     />
-                  )}
-
-                  {ledgerTab === "duties" && (
-                    <DutiesLedgerPanel
-                      items={filteredDuties}
-                      hasFilter={normalizedSearch.length > 0}
-                      base={base}
-                    />
-                  )}
-
-                  {ledgerTab === "governance" && (
+                  ) : (
                     <GovernanceLedgerPanel
                       governance={data.governance}
                       timezone={data.settings.timezone}
@@ -1053,117 +995,6 @@ function RequestsLedgerPanel({
   );
 }
 
-function DutiesLedgerPanel({
-  items,
-  hasFilter,
-  base,
-}: {
-  readonly items: readonly DashboardDutyScheduleItem[];
-  readonly hasFilter: boolean;
-  readonly base: string;
-}) {
-  if (items.length === 0) {
-    return (
-      <LedgerEmptyState
-        icon={CalendarClock}
-        title={hasFilter ? "没有匹配的值班职责" : "暂无直连后台巡检职责"}
-        description={
-          hasFilter
-            ? "尝试清空搜索词查看全部职责。"
-            : "周期性监控、看板巡检等职责直接绑定后台 Task 静默运行，仅在发现异常时唤醒会话汇报。"
-        }
-        action={
-          !hasFilter ? (
-            <Button asChild size="xs" variant="outline">
-              <a href={`${base}/schedules`}>
-                前往定时任务创建
-                <ArrowRight className="ml-1 size-3" />
-              </a>
-            </Button>
-          ) : undefined
-        }
-      />
-    );
-  }
-
-  return (
-    <div className="divide-y divide-border">
-      {items.map(duty => (
-        <div
-          key={duty.id}
-          className="px-4 py-3.5 transition-colors hover:bg-muted/30"
-        >
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <div className="flex min-w-0 items-center gap-2">
-              <span
-                className={cn(
-                  "size-2 shrink-0 rounded-full",
-                  duty.lastFailure
-                    ? "bg-[#b5544a] dark:bg-[#dc7a70]"
-                    : duty.enabled
-                      ? "bg-[#5b8a72] dark:bg-[#7fb096]"
-                      : "bg-muted-foreground/50",
-                )}
-              />
-              <span className="truncate text-[14px] font-medium text-foreground">
-                {duty.title}
-              </span>
-              {!duty.enabled && (
-                <span className="rounded-full bg-muted px-2 py-0.2 text-[11px] text-muted-foreground">
-                  已暂停
-                </span>
-              )}
-              {duty.lastFailure && (
-                <span className="rounded-full bg-[#b5544a]/12 px-2 py-0.2 text-[11px] font-medium text-[#b5544a] dark:text-[#dc7a70]">
-                  最近执行失败
-                </span>
-              )}
-            </div>
-            <span className="text-xs tabular-nums text-muted-foreground">
-              下次：{formatShortTime(duty.nextAt, duty.timezone)}
-            </span>
-          </div>
-
-          <p className="mt-1.5 line-clamp-2 text-[13px] text-muted-foreground">
-            {duty.instruction}
-          </p>
-
-          <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
-            <span>
-              巡检任务：
-              <a
-                href={`${base}/tasks/${encodeURIComponent(duty.taskId)}`}
-                className="font-medium text-foreground/85 hover:underline"
-              >
-                {duty.taskTitle}
-              </a>
-            </span>
-            <span aria-hidden="true" className="opacity-40">
-              ·
-            </span>
-            <span>
-              异常汇报至：
-              <a
-                href={`${base}/sessions/${encodeURIComponent(duty.targetSessionId)}`}
-                className="font-medium text-foreground/85 hover:underline"
-              >
-                {duty.targetSessionTitle}
-              </a>
-            </span>
-          </div>
-
-          {duty.lastFailure && (
-            <div className="mt-2 flex items-start gap-2 rounded-[8px] border border-[#b5544a]/25 bg-[#b5544a]/10 px-3 py-1.5 text-xs text-[#b5544a] dark:text-[#dc7a70]">
-              <AlertCircle className="mt-0.5 size-3.5 shrink-0" />
-              <span>{duty.lastFailure.reason}</span>
-            </div>
-          )}
-        </div>
-      ))}
-    </div>
-  );
-}
-
 function GovernanceLedgerPanel({
   governance,
   timezone,
@@ -1260,7 +1091,7 @@ function LedgerEmptyState({
   description,
   action,
 }: {
-  readonly icon: typeof CalendarClock;
+  readonly icon: typeof GitPullRequestArrow;
   readonly title: string;
   readonly description: string;
   readonly action?: React.ReactNode;
