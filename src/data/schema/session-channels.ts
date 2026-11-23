@@ -1,4 +1,4 @@
-import { integer, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
+import { index, integer, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
 import type { NormalizedInboundMessage } from "@/channels";
 import type { OutboundChannelOperation } from "@/channels/outbound";
 export const sessionChannelBindings = sqliteTable("session_channel_bindings", {
@@ -10,7 +10,7 @@ export const sessionReplyDispatches = sqliteTable("session_reply_dispatches", {
   id: text("id").primaryKey(), sessionId: text("session_id").notNull(),
   idempotencyKey: text("idempotency_key").notNull().unique(), signature: text("signature").notNull(),
   receipt: text("receipt", {mode:"json"}).$type<OutboundChannelOperation>(), createdAt: integer("created_at").notNull(),
-});
+}, t => [index("session_reply_dispatches_session_idx").on(t.sessionId, t.createdAt)]);
 export const sessionChannelDeliveries = sqliteTable("session_channel_deliveries", {
   id: text("id").primaryKey(), dispatchId: text("dispatch_id").notNull(),
   bindingId: text("binding_id").notNull(), channelId: text("channel_id").notNull(),

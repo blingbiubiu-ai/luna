@@ -71,6 +71,13 @@
       "when": 1795910400000,
       "tag": "0010_agent_proactivity",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1795996800000,
+      "tag": "0011_compact_status_card_deliveries",
+      "breakpoints": true
     }
   ]
 }

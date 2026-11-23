@@ -141,3 +141,49 @@ test("only an explicit direct target on the assigned bot is used for delivery", 
   await wrapped.send(inbound, {replyMode: "direct_message", idempotencyKey: "private-control", content: "private control response"});
   expect(native.outbound).toHaveLength(2);
 });
+
+test("repeated update_status_card deliveries prune superseded snapshots and strip transient progress arrays", async () => {
+  const first = await dispatcher.send(inbound, {...operation(), statusCard: {taskId: "task-compact"}});
+  const nativeId = native.outbound[0]!.id;
+
+  for (let i = 1; i <= 12; i++) {
+    const nativeProgress = Array.from({length: i * 10}, (_, idx) => ({
+      id: `step-${idx}`,
+      text: `正在执行步骤 ${idx} · ${"x".repeat(120)}`,
+    }));
+    const statusCardSteps = nativeProgress.map(entry => entry.text);
+    const updated = await dispatcher.send(inbound, {
+      sessionId,
+      idempotencyKey: `progress-${i}`,
+      replyMode: "update_status_card",
+      targetMessageId: nativeId,
+      statusCardStyle: "native",
+      statusCardState: i === 12 ? "terminal" : "active",
+      statusCard: {taskId: "task-compact", title: "测试压缩", status: i === 12 ? "completed" : "running"},
+      nativeProgress,
+      statusCardSteps,
+      content: "",
+    });
+    expect(updated.id).toBe(nativeId);
+  }
+
+  expect(native.outbound).toHaveLength(13);
+  expect(native.outbound[12]!.targetMessageId).toBe(nativeId);
+
+  const dispatches = db.db.select().from(schema.sessionReplyDispatches).all();
+  const deliveries = db.db.select().from(schema.sessionChannelDeliveries).all();
+  // Only 1 initial creation dispatch + 1 latest update_status_card dispatch remain!
+  expect(dispatches).toHaveLength(2);
+  expect(deliveries).toHaveLength(2);
+
+  const latestUpdateDispatch = dispatches.find(row => row.receipt?.replyMode === "update_status_card")!;
+  expect(latestUpdateDispatch.signature.startsWith("sha256:")).toBe(true);
+  expect(latestUpdateDispatch.signature.length).toBeLessThan(80);
+  expect(latestUpdateDispatch.receipt?.nativeProgress).toBeUndefined();
+  expect(latestUpdateDispatch.receipt?.statusCardSteps).toBeUndefined();
+
+  const latestUpdateDelivery = deliveries.find(row => row.operation.replyMode === "update_status_card")!;
+  expect(latestUpdateDelivery.operation.nativeProgress).toBeUndefined();
+  expect(latestUpdateDelivery.operation.statusCardSteps).toBeUndefined();
+  expect(latestUpdateDelivery.receipt?.nativeProgress).toBeUndefined();
+});

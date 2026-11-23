@@ -22,8 +22,8 @@ import { createAgentProactivityRoutes } from "./routes/agent-proactivity";
 import { createRunnerProtocolV2Routes } from "./routes/runner-protocol-v2";
 import { createRunnerRequestRoutes } from "./routes/runner-requests";
 import { loginDotMatrixScript } from "./login-dot-matrix";
-import { existsSync } from "node:fs";
-import { extname, join } from "node:path";
+import { existsSync, readFileSync, statSync } from "node:fs";
+import { extname, join, resolve, sep } from "node:path";
 
 import type { Server, ServerWebSocket } from "bun";
 import { Hono } from "hono";
@@ -365,6 +365,21 @@ export class HonoServer {
       // Platform pages (outside any Agent) share the Dashboard shell.
       this._app.get("/platform/*", serveAgentShell);
       this._app.get("/artifacts/:id/preview", serveArtifactPreviewShell);
+      const resolvedWebRoot = resolve(webRoot);
+      const gzipAssetCache = new Map<
+        string,
+        { etag: string; gzipped: Uint8Array<ArrayBuffer>; contentType: string }
+      >();
+      const compressibleMimeByExt: Record<string, string> = {
+        ".js": "text/javascript; charset=utf-8",
+        ".mjs": "text/javascript; charset=utf-8",
+        ".css": "text/css; charset=utf-8",
+        ".svg": "image/svg+xml",
+        ".json": "application/json; charset=utf-8",
+        ".map": "application/json; charset=utf-8",
+        ".html": "text/html; charset=utf-8",
+        ".txt": "text/plain; charset=utf-8",
+      };
       const serveAgentAsset = serveStatic({
         root: webRoot,
         rewriteRequestPath: (path) => path.slice("/agent".length),
@@ -374,15 +389,69 @@ export class HonoServer {
         if (!pathname.startsWith("/agent/") || pathname === "/agent/") {
           return next();
         }
+        const ext = extname(pathname).toLowerCase();
         if (
           (c.req.method === "GET" || c.req.method === "HEAD") &&
-          extname(pathname) === ""
+          ext === ""
         ) {
           return serveAgentShell();
+        }
+        let etag: string | undefined;
+        if (c.req.method === "GET" || c.req.method === "HEAD") {
+          const targetPath = resolve(resolvedWebRoot, `.${pathname.slice("/agent".length)}`);
+          if (targetPath.startsWith(`${resolvedWebRoot}${sep}`)) {
+            const stat = statSync(targetPath, { throwIfNoEntry: false });
+            if (stat?.isFile()) {
+              etag = `W/"${stat.size.toString(16)}-${Math.trunc(stat.mtimeMs).toString(16)}"`;
+              if (c.req.header("if-none-match") === etag) {
+                return new Response(null, {
+                  status: 304,
+                  headers: {
+                    "cache-control": "no-cache",
+                    etag,
+                    vary: "Accept-Encoding",
+                  },
+                });
+              }
+              const mime = compressibleMimeByExt[ext];
+              if (
+                c.req.method === "GET" &&
+                mime !== undefined &&
+                stat.size >= 1024 &&
+                (c.req.header("accept-encoding") ?? "").includes("gzip")
+              ) {
+                let cached = gzipAssetCache.get(targetPath);
+                if (!cached || cached.etag !== etag) {
+                  const gzipped = Bun.gzipSync(new Uint8Array(readFileSync(targetPath)));
+                  cached = { etag, gzipped, contentType: mime };
+                  gzipAssetCache.set(targetPath, cached);
+                  if (gzipAssetCache.size > 32) {
+                    const oldest = gzipAssetCache.keys().next().value;
+                    if (oldest !== undefined) gzipAssetCache.delete(oldest);
+                  }
+                }
+                return new Response(cached.gzipped, {
+                  status: 200,
+                  headers: {
+                    "content-type": cached.contentType,
+                    "content-encoding": "gzip",
+                    "content-length": String(cached.gzipped.byteLength),
+                    "cache-control": "no-cache",
+                    etag,
+                    vary: "Accept-Encoding",
+                  },
+                });
+              }
+            }
+          }
         }
         const res = await serveAgentAsset(c, next);
         if (res) {
           res.headers.set("cache-control", "no-cache");
+          res.headers.set("vary", "Accept-Encoding");
+          if (etag) {
+            res.headers.set("etag", etag);
+          }
         }
         return res;
       });

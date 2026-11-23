@@ -1,4 +1,5 @@
-import { and, desc, eq } from "drizzle-orm";
+import { createHash } from "node:crypto";
+import { and, desc, eq, ne, sql } from "drizzle-orm";
 import type { DrizzleDB } from "@/data";
 import { AgentError } from "@/agents/agent-store";
 import { messages, sessionTimelineEntries, sessionChannelDeliveries, sessionReplyDispatches, users } from "@/data/schema";
@@ -12,6 +13,20 @@ import { renderLocalUserMentions } from "./reply-text";
 type Operation = Omit<OutboundChannelOperation, "id" | "channelId">;
 const active = new WeakMap<DrizzleDB, Map<string, Promise<OutboundChannelOperation>>>();
 
+function compactSentOperation(operation: Operation): Operation {
+  if (operation.replyMode !== "update_status_card") return operation;
+  const { nativeProgress: _np, progressUpdate: _pu, statusCardSteps: _steps, ...rest } = operation;
+  return rest;
+}
+
+function compactSentReceipt(receipt: OutboundChannelOperation): OutboundChannelOperation {
+  if (receipt.replyMode !== "update_status_card") return receipt;
+  const { nativeProgress: _np, progressUpdate: _pu, statusCardSteps, ...rest } = receipt;
+  return receipt.progressSnapshot && statusCardSteps !== undefined
+    ? { ...rest, statusCardSteps }
+    : rest;
+}
+
 /** One logical reply, independently durable deliveries to all bound channel surfaces. */
 export class SessionReplyDispatcher {
   constructor(private readonly db: DrizzleDB, private readonly channelFor: (id: string) => ReplyChannel | undefined) {}
@@ -23,7 +38,6 @@ export class SessionReplyDispatcher {
     for (const binding of bindings) {
       bindSessionBot(this.db, sessionId, { type: binding.channelType, id: binding.channelId }, this.channelFor(binding.channelId)?.getBotIdentity?.());
     }
-
   }
 
   channel(id: string): ReplyChannel | undefined {
@@ -51,14 +65,20 @@ export class SessionReplyDispatcher {
     const locks = active.get(this.db) ?? new Map<string, Promise<OutboundChannelOperation>>();
     active.set(this.db, locks);
     // Reject conflicting payloads even while another caller is delivering the first payload.
-    const signature = JSON.stringify({ content: operation.content, ...(operation.reply ? { reply: operation.reply } : {}), replyMode: operation.replyMode,
+    const rawSignature = JSON.stringify({ content: operation.content, ...(operation.reply ? { reply: operation.reply } : {}), replyMode: operation.replyMode,
       targetMessageId: operation.targetMessageId, statusCard: operation.statusCard, statusCardSteps: operation.statusCardSteps,
       ...(operation.statusCardStyle === "native" ? {statusCardStyle: operation.statusCardStyle, nativeProgress: operation.nativeProgress} : {}),
       progressUpdate:operation.progressUpdate,
       statusCardState: operation.statusCardState, taskResultCard: operation.taskResultCard, batchSummaryCard: operation.batchSummaryCard,
       mention: operation.mention, inlineMentions: operation.inlineMentions, directTarget });
-    const existing = this.db.select().from(sessionReplyDispatches).where(eq(sessionReplyDispatches.idempotencyKey, key)).get();
-    if (existing && existing.signature !== signature) throw new Error("Reply idempotency conflict");
+    const signature = `sha256:${createHash("sha256").update(rawSignature).digest("hex")}`;
+    const existing = this.db.select({ signature: sessionReplyDispatches.signature }).from(sessionReplyDispatches).where(eq(sessionReplyDispatches.idempotencyKey, key)).get();
+    if (existing) {
+      const matches = existing.signature.startsWith("sha256:")
+        ? existing.signature === signature
+        : existing.signature === rawSignature;
+      if (!matches) throw new Error("Reply idempotency conflict");
+    }
     const pending = locks.get(key);
     if (pending) return pending;
     const promise = this.dispatch(key, signature, inbound, operation, directTarget).finally(() => locks.delete(key));
@@ -83,10 +103,32 @@ export class SessionReplyDispatcher {
     if (!dispatch) {
       const id = `session-reply:${crypto.randomUUID()}`;
       const bindings = store.channelBindings(sessionId);
-      const previous = operation.replyMode === "update_status_card" && operation.targetMessageId
-        ? this.db.select().from(sessionChannelDeliveries).all().filter(row => row.receipt && (row.receipt.id === operation.targetMessageId || row.dispatchId === operation.targetMessageId)) : [];
-      const priorDispatchId = previous[0]?.dispatchId;
-      const prior = priorDispatchId ? this.db.select().from(sessionChannelDeliveries).where(eq(sessionChannelDeliveries.dispatchId,priorDispatchId)).all() : [];
+      let priorDispatchId: string | undefined;
+      if (operation.replyMode === "update_status_card" && operation.targetMessageId) {
+        const byDispatch = this.db
+          .select({ dispatchId: sessionChannelDeliveries.dispatchId })
+          .from(sessionChannelDeliveries)
+          .where(eq(sessionChannelDeliveries.dispatchId, operation.targetMessageId))
+          .limit(1)
+          .get();
+        priorDispatchId = byDispatch?.dispatchId ?? this.db
+          .select({ dispatchId: sessionChannelDeliveries.dispatchId })
+          .from(sessionChannelDeliveries)
+          .where(sql`json_extract(${sessionChannelDeliveries.receipt}, '$.id') = ${operation.targetMessageId}`)
+          .orderBy(desc(sessionChannelDeliveries.updatedAt))
+          .limit(1)
+          .get()?.dispatchId;
+      }
+      const prior = priorDispatchId
+        ? this.db
+            .select({
+              channelId: sessionChannelDeliveries.channelId,
+              receiptId: sql<string | null>`json_extract(${sessionChannelDeliveries.receipt}, '$.id')`,
+            })
+            .from(sessionChannelDeliveries)
+            .where(eq(sessionChannelDeliveries.dispatchId, priorDispatchId))
+            .all()
+        : [];
       const plans = bindings.filter(binding => !operation.inlineMentions || binding.channelId === inbound.channel.id).map(binding => {
         const sameSource = binding.channelId === inbound.channel.id;
         const latest = this.db.select({ id: messages.externalMessageId }).from(sessionTimelineEntries)
@@ -95,9 +137,9 @@ export class SessionReplyDispatcher {
           .orderBy(desc(messages.occurredAt)).all().find(row => !row.id.startsWith("trigger:"));
         const anchor = binding.rootMessageId ?? (sameSource ? inbound.id : latest?.id);
         if (binding.threadId && !binding.rootMessageId) throw new Error("Bound thread has no root message");
-        const priorReceipt = prior.find(row => row.channelId === binding.channelId)?.receipt;
+        const priorReceiptId = prior.find(row => row.channelId === binding.channelId)?.receiptId ?? undefined;
         const target = operation.replyMode === "update_status_card"
-          ? priorReceipt?.id ?? (sameSource ? operation.targetMessageId : undefined)
+          ? priorReceiptId ?? (sameSource ? operation.targetMessageId : undefined)
           : (sameSource ? operation.targetMessageId : undefined) ?? anchor ?? binding.surfaceId;
         if (!target) throw new Error("Missing channel-specific status card target");
         const { thread: _thread, ...source } = inbound;
@@ -138,7 +180,12 @@ export class SessionReplyDispatcher {
         const destination = directTarget?.channelId === delivery.channelId ? directTarget : undefined;
         const receipt = destination && adapter.sendTo ? await adapter.sendTo(destination,payload) : await adapter.send(delivery.inbound,payload);
         const {assetBasePath:_assets,...persistable} = receipt;
-        this.db.update(sessionChannelDeliveries).set({status:"sent",receipt:persistable,updatedAt:Date.now()}).where(eq(sessionChannelDeliveries.id,delivery.id)).run();
+        this.db.update(sessionChannelDeliveries).set({
+          status: "sent",
+          operation: compactSentOperation(delivery.operation),
+          receipt: compactSentReceipt(persistable),
+          updatedAt: Date.now(),
+        }).where(eq(sessionChannelDeliveries.id,delivery.id)).run();
       } catch (error) {
         this.db.update(sessionChannelDeliveries).set({status:"failed",error:String(error),updatedAt:Date.now()}).where(eq(sessionChannelDeliveries.id,delivery.id)).run();
         errors.push(error);
@@ -168,7 +215,31 @@ export class SessionReplyDispatcher {
       channelId:inbound.channel.id,resolvedSessionId:outputSessionId,
       ...(sourceReceipt?.progressSnapshot?{progressSnapshot:sourceReceipt.progressSnapshot,statusCardSteps:sourceReceipt.statusCardSteps}:{}),
       ...(sourceReceipt?.deliveredSurfaceId ? {deliveredSurfaceId:sourceReceipt.deliveredSurfaceId} : {}) };
-    this.db.update(sessionReplyDispatches).set({receipt}).where(eq(sessionReplyDispatches.id,dispatch.id)).run();
+    this.db.transaction(tx => {
+      tx.update(sessionReplyDispatches).set({receipt: compactSentReceipt(receipt)}).where(eq(sessionReplyDispatches.id,dispatch.id)).run();
+      if (operation.replyMode === "update_status_card" && operation.targetMessageId) {
+        const obsoleteIds = tx
+          .select({ id: sessionReplyDispatches.id })
+          .from(sessionReplyDispatches)
+          .where(
+            and(
+              eq(sessionReplyDispatches.sessionId, sessionId),
+              ne(sessionReplyDispatches.id, dispatch.id),
+              sql`json_extract(${sessionReplyDispatches.receipt}, '$.replyMode') = 'update_status_card'`,
+              sql`json_extract(${sessionReplyDispatches.receipt}, '$.targetMessageId') = ${operation.targetMessageId}`,
+              sql`NOT EXISTS (SELECT 1 FROM session_channel_deliveries d WHERE d.dispatch_id = ${sessionReplyDispatches.id} AND d.status NOT IN ('sent', 'skipped'))`,
+            ),
+          )
+          .all()
+          .map(row => row.id);
+        if (obsoleteIds.length > 0) {
+          for (const obsoleteId of obsoleteIds) {
+            tx.delete(sessionChannelDeliveries).where(eq(sessionChannelDeliveries.dispatchId, obsoleteId)).run();
+            tx.delete(sessionReplyDispatches).where(eq(sessionReplyDispatches.id, obsoleteId)).run();
+          }
+        }
+      }
+    });
     return receipt;
   }
 }

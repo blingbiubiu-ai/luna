@@ -875,7 +875,20 @@ export class FeishuMessageChannel
             : await this._replyLunaMessage(inbound, operation);
 
       if (outbound.idempotencyKey !== undefined) {
-        this._providerIdempotencyRegistry.set(outbound.idempotencyKey, outbound);
+        const cached =
+          outbound.replyMode === "update_status_card"
+            ? (() => {
+                const { nativeProgress: _np, progressUpdate: _pu, ...rest } = outbound;
+                return rest;
+              })()
+            : outbound;
+        this._providerIdempotencyRegistry.set(outbound.idempotencyKey, cached);
+        if (this._providerIdempotencyRegistry.size > 256) {
+          const oldest = this._providerIdempotencyRegistry.keys().next().value;
+          if (oldest !== undefined) {
+            this._providerIdempotencyRegistry.delete(oldest);
+          }
+        }
       }
       return this._progressPresentation!.remember(outbound);
     } finally {
