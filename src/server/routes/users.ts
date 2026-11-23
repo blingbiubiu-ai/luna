@@ -17,6 +17,7 @@ import {
   channelConfigs,
   channelIdentities,
   channelSurfaces,
+  directRecipients,
   messages,
   sessionTimelineEntries,
   sessions,
@@ -31,7 +32,11 @@ import {
   type AuthorizationRuleRecord,
 } from "../policy/authorization-rule-store";
 import type { AuthorizationSubjectType } from "../policy/authorization-subject";
-import { resolveSessionDisplayTitle } from "@/dashboard-api/session-display-title";
+import {
+  type DirectRecipientRow,
+  resolveSessionDisplayTitle,
+  type UserIdentityLinkRow as RawUserIdentityLinkRow,
+} from "@/dashboard-api/session-display-title";
 import { isGuardResponse, requireDashboardOnly } from "../auth/guards";
 import { getKernel } from "./kernel";
 import { AgentUserStore, type ManagedUserStatus } from "@/identity/agent-user-store";
@@ -123,6 +128,8 @@ type DashboardUserContext = {
   readonly userRows: readonly DisplayUserRow[];
   readonly surfaceRows: readonly ChannelSurfaceRow[];
   readonly channelIdentityRows: readonly ChannelIdentityRow[];
+  readonly directRecipientRows: readonly DirectRecipientRow[];
+  readonly rawIdentityLinkRows: readonly RawUserIdentityLinkRow[];
   readonly timelineRows: readonly TimelineMessageRow[];
   readonly linksByUserId: ReadonlyMap<string, readonly UserIdentityLinkRow[]>;
   readonly channelIdentityById: ReadonlyMap<string, ChannelIdentityRow>;
@@ -371,6 +378,8 @@ function loadDashboardUserContext(db: DrizzleDB, agentId: string): DashboardUser
     userRows,
     surfaceRows: db.select().from(channelSurfaces).all(),
     channelIdentityRows,
+    directRecipientRows: db.select().from(directRecipients).all(),
+    rawIdentityLinkRows: db.select().from(userIdentityLinks).where(eq(userIdentityLinks.agentId, agentId)).all(),
     timelineRows,
     linksByUserId: groupLinksByUserId(linkRows),
     channelIdentityById: new Map(
@@ -402,6 +411,9 @@ function toDashboardUser(
           toDisplayTitleMessage(timelineRow, context.channelIdentityRows),
         ),
         identityRows: context.channelIdentityRows,
+        directRecipientRows: context.directRecipientRows,
+        userIdentityLinkRows: context.rawIdentityLinkRows,
+        userRows: context.userRows,
       });
   const userGroups = context.groupStore.listUserGroups(row.id)
     .filter(group => group.agentId === context.agentId)

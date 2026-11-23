@@ -11,7 +11,7 @@ import { HTTPException } from "hono/http-exception";
 
 import { ContextPackStore } from "@/context";
 import type { DrizzleDB } from "@/data";
-import { artifacts, channelIdentities, channelSurfaces, messages, sessionTurnEntries, sessionTimelineEntries, taskParticipants, taskRuns, taskSubscriptions, tasks, sessions, timelineEvents, channelUserBindings, users } from "@/data/schema";
+import { artifacts, channelIdentities, channelSurfaces, directRecipients, messages, sessionTurnEntries, sessionTimelineEntries, taskParticipants, taskRuns, taskSubscriptions, tasks, sessions, timelineEvents, channelUserBindings, userIdentityLinks, users } from "@/data/schema";
 import {
   buildDashboardTaskContextBundle,
   buildDashboardTasks,
@@ -266,6 +266,8 @@ function selectDashboardTaskProjectionRows(
     identityRows: db.select().from(channelIdentities).all(),
     userRows: loadDashboardUserRows(db),
     channelUserBindingRows: db.select().from(channelUserBindings).all(),
+    directRecipientRows: db.select().from(directRecipients).all(),
+    userIdentityLinkRows: db.select().from(userIdentityLinks).all(),
     sourceContextItems: new ContextPackStore(db).listTaskSourceItems(),
     subscriptionRows: db.select().from(taskSubscriptions).all(),
     sessionRows: db.select().from(sessions).all(),

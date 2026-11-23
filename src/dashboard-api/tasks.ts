@@ -21,7 +21,11 @@ import {
   linkDashboardArtifactReferencesInMarkdown,
   signDashboardArtifactReferencesInValue,
 } from "./local-paths";
-import { resolveSessionDisplayTitle } from "./session-display-title";
+import {
+  type DirectRecipientRow,
+  resolveSessionDisplayTitle,
+  type UserIdentityLinkRow,
+} from "./session-display-title";
 
 export type ChannelIdentityRow = typeof channelIdentities.$inferSelect;
 export type ChannelSurfaceRow = typeof channelSurfaces.$inferSelect;
@@ -298,6 +302,8 @@ export interface DashboardTasksProjectionRows {
   readonly identityRows: readonly ChannelIdentityRow[];
   readonly userRows: readonly UserRow[];
   readonly channelUserBindingRows: readonly ChannelUserBindingRow[];
+  readonly directRecipientRows?: readonly DirectRecipientRow[] | undefined;
+  readonly userIdentityLinkRows?: readonly UserIdentityLinkRow[] | undefined;
   readonly contextBundleRows: DashboardContextBundleRows;
   readonly artifactSigner: DashboardArtifactSigner;
 }
@@ -357,6 +363,8 @@ export function toDashboardTask(
     readonly identityRows: readonly ChannelIdentityRow[];
     readonly userRows: readonly UserRow[];
     readonly channelUserBindingRows: readonly ChannelUserBindingRow[];
+    readonly directRecipientRows?: readonly DirectRecipientRow[] | undefined;
+    readonly userIdentityLinkRows?: readonly UserIdentityLinkRow[] | undefined;
     readonly contextBundleRows: DashboardContextBundleRows;
     readonly artifactSigner: DashboardArtifactSigner;
   },
@@ -373,6 +381,9 @@ export function toDashboardTask(
           toDisplayTitleMessage(message, input.identityRows),
         ),
         identityRows: input.identityRows,
+        directRecipientRows: input.directRecipientRows,
+        userIdentityLinkRows: input.userIdentityLinkRows,
+        userRows: input.userRows,
       });
       return {
         id: session.id,

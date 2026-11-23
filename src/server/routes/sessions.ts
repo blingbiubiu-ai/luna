@@ -11,7 +11,7 @@ import { HTTPException } from "hono/http-exception";
 import { scanArtifactRefs } from "@luna/service-client/artifact-ref";
 import { ContextPackStore } from "@/context";
 import type { DrizzleDB } from "@/data";
-import { agentShadows, channelIdentities, channelSurfaces, messageMentions, messages, runnerContexts, sessionCommands, sessionInbox, sessionRunnerAttempts, sessionStates, sessionTimelineEntries, sessionTimelineEvents, sessionTurnEntries, sessionTurns, sessions, shadowBotBindings, taskSubscriptions, tasks, channelUserBindings, users } from "@/data/schema";
+import { agentShadows, channelIdentities, channelSurfaces, directRecipients, messageMentions, messages, runnerContexts, sessionCommands, sessionInbox, sessionRunnerAttempts, sessionStates, sessionTimelineEntries, sessionTimelineEvents, sessionTurnEntries, sessionTurns, sessions, shadowBotBindings, taskSubscriptions, tasks, channelUserBindings, userIdentityLinks, users } from "@/data/schema";
 import { resolveChannelSurfaceKind } from "@/dashboard-api/session-display-title";
 import { dashboardTimelineItemCursor, isInternalMessage, toDashboardSession, toDashboardSessionConversationControlEvent, toDashboardSessionMessage, toDashboardSessionTimeline, toDashboardSessionTurn, type DashboardMessageProjection, type DashboardSessionTurn, type MessageRow, type SessionRunnerAttemptRow, type SessionRow, type SessionTurnRow } from "@/dashboard-api/sessions";
 import { createDashboardArtifactSigner } from "@/dashboard-api/local-paths";
@@ -375,6 +375,8 @@ function dashboardSessionRows(db: DrizzleDB, sessionRows: SessionRow[], artifact
   const identityRows = db.select().from(channelIdentities).all();
   const userRows = loadDashboardUserRows(db);
   const channelUserBindingRows = db.select().from(channelUserBindings).all();
+  const directRecipientRows = db.select().from(directRecipients).all();
+  const userIdentityLinkRows = db.select().from(userIdentityLinks).all();
   const taskRows = db.select().from(tasks).all();
   const deletedTaskRefs = deletedTaskReferences(db);
   const contextPackStore = new ContextPackStore(db);
@@ -453,6 +455,8 @@ function dashboardSessionRows(db: DrizzleDB, sessionRows: SessionRow[], artifact
       identityRows,
       userRows,
       channelUserBindingRows,
+      directRecipientRows,
+      userIdentityLinkRows,
       taskRows,
       deletedTaskRefs,
       sourceContextItems,

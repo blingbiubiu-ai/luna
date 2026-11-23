@@ -9,16 +9,25 @@ import { triggerShadowHeartbeatNow } from "@/agents/shadow-heartbeat";
 import type { ReplyChannel } from "@/channels/outbound";
 import type { DrizzleDB } from "@/data";
 import {
+  resolveSessionDisplayTitle as resolveDashboardSessionDisplayTitle,
+  type SessionDisplayTitleInput,
+} from "@/dashboard-api/session-display-title";
+import {
   agentShadows,
+  channelIdentities,
   channelSurfaces,
   correlatedRequests,
+  directRecipients,
   lunaAgents,
   memoryConsolidations,
+  messages,
   sessionCommands,
   sessionRunnerAttempts,
   sessions,
+  sessionTimelineEntries,
   sessionTimelineEvents,
   shadowHeartbeats,
+  userIdentityLinks,
   users,
 } from "@/data/schema";
 import { CorrelatedRequestService } from "@/messaging/correlated-request-service";
@@ -37,16 +46,19 @@ type ProactivityOwnerScope = {
 
 function resolveSessionDisplayTitle(
   row: typeof sessions.$inferSelect | undefined,
-  surfaceTitleByKey: ReadonlyMap<string, string>,
+  lookup: Omit<SessionDisplayTitleInput, "row">,
 ): string {
   if (!row) return "未知会话";
   if (row.title?.trim()) return row.title.trim();
-  if (row.group_id) {
-    const surfaceTitle = surfaceTitleByKey.get(`${row.channel_id}:${row.group_id}`);
-    if (surfaceTitle?.trim()) return surfaceTitle.trim();
-    return row.group_id;
+  if (row.channel_type === "dashboard") return "本地会话";
+  const resolved = resolveDashboardSessionDisplayTitle({
+    row,
+    ...lookup,
+  });
+  if (resolved !== row.id) {
+    return resolved;
   }
-  return row.channel_type === "dashboard" ? "本地会话" : row.id.slice(0, 8);
+  return row.group_id ?? row.id.slice(0, 8);
 }
 
 const answerRequestBodySchema = z
@@ -158,21 +170,58 @@ export function createAgentProactivityRoutes(
       const sessionById = new Map(allAgentSessions.map(s => [s.id, s] as const));
 
       const surfaces = d.select().from(channelSurfaces).all();
-      const surfaceTitleByKey = new Map<string, string>();
-      for (const sf of surfaces) {
-        if (sf.displayName) {
-          surfaceTitleByKey.set(`${sf.channelId}:${sf.externalId}`, sf.displayName);
-        }
-      }
-
-      const userNameById = new Map(
-        d
-          .select({ id: users.id, displayName: users.displayName })
-          .from(users)
-          .where(eq(users.agentId, scope.agentId))
-          .all()
-          .map(u => [u.id, u.displayName] as const),
+      const identityRows = d.select().from(channelIdentities).all();
+      const identityExternalById = new Map(
+        identityRows.map(item => [item.id, item.externalId] as const),
       );
+      const directRecipientRows = d.select().from(directRecipients).all();
+      const userIdentityLinkRows = d
+        .select()
+        .from(userIdentityLinks)
+        .where(eq(userIdentityLinks.agentId, scope.agentId))
+        .all();
+
+      const agentUsers = d
+        .select({ id: users.id, displayName: users.displayName })
+        .from(users)
+        .where(eq(users.agentId, scope.agentId))
+        .all();
+      const userNameById = new Map(
+        agentUsers.map(u => [u.id, u.displayName] as const),
+      );
+
+      const allAgentSessionIds = allAgentSessions.map(s => s.id);
+      const displayTitleMessages = allAgentSessionIds.length
+        ? d
+            .select({
+              id: messages.id,
+              sessionId: sessionTimelineEntries.sessionId,
+              role: messages.role,
+              senderIdentityId: messages.senderIdentityId,
+              createdAt: messages.occurredAt,
+            })
+            .from(sessionTimelineEntries)
+            .innerJoin(messages, eq(messages.id, sessionTimelineEntries.messageId))
+            .where(inArray(sessionTimelineEntries.sessionId, allAgentSessionIds))
+            .all()
+            .map(item => ({
+              id: item.id,
+              sessionId: item.sessionId,
+              role: item.role,
+              senderExternalId: item.senderIdentityId
+                ? (identityExternalById.get(item.senderIdentityId) ?? null)
+                : null,
+              createdAt: item.createdAt,
+            }))
+        : [];
+      const titleLookup: Omit<SessionDisplayTitleInput, "row"> = {
+        surfaceRows: surfaces,
+        messageRows: displayTitleMessages,
+        identityRows,
+        directRecipientRows,
+        userIdentityLinkRows,
+        userRows: agentUsers,
+      };
 
       const consolidation = d
         .select()
@@ -290,13 +339,13 @@ export function createAgentProactivityRoutes(
         originSessionId: req.originSessionId,
         originSessionTitle: resolveSessionDisplayTitle(
           sessionById.get(req.originSessionId),
-          surfaceTitleByKey,
+          titleLookup,
         ),
         targetAddress: req.targetAddress,
         targetSessionId: req.targetSessionId,
         targetSessionTitle: resolveSessionDisplayTitle(
           sessionById.get(req.targetSessionId),
-          surfaceTitleByKey,
+          titleLookup,
         ),
         targetUserId: req.targetUserId,
         targetUserName: req.targetUserId
@@ -380,7 +429,7 @@ export function createAgentProactivityRoutes(
             sessionId: cmd.sessionId,
             sessionTitle: resolveSessionDisplayTitle(
               sessionById.get(cmd.sessionId),
-              surfaceTitleByKey,
+              titleLookup,
             ),
             contentPreview: String(cmd.payload.content ?? "").slice(0, 160),
             availableAt: cmd.availableAt,
@@ -407,7 +456,7 @@ export function createAgentProactivityRoutes(
             sessionId: ev.sessionId,
             sessionTitle: resolveSessionDisplayTitle(
               sessionById.get(ev.sessionId),
-              surfaceTitleByKey,
+              titleLookup,
             ),
             controlKind: ev.controlKind,
             reasonKind: ev.reasonKind,

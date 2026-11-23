@@ -2,12 +2,22 @@ import { resolvePersistedSurfaceKind } from "@/channels/directory-store";
 import {
   channelIdentities,
   channelSurfaces,
+  directRecipients,
   sessions,
+  userIdentityLinks,
 } from "@/data/schema";
 
 type ChannelIdentityRow = typeof channelIdentities.$inferSelect;
 type ChannelSurfaceRow = typeof channelSurfaces.$inferSelect;
+export type DirectRecipientRow = typeof directRecipients.$inferSelect;
+export type UserIdentityLinkRow = typeof userIdentityLinks.$inferSelect;
 type SessionRow = typeof sessions.$inferSelect;
+
+export interface SessionDisplayTitleUser {
+  readonly id: string;
+  readonly displayName: string | null;
+  readonly avatarUrl?: string | null | undefined;
+}
 
 export interface SessionDisplayTitleMessage {
   readonly id: string;
@@ -22,6 +32,9 @@ export interface SessionDisplayTitleInput {
   readonly surfaceRows: readonly ChannelSurfaceRow[];
   readonly messageRows: readonly SessionDisplayTitleMessage[];
   readonly identityRows: readonly ChannelIdentityRow[];
+  readonly directRecipientRows?: readonly DirectRecipientRow[] | undefined;
+  readonly userIdentityLinkRows?: readonly UserIdentityLinkRow[] | undefined;
+  readonly userRows?: readonly SessionDisplayTitleUser[] | undefined;
 }
 
 /**
@@ -34,19 +47,31 @@ export function resolveSessionDisplayTitle(
   const surface = channelSurfaceForSession(input.row, input.surfaceRows);
   const surfaceTitle = surface === null ? null : directorySurfaceName(surface);
   const surfaceKind = surface === null ? null : resolveChannelSurfaceKind(surface);
+  const directRecipient = directRecipientForSession(
+    input.row,
+    input.directRecipientRows,
+  );
 
   if (surfaceKind === "group") {
     return surfaceTitle ?? input.row.title ?? input.row.id;
   }
 
-  if (surfaceKind === "p2p") {
+  if (surfaceKind === "p2p" || (surface === null && directRecipient !== null)) {
     const p2pUser = p2pUserForSession({
       row: input.row,
       messageRows: input.messageRows,
       identityRows: input.identityRows,
+      directRecipientRows: input.directRecipientRows,
+    });
+    const canonicalUser = p2pCanonicalUserForSession({
+      row: input.row,
+      directRecipientRows: input.directRecipientRows,
+      userIdentityLinkRows: input.userIdentityLinkRows,
+      userRows: input.userRows,
     });
     return (
       (p2pUser === null ? null : directoryIdentityName(p2pUser)) ??
+      firstNonEmpty(canonicalUser?.displayName) ??
       surfaceTitle ??
       input.row.title ??
       input.row.id
@@ -77,10 +102,49 @@ function channelSurfaceForSession(
   );
 }
 
+export function directRecipientForSession(
+  row: SessionRow,
+  directRecipientRows: readonly DirectRecipientRow[] | undefined,
+): DirectRecipientRow | null {
+  if (!directRecipientRows || directRecipientRows.length === 0) {
+    return null;
+  }
+  return (
+    directRecipientRows.find((candidate) => candidate.sessionId === row.id) ??
+    (row.group_id === null
+      ? null
+      : directRecipientRows.find(
+          (candidate) =>
+            candidate.channelId === row.channel_id &&
+            candidate.surfaceId === row.group_id,
+        ) ?? null)
+  );
+}
+
+export function p2pCanonicalUserForSession<T extends SessionDisplayTitleUser>(input: {
+  readonly row: SessionRow;
+  readonly directRecipientRows?: readonly DirectRecipientRow[] | undefined;
+  readonly userIdentityLinkRows?: readonly UserIdentityLinkRow[] | undefined;
+  readonly userRows?: readonly T[] | undefined;
+}): T | null {
+  const direct = directRecipientForSession(input.row, input.directRecipientRows);
+  if (!direct?.claimId || !input.userIdentityLinkRows || !input.userRows) {
+    return null;
+  }
+  const link = input.userIdentityLinkRows.find(
+    (candidate) => candidate.id === direct.claimId,
+  );
+  if (!link) {
+    return null;
+  }
+  return input.userRows.find((user) => user.id === link.userId) ?? null;
+}
+
 export function p2pUserForSession(input: {
   readonly row: SessionRow;
   readonly messageRows: readonly SessionDisplayTitleMessage[];
   readonly identityRows: readonly ChannelIdentityRow[];
+  readonly directRecipientRows?: readonly DirectRecipientRow[] | undefined;
 }): ChannelIdentityRow | null {
   const senderIds = input.messageRows
     .filter(
@@ -110,7 +174,36 @@ export function p2pUserForSession(input: {
       return user;
     }
   }
+  const direct = directRecipientForSession(input.row, input.directRecipientRows);
+  if (direct !== null) {
+    const byRecipient = input.identityRows.find(
+      (candidate) =>
+        candidate.channelType === input.row.channel_type &&
+        candidate.channelId === input.row.channel_id &&
+        (candidate.externalId === direct.recipientId ||
+          identityMatchesProviderId(
+            candidate.providerIdsJson,
+            direct.idType,
+            direct.recipientId,
+          )),
+    );
+    if (byRecipient !== undefined) {
+      return byRecipient;
+    }
+  }
   return null;
+}
+
+function identityMatchesProviderId(
+  providerIdsJson: string | null,
+  idType: string,
+  recipientId: string,
+): boolean {
+  if (providerIdsJson === null) {
+    return false;
+  }
+  const record = asRecord(parseJsonOrNull(providerIdsJson));
+  return record !== null && record[idType] === recipientId;
 }
 
 function directorySurfaceName(row: ChannelSurfaceRow): string | null {

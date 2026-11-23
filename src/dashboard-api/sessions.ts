@@ -21,9 +21,13 @@ import {
   signDashboardArtifactReferencesInValue,
 } from "./local-paths";
 import {
+  directRecipientForSession,
+  type DirectRecipientRow,
+  p2pCanonicalUserForSession,
   p2pUserForSession,
   resolveChannelSurfaceKind,
   resolveSessionDisplayTitle,
+  type UserIdentityLinkRow,
 } from "./session-display-title";
 
 export type ChannelSurfaceRow = typeof channelSurfaces.$inferSelect;
@@ -382,6 +386,8 @@ export function toDashboardSession(
     readonly identityRows: readonly ChannelIdentityRow[];
     readonly userRows: readonly UserRow[];
     readonly channelUserBindingRows: readonly ChannelUserBindingRow[];
+    readonly directRecipientRows?: readonly DirectRecipientRow[] | undefined;
+    readonly userIdentityLinkRows?: readonly UserIdentityLinkRow[] | undefined;
     readonly taskRows: readonly TaskRow[];
     readonly deletedTaskRefs?: readonly DeletedTaskReference[];
     readonly sourceContextItems: readonly TaskSourceContextItem[];
@@ -391,7 +397,7 @@ export function toDashboardSession(
   },
 ): DashboardSession {
   const linkedTasks = taskBadgesForSession(row.id, input);
-  const surface = channelSurfaceForSession(row, input.surfaceRows);
+  const surface = channelSurfaceForSession(row, input.surfaceRows, input.directRecipientRows);
   const displayTitleMessages = input.timelineRows.map((item) =>
     toDisplayTitleMessage(item, input.identityRows),
   );
@@ -400,6 +406,9 @@ export function toDashboardSession(
     surfaceRows: input.surfaceRows,
     messageRows: displayTitleMessages,
     identityRows: input.identityRows,
+    directRecipientRows: input.directRecipientRows,
+    userIdentityLinkRows: input.userIdentityLinkRows,
+    userRows: input.userRows,
   });
   const avatarUrl = sessionAvatarUrlForRow(row, {
     surface,
@@ -407,13 +416,15 @@ export function toDashboardSession(
     identityRows: input.identityRows,
     channelUserBindingRows: input.channelUserBindingRows,
     userRows: input.userRows,
+    directRecipientRows: input.directRecipientRows,
+    userIdentityLinkRows: input.userIdentityLinkRows,
   });
   const parentRow = row.parent_session_id === null
     ? undefined
     : input.sessionRows.find((candidate) => candidate.id === row.parent_session_id);
   const parentSurface = parentRow === undefined
     ? null
-    : channelSurfaceForSession(parentRow, input.surfaceRows);
+    : channelSurfaceForSession(parentRow, input.surfaceRows, input.directRecipientRows);
   const parentSession: DashboardParentSessionSummary | null = parentRow === undefined
     ? null
     : {
@@ -423,6 +434,9 @@ export function toDashboardSession(
           surfaceRows: input.surfaceRows,
           messageRows: displayTitleMessages,
           identityRows: input.identityRows,
+          directRecipientRows: input.directRecipientRows,
+          userIdentityLinkRows: input.userIdentityLinkRows,
+          userRows: input.userRows,
         }),
         avatarUrl: parentSurface?.avatarUrl ?? null,
         memberCount: parentSurface?.memberCount ?? null,
@@ -532,17 +546,31 @@ export function toDashboardSession(
 function channelSurfaceForSession(
   row: SessionRow,
   surfaceRows: readonly ChannelSurfaceRow[],
+  directRecipientRows?: readonly DirectRecipientRow[],
 ): DashboardSurface | null {
-  if (row.group_id === null) {
-    return null;
+  if (row.group_id !== null) {
+    const surface = surfaceRows.find(
+      (candidate) =>
+        candidate.channelType === row.channel_type &&
+        candidate.channelId === row.channel_id &&
+        candidate.externalId === row.group_id,
+    );
+    if (surface !== undefined) {
+      return toDashboardSurface(surface);
+    }
   }
-  const surface = surfaceRows.find(
-    (candidate) =>
-      candidate.channelType === row.channel_type &&
-      candidate.channelId === row.channel_id &&
-      candidate.externalId === row.group_id,
-  );
-  return surface === undefined ? null : toDashboardSurface(surface);
+  const direct = directRecipientForSession(row, directRecipientRows);
+  if (direct !== null && row.channel_type !== "dashboard") {
+    return {
+      id: `direct:${direct.id}`,
+      externalId: direct.surfaceId ?? direct.recipientId,
+      kind: "p2p",
+      displayName: null,
+      avatarUrl: null,
+      memberCount: null,
+    };
+  }
+  return null;
 }
 
 function toDashboardSurface(row: ChannelSurfaceRow): DashboardSurface {
@@ -590,6 +618,8 @@ function sessionAvatarUrlForRow(
     readonly identityRows: readonly ChannelIdentityRow[];
     readonly channelUserBindingRows: readonly ChannelUserBindingRow[];
     readonly userRows: readonly UserRow[];
+    readonly directRecipientRows?: readonly DirectRecipientRow[] | undefined;
+    readonly userIdentityLinkRows?: readonly UserIdentityLinkRow[] | undefined;
   },
 ): string | null {
   if (row.channel_type === "dashboard") {
@@ -603,6 +633,7 @@ function sessionAvatarUrlForRow(
       row,
       messageRows: input.displayTitleMessages,
       identityRows: input.identityRows,
+      directRecipientRows: input.directRecipientRows,
     });
     if (peerIdentity !== null) {
       const boundUserId = input.channelUserBindingRows.find(
@@ -617,6 +648,15 @@ function sessionAvatarUrlForRow(
       if (peerIdentity.avatarUrl) {
         return peerIdentity.avatarUrl;
       }
+    }
+    const directCanonical = p2pCanonicalUserForSession({
+      row,
+      directRecipientRows: input.directRecipientRows,
+      userIdentityLinkRows: input.userIdentityLinkRows,
+      userRows: input.userRows,
+    });
+    if (directCanonical?.avatarUrl) {
+      return directCanonical.avatarUrl;
     }
   }
   return input.surface?.avatarUrl ?? null;
