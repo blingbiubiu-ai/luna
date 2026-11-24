@@ -31,6 +31,7 @@ export type TaskPriority = "low" | "medium" | "high" | "urgent";
 export type TaskStatus =
   | "new"
   | "running"
+  | "waiting"
   | "completed"
   | "failed"
   | "cancelled";
@@ -41,8 +42,9 @@ export type TaskBlockReason =
   | null
   | "waiting_user"
   | "waiting_dev"
-  | "waiting_approval";
-/** Set by a Task report that asks for an answer; cleared when the next run starts. */
+  | "waiting_approval"
+  | "waiting_external";
+/** Set when a Task pauses awaiting external response or condition; cleared when the next run starts. */
 export const WAITING_FOR_INPUT: TaskBlockReason = "waiting_user";
 /**
  * Defines canonical Task thread statuses that can still receive follow-up input.
@@ -52,6 +54,7 @@ export const WAITING_FOR_INPUT: TaskBlockReason = "waiting_user";
 export const REUSABLE_TASK_STATUSES: readonly TaskStatus[] = [
   "new",
   "running",
+  "waiting",
   "completed",
   "failed",
   "cancelled",

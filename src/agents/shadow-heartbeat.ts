@@ -93,7 +93,7 @@ export function renderHeartbeatInstruction(
         "Settled correlated requests:",
         ...report.correlatedRequests.map(
           item =>
-            `- [request:${item.requestId}] (${item.kind}, ${item.status}) origin session:${item.originSessionId} -> target session:${item.targetSessionId} at ${formatIso(item.updatedAt)}`,
+            `- [request:${item.requestId}] (${item.mode}, ${item.status}) origin ${item.originTaskId ? `task:${item.originTaskId}` : `session:${item.originSessionId}`} -> target session:${item.targetSessionId} at ${formatIso(item.updatedAt)}`,
         ),
       ].join("\n"),
     );

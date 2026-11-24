@@ -16,6 +16,7 @@ import {
   agentShadows,
   channelIdentities,
   channelSurfaces,
+  correlatedRequestEvents,
   correlatedRequests,
   directRecipients,
   lunaAgents,
@@ -296,7 +297,7 @@ export function createAgentProactivityRoutes(
         };
       });
 
-      // 2. Correlated requests (Asks & Handoffs)
+      // 2. Correlated requests
       const rawRequests = d
         .select()
         .from(correlatedRequests)
@@ -312,9 +313,42 @@ export function createAgentProactivityRoutes(
         .limit(100)
         .all();
 
+      const requestIds = rawRequests.map(r => r.id);
+      const eventsByRequestId = new Map<
+        string,
+        {
+          id: string;
+          seq: number;
+          direction: "origin_to_target" | "target_to_origin" | "system";
+          kind: string;
+          content: string;
+          createdAt: number;
+        }[]
+      >();
+      if (requestIds.length > 0) {
+        for (const ev of d
+          .select()
+          .from(correlatedRequestEvents)
+          .where(inArray(correlatedRequestEvents.requestId, requestIds))
+          .orderBy(correlatedRequestEvents.seq)
+          .all()) {
+          const arr = eventsByRequestId.get(ev.requestId) ?? [];
+          arr.push({
+            id: ev.id,
+            seq: ev.seq,
+            direction: ev.direction,
+            kind: ev.kind,
+            content: ev.content,
+            createdAt: ev.createdAt,
+          });
+          eventsByRequestId.set(ev.requestId, arr);
+        }
+      }
+
       const requests = rawRequests.map(req => ({
         id: req.id,
         kind: req.kind,
+        mode: req.mode,
         status: req.status,
         shadowId: req.shadowId,
         shadowName: shadowNameById.get(req.shadowId) ?? req.shadowId,
@@ -323,6 +357,7 @@ export function createAgentProactivityRoutes(
           sessionById.get(req.originSessionId),
           titleLookup,
         ),
+        originTaskId: req.originTaskId,
         targetAddress: req.targetAddress,
         targetSessionId: req.targetSessionId,
         targetSessionTitle: resolveSessionDisplayTitle(
@@ -334,13 +369,14 @@ export function createAgentProactivityRoutes(
           ? (userNameById.get(req.targetUserId) ?? req.targetUserId)
           : null,
         canAnswer:
-          req.kind === "ask" &&
-          req.status === "pending" &&
+          req.mode === "card" &&
+          (req.status === "open" || req.status === "in_progress") &&
           (!req.targetUserId || req.targetUserId === scope.actorUserId),
         instruction: req.instruction,
         contextSummary: req.contextSummary,
         options: req.optionsJson ?? [],
         result: req.resultJson,
+        events: eventsByRequestId.get(req.id) ?? [],
         resolvedByUserId: req.resolvedByUserId,
         resolvedByUserName: req.resolvedByUserId
           ? (userNameById.get(req.resolvedByUserId) ?? req.resolvedByUserId)
@@ -491,31 +527,15 @@ export function createAgentProactivityRoutes(
       if (!existing) {
         throw new GatewayError("request_not_found", "Request not found", 404);
       }
-      if (existing.status !== "pending") {
+      if (existing.status !== "open" && existing.status !== "in_progress") {
         return c.json({ ok: true, status: existing.status, alreadySettled: true });
       }
-      const now = Date.now();
-      d.update(correlatedRequests)
-        .set({
-          status: "cancelled",
-          resolvedByUserId: scope.actorUserId,
-          resultJson: { cancelledByOwner: true },
-          updatedAt: now,
-        })
-        .where(
-          and(
-            eq(correlatedRequests.id, requestId),
-            eq(correlatedRequests.status, "pending"),
-          ),
-        )
-        .run();
-      if (existing.outboundCommandId) {
-        const outCmd = service().get(existing.outboundCommandId);
-        if (outCmd && ["pending", "deferred"].includes(outCmd.status)) {
-          service().cancel(existing.outboundCommandId);
-        }
-      }
-      return c.json({ ok: true, status: "cancelled", alreadySettled: false });
+      const updated = new CorrelatedRequestService(d, channelFor).cancelRequest({
+        requestId,
+        shadowId: existing.shadowId,
+        actorUserId: scope.actorUserId,
+      });
+      return c.json({ ok: true, status: updated.status, alreadySettled: false });
     })
     .post("/requests/:requestId/answer", async c => {
       const scope = ownerScope(c);
@@ -534,12 +554,12 @@ export function createAgentProactivityRoutes(
           ),
         )
         .get();
-      if (!existing || existing.kind !== "ask") {
-        throw new GatewayError("ask_not_found", "Ask request not found", 404);
+      if (!existing) {
+        throw new GatewayError("request_not_found", "Request not found", 404);
       }
       if (existing.targetUserId && existing.targetUserId !== scope.actorUserId) {
         throw new GatewayError(
-          "ask_forbidden",
+          "request_forbidden",
           "This confirmation is addressed to another specific user",
           403,
         );
@@ -547,9 +567,10 @@ export function createAgentProactivityRoutes(
       const { request, alreadyResolved } = new CorrelatedRequestService(
         d,
         channelFor,
-      ).answerAsk({
+      ).updateRequest({
         requestId,
-        answer: body.answer,
+        action: "done",
+        summary: body.answer,
         selectedOption: body.selectedOption,
         resolvedByUserId: scope.actorUserId,
         source: "dashboard",

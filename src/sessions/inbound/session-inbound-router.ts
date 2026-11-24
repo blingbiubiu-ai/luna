@@ -3,6 +3,7 @@ import {TaskScopeResolver} from "@/agents/task-scope";
 import { prepareRunnerFiles } from "@/runners/prepare-runner-files";
 import { completeProcessingOnce } from "@/messaging/processing-markers";
 import { reportSessionExecutionError } from "@/messaging/session-execution-error";
+import { CorrelatedRequestService } from "@/messaging/correlated-request-service";
 import { RuntimeDetachedError } from "@/runners/runtime-detach";
 import { bindSessionBot } from "@/channels/session-bot";
 import { and, asc, eq } from "drizzle-orm";
@@ -32,7 +33,13 @@ import {
 import { selectActivationContext } from "@/main-runner/activation-context";
 import { sessionConfigForAgent, sessionConfigForSession } from "@/agents/agent-settings-store";
 import { MainRunnerContextBuilder } from "@/main-runner/context-builder";
-import { ContextPackStore, LaunchContextBuilder } from "@/context";
+import {
+  ContextPackStore,
+  LaunchContextBuilder,
+  ensureTurnDeltaPack,
+  selectOutOfBandCandidates,
+} from "@/context";
+import type { ResolvedRunnerContext } from "@/runners/runner-context-store";
 import {
   canonicalUserIdForRequestedIdentity,
   requestedIdentityFromInbound,
@@ -675,10 +682,22 @@ export class SessionTurnProcessor {
         }
       }
       const currentEntryIds = new Set(contextExcludedEntryIds);
-      const deltaContextPack = this._createActivationContextPack({
+      const includeLaunchSeed = syncedRunnerContext.runner_session_id === null;
+      const baseSeedBuild = includeLaunchSeed
+        ? this._contextBuilder.buildForSessionWithEntries(input.sessionId, {
+            excludeEntryIds: contextExcludedEntryIds,
+            includeLaunchSeed: true,
+            createdForInvocationId: input.turnId,
+          })
+        : undefined;
+      const launchSeedEntryIds = new Set(baseSeedBuild?.contextEntryIds ?? []);
+      const deltaContextPack = this._createDeltaContextPack({
         sessionId: input.sessionId,
         turnId: input.turnId,
+        runnerContext: syncedRunnerContext,
         currentEntryIds: input.currentEntryIds,
+        excludedEntryIds: currentEntryIds,
+        launchSeedEntryIds,
         messageRows: input.messageRows,
         latestInbound: input.latestInbound,
         activationContextMessages: input.activationContextMessages,
@@ -687,7 +706,7 @@ export class SessionTurnProcessor {
         input.sessionId,
         {
           excludeEntryIds: contextExcludedEntryIds,
-          includeLaunchSeed: syncedRunnerContext.runner_session_id === null,
+          includeLaunchSeed,
           createdForInvocationId: input.turnId,
           ...(deltaContextPack !== undefined
             ? { deltaContextPackIds: [deltaContextPack.id] }
@@ -734,9 +753,18 @@ export class SessionTurnProcessor {
             ? { requesterUserId }
             : {}),
         };
+      const senderIds = input.messageRows
+        .map((row) => row.senderUserId)
+        .filter((id): id is string => Boolean(id));
+      const openRequests = new CorrelatedRequestService(
+        this._db,
+        () => undefined,
+      ).openRequestsForTurn(input.sessionId, senderIds);
       this._turnStore.recordMaterializedPrompt(
         input.turnId,
         renderMainRunnerPrompt(mainRunnerInput, {
+          db: this._db,
+          ...(openRequests.length > 0 ? { openRequests } : {}),
           timezone: new PlatformSettingsStore(this._db).get().general.timezone,
         }),
       );
@@ -795,32 +823,60 @@ export class SessionTurnProcessor {
     });
   }
 
-  private _createActivationContextPack(input: {
+  private _createDeltaContextPack(input: {
     readonly sessionId: string;
     readonly turnId: string;
+    readonly runnerContext: ResolvedRunnerContext;
     readonly currentEntryIds: readonly string[];
+    readonly excludedEntryIds: ReadonlySet<string>;
+    readonly launchSeedEntryIds: ReadonlySet<string>;
     readonly messageRows: readonly MessageRow[];
     readonly latestInbound: NormalizedInboundMessage;
     readonly activationContextMessages: readonly ActivationContextMessage[];
   }): { readonly id: string } | undefined {
-    if (
-      input.activationContextMessages.length === 0 ||
-      !isAddressedGroupMessage(input.latestInbound)
-    ) {
-      return undefined;
+    const combinedExcludes =
+      input.launchSeedEntryIds.size > 0
+        ? new Set([...input.excludedEntryIds, ...input.launchSeedEntryIds])
+        : input.excludedEntryIds;
+    const isGroupAddressed = isAddressedGroupMessage(input.latestInbound);
+    if (isGroupAddressed && input.activationContextMessages.length > 0) {
+      const latestMessageRow = input.messageRows.at(-1);
+      const activationEntryId = input.currentEntryIds.at(-1);
+      if (latestMessageRow === undefined || activationEntryId === undefined) {
+        return undefined;
+      }
+      const outOfBand = selectOutOfBandCandidates({
+        db: this._db,
+        sessionId: input.sessionId,
+        runnerContext: input.runnerContext,
+        currentInvocationId: input.turnId,
+        excludeEntryIds: combinedExcludes,
+      });
+      return this._launchContextBuilder.buildForGroupActivation({
+        sessionId: input.sessionId,
+        activationEntryId,
+        activationMessageId: latestMessageRow.id,
+        contextMessages: input.activationContextMessages,
+        ...(outOfBand.selected.length > 0
+          ? { outOfBandCandidates: outOfBand.selected }
+          : {}),
+        ...(outOfBand.omittedCount > 0
+          ? { omittedOutOfBandCount: outOfBand.omittedCount }
+          : {}),
+        createdForInvocationId: input.turnId,
+      });
     }
-    const latestMessageRow = input.messageRows.at(-1);
-    const activationEntryId = input.currentEntryIds.at(-1);
-    if (latestMessageRow === undefined || activationEntryId === undefined) {
-      return undefined;
-    }
-    return this._launchContextBuilder.buildForGroupActivation({
+
+    const deltaPackId = ensureTurnDeltaPack({
+      db: this._db,
       sessionId: input.sessionId,
-      activationEntryId,
-      activationMessageId: latestMessageRow.id,
-      contextMessages: input.activationContextMessages,
-      createdForInvocationId: input.turnId,
+      invocationId: input.turnId,
+      runnerContext: input.runnerContext,
+      turnFlavor: "user_messages",
+      excludeEntryIds: input.excludedEntryIds,
+      launchSeedEntryIds: input.launchSeedEntryIds,
     });
+    return deltaPackId !== undefined ? { id: deltaPackId } : undefined;
   }
 
   private _recordActivationFollowupInterruption(input: {

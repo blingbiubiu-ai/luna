@@ -1,12 +1,15 @@
-import { index, integer, sqliteTable, text } from "drizzle-orm/sqlite-core";
+import { index, integer, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
 import { agentShadows, lunaAgents } from "./luna-agents";
 
-export const CORRELATED_REQUEST_KINDS = ["ask", "handoff"] as const;
+export const CORRELATED_REQUEST_KINDS = ["request"] as const;
 export type CorrelatedRequestKind = (typeof CORRELATED_REQUEST_KINDS)[number];
 
+export const CORRELATED_REQUEST_MODES = ["card", "delegate"] as const;
+export type CorrelatedRequestMode = (typeof CORRELATED_REQUEST_MODES)[number];
+
 export const CORRELATED_REQUEST_STATUSES = [
-  "pending",
-  "answered",
+  "open",
+  "in_progress",
   "done",
   "declined",
   "expired",
@@ -14,6 +17,27 @@ export const CORRELATED_REQUEST_STATUSES = [
   "cancelled",
 ] as const;
 export type CorrelatedRequestStatus = (typeof CORRELATED_REQUEST_STATUSES)[number];
+
+export const CORRELATED_REQUEST_EVENT_DIRECTIONS = [
+  "origin_to_target",
+  "target_to_origin",
+  "system",
+] as const;
+export type CorrelatedRequestEventDirection =
+  (typeof CORRELATED_REQUEST_EVENT_DIRECTIONS)[number];
+
+export const CORRELATED_REQUEST_EVENT_KINDS = [
+  "opened",
+  "message",
+  "progress",
+  "done",
+  "declined",
+  "cancelled",
+  "expired",
+  "card_click",
+] as const;
+export type CorrelatedRequestEventKind =
+  (typeof CORRELATED_REQUEST_EVENT_KINDS)[number];
 
 /**
  * Per-Shadow self-driven heartbeat cursor and dedicated local session.
@@ -49,18 +73,20 @@ export const scheduleFailureNotifications = sqliteTable(
 );
 
 /**
- * Unified correlated request ledger for `ask` (awaiting human answer/card action)
- * and `handoff` (delegated session work with automatic or explicit result return).
+ * Unified correlated request ledger for tracked cross-session and Task -> Main requests.
  */
 export const correlatedRequests = sqliteTable(
   "correlated_requests",
   {
     id: text("id").primaryKey(),
-    kind: text("kind", { enum: CORRELATED_REQUEST_KINDS }).notNull(),
+    kind: text("kind", { enum: CORRELATED_REQUEST_KINDS }).notNull().default("request"),
+    mode: text("mode", { enum: CORRELATED_REQUEST_MODES }).notNull().default("delegate"),
     agentId: text("agent_id").notNull().references(() => lunaAgents.id),
     shadowId: text("shadow_id").notNull().references(() => agentShadows.id),
     originSessionId: text("origin_session_id").notNull(),
     originTurnId: text("origin_turn_id"),
+    originTaskId: text("origin_task_id"),
+    originTaskRunId: text("origin_task_run_id"),
     targetAddress: text("target_address").notNull(),
     targetSessionId: text("target_session_id").notNull(),
     targetUserId: text("target_user_id"),
@@ -83,7 +109,33 @@ export const correlatedRequests = sqliteTable(
     index("correlated_requests_shadow_status_idx").on(t.shadowId, t.status, t.expiresAt),
     index("correlated_requests_target_session_idx").on(t.targetSessionId, t.status),
     index("correlated_requests_origin_session_idx").on(t.originSessionId, t.createdAt),
+    index("correlated_requests_origin_task_idx").on(t.originTaskId, t.status),
     index("correlated_requests_outbound_msg_idx").on(t.outboundMessageId),
     index("correlated_requests_outbound_cmd_idx").on(t.outboundCommandId),
+  ],
+);
+
+/**
+ * Append-only audit and back-and-forth event log for `correlated_requests`.
+ */
+export const correlatedRequestEvents = sqliteTable(
+  "correlated_request_events",
+  {
+    id: text("id").primaryKey(),
+    requestId: text("request_id")
+      .notNull()
+      .references(() => correlatedRequests.id, { onDelete: "cascade" }),
+    seq: integer("seq").notNull(),
+    direction: text("direction", { enum: CORRELATED_REQUEST_EVENT_DIRECTIONS }).notNull(),
+    kind: text("kind", { enum: CORRELATED_REQUEST_EVENT_KINDS }).notNull(),
+    content: text("content").notNull(),
+    metadataJson: text("metadata_json", { mode: "json" }).$type<Record<string, unknown> | null>(),
+    actorUserId: text("actor_user_id"),
+    commandId: text("command_id"),
+    createdAt: integer("created_at").notNull(),
+  },
+  t => [
+    uniqueIndex("correlated_request_events_req_seq_unique").on(t.requestId, t.seq),
+    index("correlated_request_events_req_created_idx").on(t.requestId, t.createdAt),
   ],
 );

@@ -16,6 +16,7 @@ import {
 } from "@/data/schema";
 import {
   ContextPackStore,
+  MAX_OUT_OF_BAND_RENDER_ITEM_CHARS,
   type ContextPackItemRow,
   type ContextPackRow,
 } from "@/context";
@@ -201,11 +202,21 @@ export class MainRunnerContextBuilder {
     if (items.length === 0) {
       return undefined;
     }
+    const packMeta =
+      typeof pack.metadataJson === "object" && pack.metadataJson !== null
+        ? (pack.metadataJson as Record<string, unknown>)
+        : undefined;
+    const omittedOutOfBandCount =
+      typeof packMeta?.omittedOutOfBandCount === "number" &&
+      packMeta.omittedOutOfBandCount > 0
+        ? packMeta.omittedOutOfBandCount
+        : undefined;
     return {
       packId: pack.id,
       kind: pack.kind,
       selectionStrategy: pack.selectionStrategy,
       items,
+      ...(omittedOutOfBandCount !== undefined ? { omittedOutOfBandCount } : {}),
     };
   }
 
@@ -224,16 +235,41 @@ export class MainRunnerContextBuilder {
     const entryId =
       item.itemKind === "timeline_entry" ? item.itemId : item.sourceEntryId;
     const source = this._readContextPackItemSource(entryId);
+    const rawText = renderMessageBlocksForRunner(
+      Array.isArray(message.contentJson)
+        ? (message.contentJson as readonly MessageContentBlock[])
+        : [],
+    );
+    const isOutOfBand = item.reason.startsWith("out_of_band:");
+    const text =
+      isOutOfBand && rawText.length > MAX_OUT_OF_BAND_RENDER_ITEM_CHARS
+        ? `${rawText.slice(0, MAX_OUT_OF_BAND_RENDER_ITEM_CHARS)}…`
+        : rawText;
+    const itemMeta =
+      typeof item.metadataJson === "object" && item.metadataJson !== null
+        ? (item.metadataJson as Record<string, unknown>)
+        : undefined;
+    const via =
+      itemMeta?.via === "ask"
+        ? "request"
+        : typeof itemMeta?.via === "string" &&
+            ["request", "message", "schedule", "routine", "service"].includes(itemMeta.via)
+          ? (itemMeta.via as MainRunnerContextPackItem["via"])
+          : undefined;
+    const originSessionId =
+      typeof itemMeta?.originSessionId === "string"
+        ? itemMeta.originSessionId
+        : undefined;
+    const correlationId =
+      typeof itemMeta?.correlationId === "string"
+        ? itemMeta.correlationId
+        : undefined;
     return {
       item: {
         contextItemId: item.id,
         role: contextItemRole(item.role),
         messageRole: message.role === "assistant" ? "assistant" : "user",
-        text: renderMessageBlocksForRunner(
-          Array.isArray(message.contentJson)
-            ? (message.contentJson as readonly MessageContentBlock[])
-            : [],
-        ),
+        text,
         entryId: entryId ?? null,
         messageId: message.id,
         sourceEntryId: item.sourceEntryId,
@@ -242,6 +278,9 @@ export class MainRunnerContextBuilder {
         ...(source !== undefined ? { source } : {}),
         reason: item.reason,
         displayOrder: item.displayOrder,
+        ...(via !== undefined ? { via } : {}),
+        ...(originSessionId !== undefined ? { originSessionId } : {}),
+        ...(correlationId !== undefined ? { correlationId } : {}),
       },
       occurredAt: message.occurredAt,
     };

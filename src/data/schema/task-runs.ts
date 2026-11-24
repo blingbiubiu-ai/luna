@@ -25,6 +25,7 @@ export const taskRuns = sqliteTable(
     source_message_id: text("source_message_id"),
     started_at: integer("started_at").notNull(),
     finished_at: integer("finished_at"),
+    pause_reason: text("pause_reason"),
     cancel_reason: text("cancel_reason"),
     error: text("error"),
     final_report_artifact_id: text("final_report_artifact_id"),

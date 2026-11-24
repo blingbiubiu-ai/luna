@@ -10,7 +10,12 @@ import { SessionTimelineStore } from "@/sessions/session-timeline-store";
 import {
   ContextPackStore,
   type ContextPackRow,
+  type CreateContextPackItemInput,
 } from "./context-pack-store";
+import {
+  outOfBandPackItemInput,
+  type OutOfBandCandidate,
+} from "./turn-delta-selector";
 
 type TimelineItem = ReturnType<SessionTimelineReader["listForSession"]>[number];
 
@@ -97,6 +102,8 @@ export class LaunchContextBuilder {
     readonly activationEntryId: string;
     readonly activationMessageId: string;
     readonly contextMessages: readonly ActivationContextMessage[];
+    readonly outOfBandCandidates?: readonly OutOfBandCandidate[];
+    readonly omittedOutOfBandCount?: number;
     readonly createdForInvocationId?: string | null;
   }): ContextPackRow {
     const existing = this._contextPacks
@@ -120,15 +127,24 @@ export class LaunchContextBuilder {
       triggerEntryId: input.activationEntryId,
       triggerMessageId: input.activationMessageId,
       createdForInvocationId: input.createdForInvocationId ?? null,
+      ...(input.omittedOutOfBandCount && input.omittedOutOfBandCount > 0
+        ? { metadataJson: { omittedOutOfBandCount: input.omittedOutOfBandCount } }
+        : {}),
     });
-    this._contextPacks.addItems(
-      pack.id,
-      input.contextMessages.map((message, index) => {
-        const source = this._findTimelineMessageSource({
-          sessionId: input.sessionId,
-          messageId: message.messageId,
-        });
-        return {
+    const seenMessageIds = new Set<string>();
+    const combined: Array<{
+      readonly occurredAt: number;
+      readonly item: CreateContextPackItemInput;
+    }> = [];
+    for (const message of input.contextMessages) {
+      seenMessageIds.add(message.messageId);
+      const source = this._findTimelineMessageSource({
+        sessionId: input.sessionId,
+        messageId: message.messageId,
+      });
+      combined.push({
+        occurredAt: message.createdAt,
+        item: {
           itemKind: source ? "timeline_entry" : "message",
           itemId: source?.entryId ?? message.messageId,
           sourceSessionId: input.sessionId,
@@ -137,7 +153,6 @@ export class LaunchContextBuilder {
           sourceIdentityId: source?.senderIdentityId ?? null,
           role: "delta_context",
           reason: "group activation context",
-          displayOrder: index,
           metadataJson: {
             ...(message.channelMessageKey !== undefined
               ? { channelMessageKey: message.channelMessageKey }
@@ -147,8 +162,24 @@ export class LaunchContextBuilder {
               : {}),
             createdAt: message.createdAt,
           },
-        };
-      }),
+        },
+      });
+    }
+    for (const candidate of input.outOfBandCandidates ?? []) {
+      if (seenMessageIds.has(candidate.message.id)) continue;
+      seenMessageIds.add(candidate.message.id);
+      combined.push({
+        occurredAt: candidate.message.occurredAt,
+        item: outOfBandPackItemInput(input.sessionId, candidate),
+      });
+    }
+    combined.sort((a, b) => a.occurredAt - b.occurredAt);
+    this._contextPacks.addItems(
+      pack.id,
+      combined.map((entry, index) => ({
+        ...entry.item,
+        displayOrder: index,
+      })),
     );
     return pack;
   }

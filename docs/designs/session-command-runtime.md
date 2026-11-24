@@ -62,14 +62,14 @@ records, independent of Runner message commands.
 
 ## Authentication and targets
 
-Runner APIs require a verified Main token plus an active process-local invocation.
+Runner APIs require a verified Main, Work, or Task token plus an active process-local invocation.
 Completion, abort and restart invalidate that capability. Actor and source IDs
-come from the invocation, never request JSON. Cross-session messages, handoffs,
+come from the invocation, never request JSON. Cross-session messages, requests,
 schedules and group operations do not require an `authority-id`. Acceptance and
 execution check active actors, active target sessions and artifact availability.
 
-Targets use unified Luna addresses (`current`, `self`, `user:<id>`, `session:<id>`,
-and `group:<id>`) across messaging, handoffs, asks, schedules and group invitations; see
+Targets use unified Luna addresses (`current`, `self`, `owner`, `main`, `task:<id>`, `user:<id>`, `session:<id>`,
+and `group:<id>`) across `say`, `requests`, schedules and group invitations; see
 [Agent Proactivity](agent-proactivity.md) and [Runner Protocol v2](runner-protocol.md).
 The authenticated runner endpoint resolves or creates a local session for a known
 surface or verified user recipient using `SessionStore`. Unknown session IDs fail.
@@ -88,17 +88,20 @@ are reused where the directory can resolve them. Ambiguous users and unimported
 threads fail explicitly. Group creation is an explicit command (see
 below), never an implicit side effect of sending. External threads are not created. Thread delivery requires a valid root message.
 
-Handoff does not post its instruction to the channel. It creates session.invoke,
-with a correlation ID and decreasing hop budget. Self-handoff is rejected. Target
-Main decides what to do; completion is not automatically sent back to the source.
-For a newly provisioned topic, source Main hands off the full request without
-sending its opening or creating its Task. Topic Main sends the opening through
-CLI before creating the Task locally. This reuses session.invoke and message.send;
-there is no new protocol, automatic forwarding loop, or extra task creator.
-Commands issued by the receiving Main use its current session as sourceSessionId,
-including the opening answer. The incoming handoff retains the previous source;
-correlation ID and remaining hop budget propagate without attributing the
-receiving Main's commands to that previous session.
+One-way Main invocation (`luna say --to <address> --via-main`, or Task milestone
+`luna say --to main`) does not post its instruction directly to the channel: it
+creates `session.invoke` (`peer_message`) with decreasing hop budget and zero
+`correlated_requests` ticket. Tracked delegation (`luna ask --to <address> --text '...'`) records
+`correlated_requests` + `correlated_request_events` (`card` mode when `--options`
+are provided, `delegate` mode otherwise, defaulting to a 2-hour expiration window)
+and remains open across turns until settled via `luna ask reply <id> --done|--declined --text '...'`.
+For a newly provisioned Feishu topic, Group Main runs `luna sessions create-thread`,
+sends the opening into `session:<topicId>` via `luna say --to session:<topicId>`,
+and dispatches `luna tasks create` (`sessionId: <topicId>`) in the same turn;
+Service automatically suppresses duplicate terminal reply in the source group.
+Commands issued by a receiving Main use its current session as `sourceSessionId`,
+propagating `correlationId` and remaining hop budget without attributing the
+receiving Main's commands to the previous session.
 
 ## Schedules
 
@@ -136,9 +139,10 @@ Runner endpoints:
 - GET /api/runner/users — local recipient search (q, channelId, limit, offset).
 - GET /api/runner/users/:id — canonical user details in the visible directory.
 - GET /api/runner/users/lookup — exact Feishu lookup (channelId, idType, id).
-- POST /api/runner/messages — target, text blocks, purpose.
-- GET /api/runner/commands/:id — command status within the actor/source scope.
-- POST /api/runner/handoffs — target, instruction, artifact IDs.
+- POST /api/runner/messages — target (`current`, `user:`, `group:`, `session:`, `main`, `task:`), `viaMain`, text/reply, purpose.
+- POST /api/runner/requests — create card or delegate request (optional `waitMs`, `expiresInMs`).
+- GET /api/runner/requests, GET /api/runner/requests/:id, POST /api/runner/requests/:id/{wait,update,messages,cancel} — inspect and mutate correlated requests.
+- GET /api/runner/commands/:id — unified command status across session commands, operations, requests, task inbox events, and task reports.
 - POST /api/runner/schedules — target, optional nextAt, intervalMs or recurrence, timezone, action.
 
 Mutating runner endpoints require Idempotency-Key. Same-key different content or
@@ -151,7 +155,7 @@ Dashboard-admin endpoints under /api/session-commands:
 - GET /commands and /commands/:id; POST /commands/:id/cancel or /retry.
 - GET/POST /schedules; PUT/DELETE /schedules/:id; GET /occurrences.
 
-CLI: `luna messages send`, `luna messages status`, `luna messages handoff`, and
+CLI: `luna say`, `luna ask`, `luna commands status|wait`, and
 `luna schedules create`. No automatic message-to-trigger conversion is performed.
 
 ## Dashboard
@@ -417,7 +421,11 @@ continue waiting with `luna commands status <id>` and `luna commands wait <id>`.
 Proactive outbound messages (`notification` or cross-session sends) pass through
 per-session hourly limits, per-recipient daily limits, 24-hour content deduplication
 and quiet-hours deferral (`status = "deferred"`), while passive `answer` and `progress`
-sends in the current session are exempt.
+sends in the current session are exempt. Every `message.send` records
+`payload.authoredBy` (`"runner"` for in-session replies, `"cross_session"` when
+`targetSessionId !== sourceSessionId`, `"service"` for scheduled/routine/diagnostic
+sends) so `TurnDeltaSelector` can surface out-of-band assistant messages once in
+the target session's `<history>.deltaContext`.
 
 The command queue owns accepted deliveries independently of runner exit. Pending,
 running, sent and unknown answer commands retain that ownership; failed commands
@@ -430,9 +438,9 @@ Task Runner has no user-message capability and reports internally to Main.
 ## Task and session operations
 
 Task and session-state mutations are domain commands, separate from message delivery:
-`luna tasks` (`create`, `update`, `restart`, `cancel`, `report`, `status-card`),
-`luna sessions` (`create-thread`, `clarify`, `release`), `luna handoff` / `luna handoffs resolve`,
-`luna asks` / `luna requests`, and unified `luna commands status|wait <id>` backed by
+`luna tasks` (`create`, `update`, `restart`, `cancel`, `pause`, `report`, `status-card`),
+`luna sessions` (`create-thread`, `clarify`, `release`), `luna say [--via-main]`,
+`luna ask` (`reply`, `message`, `wait`, `cancel`, `get`, `list`), and unified `luna commands status|wait <id>` backed by
 `GET /api/runner/commands/:id`. There is no generic action API or batch response command.
 
 `runner_operations` stores trusted context and phases `accepted`, `prepared`,

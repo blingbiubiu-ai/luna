@@ -56,6 +56,9 @@ export function resolveTaskEffectiveState(input: {
   if (isActiveTaskStatus(input.status)) {
     return "running";
   }
+  if (input.status === "waiting") {
+    return "waiting";
+  }
   if (input.status === "failed") {
     return "failed";
   }

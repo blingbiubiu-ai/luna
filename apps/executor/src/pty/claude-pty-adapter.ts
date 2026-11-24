@@ -12,6 +12,10 @@ import {
   realpathOrResolve,
   writePrivateJsonAtomic,
 } from "./jsonl-cursor";
+import {
+  buildClaudePtyStopHookCommand,
+  TASK_POST_TOOL_HOOK_CMD,
+} from "../task-hooks";
 import { chunkTextByUtf8Bytes, wrapBracketedPaste } from "./viewport";
 import type { PtyCliAdapter, PtySpawnSpec, PtyTurnBridge, PtyTurnDrainResult, PtyWriteTarget } from "./types";
 
@@ -434,7 +438,8 @@ export const claudePtyAdapter: PtyCliAdapter = {
       ...(Object.keys(settingsEnv).length > 0 ? { env: settingsEnv } : {}),
       hooks: {
         SessionStart: [{ hooks: [{ type: "command", command: buildHookCommand(hookEventsFile, "SessionStart") }] }],
-        Stop: [{ hooks: [{ type: "command", command: buildHookCommand(hookEventsFile, "Stop") }] }],
+        PostToolUse: [{ hooks: [{ type: "command", command: TASK_POST_TOOL_HOOK_CMD }] }],
+        Stop: [{ hooks: [{ type: "command", command: buildClaudePtyStopHookCommand(hookEventsFile) }] }],
         StopFailure: [{ hooks: [{ type: "command", command: buildHookCommand(hookEventsFile, "StopFailure") }] }],
       },
     };

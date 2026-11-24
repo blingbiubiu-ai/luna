@@ -10,6 +10,8 @@ import {
   sessionTimelineEntries,
   sessions,
   shadowBotBindings,
+  tasks,
+  taskSubscriptions,
   userIdentityLinks,
   users,
 } from "@/data/schema";
@@ -23,6 +25,7 @@ export type ParsedLunaAddress =
   | { readonly kind: "self" }
   | { readonly kind: "current" }
   | { readonly kind: "owner" }
+  | { readonly kind: "main" }
   | { readonly kind: "user"; readonly userId: string }
   | { readonly kind: "session"; readonly sessionId: string }
   | { readonly kind: "group"; readonly groupId: string };
@@ -31,6 +34,7 @@ export interface LunaAddressScope {
   readonly agentId: string;
   readonly shadowId: string;
   readonly currentSessionId?: string | undefined;
+  readonly taskId?: string | undefined;
 }
 
 export interface ResolvedLunaAddress {
@@ -42,11 +46,22 @@ export interface ResolvedLunaAddress {
   readonly chatId?: string | undefined;
 }
 
+export function parseTaskAddress(raw: string): string | null {
+  const trimmed = raw.trim();
+  if (!trimmed.startsWith("task:")) return null;
+  const taskId = trimmed.slice("task:".length).trim();
+  if (!taskId) {
+    throw new GatewayError("invalid_address", "Empty task address", 400);
+  }
+  return taskId;
+}
+
 export function parseLunaAddress(raw: string): ParsedLunaAddress {
   const trimmed = raw.trim();
   if (trimmed === "self") return { kind: "self" };
   if (trimmed === "current") return { kind: "current" };
   if (trimmed === "owner") return { kind: "owner" };
+  if (trimmed === "main") return { kind: "main" };
   if (trimmed.startsWith("user:")) {
     const userId = trimmed.slice("user:".length).trim();
     if (!userId) throw new GatewayError("invalid_address", "Empty user address", 400);
@@ -64,7 +79,7 @@ export function parseLunaAddress(raw: string): ParsedLunaAddress {
   }
   throw new GatewayError(
     "invalid_address",
-    "Address must be 'self', 'current', 'owner', 'user:<id>', 'session:<id>', or 'group:<id>'",
+    "Address must be 'self', 'current', 'owner', 'main', 'user:<id>', 'session:<id>', 'group:<id>', or 'task:<id>'",
     400,
   );
 }
@@ -100,6 +115,49 @@ export function resolveLunaAddress(
   if (parsed.kind === "self") {
     const sessionId = ensureShadowHeartbeatSession(db, scope.shadowId);
     return { address: "self", kind: "self", sessionId };
+  }
+
+  if (parsed.kind === "main") {
+    if (!scope.taskId) {
+      throw new GatewayError(
+        "invalid_address",
+        "'main' address is only valid from a Task Runner",
+        400,
+      );
+    }
+    const taskRow = db
+      .select()
+      .from(tasks)
+      .where(eq(tasks.id, scope.taskId))
+      .get();
+    if (!taskRow || taskRow.agent_id !== scope.agentId || taskRow.shadow_id !== scope.shadowId) {
+      throw new GatewayError("task_not_found", "Task not found in scope", 404);
+    }
+    const subSessionId =
+      taskRow.primary_session_id ??
+      db
+        .select({ sessionId: taskSubscriptions.session_id })
+        .from(taskSubscriptions)
+        .where(eq(taskSubscriptions.task_id, taskRow.id))
+        .get()?.sessionId;
+    if (!subSessionId) {
+      throw new GatewayError("session_unavailable", "Task has no subscribed Main session", 409);
+    }
+    const row = db
+      .select()
+      .from(sessions)
+      .where(eq(sessions.id, subSessionId))
+      .get();
+    if (!row || row.status !== "active") {
+      throw new GatewayError("session_unavailable", "Subscribed Main session is unavailable", 409);
+    }
+    return {
+      address: "main",
+      kind: "main",
+      sessionId: row.id,
+      ...(row.channel_type !== "dashboard" ? { channelId: row.channel_id } : {}),
+      ...(row.group_id ? { chatId: row.group_id } : {}),
+    };
   }
 
   if (parsed.kind === "current") {

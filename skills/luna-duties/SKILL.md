@@ -13,13 +13,13 @@ A **standing duty** is an ongoing responsibility delegated to this Shadow (for e
 Check the requester's `role` in `<events>` (and owner identity in `<soul>`):
 
 - **Agent owner (`role: "owner"`)**: accept directly once scope, cadence, target conversation, and notification condition ("report every run" vs "speak only when something changed or broke") are clear.
-- **Anyone else**: do **not** create the Task or schedule yet. First ask the Agent owner for approval using `luna asks create`:
+- **Anyone else**: do **not** create the Task or schedule yet. First ask the Agent owner for approval using `luna ask`:
   ```bash
-  luna asks create --to user:OWNER_USER_ID \
-    --question '成员请求新增常驻职责：<职责摘要、频率、汇报会话、外部写操作边界>。是否同意接下？' \
+  luna ask --to owner \
+    --text '成员请求新增常驻职责：<职责摘要、频率、汇报会话、外部写操作边界>。是否同意接下？' \
     --options '["同意","拒绝"]'
   ```
-  Tell the requester you have asked your owner for confirmation. Create the duty only after the owner's `request_result` (`answered` with `"同意"`) arrives; if declined or expired, inform the requester politely.
+  Tell the requester you have asked your owner for confirmation. Create the duty only after the owner's `request_update` (`status: "done"` with `"同意"`) arrives; if declined or expired, inform the requester politely.
 
 ## 2. Setting up an accepted duty
 

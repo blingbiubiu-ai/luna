@@ -33,8 +33,6 @@ export interface TaskResultForMainRunner {
   /** Downloadable managed artifacts; artifactIds retain timeline/report identity. */
   readonly artifactRefs?: readonly string[];
   readonly nextActions: readonly string[];
-  /** The Task stopped to wait for an answer; its report holds the questions. */
-  readonly waitingForInput?: boolean;
 }
 
 /**
@@ -129,6 +127,9 @@ export interface MainRunnerContextPackItem {
   readonly source?: "message" | "reference";
   readonly reason: string;
   readonly displayOrder: number;
+  readonly via?: "request" | "message" | "schedule" | "routine" | "service";
+  readonly originSessionId?: string;
+  readonly correlationId?: string;
 }
 
 /**
@@ -139,6 +140,7 @@ export interface MainRunnerContextPack {
   readonly kind: string;
   readonly selectionStrategy: string;
   readonly items: readonly MainRunnerContextPackItem[];
+  readonly omittedOutOfBandCount?: number;
 }
 
 /**

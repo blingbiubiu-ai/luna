@@ -24,8 +24,10 @@ export type TurnOriginKind =
   | "ambient_listening"
   | "task_result"
   | "schedule_fired"
-  | "handoff"
-  | "request_result"
+  | "peer_message"
+  | "request_opened"
+  | "request_message"
+  | "request_update"
   | "self_routine"
   | "task_run"
   | "work_turn";
@@ -57,6 +59,8 @@ export interface RunnerCapabilitiesManifest {
     readonly allowCurrent: boolean;
     readonly allowSelf: boolean;
     readonly allowOwner: boolean;
+    readonly allowMain: boolean;
+    readonly allowTask: boolean;
     readonly allowSession: boolean;
     readonly allowGroup: boolean;
     readonly allowUser: boolean;
@@ -66,10 +70,7 @@ export interface RunnerCapabilitiesManifest {
 
 const MAIN_COMMANDS = [
   "say",
-  "handoff",
-  "handoffs resolve",
-  "asks create|answer|cancel|list",
-  "requests list",
+  "ask | ask reply|message|wait|cancel|get|list",
   "tasks create|update|restart|cancel|list|get|status-card",
   "sessions list|timeline|messages|create-thread|clarify|release",
   "schedules create|list|get|update|pause|resume|cancel",
@@ -84,9 +85,8 @@ const MAIN_COMMANDS = [
 ] as const;
 
 const HEARTBEAT_COMMANDS = [
-  "handoff",
-  "asks create|cancel|list",
-  "requests list",
+  "say --via-main",
+  "ask | ask message|cancel|get|list",
   "schedules create|list|get|update|pause|resume|cancel",
   "sessions list|timeline|messages",
   "tasks list|get",
@@ -106,9 +106,7 @@ const MEMORY_ROUTINE_COMMANDS = [
 
 const WORK_COMMANDS = [
   "say",
-  "handoff",
-  "asks create|answer|cancel|list",
-  "requests list",
+  "ask | ask reply|message|wait|cancel|get|list",
   "schedules create|list|get|update|pause|resume|cancel",
   "sessions list|timeline|messages",
   "activity",
@@ -123,7 +121,9 @@ const WORK_COMMANDS = [
 ] as const;
 
 const TASK_COMMANDS = [
-  "tasks report",
+  "say --to main",
+  "ask --to main | ask wait|message|cancel|get|list",
+  "tasks report|pause",
   "memory list|search|timeline|get|add|update|delete|restore",
   "artifacts",
   "knowledge",
@@ -132,16 +132,21 @@ const TASK_COMMANDS = [
   "whoami",
 ] as const;
 
+export interface ResolvedMainTriggerClassification {
+  readonly originKind: TurnOriginKind;
+  readonly routineKind?: SelfRoutineKind | undefined;
+  readonly requestUpdate?: Record<string, unknown> | undefined;
+  readonly requestOpened?: Record<string, unknown> | undefined;
+  readonly requestMessage?: Record<string, unknown> | undefined;
+  readonly peerMessage?: Record<string, unknown> | undefined;
+}
+
 export function resolveMainTriggerClassification(
   db: DrizzleDB | undefined,
   triggerId: string,
   sourceSessionId: string,
   currentSessionId: string,
-): {
-  readonly originKind: TurnOriginKind;
-  readonly routineKind?: SelfRoutineKind | undefined;
-  readonly requestResult?: Record<string, unknown> | undefined;
-} {
+): ResolvedMainTriggerClassification {
   if (db) {
     const routine = selfRoutineKindOfTrigger(db, triggerId);
     if (routine === "reflection" || routine === "consolidation" || routine === "heartbeat") {
@@ -152,19 +157,42 @@ export function resolveMainTriggerClassification(
       .from(sessionCommands)
       .where(eq(sessionCommands.id, triggerId))
       .get();
-    if (cmd) {
-      if (
-        cmd.payload &&
-        typeof cmd.payload === "object" &&
-        "requestResult" in cmd.payload &&
-        cmd.payload.requestResult &&
-        typeof cmd.payload.requestResult === "object"
-      ) {
+    if (cmd && cmd.payload && typeof cmd.payload === "object") {
+      const payload = cmd.payload as Record<string, unknown>;
+      if (payload.requestUpdate && typeof payload.requestUpdate === "object") {
         return {
-          originKind: "request_result",
+          originKind: "request_update",
           ...(routine ? { routineKind: routine } : {}),
-          requestResult: cmd.payload.requestResult as Record<string, unknown>,
+          requestUpdate: payload.requestUpdate as Record<string, unknown>,
         };
+      }
+      if (payload.requestResult && typeof payload.requestResult === "object") {
+        return {
+          originKind: "request_update",
+          ...(routine ? { routineKind: routine } : {}),
+          requestUpdate: payload.requestResult as Record<string, unknown>,
+        };
+      }
+      if (payload.requestOpened && typeof payload.requestOpened === "object") {
+        return {
+          originKind: "request_opened",
+          requestOpened: payload.requestOpened as Record<string, unknown>,
+        };
+      }
+      if (payload.requestMessage && typeof payload.requestMessage === "object") {
+        return {
+          originKind: "request_message",
+          requestMessage: payload.requestMessage as Record<string, unknown>,
+        };
+      }
+      if (payload.peerMessage && typeof payload.peerMessage === "object") {
+        return {
+          originKind: "peer_message",
+          peerMessage: payload.peerMessage as Record<string, unknown>,
+        };
+      }
+      if (payload.eventKind === "peer_message") {
+        return { originKind: "peer_message" };
       }
       const occ = db
         .select({ id: scheduleOccurrences.id })
@@ -182,7 +210,7 @@ export function resolveMainTriggerClassification(
     }
   }
   if (sourceSessionId !== currentSessionId) {
-    return { originKind: "handoff" };
+    return { originKind: "peer_message" };
   }
   return { originKind: "schedule_fired" };
 }
@@ -284,15 +312,17 @@ export function buildMainCapabilities(
     },
     commands,
     addressScope: {
-      allowCurrent: !ignoreTerminal,
+      allowCurrent: !ignoreTerminal && !isMemoryOnly,
       allowSelf: !isMemoryOnly,
       allowOwner: !isMemoryOnly,
+      allowMain: false,
+      allowTask: !isMemoryOnly,
       allowSession: !isMemoryOnly,
       allowGroup: !isMemoryOnly,
       allowUser: !isMemoryOnly,
     },
     outboundGovernance:
-      db && scope?.agentId
+      db && scope?.agentId && !isMemoryOnly
         ? inspectOutboundQuota(db, scope.agentId, sessionId)
         : null,
   };
@@ -309,7 +339,10 @@ export function buildWorkCapabilities(
     readonly allowSilent: boolean;
   },
 ): RunnerCapabilitiesManifest {
-  const isRoutine = Boolean(options.routineKind);
+  const isRoutine =
+    options.routineKind === "reflection" ||
+    options.routineKind === "consolidation";
+
   return {
     protocolVersion: RUNNER_PROTOCOL_VERSION,
     identity: {
@@ -330,6 +363,8 @@ export function buildWorkCapabilities(
       allowCurrent: !isRoutine,
       allowSelf: !isRoutine,
       allowOwner: !isRoutine,
+      allowMain: false,
+      allowTask: !isRoutine,
       allowSession: !isRoutine,
       allowGroup: !isRoutine,
       allowUser: !isRoutine,
@@ -368,6 +403,8 @@ export function buildTaskCapabilities(options: {
       allowCurrent: false,
       allowSelf: false,
       allowOwner: false,
+      allowMain: true,
+      allowTask: false,
       allowSession: false,
       allowGroup: false,
       allowUser: false,

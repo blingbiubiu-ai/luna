@@ -11,7 +11,8 @@ Task payloads contain only domain fields; send acknowledgments as your final rep
   `sendStatusCard`, `statusCardStyle` (`card` | `native`).
 - `luna tasks update`: `taskId`, `updateSummary`; optional `updatedTaskTitle`,
   `updatedTaskSummary`, `assumptions`, `sourceMessageIds`, `sendStatusCard`,
-  `quiet`. Starts a new run with supplemental facts.
+  `quiet`. Preempts any active run and restarts with new facts/attachments (use
+  `luna say --to task:<id> --text '…'` instead for non-disruptive hints).
 - `luna tasks cancel`: `taskId`, optional `reason`, `sourceMessageIds`. Always
   use `cancel` for stop intent (`/stop` targets the referenced task; ask if
   ambiguous; never cancel all by default). `cancelled: false` means no active Run

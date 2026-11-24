@@ -6,12 +6,15 @@ quote or acknowledge them:
 - `<capabilities>`: Protocol v2 manifest (`identity`, `turn`, `commands`,
   `addressScope`, `outboundGovernance`). Run `luna whoami` anytime to inspect it.
 - `<events>`: this turn's events (`{ id, kind, time, source, actor, correlationId?, payload }`):
-  `message` (new/overheard chat), `pending_ask` (open question in this session),
-  `task_result` (Task Run finished or `waitingForInput`), `schedule_fired`
-  (scheduled `session.invoke`), `handoff` (delegated from another session or
-  Heartbeat), `request_result` (`ask`/`handoff` outcome), `routine`
-  (`reflection`, `consolidation`, `heartbeat`, `request_expiry`), `clarification`.
-- `<task>`, `<launch_context>`, `<update_context>`, `<user_input>`: Task Runner input.
+  `message` (new/overheard chat), `open_request` (active request targeting this
+  session), `request_opened` (delegated request opened from another session or
+  `task:<id>`), `request_message` (follow-up note on an open request),
+  `request_update` (`done`/`declined`/`expired`/`cancelled` request outcome),
+  `peer_message` (one-way `say --via-main` or Task milestone note), `task_result`
+  (terminal Task Run completion or failure), `schedule_fired` (scheduled
+  `session.invoke`), `routine` (`reflection`, `consolidation`, `heartbeat`,
+  `request_expiry`), `clarification`.
+- `<task>`, `<launch_context>`, `<update_context>`, `<task_events>`, `<user_input>`: Task Runner input.
 - `<memory>`: Agent memory entries for this turn.
 - `<history>`: earlier conversation given as background.
 - `<now>`: current time (`now`, `weekday`, `timezone`); use `now` for today's date/time.

@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readdirSync, readFileSync, readlinkSync, statSync } from "node:fs";
+import { closeSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, readlinkSync, readSync, statSync } from "node:fs";
 import { basename, join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { runnerAssetPaths, runnerResourcesPath } from "@luna/runner-protocol/runner-assets";
@@ -8,6 +8,7 @@ import { prepareCodexSkills } from "../providers/codex-skills";
 import { normalizeProviderFailure } from "../providers/failure-normalizer";
 import { toolResultText, toolTitle } from "../providers/tool-progress";
 import { currentRegularFileSize, drainJsonlLines, writePrivateJsonAtomic } from "./jsonl-cursor";
+import { writeCodexHooksJson } from "../task-hooks";
 import { chunkTextByUtf8Bytes } from "./viewport";
 import type { PtyCliAdapter, PtySpawnSpec, PtyTurnBridge, PtyTurnDrainResult, PtyWriteTarget } from "./types";
 
@@ -207,6 +208,146 @@ function toolOutputIndicatesFailure(rawOutput: unknown): boolean {
   return /^Process exited with code [1-9]\d*/m.test(text);
 }
 
+interface RolloutInspection {
+  readonly sessionId?: string | undefined;
+  readonly cwd?: string | undefined;
+  readonly hasPriorTurnActivity: boolean;
+}
+
+function lineIndicatesTurnActivity(rawLine: string): boolean {
+  const trimmed = rawLine.trim();
+  if (!trimmed) return false;
+  try {
+    const obj = JSON.parse(trimmed) as Record<string, unknown>;
+    const payload = obj.payload && typeof obj.payload === "object"
+      ? (obj.payload as Record<string, unknown>)
+      : undefined;
+    if (!payload) return false;
+    if (obj.type === "event_msg") {
+      return (
+        payload.type === "task_started" ||
+        payload.type === "task_complete" ||
+        payload.type === "turn_aborted" ||
+        payload.type === "agent_message"
+      );
+    }
+    if (obj.type === "response_item") {
+      return payload.type === "message" && payload.role === "user";
+    }
+    return false;
+  } catch {
+    return false;
+  }
+}
+
+export function inspectCodexRolloutFile(filePath: string): RolloutInspection {
+  let fd: number | undefined;
+  try {
+    const st = statSync(filePath);
+    if (!st.isFile() || st.size === 0) {
+      return { hasPriorTurnActivity: false };
+    }
+    fd = openSync(filePath, "r");
+    const headLen = Math.min(st.size, 128 * 1024);
+    const headBuf = Buffer.allocUnsafe(headLen);
+    const bytesRead = readSync(fd, headBuf, 0, headLen, 0);
+    const headText = headBuf.subarray(0, bytesRead).toString("utf8");
+
+    let sessionId: string | undefined;
+    let cwd: string | undefined;
+    const headLines = headText.split("\n");
+    const firstComplete = headLines.length > 1 ? headLines[0]!.trim() : "";
+    if (firstComplete) {
+      try {
+        const meta = JSON.parse(firstComplete) as Record<string, unknown>;
+        if (meta.type === "session_meta" && meta.payload && typeof meta.payload === "object") {
+          const payload = meta.payload as Record<string, unknown>;
+          const rawId = typeof payload.id === "string" && payload.id.trim()
+            ? payload.id.trim()
+            : typeof payload.session_id === "string" && payload.session_id.trim()
+              ? payload.session_id.trim()
+              : undefined;
+          sessionId = rawId;
+          if (typeof payload.cwd === "string" && payload.cwd.trim()) {
+            cwd = payload.cwd.trim();
+          }
+        }
+      } catch { /* ignore malformed head */ }
+    }
+
+    let hasPriorTurnActivity = false;
+    const completeHeadCount = headLines.length - 1;
+    for (let i = 1; i < completeHeadCount; i += 1) {
+      if (lineIndicatesTurnActivity(headLines[i]!)) {
+        hasPriorTurnActivity = true;
+        break;
+      }
+    }
+    if (!hasPriorTurnActivity && st.size > headLen) {
+      const tailLen = Math.min(st.size - headLen, 64 * 1024);
+      const tailBuf = Buffer.allocUnsafe(tailLen);
+      const tailRead = readSync(fd, tailBuf, 0, tailLen, st.size - tailLen);
+      const tailLines = tailBuf.subarray(0, tailRead).toString("utf8").split("\n");
+      for (let i = 1; i < tailLines.length - 1; i += 1) {
+        if (lineIndicatesTurnActivity(tailLines[i]!)) {
+          hasPriorTurnActivity = true;
+          break;
+        }
+      }
+    }
+
+    return { sessionId, cwd, hasPriorTurnActivity };
+  } catch {
+    return { hasPriorTurnActivity: false };
+  } finally {
+    if (fd !== undefined) {
+      try { closeSync(fd); } catch { /* ignore */ }
+    }
+  }
+}
+
+function collectExcludedColdRolloutSessions(codexHome: string, expectedCwd?: string): Set<string> {
+  const excluded = new Set<string>();
+  const root = join(codexHome, "sessions");
+  if (!existsSync(root)) return excluded;
+
+  const walk = (dir: string, depth: number): void => {
+    if (depth > 4) return;
+    let entries: string[];
+    try { entries = readdirSync(dir); } catch { return; }
+    for (const name of entries) {
+      const full = join(dir, name);
+      try {
+        const st = statSync(full);
+        if (st.isDirectory()) {
+          walk(full, depth + 1);
+        } else if (st.isFile() && name.endsWith(".jsonl")) {
+          const sid = extractRolloutSessionId(name);
+          if (!sid) continue;
+          const info = inspectCodexRolloutFile(full);
+          const cwdMismatch = Boolean(expectedCwd && info.cwd && info.cwd !== expectedCwd);
+          if (cwdMismatch || info.hasPriorTurnActivity) {
+            excluded.add(sid.toLowerCase());
+          }
+        }
+      } catch { /* ignore transient entry */ }
+    }
+  };
+  walk(root, 0);
+  return excluded;
+}
+
+function isSameRegularFile(a: string, b: string): boolean {
+  if (a === b) return true;
+  try {
+    const sa = statSync(a);
+    const sb = statSync(b);
+    return sa.dev === sb.dev && sa.ino === sb.ino;
+  } catch {
+    return false;
+  }
+}
+
 export class CodexRolloutTurnBridge implements PtyTurnBridge {
   private readonly historyPath: string;
   private historyOffset: number;
@@ -218,11 +359,13 @@ export class CodexRolloutTurnBridge implements PtyTurnBridge {
   private pendingOutputs: ProviderOutput[] = [];
   private terminalResult?: PtyTurnDrainResult["terminal"];
   private readonly expectedPromptTrimmed: string;
+  private readonly excludedColdSessionIds: Set<string>;
 
   constructor(
     private readonly options: {
       readonly prompt: string;
       readonly codexHome: string;
+      readonly cwd?: string | undefined;
       readonly cliPid: number;
       readonly initialSessionId?: string | undefined;
     },
@@ -231,6 +374,9 @@ export class CodexRolloutTurnBridge implements PtyTurnBridge {
     this.historyOffset = currentRegularFileSize(this.historyPath);
     this.sessionId = options.initialSessionId;
     this.expectedPromptTrimmed = normaliseText(options.prompt);
+    this.excludedColdSessionIds = this.sessionId
+      ? new Set()
+      : collectExcludedColdRolloutSessions(options.codexHome, options.cwd);
 
     if (this.sessionId) {
       const existing = findCodexRolloutBySessionId(options.codexHome, this.sessionId);
@@ -246,19 +392,32 @@ export class CodexRolloutTurnBridge implements PtyTurnBridge {
     if (this.sessionId) {
       const exactOpen = openRollouts.find(r => r.sessionId.toLowerCase() === this.sessionId!.toLowerCase());
       const resolvedPath = exactOpen?.path ?? findCodexRolloutBySessionId(this.options.codexHome, this.sessionId);
-      if (resolvedPath && resolvedPath !== this.rolloutPath) {
+      if (resolvedPath && (!this.rolloutPath || !isSameRegularFile(resolvedPath, this.rolloutPath))) {
         this.rolloutPath = resolvedPath;
         this.rolloutOffset = 0;
       }
       return;
     }
-    if (openRollouts.length === 1 && openRollouts[0]) {
-      this.sessionId = openRollouts[0].sessionId;
-      const resolvedPath = openRollouts[0].path ?? findCodexRolloutBySessionId(this.options.codexHome, openRollouts[0].sessionId);
-      if (resolvedPath) {
-        this.rolloutPath = resolvedPath;
-        this.rolloutOffset = 0;
+
+    const eligible: Array<{ sessionId: string; path: string }> = [];
+    for (const candidate of openRollouts) {
+      const key = candidate.sessionId.toLowerCase();
+      if (this.excludedColdSessionIds.has(key)) continue;
+      const resolvedPath = candidate.path ?? findCodexRolloutBySessionId(this.options.codexHome, candidate.sessionId);
+      if (!resolvedPath) continue;
+      const info = inspectCodexRolloutFile(resolvedPath);
+      if (!info.sessionId) continue;
+      if (this.options.cwd && info.cwd && info.cwd !== this.options.cwd) {
+        this.excludedColdSessionIds.add(key);
+        continue;
       }
+      eligible.push({ sessionId: candidate.sessionId, path: resolvedPath });
+    }
+
+    if (eligible.length === 1 && eligible[0]) {
+      this.sessionId = eligible[0].sessionId;
+      this.rolloutPath = eligible[0].path;
+      this.rolloutOffset = 0;
     }
   }
 
@@ -266,7 +425,6 @@ export class CodexRolloutTurnBridge implements PtyTurnBridge {
     if (this.submitConfirmed && this.sessionId) return;
     const { lines, newOffset } = drainJsonlLines(this.historyPath, this.historyOffset);
     this.historyOffset = newOffset;
-    const openSids = new Set(findOpenCodexRolloutsByPid(this.options.cliPid).map(r => r.sessionId.toLowerCase()));
 
     for (const line of lines) {
       let parsed: Record<string, unknown>;
@@ -276,11 +434,21 @@ export class CodexRolloutTurnBridge implements PtyTurnBridge {
       const sid = typeof parsed.session_id === "string" && parsed.session_id.trim()
         ? parsed.session_id.trim()
         : undefined;
+      if (sid && this.excludedColdSessionIds.has(sid.toLowerCase())) {
+        continue;
+      }
       if (this.sessionId && sid && sid.toLowerCase() !== this.sessionId.toLowerCase()) {
         continue;
       }
-      if (!this.sessionId && sid && openSids.size > 0 && !openSids.has(sid.toLowerCase())) {
-        continue;
+      if (!this.sessionId && sid && this.options.cwd) {
+        const existingRollout = findCodexRolloutBySessionId(this.options.codexHome, sid);
+        if (existingRollout) {
+          const info = inspectCodexRolloutFile(existingRollout);
+          if (info.cwd && info.cwd !== this.options.cwd) {
+            this.excludedColdSessionIds.add(sid.toLowerCase());
+            continue;
+          }
+        }
       }
       this.submitConfirmed = true;
       if (sid && !this.sessionId) {
@@ -470,6 +638,7 @@ export const codexPtyAdapter: PtyCliAdapter = {
   async prepareSpawn(input): Promise<PtySpawnSpec> {
     const codexHome = resolveCodexHome(input.home, input.baseEnv);
     seedCodexAuthState(codexHome, input.baseEnv);
+    writeCodexHooksJson(codexHome);
     const { skillPlugin } = runnerAssetPaths(input.home);
     if (existsSync(join(skillPlugin, ".codex-plugin", "plugin.json"))) {
       await prepareCodexSkills({ ...input.baseEnv, CODEX_HOME: codexHome }, runnerResourcesPath(input.home), codexHome);
@@ -531,6 +700,7 @@ export const codexPtyAdapter: PtyCliAdapter = {
     const bridge = new CodexRolloutTurnBridge({
       prompt: input.prompt,
       codexHome,
+      cwd: input.cwd,
       cliPid: input.cliPid,
       initialSessionId: input.currentSessionId,
     });

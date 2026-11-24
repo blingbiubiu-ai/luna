@@ -24,8 +24,10 @@ import {requireTaskReportCompletion} from "../../src/tasks/task-report-store";
 import {TaskRunSupervisor} from "../../src/tasks/task-run-supervisor";
 import {createTaskReportRoutes} from "../../src/server/routes/task-reports";
 import {createRunnerProtocolV2Routes} from "../../src/server/routes/runner-protocol-v2";
+import {TaskInboxStore} from "../../src/tasks/task-inbox-store";
 import {runTasksCli} from "@luna/cli/commands/tasks";
 import {runCommandsCli} from "@luna/cli/commands/commands";
+import {runInternalCli} from "@luna/cli/commands/internal";
 import type {LunaAccessTokenClaims} from "../../src/server/auth/access-token-service";
 
 let home: string;
@@ -67,8 +69,8 @@ test("report commits before process exit; identical retries are idempotent and t
   expect(f.db.select().from(schema.taskReportCommands).all()).toHaveLength(1);
   expect(()=>f.service.submit(f.claims,"final","changed")).toThrow("already has");
   expect(()=>f.service.submit(f.claims,"another","2+2=4")).toThrow("already has");
-  expect(requireTaskReportCompletion(f.db,f.run.id,"Report submitted.")).toEqual({finalReportArtifactId:receipt.reportArtifactId});
-  expect(requireTaskReportCompletion(f.db,f.run.id,"")).toEqual({finalReportArtifactId:receipt.reportArtifactId});
+  expect(requireTaskReportCompletion(f.db,f.run.id,"Report submitted.")).toEqual({kind:"completed",finalReportArtifactId:receipt.reportArtifactId});
+  expect(requireTaskReportCompletion(f.db,f.run.id,"")).toEqual({kind:"completed",finalReportArtifactId:receipt.reportArtifactId});
 });
 test("Task report capability rejects other roles, wrong runs, missing artifacts, revoked tokens and late calls",()=>{
   const f=fixture();
@@ -221,50 +223,7 @@ test("Main downloads the managed report while Task Run retains its timeline arti
   }
 });
 
-test("a waiting report marks the Task, tells Main, and the next run clears the mark", async () => {
-  const f = fixture();
-  const published: unknown[] = [];
-  const service = new TaskReportService(f.db, async result => { published.push(result); });
-  const blockReason = () => f.db.select().from(schema.tasks).where(eq(schema.tasks.id, "task")).get()!.block_reason;
-  const receipt = service.submit(f.claims, "final", "Which version should this target?", true);
-  expect(blockReason()).toBe("waiting_user");
-  expect(published[0]).toMatchObject({ status: "completed", waitingForInput: true });
-  expect(service.submit(f.claims, "final", "Which version should this target?", true)).toEqual(receipt);
-  expect(() => service.submit(f.claims, "final", "Which version should this target?")).toThrow("already has");
-  const prompt = renderMainRunnerPrompt({ type: "task_result", sessionId: "session", taskId: "task",
-    context: { sessionId: "session", candidateOpenTasks: [] }, result: published[0] as never });
-  expect(prompt).toMatch(/"waitingForInput":\s*true/);
-
-  f.finishJob();
-  new InvocationStore(f.db).finish("invocation");
-  const settled: unknown[] = [];
-  let seenAtRestart: string | null | undefined;
-  const supervisor = new TaskRunSupervisor({ db: f.db, runnerType: "mock", onTaskResult: async result => { settled.push(result); },
-    executeRun: async input => {
-      seenAtRestart = blockReason();
-      const id = "answer-invocation";
-      f.db.update(schema.accessTokens).set({ metadataJson: { invocationId: id } }).where(eq(schema.accessTokens.id, f.claims.tokenId)).run();
-      const active = { ...f.claims, taskRunId: input.taskRunId, runnerJobId: input.runnerContext!.id };
-      const finish = registerTestRunnerJob(f.db, id, active, {
-        version: 1, kind: "task",
-        input: { taskId: input.taskId, taskRunId: input.taskRunId, runnerContextId: input.runnerContext!.id },
-      }, input.taskRunId);
-      service.submit(active, "final", "Done with the answer");
-      finish();
-      throw Error("process disappeared");
-    } });
-  expect(await supervisor.recoverRunningRuns()).toBe(1);
-  expect(settled[0]).toMatchObject({ status: "completed", waitingForInput: true });
-  expect(blockReason()).toBe("waiting_user");
-
-  supervisor.restartTaskRun({ taskId: "task", updatedTaskSummary: "Original", updateSummary: "Target 1.2", preserveTaskContext: true, inputSnapshot: {} });
-  await supervisor.waitForIdle();
-  expect(seenAtRestart).toBeNull();
-  expect(blockReason()).toBeNull();
-  expect(settled.at(-1)).not.toHaveProperty("waitingForInput");
-});
-
-test("report CLI sends --waiting and rejects it on the wire only when malformed", async () => {
+test("report CLI rejects removed --waiting flag, and tasks pause --wake-in suspends into waiting until sweepDueWakeups resumes", async () => {
   const f = fixture();
   const app = new Hono<{ Variables: { lunaAccessTokenClaims: LunaAccessTokenClaims } }>();
   app.use("*", async (c, next) => { c.set("lunaAccessTokenClaims", f.claims); await next(); });
@@ -272,11 +231,147 @@ test("report CLI sends --waiting and rejects it on the wire only when malformed"
   const server = Bun.serve({ port: 0, fetch: req => app.fetch(req) });
   const env = { LUNA_SERVICE_URL: `http://127.0.0.1:${server.port}`, LUNA_ACCESS_TOKEN: "test", LUNA_INVOCATION_ID: "invocation" };
   try {
-    const result = await runTasksCli(["report", "--waiting", "--text", "Confirm the scope"], env);
-    expect(result.status).toBe("ok");
-    expect(f.db.select().from(schema.tasks).where(eq(schema.tasks.id, "task")).get()!.block_reason).toBe("waiting_user");
-    const malformed = await fetch(`${env.LUNA_SERVICE_URL}/api/runner/task-reports`, { method: "POST",
-      headers: { "Content-Type": "application/json", "Idempotency-Key": "other" }, body: JSON.stringify({ content: "x", waiting: "yes" }) });
-    expect(malformed.status).toBe(400);
-  } finally { server.stop(true); }
+    const legacyWaiting = await runTasksCli(["report", "--waiting", "--text", "Confirm the scope"], env);
+    expect(legacyWaiting.status).toBe("error");
+    expect(legacyWaiting.message).toContain("--waiting");
+
+    const pauseRes = await runTasksCli(["pause", "--wake-in", "10m", "--reason", "Waiting for CI pipeline"], env);
+    expect(pauseRes.status).toBe("ok");
+    expect(JSON.parse(pauseRes.output!)).toMatchObject({
+      status: "accepted",
+      kind: "task.pause",
+      result: { reason: "Waiting for CI pipeline" },
+    });
+
+    const taskRow = f.db.select().from(schema.tasks).where(eq(schema.tasks.id, "task")).get()!;
+    expect(taskRow.block_reason).toBe("waiting_external");
+    expect(taskRow.wake_at).toBeGreaterThan(Date.now());
+    expect(requireTaskReportCompletion(f.db, f.run.id, "")).toEqual({
+      kind: "waiting",
+      pauseReason: "Waiting for CI pipeline",
+    });
+
+    // Simulate process exit into `waiting` state, then advance `sweepDueWakeups` past `wake_at` to resume!
+    f.finishJob();
+    new InvocationStore(f.db).finish("invocation");
+    f.store.markWaiting(f.run.id, { pauseReason: "Waiting for CI pipeline" });
+    f.db.update(schema.tasks).set({ status: "waiting" }).where(eq(schema.tasks.id, "task")).run();
+
+    let resumedReason: string | undefined;
+    const supervisor = new TaskRunSupervisor({
+      db: f.db,
+      runnerType: "mock",
+      executeRun: async input => {
+        resumedReason = input.reason;
+        const id = "wake-invocation";
+        f.db.update(schema.accessTokens).set({ metadataJson: { invocationId: id } }).where(eq(schema.accessTokens.id, f.claims.tokenId)).run();
+        const active = { ...f.claims, taskRunId: input.taskRunId, runnerJobId: input.runnerContext!.id };
+        const finish = registerTestRunnerJob(f.db, id, active, {
+          version: 1, kind: "task",
+          input: { taskId: input.taskId, taskRunId: input.taskRunId, runnerContextId: input.runnerContext!.id },
+        }, input.taskRunId);
+        try {
+          const wakeEvents = new TaskInboxStore(f.db).consumePending({
+            taskId: input.taskId,
+            runnerContextId: input.runnerContext!.id,
+            runId: input.taskRunId,
+          });
+          expect(wakeEvents.some(e => e.kind === "wake_timer")).toBe(true);
+          const receipt = f.service.submit(active, "final", "CI green, deployed");
+          return { kind: "completed", finalReportArtifactId: receipt.reportArtifactId };
+        } finally {
+          finish();
+        }
+      },
+    });
+    expect(supervisor.sweepDueWakeups(Date.now())).toBe(0);
+    expect(supervisor.sweepDueWakeups(taskRow.wake_at! + 1)).toBe(1);
+    await supervisor.waitForIdle();
+
+    expect(resumedReason).toBe("restart");
+    const finalTask = f.db.select().from(schema.tasks).where(eq(schema.tasks.id, "task")).get()!;
+    expect(finalTask.status).toBe("completed");
+    expect(finalTask.block_reason).toBeNull();
+    expect(finalTask.wake_at).toBeNull();
+  } finally {
+    server.stop(true);
+  }
+});
+
+test("unread soft task inbox events block premature report/exit and inject via throttled PostToolUse + capped Stop hooks", async () => {
+  const f = fixture();
+  const inbox = new TaskInboxStore(f.db);
+  const app = new Hono<{ Variables: { lunaAccessTokenClaims: LunaAccessTokenClaims } }>();
+  app.use("*", async (c, next) => { c.set("lunaAccessTokenClaims", f.claims); await next(); });
+  app.route("/api/runner/task-reports", createTaskReportRoutes(f.service));
+  const server = Bun.serve({ port: 0, fetch: req => app.fetch(req) });
+  const env = {
+    LUNA_SERVICE_URL: `http://127.0.0.1:${server.port}`,
+    LUNA_ACCESS_TOKEN: "test",
+    LUNA_INVOCATION_ID: "invocation",
+    LUNA_RUNNER_KIND: "task",
+    LUNA_TASK_RUN_ID: f.run.id,
+  };
+  try {
+    // 1. First PostToolUse check with empty inbox sets local stamp and emits empty stdout.
+    const idleHook = await runInternalCli(["task-hook", "post-tool"], env);
+    expect(idleHook.status).toBe("ok");
+    expect(idleHook.output ?? "").toBe("");
+
+    // 2. Append a soft `say --to task:<id>` note while run is active.
+    inbox.append({
+      taskId: "task",
+      kind: "peer_message",
+      source: "session:session",
+      content: "补充说明：生产库端口改为 5433",
+      payload: { text: "补充说明：生产库端口改为 5433" },
+    });
+
+    // Immediate PostToolUse within 15s throttle window does NOT hit the server yet!
+    const throttledHook = await runInternalCli(["task-hook", "post-tool"], env);
+    expect(throttledHook.output ?? "").toBe("");
+    expect(inbox.peekUndelivered("task")).toHaveLength(1);
+
+    // 3. `Stop` hook always checks unthrottled: drains unread note and blocks exit with `<task_events>`!
+    const stopWithNote = await runInternalCli(["task-hook", "stop"], env);
+    expect(stopWithNote.status).toBe("ok");
+    const stopJson1 = JSON.parse(stopWithNote.output!) as { decision: string; reason: string };
+    expect(stopJson1.decision).toBe("block");
+    expect(stopJson1.reason).toContain("5433");
+    expect(inbox.peekUndelivered("task")).toHaveLength(0);
+
+    // Another late note arriving right before `tasks report` is ALSO intercepted by `TaskReportService.submit` (`409 unread_updates_pending`)!
+    inbox.append({
+      taskId: "task",
+      kind: "peer_message",
+      source: "session:session",
+      content: "再补充：记得开启 SSL",
+      payload: { text: "再补充：记得开启 SSL" },
+    });
+    expect(() => f.service.submit(f.claims, "final", "Premature report")).toThrow("New messages arrived from Main");
+    expect(inbox.peekUndelivered("task")).toHaveLength(0);
+
+    // 4. Attempting to exit again without calling `tasks report` or `tasks pause` blocks once more (2nd block), then allows exit on 3rd attempt (cap = 2)!
+    const stopForgotReport = await runInternalCli(["task-hook", "stop"], env);
+    expect(JSON.parse(stopForgotReport.output!).decision).toBe("block");
+    expect(JSON.parse(stopForgotReport.output!).reason).toContain("luna tasks report");
+
+    const stopCapped = await runInternalCli(["task-hook", "stop"], env);
+    expect(stopCapped.output ?? "").toBe("");
+
+    // 5. Once unread events are consumed, `tasks report` succeeds and `Stop` hook passes cleanly.
+    f.service.submit(f.claims, "final", "Updated port 5433 + SSL and verified");
+    expect(f.service.hookCheck(f.claims, "stop")).toEqual({ action: "allow" });
+
+    // 6. CLI entrypoint must write 0 bytes to stdout when hook returns empty output (Codex rejects `{"status":"ok","output":""}`).
+    const proc = Bun.spawn(
+      [process.execPath, join(import.meta.dir, "../../apps/cli/src/main.ts"), "internal", "task-hook", "post-tool"],
+      { env: { ...process.env, HOME: home, LUNA_RUNNER_KIND: "main" }, stdout: "pipe", stderr: "pipe" },
+    );
+    const stdoutText = await new Response(proc.stdout).text();
+    expect(await proc.exited).toBe(0);
+    expect(stdoutText).toBe("");
+  } finally {
+    server.stop(true);
+  }
 });

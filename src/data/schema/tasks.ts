@@ -1,5 +1,6 @@
 import {lunaAgents,agentShadows} from "./luna-agents";
 import {
+  index,
   integer,
   sqliteTable,
   text,
@@ -18,6 +19,8 @@ export const tasks = sqliteTable("tasks", {
   summary: text("summary"),
   status: text("status").notNull(),
   block_reason: text("block_reason"),
+  wake_at: integer("wake_at"),
+  wake_reason: text("wake_reason"),
   priority: text("priority").notNull().default("medium"),
   severity: text("severity"),
   creator_user_id: text("creator_user_id"),
@@ -28,7 +31,9 @@ export const tasks = sqliteTable("tasks", {
   created_at: integer("created_at").notNull(),
   updated_at: integer("updated_at").notNull(),
   last_activity_at: integer("last_activity_at").notNull(),
-});
+}, (table) => [
+  index("tasks_wake_at_idx").on(table.status, table.wake_at),
+]);
 
 /**
  * Drizzle table definition for users participating in a task.

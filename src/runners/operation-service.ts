@@ -19,8 +19,6 @@ import { SessionStateStore } from "@/main-runner/session-state-store";
 import { TaskStatusCardCommandService } from "@/tasks/task-status-card-command-service";
 import { TaskRunNotificationService } from "@/tasks/task-run-notification-service";
 import { TaskCommandService, type TaskCommandSupervisor } from "@/tasks/task-command-service";
-import { CorrelatedRequestService } from "@/messaging/correlated-request-service";
-import { getKernel } from "@/server/routes/kernel";
 import { mainMessageOrigin } from "./main-invocation-registry";
 import { operationSchemas, type OperationContext, type OperationKind, type OperationRequest } from "./operation-contract";
 
@@ -63,7 +61,7 @@ export class RunnerOperationService {
     if (isHeartbeatSession(this.db, input.context.sessionId)) {
       throw new GatewayError(
         "heartbeat_operation_forbidden",
-        "Heartbeat self session cannot create or mutate Tasks or threads directly; delegate to the target session via luna handoff",
+        "Heartbeat self session cannot create or mutate Tasks or threads directly; delegate to the target session via luna say --via-main or luna ask",
         403,
       );
     }
@@ -217,32 +215,7 @@ export class RunnerOperationService {
       }
       const result = row.request.kind === "task.status_card"
         ? await (this.cards ?? new TaskRunNotificationService({db: this.db, channelForNotification: () => undefined})).applyStatusCardCommand(row.id, row.result!, row.request.payload.resend, row.request.payload.style)
-        : row.request.kind === "session.create_thread"
-          ? (() => {
-              const base = row.result!;
-              if (row.request.payload.handoffInstruction && base.targetSessionId && !base.handoffCommandId) {
-                const channelResolver = (id: string) => {
-                  try { return getKernel().replyChannel(id); } catch { return undefined; }
-                };
-                const { command, request } = new CorrelatedRequestService(this.db, channelResolver).createHandoff({
-                  actor: {
-                    userId: row.context.actorUserId,
-                    agentId: session.agent_id,
-                    shadowId: session.shadow_id,
-                    sourceSessionId: row.sessionId,
-                    currentSessionId: row.sessionId,
-                    originId: row.originId,
-                  },
-                  key: `thread-handoff:${row.id}`,
-                  targetSessionId: base.targetSessionId,
-                  targetAddress: `session:${base.targetSessionId}`,
-                  instruction: row.request.payload.handoffInstruction,
-                });
-                return { ...base, handoffCommandId: command.id, handoffRequestId: request.id };
-              }
-              return base;
-            })()
-        : row.request.kind === "session.clarify" || row.request.kind === "session.release" ? row.result! :
+        : row.request.kind === "session.create_thread" || row.request.kind === "session.clarify" || row.request.kind === "session.release" ? row.result! :
         new TaskCommandService(this.db, this.supervisor).dispatch(row.id, row.request, row.context, row.result!);
       row = this.db.update(runnerOperations).set({result, status: "applied", error: null, updatedAt: Date.now()}).where(eq(runnerOperations.id, row.id)).returning().get()!;
       return this.receipt(row);
@@ -256,8 +229,6 @@ export class RunnerOperationService {
     const cleanResult = row.result ? (({ cardDelivery: _cd, ...rest }) => rest)(row.result) : null;
     return {commandId: row.id, kind: row.request.kind, sessionId: row.sessionId, operation: row.request.kind, status: row.status, result: cleanResult,
       ...(row.result?.targetSessionId ? {targetSessionId: row.result.targetSessionId} : {}),
-      ...(row.result?.handoffCommandId ? {handoffCommandId: row.result.handoffCommandId} : {}),
-      ...(row.result?.handoffRequestId ? {handoffRequestId: row.result.handoffRequestId} : {}),
       ...(row.result?.statusMessageId ? {statusMessageId: row.result.statusMessageId} : {}),
       ...(row.result?.taskSessionId ? {taskSessionId: row.result.taskSessionId} : {}),
       ...(row.result?.cancelled !== undefined ? {cancelled: row.result.cancelled} : {}),

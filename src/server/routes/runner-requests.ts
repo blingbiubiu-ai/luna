@@ -3,41 +3,55 @@ import { z } from "zod";
 import { AgentError } from "@/agents/agent-store";
 import type { ReplyChannel } from "@/channels/outbound";
 import type { DrizzleDB } from "@/data";
-import { CORRELATED_REQUEST_STATUSES } from "@/data/schema";
+import {
+  CORRELATED_REQUEST_MODES,
+  CORRELATED_REQUEST_STATUSES,
+} from "@/data/schema";
 import { CorrelatedRequestService } from "@/messaging/correlated-request-service";
 import { RunnerMessageService } from "@/messaging/runner-message-service";
 import type { LunaAccessTokenClaims } from "../auth/access-token-service";
 import { GatewayError } from "../gateway-error";
 import { getKernel } from "./kernel";
 
-const createAskSchema = z
+const createRequestSchema = z
   .object({
     to: z.string().min(1).max(512),
-    question: z.string().trim().min(1).max(20_000),
-    context: z.string().trim().max(5_000).optional(),
-    options: z.array(z.string().trim().min(1).max(64)).min(2).max(8).optional(),
-    expiresInMs: z.number().int().min(60_000).max(30 * 86_400_000).optional(),
+    goal: z.string().trim().min(1).max(20_000),
+    context: z.string().trim().max(10_000).optional(),
+    options: z
+      .array(z.string().trim().min(1).max(64))
+      .min(2)
+      .max(8)
+      .optional(),
+    expiresInMs: z
+      .number()
+      .int()
+      .min(60_000)
+      .max(30 * 86_400_000)
+      .optional(),
+    waitMs: z.number().int().min(0).max(5 * 60_000).optional(),
   })
   .strict();
 
-const answerAskSchema = z
+const updateRequestSchema = z
   .object({
-    answer: z.string().trim().min(1).max(20_000),
+    action: z.enum(["progress", "done", "declined"]),
+    summary: z.string().trim().min(1).max(20_000),
     selectedOption: z.string().trim().min(1).max(64).optional(),
   })
   .strict();
 
-const resolveHandoffSchema = z
+const sendRequestMessageSchema = z
   .object({
-    declined: z.boolean().default(false),
-    reason: z.string().trim().max(5_000).optional(),
-    summary: z.string().trim().max(5_000).optional(),
+    message: z.string().trim().min(1).max(20_000),
   })
-  .strict()
-  .refine(
-    b => Boolean((b.declined ? b.reason : b.summary ?? b.reason)?.trim()),
-    "Provide summary (when done) or reason (when declined)",
-  );
+  .strict();
+
+const waitRequestSchema = z
+  .object({
+    timeoutMs: z.number().int().min(0).max(5 * 60_000).default(60_000),
+  })
+  .strict();
 
 export function createRunnerRequestRoutes(
   options: {
@@ -74,33 +88,85 @@ export function createRunnerRequestRoutes(
       }
       return c.json({ error: "internal_error", message: String(error) }, 500);
     })
-    .post("/asks", async c => {
+    .post("/requests", async c => {
       const key = c.req.header("Idempotency-Key");
       if (!key || !/^[\w.-]{1,128}$/.test(key)) {
         return c.json({ error: "invalid_idempotency_key" }, 400);
       }
-      const body = createAskSchema.parse(await c.req.json().catch(() => null));
-      const actor = runnerSvc().actor(c.get("lunaAccessTokenClaims"));
-      const created = requestsSvc().createAsk({
+      const body = createRequestSchema.parse(
+        await c.req.json().catch(() => null),
+      );
+      const actor = runnerSvc().anyActor(c.get("lunaAccessTokenClaims"));
+      const created = requestsSvc().createRequest({
         actor,
         key,
         toAddress: body.to,
-        question: body.question,
+        goal: body.goal,
         contextSummary: body.context,
         options: body.options,
         expiresInMs: body.expiresInMs,
       });
+
+      if (body.waitMs && body.waitMs > 0) {
+        const claims = c.get("lunaAccessTokenClaims");
+        const waited = await requestsSvc().waitForRequest({
+          shadowId: actor.shadowId,
+          requestId: created.id,
+          timeoutMs: body.waitMs,
+          signal: c.req.raw.signal,
+          ...(actor.taskId && actor.taskRunId
+            ? {
+                consumerTask: {
+                  taskId: actor.taskId,
+                  runnerContextId: claims?.runnerJobId ?? actor.taskRunId,
+                  runId: actor.taskRunId,
+                },
+              }
+            : {}),
+        });
+        const req = waited.request;
+        return c.json(
+          {
+            commandId: req.id,
+            outboundCommandId: req.outboundCommandId,
+            requestId: req.id,
+            kind: "request",
+            mode: req.mode,
+            status: req.status,
+            settled: waited.settled,
+            targetSessionId: req.targetSessionId,
+            expiresAt: req.expiresAt,
+            result: {
+              requestId: req.id,
+              mode: req.mode,
+              status: req.status,
+              settled: waited.settled,
+              outboundCommandId: req.outboundCommandId,
+              targetSessionId: req.targetSessionId,
+              expiresAt: req.expiresAt,
+              outcome: req.resultJson,
+            },
+            events: waited.events,
+            error: null,
+          },
+          waited.settled ? 200 : 202,
+        );
+      }
+
       return c.json(
         {
           commandId: created.id,
           outboundCommandId: created.outboundCommandId,
           requestId: created.id,
-          kind: "ask",
+          kind: "request",
+          mode: created.mode,
           status: created.status,
           targetSessionId: created.targetSessionId,
           expiresAt: created.expiresAt,
           result: {
             requestId: created.id,
+            mode: created.mode,
+            status: created.status,
             outboundCommandId: created.outboundCommandId,
             targetSessionId: created.targetSessionId,
             expiresAt: created.expiresAt,
@@ -110,74 +176,146 @@ export function createRunnerRequestRoutes(
         201,
       );
     })
-    .get("/asks", c => {
-      const actor = runnerSvc().actor(c.get("lunaAccessTokenClaims"));
+    .get("/requests", c => {
+      const actor = runnerSvc().anyActor(c.get("lunaAccessTokenClaims"));
       const query = z
         .object({
           status: z.enum(CORRELATED_REQUEST_STATUSES).optional(),
+          mode: z.enum(CORRELATED_REQUEST_MODES).optional(),
+          role: z.enum(["origin", "target"]).optional(),
           limit: z.coerce.number().int().min(1).max(200).optional(),
         })
         .parse(c.req.query());
+
       const rows = requestsSvc().listRequests(actor.shadowId, {
-        kind: "ask",
         status: query.status,
+        mode: query.mode,
+        ...(query.role === "origin"
+          ? actor.taskId
+            ? { originTaskId: actor.taskId }
+            : { originSessionId: actor.currentSessionId }
+          : query.role === "target"
+            ? { targetSessionId: actor.currentSessionId }
+            : {}),
         limit: query.limit,
       });
-      return c.json({ asks: rows });
+      return c.json({ requests: rows });
     })
-    .post("/asks/:id/answer", async c => {
-      const actor = runnerSvc().actor(c.get("lunaAccessTokenClaims"));
-      const body = answerAskSchema.parse(await c.req.json().catch(() => null));
-      const { request, alreadyResolved } = requestsSvc().answerAsk({
+    .get("/requests/:id", c => {
+      const actor = runnerSvc().anyActor(c.get("lunaAccessTokenClaims"));
+      const detail = requestsSvc().getRequest(actor.shadowId, c.req.param("id"));
+      return c.json(detail);
+    })
+    .post("/requests/:id/wait", async c => {
+      const claims = c.get("lunaAccessTokenClaims");
+      const actor = runnerSvc().anyActor(claims);
+      const body = waitRequestSchema.parse(
+        await c.req.json().catch(() => ({})),
+      );
+      const waited = await requestsSvc().waitForRequest({
+        shadowId: actor.shadowId,
         requestId: c.req.param("id"),
-        answer: body.answer,
+        timeoutMs: body.timeoutMs,
+        signal: c.req.raw.signal,
+        ...(actor.taskId && actor.taskRunId
+          ? {
+              consumerTask: {
+                taskId: actor.taskId,
+                runnerContextId: claims?.runnerJobId ?? actor.taskRunId,
+                runId: actor.taskRunId,
+              },
+            }
+          : {}),
+      });
+      return c.json({
+        requestId: waited.request.id,
+        status: waited.request.status,
+        settled: waited.settled,
+        request: waited.request,
+        events: waited.events,
+      });
+    })
+    .post("/requests/:id/update", async c => {
+      const actor = runnerSvc().actor(c.get("lunaAccessTokenClaims"));
+      const body = updateRequestSchema.parse(
+        await c.req.json().catch(() => null),
+      );
+      const { request, alreadyResolved } = requestsSvc().updateRequest({
+        requestId: c.req.param("id"),
+        action: body.action,
+        summary: body.summary,
         selectedOption: body.selectedOption,
         resolvedByUserId: actor.userId,
         source: "runner",
         expectedShadowId: actor.shadowId,
         expectedTargetSessionId: actor.currentSessionId,
       });
-      return c.json({ request, alreadyResolved });
-    })
-    .post("/asks/:id/cancel", c => {
-      const actor = runnerSvc().actor(c.get("lunaAccessTokenClaims"));
-      const request = requestsSvc().cancelAsk({
-        requestId: c.req.param("id"),
-        shadowId: actor.shadowId,
+      return c.json({
+        commandId: request.id,
+        kind: "request.update",
+        status: request.status,
+        request,
+        alreadyResolved,
+        result: {
+          requestId: request.id,
+          status: request.status,
+          alreadyResolved,
+        },
+        error: null,
       });
-      return c.json({ request });
     })
-    .post("/handoffs/:id/resolve", async c => {
-      const actor = runnerSvc().actor(c.get("lunaAccessTokenClaims"));
-      const body = resolveHandoffSchema.parse(
+    .post("/requests/:id/messages", async c => {
+      const key = c.req.header("Idempotency-Key");
+      if (!key || !/^[\w.-]{1,128}$/.test(key)) {
+        return c.json({ error: "invalid_idempotency_key" }, 400);
+      }
+      const actor = runnerSvc().anyActor(c.get("lunaAccessTokenClaims"));
+      const body = sendRequestMessageSchema.parse(
         await c.req.json().catch(() => null),
       );
-      const request = requestsSvc().resolveHandoff({
+      const { request, command } = requestsSvc().sendMessage({
+        actor,
+        key,
+        requestId: c.req.param("id"),
+        message: body.message,
+      });
+      return c.json(
+        {
+          commandId: command.id,
+          kind: "request.message",
+          status: command.status,
+          requestId: request.id,
+          request,
+          result: {
+            requestId: request.id,
+            triggerId: command.id,
+            targetSessionId: request.targetSessionId,
+          },
+          error: null,
+        },
+        202,
+      );
+    })
+    .post("/requests/:id/cancel", c => {
+      const actor = runnerSvc().anyActor(c.get("lunaAccessTokenClaims"));
+      const request = requestsSvc().cancelRequest({
         requestId: c.req.param("id"),
         shadowId: actor.shadowId,
-        targetSessionId: actor.currentSessionId,
-        declined: body.declined,
-        summaryOrReason: (body.declined
-          ? body.reason
-          : body.summary ?? body.reason)!,
-        resolvedByUserId: actor.userId,
+        actorUserId: actor.userId,
+        ...(actor.taskId
+          ? { expectedOriginTaskId: actor.taskId }
+          : { expectedOriginSessionId: actor.currentSessionId, expectedOriginTaskId: null }),
       });
-      return c.json({ request });
-    })
-    .get("/requests", c => {
-      const actor = runnerSvc().actor(c.get("lunaAccessTokenClaims"));
-      const query = z
-        .object({
-          status: z.enum(CORRELATED_REQUEST_STATUSES).optional(),
-          kind: z.enum(["ask", "handoff"]).optional(),
-          limit: z.coerce.number().int().min(1).max(200).optional(),
-        })
-        .parse(c.req.query());
-      const rows = requestsSvc().listRequests(actor.shadowId, {
-        status: query.status,
-        kind: query.kind,
-        limit: query.limit,
+      return c.json({
+        commandId: request.id,
+        kind: "request.cancel",
+        status: request.status,
+        request,
+        result: {
+          requestId: request.id,
+          status: request.status,
+        },
+        error: null,
       });
-      return c.json({ requests: rows });
     });
 }

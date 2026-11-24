@@ -31,6 +31,7 @@ A Task Run is one execution turn for the Task subagent. It owns:
 
 - `new`
 - `running`
+- `waiting` (suspended cleanly while waiting on an open `Request` to Main or a scheduled `tasks pause --wake-in` timer; container released, `runner_session_id` preserved for `--resume`)
 - `completed`
 - `failed`
 - `cancelled`
@@ -41,30 +42,25 @@ Workflow statuses such as `INVESTIGATING`, `RESOLVED`, and `ESCALATED` are not p
 
 Typical lifecycle:
 
-1. Main Runner requests task creation or update through `luna task create|update|restart` , while the Main process is still running.
+1. Main Runner requests task creation or update through `luna tasks create|update|restart`, while the Main process is still running.
 2. Runtime persists the task, source context pack, and dispatch marker.
-3. Task Run Supervisor creates an initial or restart run.
-4. Task Runner materializes the prompt and begins execution.
-5. The runner calls tools, queries knowledge, invokes plugin operation commands, or writes workspace files.
+3. Task Run Supervisor creates an initial, restart, or resume run.
+4. Task Runner materializes the prompt (`<task>`, `<launch_context>` / `<update_context>`, `<task_events>`, `<user_input>`, `<completion>`) and begins execution.
+5. During multi-stage work, Task Runner may send non-terminal milestone updates (`luna say --to main`), ask mid-run non-blocking or blocking questions (`luna ask --to main [--wait 60s]`), or suspend while waiting on external CI/jobs (`luna tasks pause [--wake-in <duration>] --reason "..."`).
 6. User-visible files are registered through `luna artifacts register <path>`.
-7. When the Task Run completes, Runtime updates task status, timeline, enabled status cards, and result delivery.
+7. When the Task achieves its goal and calls `luna tasks report`, Runtime updates task status to `completed`, timeline, enabled status cards, and result delivery.
 
-Each Task Run stores source context packs, materialized prompt, runner context, timeline events, final report/artifacts, and terminal status.
+Each Task Run stores source context packs, materialized prompt, runner context, timeline events, pause reason / final report artifacts, and terminal or `waiting` status.
 
-## Supplemental Input
+## Supplemental Input (`say --to task:<id>` vs. `tasks update`)
 
-Task supplemental messages are selected by Main Runner task commands, not by keyword detection. If the Main Runner calls `luna task update`, Runtime treats the message as valuable context appended to the Task subagent and starts a new Task Run.
+Supplemental input from Main uses two distinct channels depending on urgency:
 
-Current behavior:
-
-- If there is no active run, supplemental input creates a new restart run immediately.
-- `TaskRunSupervisor.restartTaskRun()` validates the source and records the update context together with its timeline event. If preparation succeeds, it cancels the active run and starts the replacement.
-- A manual restart with no source message stores the supplied text as a fact in the task's update context pack.
-- The old run must not overwrite the new run's terminal status or final report.
-- `luna task list` takes the Agent scope from `LUNA_AGENT_ID` or `--agent-id`.
-  Service applies the caller's existing permissions to task reads.
-- For status/progress questions, Main reads `luna task get --task-id TASK_ID` and replies with `luna messages send`, without starting another run.
-- `luna task update` supplements or corrects task context and starts a new run; `luna task restart` retries with existing information unchanged. Both cancel any active run.
+- **Soft runtime inbox (`luna say --to task:<id>`)**: appends a `peer_message` event to `task_inbox_events` without aborting an active Task Run. Executor wires native `PostToolUse` (locally throttled to once per 15s via a file stamp, injecting `<task_events>` via `additionalContext` only when unread events exist) and `Stop` (blocking premature exit up to 2 times per run if unread events arrived or if the model forgot `tasks report` / `tasks pause` / open `Request`) hooks for both Claude Code and Codex in both `subprocess` and `pty` modes. `TaskReportService.submit` and `pause` also guard against unread inbox events (`409 unread_updates_pending`). If the Task is currently `waiting`, `say --to task:<id>` automatically resumes it.
+- **Preemptive restart (`luna tasks update`)**: used when changed direction, conflicting facts, or new attachments (`sourceMessageIds`) make keeping the current run wasteful. `TaskRunSupervisor.restartTaskRun()` records a `task_update` context pack, cancels any active run, and starts a replacement run (`--resume` receives all unseen `task_update` packs recorded since the last delivered run on that `runnerContextId`).
+- `luna tasks restart` retries a failed or cancelled task with existing information unchanged.
+- `luna tasks cancel` cancels an active `running` run or transitions a suspended `waiting` task directly to `cancelled` (clearing `wake_at`, `wake_reason`, and `block_reason`).
+- For status/progress questions, Main reads `luna tasks get --task-id TASK_ID` and replies directly without starting another run.
 
 ## Launch Prompt
 
@@ -201,15 +197,32 @@ The transaction removes the task, runs, participants, subscriptions, task timeli
 
 Deleted Task references remain visible in the Dashboard. Before removing a task, deletion records only task/session/source-message IDs in `deleted_task_references` (no title, report or execution content). Session lists, session headers, message tags and status/result cards project these relationships as `status=deleted`, with the fixed label “Task deleted” and no task detail link. Historical message text is preserved. Task links in Markdown are replaced with the same non-clickable placeholder when they point to a deleted local task; external-site links remain unchanged. Historical cards and later links can also resolve deletion from `task_deletions`, so older deletions with surviving message references are recognized. Deleting a session removes its retained reference edges. Task detail APIs continue returning 404 after deletion; the placeholder is a reference projection, not a retained Task object.
 
-## User communication boundary
+## User communication boundary & multi-stage interaction
 
-Task Runner communicates findings, missing information and final reports to Main
-through its internal task execution/report flow. It cannot use the runner message
-API to address users. Main asks the user and receives their answer, then chooses
-the task command that supplies further context to the Task.
+Task Runner never addresses external chat surfaces directly; all communication
+goes through Main (`--to main`):
+
+- **Non-terminal milestone updates (`luna say --to main`)**: wakes subscribing
+  Main (`peer_message`) with intermediate findings or registered artifacts while
+  the Task container keeps running.
+- **Mid-run questions & approvals (`luna ask --to main --text ... [--wait 60s]`)**:
+  opens a correlated `Request` (`request_opened` on Main). When independent parallel
+  work exists, omitting `--wait` lets the Task keep working and receive Main's
+  `request_update` mid-run via `<task_events>` (`PostToolUse` / `Stop` hooks). When
+  blocked, `--wait` returns immediately in the same container if Main settles in time
+  (marking the `task_inbox_events` row delivered); otherwise the Task exits cleanly
+  into `waiting` state (`block_reason = "waiting_user"`), releasing the container
+  until Main settles via `luna ask reply <id> --done|--declined --text '...'`, which
+  writes `request_update` to `task_inbox_events` and automatically `--resume`s the Task.
+- **Timed external waits (`luna tasks pause [--wake-in <duration>] --reason "..."`)**:
+  sets `tasks.wake_at` and `block_reason = "waiting_external"`, releasing the
+  container cleanly (`status = "waiting"`). `TaskRunSupervisor.sweepDueWakeups`
+  automatically resumes the Task when `wake_at` arrives.
+- **Final report (`luna tasks report --stdin`)**: reserved exclusively for final
+  Task completion (`--waiting` is removed).
 
 A completed run with status cards enabled updates its operational status card with a neutral completion
-notice. Main receives the `task_result` event in `<events>` and sends the user-facing explanation
+notice (a suspended `waiting` run updates its status card with the pause reason). Main receives the `task_result` event in `<events>` and sends the user-facing explanation
 as its final reply or with `luna say --purpose answer`; terminal Main output is suppressed when an early CLI answer already owns delivery.
 The result publisher correlates this command with its notification attempt and
 avoids duplicate delivery during recovery.
@@ -230,43 +243,36 @@ command source makes supervisor dispatch and restart idempotent. Clarification
 state clears when a task is created. Updates require task ownership or an existing
 subscription in the current conversation.
 
-## Task report command and execution completion
+## Task report, pause, and native CLI hooks
 
 Task calls `luna tasks report --stdin` with plain report text (`--text REPORT`
-is also supported; CLI derives `Idempotency-Key` automatically). `luna commands status COMMAND_ID`
-reads its receipt (`POST /api/runner/task-reports` and `GET /api/runner/commands/:id`).
-Only the current active Task invocation may submit or inspect its report; Main
-and Work cannot use this capability.
+is also supported; CLI derives `Idempotency-Key` automatically), or suspends via
+`luna tasks pause [--wake-in <duration>] --reason "..."`. `luna commands status COMMAND_ID`
+reads receipts (`POST /api/runner/task-reports`, `POST /api/runner/task-reports/pause`,
+and `GET /api/runner/commands/:id`). Only the current active Task invocation may
+submit a report or pause; Main and Work cannot use this capability.
 
-A transaction persists the managed report artifact, task artifact, immutable
+Before accepting `submit` or `pause`, `TaskReportService` checks `task_inbox_events`
+for unread updates (`409 unread_updates_pending`), ensuring the model sees any
+late notes or settled `Request` answers before closing out.
+
+A report transaction persists the managed report artifact, task artifact, immutable
 `task_report_commands` receipt, run report reference and per-subscription
 task-result outbox entries. One report is accepted per run; identical retries
-return the same receipt, while changes conflict.
-The publisher wakes Main immediately after commit, before Task process exit.
-Task still cannot address users. Main sends the user-facing message.
+return the same receipt, while changes conflict. The publisher wakes Main
+immediately after commit, before Task process exit.
 
 Task terminal output is ignored (`terminalOutputMode: "ignored_use_tasks_report"`—no
 `LUNA_NOTHING_TO_SEND` sentinel is required). Completing a run without an
-accepted `luna tasks report` fails execution; terminal prose never becomes a
-report. The run stays running until process settlement. Once accepted, the
-report survives later process errors and startup recovery completes the run
-from its durable receipt. Existing notification deduplication prevents a second
-delivery on settlement. A superseded run cannot publish over the current run.
-
-Missing information is included in this final command report. Main asks the
-user, receives the answer and starts a new run with `tasks update`. Mid-run
-question/suspend/resume is not implemented.
-
-A report that asks for an answer the Task needs before it can continue is
-submitted with `luna tasks report --waiting` (`waiting: true` on
-`POST /api/runner/task-reports`). Acceptance sets `tasks.block_reason` to
-`waiting_user` in the report transaction, and the task result delivered to Main
-carries `waitingForInput: true`. The run still settles as `completed`; status
-cards close with “等待答复。” instead of “处理完成。”. The mark is cleared when the
-next run starts, so it always describes the latest report. A retry must repeat
-the same flag; a different flag conflicts like changed text. The mark changes
-presentation and Main's input only: it does not hold the Job, queue the answer
-or restart anything by itself.
+accepted `luna tasks report`, `luna tasks pause`, or an open `Request` from the
+Task fails execution; terminal prose never becomes a report. Executor wires
+native `PostToolUse` (15s local file-stamp throttle) and `Stop` (up to 2 blocks
+per run) hooks (`apps/executor/src/task-hooks.ts` + `luna internal task-hook`)
+for both Claude Code and Codex so unread inbox events are injected mid-run and
+forgotten `tasks report` / `tasks pause` calls are caught before process exit.
+Once accepted, a report survives later process errors and startup recovery
+completes the run from its durable receipt. A superseded run cannot publish over
+the current run.
 
 ### Quiet runs and results without a reply
 

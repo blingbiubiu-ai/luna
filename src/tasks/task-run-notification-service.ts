@@ -72,6 +72,11 @@ export interface OnTaskRunFailedInput {
   readonly error: string;
 }
 
+export interface OnTaskRunWaitingInput {
+  readonly taskRunId: string;
+  readonly reason: string;
+}
+
 export type TaskRunNotificationResult =
   Partial<TaskResultForMainRunner> &
   Pick<TaskResultForMainRunner, "taskId" | "title" | "summary" | "status">;
@@ -273,12 +278,19 @@ export class TaskRunNotificationService {
   }
 
   async onRunCompleted(input: OnTaskRunCompletedInput): Promise<void> {
-    const waiting = this._requireTask(this._requireRun(input.taskRunId).task_id).block_reason === WAITING_FOR_INPUT;
     await this._updateTerminalCards({
       taskRunId: input.taskRunId,
       status: "completed",
-      content: waiting ? "等待答复。" : "处理完成。",
+      content: "处理完成。",
       ...(input.result !== undefined ? { result: input.result } : {}),
+    });
+  }
+
+  async onRunWaiting(input: OnTaskRunWaitingInput): Promise<void> {
+    await this._updateTerminalCards({
+      taskRunId: input.taskRunId,
+      status: "waiting",
+      content: `暂停等待中：${input.reason}`,
     });
   }
 
@@ -292,7 +304,7 @@ export class TaskRunNotificationService {
 
   private async _updateTerminalCards(input: {
     readonly taskRunId: string;
-    readonly status: "completed" | "failed" | "cancelled";
+    readonly status: "completed" | "waiting" | "failed" | "cancelled";
     readonly content: string;
     readonly result?: TaskRunNotificationResult;
   }): Promise<void> {
@@ -302,7 +314,7 @@ export class TaskRunNotificationService {
 
   private async _updateTerminalCardsUnlocked(input: {
     readonly taskRunId: string;
-    readonly status: "completed" | "failed" | "cancelled";
+    readonly status: "completed" | "waiting" | "failed" | "cancelled";
     readonly content: string;
     readonly result?: TaskRunNotificationResult;
   }): Promise<void> {

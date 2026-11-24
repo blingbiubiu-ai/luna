@@ -2010,14 +2010,25 @@ export interface DashboardShadowHeartbeatItem {
   };
 }
 
+export interface DashboardCorrelatedRequestEventItem {
+  id: string;
+  seq: number;
+  direction: "origin_to_target" | "target_to_origin" | "system";
+  kind: string;
+  content: string;
+  createdAt: number;
+}
+
 export interface DashboardCorrelatedRequestItem {
   id: string;
-  kind: "ask" | "handoff";
-  status: "pending" | "answered" | "done" | "declined" | "expired" | "failed" | "cancelled";
+  kind: "request";
+  mode: "card" | "delegate";
+  status: "open" | "in_progress" | "done" | "declined" | "expired" | "failed" | "cancelled";
   shadowId: string;
   shadowName: string;
   originSessionId: string;
   originSessionTitle: string;
+  originTaskId: string | null;
   targetAddress: string;
   targetSessionId: string;
   targetSessionTitle: string;
@@ -2028,6 +2039,7 @@ export interface DashboardCorrelatedRequestItem {
   contextSummary: string | null;
   options: string[];
   result: Record<string, unknown> | null;
+  events: DashboardCorrelatedRequestEventItem[];
   resolvedByUserId: string | null;
   resolvedByUserName: string | null;
   expiresAt: number | null;

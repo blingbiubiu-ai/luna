@@ -10,9 +10,8 @@ import { loadDefaultLunaEnv, resolveTurnLunaEnv } from "@luna/cli-support/env";
 import { hasFlag } from "@luna/cli-support/options";
 import { runSchedulesCli } from "./commands/schedules";
 import { runSayCli } from "./commands/say";
-import { runHandoffCli, runHandoffsCli } from "./commands/handoffs";
-import { runAsksCli } from "./commands/asks";
-import { runRequestsCli } from "./commands/requests";
+import { runAskCli } from "./commands/ask";
+import { runInternalCli } from "./commands/internal";
 import { runCommandsCli } from "./commands/commands";
 import { runWhoamiCli } from "./commands/whoami";
 import { runActivityCli } from "./commands/activity";
@@ -32,7 +31,11 @@ import {
 export { loadDefaultLunaEnv } from "@luna/cli-support/env";
 
 const LEGACY_REMOVED_TOP_LEVEL: Record<string, string> = {
-  messages: "`luna messages` is removed in Protocol v2; use `luna say` or `luna handoff`",
+  messages: "`luna messages` is removed; use `luna say` or `luna ask`",
+  asks: "`luna asks` is removed; use `luna ask` (`luna ask --to ...` or `luna ask reply|message|wait|cancel|get|list`)",
+  requests: "`luna requests` is removed; use `luna ask` (`luna ask --to ...` or `luna ask reply|message|wait|cancel|get|list`)",
+  handoff: "`luna handoff` is removed; use `luna say --to <address> --via-main` (one-way) or `luna ask --to <address> --text ...` (tracked response)",
+  handoffs: "`luna handoffs` is removed; use `luna ask reply <id> --done|--declined --text ...`",
   task: "`luna task` is removed in Protocol v2; use `luna tasks`",
   session: "`luna session` is removed in Protocol v2; use `luna sessions`",
 };
@@ -77,11 +80,9 @@ export async function runClientCli(
     }
     return { status: "ok", output: "0.2.0" };
   }
+  if (command === "internal") return runInternalCli(rest, env);
   if (command === "say") return runSayCli(rest, env);
-  if (command === "handoff") return runHandoffCli(rest, env);
-  if (command === "handoffs") return runHandoffsCli(rest, env);
-  if (command === "asks") return runAsksCli(rest, env);
-  if (command === "requests") return runRequestsCli(rest, env);
+  if (command === "ask") return runAskCli(rest, env);
   if (command === "commands") return runCommandsCli(rest, env);
   if (command === "whoami") return runWhoamiCli(rest, env);
   if (command === "activity") return runActivityCli(rest, env);
@@ -130,13 +131,11 @@ function clientHelpText(): string {
     "  luna worker <command>",
     "  luna auth <command>",
     "  luna whoami",
-    "  luna say [--to <address>] (--text <text> | --stdin) [--json] [--purpose progress|answer|notification] [--repeat]",
-    "  luna handoff --to <address> (--text <instruction> | --stdin) [--expires-in <duration>] [--repeat]",
-    "  luna handoffs resolve <request-id> (--summary <text> | --declined --reason <text>)",
-    "  luna asks create|answer|cancel|list",
-    "  luna requests list [--status <status>] [--kind ask|handoff] [--limit <n>]",
+    "  luna say [--to <address>] [--via-main] (--text <text> | --stdin) [--json] [--purpose progress|answer|notification] [--repeat]",
+    "  luna ask --to <address|main> (--text <text> | --stdin) [--context <text>] [--options '<json-array>'] [--expires-in <duration>] [--wait [<duration>]]",
+    "  luna ask reply|message|wait|cancel|get|list ...",
     "  luna commands status|wait <command-id> [--timeout-ms <ms>]",
-    "  luna tasks list|get|progress|create|update|restart|cancel|status-card|report",
+    "  luna tasks list|get|progress|create|update|restart|cancel|status-card|pause|report",
     "  luna sessions list|timeline|messages|create-thread|clarify|release",
     "  luna schedules create|list|get|update|pause|resume|cancel",
     "  luna activity --since <ISO-8601-or-epoch-ms> [--limit <n>]",
@@ -150,7 +149,7 @@ function clientHelpText(): string {
     "  luna artifacts materialize|download|register|cat",
     "  luna version",
     "",
-    "Addresses: current, self, user:<id>, session:<id>, group:<id>",
+    "Addresses: current, self, owner, main, task:<id>, user:<id>, session:<id>, group:<id>",
     "Run `luna auth login` before using protected Luna Service commands.",
   ].join("\n");
 }
@@ -202,8 +201,10 @@ if (import.meta.main) {
     }
   }
   const result = await runClientCli(args);
-  if (result.output) {
-    process.stdout.write(`${result.output}\n`);
+  if (result.output !== undefined) {
+    if (result.output.length > 0) {
+      process.stdout.write(`${result.output}\n`);
+    }
   } else {
     console.log(JSON.stringify(result, null, 2));
   }

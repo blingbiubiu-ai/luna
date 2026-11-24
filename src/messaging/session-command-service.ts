@@ -45,6 +45,7 @@ export interface CommandActor {
 }
 export type SessionCommand = typeof sessionCommands.$inferSelect;
 type DirectDeliveryAddress = Pick<typeof directRecipients.$inferSelect, "channelId" | "idType" | "recipientId" | "claimId">;
+export type MessageAuthoredBy = "runner" | "cross_session" | "service";
 export interface CommandPayload {
     group?: GroupCreation;
     invitation?: GroupInvitation;
@@ -53,6 +54,7 @@ export interface CommandPayload {
     reply?: ReplyDocument;
     mentionBotUserId?: string;
     purpose?: "progress" | "answer" | "notification";
+    authoredBy?: MessageAuthoredBy;
     contextRefs?: string[];
     contextMessageIds?: string[];
 }
@@ -228,11 +230,25 @@ export class SessionCommandService {
                 contextPackId = pack.id;
             }
             const rawPayload = payload as unknown as Record<string, unknown>;
-            const extraPayload = "requestResult" in rawPayload
-                ? { requestResult: rawPayload.requestResult }
-                : {};
+            const extraPayload = {
+                ...("eventKind" in rawPayload ? { eventKind: rawPayload.eventKind } : {}),
+                ...("requestOpened" in rawPayload ? { requestOpened: rawPayload.requestOpened } : {}),
+                ...("requestMessage" in rawPayload ? { requestMessage: rawPayload.requestMessage } : {}),
+                ...("requestUpdate" in rawPayload ? { requestUpdate: rawPayload.requestUpdate } : {}),
+                ...("peerMessage" in rawPayload ? { peerMessage: rawPayload.peerMessage } : {}),
+                ...("requestResult" in rawPayload ? { requestResult: rawPayload.requestResult } : {}),
+            };
+            const authoredBy: MessageAuthoredBy | undefined = kind === "message.send"
+                ? payload.authoredBy
+                    ?? (targetId !== actor.sourceSessionId
+                        ? "cross_session"
+                        : ((payload.purpose === "answer" || payload.purpose === "progress") &&
+                            !dedupeKey.endsWith(":service-execution-error"))
+                            ? "runner"
+                            : "service")
+                : undefined;
             tx.insert(sessionCommands).values({ id, kind, sessionId: targetId, sourceSessionId: actor.sourceSessionId, actorUserId: actor.userId,
-                originId: actor.originId, dedupeKey, payload: { ...canonical, ...extraPayload, ...(governance.metadata ? { proactiveGovernance: governance.metadata } : {}), ...(directAddress ? {directAddress} : {}), ...(launch ? {launchMessageIds: launch.selected.map(row => row.message.id), launchAnchorMessageId: launch.anchorMessageId} : {}), ...(contextPackId ? { contextPackId } : {}) }, status: governance.status, messageId, correlationId: actor.correlationId ?? id, hops: kind === "session.invoke" ? (actor.hops ?? 3) - 1 : actor.hops ?? 3,
+                originId: actor.originId, dedupeKey, payload: { ...canonical, ...(authoredBy ? { authoredBy } : {}), ...extraPayload, ...(governance.metadata ? { proactiveGovernance: governance.metadata } : {}), ...(directAddress ? {directAddress} : {}), ...(launch ? {launchMessageIds: launch.selected.map(row => row.message.id), launchAnchorMessageId: launch.anchorMessageId} : {}), ...(contextPackId ? { contextPackId } : {}) }, status: governance.status, messageId, correlationId: actor.correlationId ?? id, hops: kind === "session.invoke" ? (actor.hops ?? 3) - 1 : actor.hops ?? 3,
                 availableAt: governance.availableAt, expiresAt: timing.expiresAt ?? null, createdAt: now, updatedAt: now }).run();
             return tx.select().from(sessionCommands).where(eq(sessionCommands.id, id)).get()!;
         });

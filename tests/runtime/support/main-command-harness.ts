@@ -94,6 +94,6 @@ export class SessionInboundRouter extends Router {
 function replyPayload(text:string){
  const reply=parseReply(text);
  return text.trim().startsWith('{')&&reply.content[0]?.type==='text'&&reply.content[0].text!==text
-  ? {content:replyMarkdown(reply),reply,purpose:'answer' as const}
-  : {content:text,purpose:'answer' as const};
+  ? {content:replyMarkdown(reply),reply,purpose:'answer' as const,authoredBy:'runner' as const}
+  : {content:text,purpose:'answer' as const,authoredBy:'runner' as const};
 }

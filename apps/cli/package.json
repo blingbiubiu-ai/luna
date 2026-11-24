@@ -6,9 +6,8 @@
   "exports": {
     "./main": "./src/main.ts",
     "./commands/say": "./src/commands/say.ts",
-    "./commands/handoffs": "./src/commands/handoffs.ts",
-    "./commands/asks": "./src/commands/asks.ts",
-    "./commands/requests": "./src/commands/requests.ts",
+    "./commands/ask": "./src/commands/ask.ts",
+    "./commands/internal": "./src/commands/internal.ts",
     "./commands/commands": "./src/commands/commands.ts",
     "./commands/whoami": "./src/commands/whoami.ts",
     "./commands/activity": "./src/commands/activity.ts",

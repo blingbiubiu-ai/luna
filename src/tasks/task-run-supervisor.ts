@@ -7,11 +7,12 @@ import { InvocationStore } from "@/runners/invocation-store";
 import { taskReportForRun } from "./task-report-store";
 import { setTimeout as delay } from "node:timers/promises";
 import { ExecutionError } from "@luna/execution-store";
-import { asc, eq } from "drizzle-orm";
+import { and, asc, eq, lte } from "drizzle-orm";
 
 import type { DrizzleDB } from "@/data";
 import { messages, sessionTimelineEntries, tasks } from "@/data/schema";
 import { ContextPackStore } from "@/context";
+import { requestedIdentityFromTaskContext } from "@/identity/requested-identity";
 import type { TaskResultForMainRunner } from "@/main-runner/types";
 import {
   RunnerContextStore,
@@ -26,11 +27,16 @@ import {
 } from "@/kernel/task-run-handler";
 import { createLogger } from "@/shared";
 
+import { TaskInboxStore } from "./task-inbox-store";
+import {
+  registerTaskResumeHandler,
+  type ResumeWaitingTaskInput,
+} from "./task-resume-registry";
 import {
   TaskRunStore,
   type TaskRun,
 } from "./task-run-store";
-import type { TaskStatus } from "./types";
+import { WAITING_FOR_INPUT, type TaskStatus } from "./types";
 
 /**
  * Configuration options for Task Run Supervisor behavior.
@@ -63,6 +69,10 @@ export interface TaskRunNotificationLifecycle {
   readonly onRunCompleted?: (input: {
     readonly taskRunId: string;
     readonly result: TaskResultForMainRunner;
+  }) => Promise<void> | void;
+  readonly onRunWaiting?: (input: {
+    readonly taskRunId: string;
+    readonly reason: string;
   }) => Promise<void> | void;
   readonly onRunProgress?: (input: {
     readonly taskRunId: string;
@@ -115,12 +125,89 @@ export class TaskRunSupervisor {
   private readonly _timeline: TimelineStore;
   private readonly _trackedRuns = new Set<Promise<void>>();
   private readonly _controllers = new Map<string, AbortController>();
+  private _wakeTimer?: ReturnType<typeof setInterval> | undefined;
 
   constructor(private readonly _options: TaskRunSupervisorOptions) {
     this._taskRuns = new TaskRunStore(_options.db);
     this._contexts = new RunnerContextStore(_options.db);
     this._contextPacks = new ContextPackStore(_options.db);
     this._timeline = new TimelineStore(_options.db);
+    registerTaskResumeHandler(_options.db, resume => this._resumeFromWaiting(resume));
+    this._wakeTimer = setInterval(() => {
+      try {
+        this.sweepDueWakeups();
+      } catch {
+        // Ignore sweep error when a test database is already closed.
+      }
+    }, 2000);
+    this._wakeTimer.unref?.();
+  }
+
+  private _resumeFromWaiting(input: ResumeWaitingTaskInput): void {
+    const taskRow = this._options.db
+      .select()
+      .from(tasks)
+      .where(eq(tasks.id, input.taskId))
+      .get();
+    if (!taskRow || taskRow.status === "cancelled") return;
+    if (this._taskRuns.getActiveRunForTask(input.taskId)) return;
+    const identity =
+      requestedIdentityFromTaskContext(taskRow.context_json) ?? {
+        provider: "local",
+        externalUserId: taskRow.creator_user_id ?? "system",
+        canonicalUserId: taskRow.creator_user_id ?? "system",
+      };
+    this.restartTaskRun({
+      taskId: input.taskId,
+      preserveTaskContext: true,
+      updatedTaskSummary: taskRow.summary ?? "",
+      updateSummary: input.summary,
+      operationId: input.operationId,
+      inputSnapshot: {
+        operation: "task.resume",
+        operationId: input.operationId,
+        sessionId: taskRow.primary_session_id ?? undefined,
+        ...(input.quiet ? { quiet: true } : {}),
+        requestedByIdentity: identity,
+      },
+    });
+  }
+
+  /** Resumes any `waiting` Tasks whose `wake_at` timer has elapsed. */
+  sweepDueWakeups(now = Date.now()): number {
+    const due = this._options.db
+      .select()
+      .from(tasks)
+      .where(and(eq(tasks.status, "waiting"), lte(tasks.wake_at, now)))
+      .all();
+    let resumed = 0;
+    for (const row of due) {
+      if (row.wake_at === null) continue;
+      if (this._taskRuns.getActiveRunForTask(row.id)) continue;
+      const wakeAt = row.wake_at;
+      const reason = row.wake_reason ?? "Scheduled wake-up check";
+      this._options.db
+        .update(tasks)
+        .set({ wake_at: null, updated_at: now })
+        .where(and(eq(tasks.id, row.id), eq(tasks.wake_at, wakeAt)))
+        .run();
+      new TaskInboxStore(this._options.db).append({
+        id: `tie_wake_${row.id}_${wakeAt}`,
+        taskId: row.id,
+        kind: "wake_timer",
+        source: "system",
+        content: `Scheduled wake-up reached (${reason}). Inspect external status and continue.`,
+        payload: { wakeAt, reason },
+        now,
+      });
+      this._resumeFromWaiting({
+        taskId: row.id,
+        operationId: `wake:${row.id}:${wakeAt}`,
+        summary: `Scheduled wake-up reached: ${reason}`,
+      });
+      resumed++;
+    }
+    return resumed;
   }
 
   startInitialRun(input: StartInitialTaskRunInput): TaskRun {
@@ -215,6 +302,26 @@ export class TaskRunSupervisor {
     return run;
   }
 
+  /** Cancel a Task currently suspended in `waiting` state (no active running run). */
+  cancelWaitingTask(input: { taskId: string; reason: string }): boolean {
+    const taskRow = this._options.db
+      .select()
+      .from(tasks)
+      .where(eq(tasks.id, input.taskId))
+      .get();
+    if (!taskRow || taskRow.status !== "waiting") return false;
+    this._options.db.transaction(() => {
+      _updateTaskStatus(this._options.db, input.taskId, "cancelled");
+      this._timeline.append({
+        taskId: input.taskId,
+        type: "runner.cancelled",
+        summary: input.reason,
+        data: { cancelReason: input.reason, fromStatus: "waiting" },
+      });
+    });
+    return true;
+  }
+
   /**
    * The single cancellation rule shared by explicit cancel and restart
    * supersession: run state, optional task status, invocation/token authority
@@ -242,6 +349,10 @@ export class TaskRunSupervisor {
   }
 
   async abortAndWait(reason = "Runtime is stopping."): Promise<void> {
+    if (this._wakeTimer) {
+      clearInterval(this._wakeTimer);
+      this._wakeTimer = undefined;
+    }
     for (const controller of this._controllers.values()) {
       controller.abort(reason);
     }
@@ -356,6 +467,10 @@ export class TaskRunSupervisor {
         await this._notifyExternalCancellation(input.run, input.signal);
         return;
       }
+      if (result.kind === "waiting") {
+        await this._pauseRun(input.run, result.pauseReason);
+        return;
+      }
       if (result.finalReportArtifactId === undefined) {
         throw new Error(
           "Task runner completed without a final report artifact.",
@@ -442,6 +557,44 @@ export class TaskRunSupervisor {
       );
       await this._notifyRunCompleted(completedRun, completedResult);
       await this._notifyTaskResult(() => completedResult);
+  }
+
+  private async _pauseRun(run: TaskRun, pauseReason: string): Promise<void> {
+    let waitingRun!: TaskRun;
+    this._settleRun(run, () => {
+      waitingRun = this._taskRuns.markWaiting(run.id, { pauseReason });
+      const currentTask = this._options.db
+        .select({ blockReason: tasks.block_reason, wakeReason: tasks.wake_reason })
+        .from(tasks)
+        .where(eq(tasks.id, run.taskId))
+        .get();
+      const now = Date.now();
+      this._options.db
+        .update(tasks)
+        .set({
+          status: "waiting",
+          block_reason: currentTask?.blockReason ?? WAITING_FOR_INPUT,
+          wake_reason: currentTask?.wakeReason ?? pauseReason,
+          updated_at: now,
+          last_activity_at: now,
+        })
+        .where(eq(tasks.id, run.taskId))
+        .run();
+    });
+    await this._notifyRunWaiting(waitingRun, pauseReason);
+
+    // If a request_update arrived during teardown while `status` was still `running`, resume immediately.
+    const arrivedUpdates = new TaskInboxStore(this._options.db)
+      .peekUndelivered(run.taskId)
+      .filter(ev => ev.kind === "request_update");
+    if (arrivedUpdates.length > 0) {
+      const latest = arrivedUpdates.at(-1)!;
+      this._resumeFromWaiting({
+        taskId: run.taskId,
+        operationId: `req-teardown-resume:${latest.id}`,
+        summary: `Received response while suspending (${latest.correlationId ?? latest.id})`,
+      });
+    }
   }
 
   /**
@@ -548,6 +701,20 @@ export class TaskRunSupervisor {
       logger.warn(
         { err, task_id: run.taskId, task_run_id: run.id },
         "failed to complete Task Run status card",
+      );
+    }
+  }
+
+  private async _notifyRunWaiting(run: TaskRun, reason: string): Promise<void> {
+    try {
+      await this._options.runNotifications?.onRunWaiting?.({
+        taskRunId: run.id,
+        reason,
+      });
+    } catch (err) {
+      logger.warn(
+        { err, task_id: run.taskId, task_run_id: run.id },
+        "failed to update Task Run status card to waiting",
       );
     }
   }
@@ -800,11 +967,8 @@ export class TaskRunSupervisor {
       .filter((pack) => pack.kind === "task_launch")
       .map((pack) => pack.id);
     if (reason === "restart") {
-      const latestUpdatePack = packs
-        .filter((pack) => pack.kind === "task_update")
-        .at(-1);
-      if (latestUpdatePack !== undefined) {
-        ids.push(latestUpdatePack.id);
+      for (const updatePack of packs.filter((pack) => pack.kind === "task_update")) {
+        ids.push(updatePack.id);
       }
     }
     return [...new Set(ids)];
@@ -841,9 +1005,17 @@ function _updateTaskStatus(
   status: TaskStatus,
 ): void {
   const now = Date.now();
+  const clearSuspendFields =
+    status === "running" || status === "completed" || status === "cancelled";
   db.update(tasks)
-    // A new run answers whatever the previous report was waiting for.
-    .set({ status, ...(status === "running" ? { block_reason: null } : {}), updated_at: now, last_activity_at: now })
+    .set({
+      status,
+      ...(clearSuspendFields
+        ? { block_reason: null, wake_at: null, wake_reason: null }
+        : {}),
+      updated_at: now,
+      last_activity_at: now,
+    })
     .where(eq(tasks.id, taskId))
     .run();
 }

@@ -297,7 +297,7 @@ test("Protocol v2 rejects x-luna-protocol-version < 2 with HTTP 426 and serves /
   expect(body.capabilities.commands).toContain("say");
 });
 
-test("CLI Protocol v2 derives idempotency, rejects v1 flags/commands, queries unified commands ledger, and enforces atomic create-thread --handoff silence", async () => {
+test("CLI Protocol v2 derives idempotency, rejects legacy commands/flags, queries unified commands ledger, and suppresses parent-group duplicate reply on direct topic launch", async () => {
   const f = setupGroupInvocation();
   const otherSession = new SessionStore(f.db).createLocalSession("colleague", {
     agentId: f.session.agent_id,
@@ -315,10 +315,17 @@ test("CLI Protocol v2 derives idempotency, rejects v1 flags/commands, queries un
     LUNA_AGENT_ID: f.session.agent_id,
   };
 
-  // Legacy v1 commands and --request-id are rejected cleanly.
+  // Legacy commands and flags are rejected cleanly.
   expect((await runClientCli(["messages", "send", "--text", "hi"], env)).status).toBe("error");
   expect((await runClientCli(["task", "list"], env)).status).toBe("error");
   expect((await runClientCli(["session", "messages"], env)).status).toBe("error");
+  expect((await runClientCli(["asks", "list"], env)).status).toBe("error");
+  expect((await runClientCli(["requests", "list"], env)).status).toBe("error");
+  expect((await runClientCli(["ask", "create", "--to", `session:${otherSession.id}`, "--text", "hi"], env)).status).toBe("error");
+  expect((await runClientCli(["ask", "update", "req_1", "--done", "--text", "ok"], env)).status).toBe("error");
+  expect((await runClientCli(["handoffs", "list"], env)).status).toBe("error");
+  expect((await runClientCli(["handoff", "--to", `session:${otherSession.id}`, "--text", "hi"], env)).status).toBe("error");
+  expect((await runClientCli(["sessions", "create-thread", "--handoff", "legacy"], env)).status).toBe("error");
   expect((await runClientCli(["say", "--text", "hi", "--request-id", "old"], env)).status).toBe("error");
 
   // `luna whoami`
@@ -349,14 +356,13 @@ test("CLI Protocol v2 derives idempotency, rejects v1 flags/commands, queries un
     status: "sent",
   });
 
-  // `luna asks create` + `luna commands status <requestId>`
+  // Direct `luna ask --to ...` + `luna commands status <requestId>`
   const askRes = await runClientCli(
     [
-      "asks",
-      "create",
+      "ask",
       "--to",
       `session:${otherSession.id}`,
-      "--question",
+      "--text",
       "是否继续？",
       "--options",
       '["继续","暂停"]',
@@ -369,19 +375,17 @@ test("CLI Protocol v2 derives idempotency, rejects v1 flags/commands, queries un
   expect(askCmdStatus.status).toBe("ok");
   expect(JSON.parse(askCmdStatus.output!)).toMatchObject({
     commandId: askJson.requestId,
-    kind: "ask",
-    status: "pending",
+    kind: "request",
+    status: "open",
   });
 
-  // Atomic `luna sessions create-thread --handoff` creates topic, queues handoff, and suppresses source duplicate reply!
+  // Direct topic launch: `luna sessions create-thread` + `luna say --to session:<topicId>` materializes topic and suppresses duplicate parent-group reply!
   const threadRes = await runClientCli(
     [
       "sessions",
       "create-thread",
       "--title",
       "异常排查",
-      "--handoff",
-      "排查刚才群里反馈的卡顿问题",
     ],
     env,
   );
@@ -389,12 +393,22 @@ test("CLI Protocol v2 derives idempotency, rejects v1 flags/commands, queries un
   const threadJson = JSON.parse(threadRes.output!) as {
     commandId: string;
     targetSessionId: string;
-    handoffCommandId: string;
-    handoffRequestId: string;
   };
   expect(threadJson.targetSessionId).toBeTruthy();
-  expect(threadJson.handoffCommandId).toBeTruthy();
-  expect(threadJson.handoffRequestId).toMatch(/^req_/);
+
+  const topicOpening = await runClientCli(
+    [
+      "say",
+      "--to",
+      `session:${threadJson.targetSessionId}`,
+      "--text",
+      "已开话题，正在启动排查任务。",
+    ],
+    env,
+  );
+  expect(topicOpening.status).toBe("ok");
+
+  const topicOpeningJson = JSON.parse(topicOpening.output!) as { commandId: string };
 
   const opLedger = await runClientCli(["commands", "status", threadJson.commandId], env);
   expect(JSON.parse(opLedger.output!)).toMatchObject({
@@ -403,7 +417,7 @@ test("CLI Protocol v2 derives idempotency, rejects v1 flags/commands, queries un
     status: "applied",
   });
 
-  // Protocol v2 invariant (3.6): source turn terminal text is suppressed automatically!
+  // Source turn terminal text is suppressed automatically when anchored thread already received opening/Task!
   const settlement = finalizeRunnerReply(f.db, {
     sessionId: f.session.id,
     originId: "turn-v2-1",
@@ -414,6 +428,6 @@ test("CLI Protocol v2 derives idempotency, rejects v1 flags/commands, queries un
   });
   expect(settlement).toEqual({
     kind: "thread_handoff",
-    commandId: threadJson.handoffCommandId,
+    commandId: topicOpeningJson.commandId,
   });
 });

@@ -380,14 +380,16 @@ export function TaskDetailView({
               ) : null}
 
               <TaskStatusPill
-                status={taskDetail?.status ?? "loading"}
+                status={taskDetail?.status === "waiting" ? "Waiting" : (taskDetail?.status ?? "loading")}
                 effectiveState={
-                  effectiveState === "waiting" ? "completed" : effectiveState
+                  effectiveState === "waiting" && taskDetail?.status !== "waiting"
+                    ? "completed"
+                    : effectiveState
                 }
                 showDot
                 className="rounded-full px-2.5 py-0.5 text-xs font-semibold"
               />
-              {effectiveState === "waiting" ? (
+              {effectiveState === "waiting" && taskDetail?.status !== "waiting" ? (
                 <TaskStatusPill
                   status="Waiting"
                   effectiveState="waiting"
@@ -1231,13 +1233,15 @@ export function TaskDetailView({
                   <dt className="text-muted-foreground">{t("Status")}</dt>
                   <dd className="m-0 flex items-center gap-1.5">
                     <TaskStatusPill
-                      status={taskDetail?.status ?? "loading"}
+                      status={taskDetail?.status === "waiting" ? "Waiting" : (taskDetail?.status ?? "loading")}
                       effectiveState={
-                        effectiveState === "waiting" ? "completed" : effectiveState
+                        effectiveState === "waiting" && taskDetail?.status !== "waiting"
+                          ? "completed"
+                          : effectiveState
                       }
                       showDot
                     />
-                    {effectiveState === "waiting" ? (
+                    {effectiveState === "waiting" && taskDetail?.status !== "waiting" ? (
                       <TaskStatusPill
                         status="Waiting"
                         effectiveState="waiting"

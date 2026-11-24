@@ -14,7 +14,7 @@ import { randomUUID } from "node:crypto";
 import { mainInvocations, mainMessageOrigin } from "@/runners/main-invocation-registry";
 import type { AgentExecutionSnapshot } from "@/agent-config";
 import type { DrizzleDB } from "@/data";
-import { channelSurfaces, runnerOperations, sessions, tasks } from "@/data/schema";
+import { channelSurfaces, correlatedRequests, runnerOperations, sessions, tasks } from "@/data/schema";
 import { CorrelatedRequestService, isHeartbeatSession, type CorrelatedRequestRow } from "@/messaging/correlated-request-service";
 import {
   buildMainCapabilities,
@@ -167,9 +167,9 @@ export class MainRunner {
     const senderIds = input.input.type === "user_messages"
       ? input.input.messages.map(m => m.senderUserId).filter((id): id is string => Boolean(id))
       : undefined;
-    const pendingAsks = this._options.serviceAuthDb && input.input.type === "user_messages"
+    const openRequests = this._options.serviceAuthDb && input.input.type === "user_messages"
       ? new CorrelatedRequestService(this._options.serviceAuthDb, () => undefined)
-          .pendingAsksForTurn(input.input.context.sessionId, senderIds)
+          .openRequestsForTurn(input.input.context.sessionId, senderIds)
       : undefined;
     const capabilities = buildMainCapabilities(this._options.serviceAuthDb, input.input, {
       agentId: scope.agentId,
@@ -179,7 +179,7 @@ export class MainRunner {
     const prompt = renderMainRunnerPrompt(input.input, {
       ...(memory?.text ? { memory: memory.text } : {}),
       capabilities,
-      ...(pendingAsks?.length ? { pendingAsks } : {}),
+      ...(openRequests?.length ? { openRequests } : {}),
       ...(this._options.serviceAuthDb ? {
         db: this._options.serviceAuthDb,
         people: shadowPeople(this._options.serviceAuthDb, scope),
@@ -442,8 +442,8 @@ export interface MainRunnerPromptOptions {
   readonly memory?: string;
   /** Capability manifest for Protocol v2. */
   readonly capabilities?: RunnerCapabilitiesManifest;
-  /** Pending asks targeting the current sender(s) in this session. */
-  readonly pendingAsks?: readonly CorrelatedRequestRow[];
+  /** Open correlated requests targeting this session. */
+  readonly openRequests?: readonly CorrelatedRequestRow[];
   readonly db?: DrizzleDB;
   /** Relation of each sender to this Shadow. */
   readonly people?: PeopleResolver;
@@ -456,13 +456,32 @@ export function renderMainRunnerPrompt(input: MainRunnerInput, options: MainRunn
   const clock = turnClock(options.now, options.timezone);
   const context = input.context;
   const capabilities = options.capabilities ?? buildMainCapabilities(options.db, input);
-  const pack = (value: MainRunnerContextPack | undefined) => value && {
+  const openRequestIds = new Set((options.openRequests ?? []).map((req) => req.id));
+  const pack = (value: MainRunnerContextPack | undefined) => value && compact({
     kind: value.kind,
-    items: value.items.map((item) => compact({
-      role: item.messageRole, text: item.text, entryId: item.entryId, messageId: item.messageId,
-      source: item.source, sourceSessionId: item.sourceSessionId, reason: item.reason,
-    })),
-  };
+    omittedOutOfBandCount: value.omittedOutOfBandCount,
+    items: value.items.map((item) => {
+      const requestSnapshot = renderDeltaItemRequestSnapshot(
+        options.db,
+        item,
+        openRequestIds,
+        clock.timezone,
+      );
+      return compact({
+        role: item.messageRole,
+        text: item.text,
+        entryId: item.entryId,
+        messageId: item.messageId,
+        source: item.source,
+        sourceSessionId: item.sourceSessionId,
+        reason: item.reason,
+        via: item.via,
+        originSessionId: item.originSessionId,
+        correlationId: item.correlationId,
+        request: requestSnapshot,
+      });
+    }),
+  });
   const activation = input.type === "user_messages" ? input.activationContextMessages?.map((message) => activationItem(message, options.people, clock.timezone)) : undefined;
   const history = compact({ launchSeed: pack(context.launchSeed), deltaContext: pack(context.deltaContext), activationContext: activation });
 
@@ -477,19 +496,25 @@ export function renderMainRunnerPrompt(input: MainRunnerInput, options: MainRunn
       payload: clarificationFacts(context.clarification) as Record<string, unknown>,
     }));
   }
-  for (const ask of options.pendingAsks ?? []) {
+  for (const req of options.openRequests ?? []) {
+    const res = (req.resultJson ?? null) as Record<string, unknown> | null;
     events.push(turnEvent({
-      id: ask.id,
-      kind: "pending_ask",
-      time: zonedIso(new Date(ask.createdAt), clock.timezone),
-      source: `session:${ask.originSessionId}`,
-      actor: ask.targetUserId ?? undefined,
-      correlationId: ask.id,
+      id: req.id,
+      kind: "open_request",
+      time: zonedIso(new Date(req.createdAt), clock.timezone),
+      source: req.originTaskId ? `task:${req.originTaskId}` : `session:${req.originSessionId}`,
+      actor: req.targetUserId ?? undefined,
+      correlationId: req.id,
       payload: compact({
-        question: ask.instruction,
-        context: ask.contextSummary ?? undefined,
-        options: ask.optionsJson ?? undefined,
-        expiresAt: ask.expiresAt ? zonedIso(new Date(ask.expiresAt), clock.timezone) : undefined,
+        mode: req.mode,
+        status: req.status,
+        goal: req.instruction,
+        context: req.contextSummary ?? undefined,
+        options: req.optionsJson ?? undefined,
+        originSessionId: req.originSessionId,
+        originTaskId: req.originTaskId ?? undefined,
+        latestProgress: typeof res?.latestProgress === "string" ? res.latestProgress : undefined,
+        expiresAt: req.expiresAt ? zonedIso(new Date(req.expiresAt), clock.timezone) : undefined,
       }) as Record<string, unknown>,
     }));
   }
@@ -513,6 +538,47 @@ export function renderMainRunnerPrompt(input: MainRunnerInput, options: MainRunn
 function clarificationFacts(clarification: NonNullable<MainRunnerInput["context"]["clarification"]>) {
   const { lastReply: _lastReply, ...facts } = clarification;
   return facts;
+}
+
+function renderDeltaItemRequestSnapshot(
+  db: DrizzleDB | undefined,
+  item: MainRunnerContextPack["items"][number],
+  openRequestIds: ReadonlySet<string>,
+  timezone: string,
+): Record<string, unknown> | undefined {
+  if (!db || !item.correlationId) return undefined;
+  if (openRequestIds.has(item.correlationId)) return undefined;
+  const req = db
+    .select()
+    .from(correlatedRequests)
+    .where(eq(correlatedRequests.id, item.correlationId))
+    .get();
+  if (!req) return undefined;
+  const resultJson = (req.resultJson ?? null) as Record<string, unknown> | null;
+  const selectedOption =
+    typeof resultJson?.selectedOption === "string"
+      ? resultJson.selectedOption
+      : undefined;
+  const summary =
+    typeof resultJson?.summary === "string"
+      ? resultJson.summary
+      : typeof resultJson?.answer === "string"
+        ? resultJson.answer
+        : undefined;
+  return compact({
+    mode: req.mode,
+    status: req.status,
+    originTaskId: req.originTaskId ?? undefined,
+    contextSummary: req.contextSummary ?? undefined,
+    options: req.optionsJson ?? undefined,
+    selectedOption,
+    summary: summary && summary !== selectedOption ? summary : undefined,
+    resolvedBy: req.resolvedByUserId ? `user:${req.resolvedByUserId}` : undefined,
+    resolvedAt:
+      req.status !== "open" && req.status !== "in_progress"
+        ? zonedIso(new Date(req.updatedAt), timezone)
+        : undefined,
+  }) as Record<string, unknown>;
 }
 
 function buildPrimaryMainEvents(
@@ -569,31 +635,94 @@ function buildPrimaryMainEvents(
         text: input.instruction,
       };
     }
-    if (classified.originKind === "request_result") {
+    if (classified.originKind === "request_update") {
       return {
         primaryEvents: [
           turnEvent({
             id: input.triggerId,
-            kind: "request_result",
+            kind: "request_update",
             time: clock.now,
-            source: `session:${String(classified.requestResult?.targetSessionId ?? input.sourceSessionId)}`,
+            source: `session:${String(classified.requestUpdate?.targetSessionId ?? input.sourceSessionId)}`,
             actor:
-              (classified.requestResult?.resolvedByUserId as string | undefined) ??
+              (classified.requestUpdate?.resolvedByUserId as string | undefined) ??
               input.requesterUserId ??
               undefined,
             correlationId: input.correlationId,
-            payload: (classified.requestResult ?? {}) as Record<string, unknown>,
+            payload: (classified.requestUpdate ?? {}) as Record<string, unknown>,
           }),
         ],
         text: input.instruction,
       };
     }
-    const eventKind = classified.originKind === "handoff" ? "handoff" : "schedule_fired";
+    if (classified.originKind === "request_opened") {
+      const opened = classified.requestOpened ?? {};
+      return {
+        primaryEvents: [
+          turnEvent({
+            id: input.triggerId,
+            kind: "request_opened",
+            time: clock.now,
+            source: String(opened.source ?? `session:${input.sourceSessionId}`),
+            actor: input.requesterUserId ?? undefined,
+            correlationId: input.correlationId,
+            payload: compact({
+              ...opened,
+              hops: input.hops,
+              artifactRefs: input.artifactRefs,
+            }) as Record<string, unknown>,
+          }),
+        ],
+        text: input.instruction,
+      };
+    }
+    if (classified.originKind === "request_message") {
+      const msg = classified.requestMessage ?? {};
+      return {
+        primaryEvents: [
+          turnEvent({
+            id: input.triggerId,
+            kind: "request_message",
+            time: clock.now,
+            source: String(msg.source ?? `session:${input.sourceSessionId}`),
+            actor: input.requesterUserId ?? undefined,
+            correlationId: input.correlationId,
+            payload: compact({
+              ...msg,
+              hops: input.hops,
+              artifactRefs: input.artifactRefs,
+            }) as Record<string, unknown>,
+          }),
+        ],
+        text: input.instruction,
+      };
+    }
+    if (classified.originKind === "peer_message") {
+      const peer = classified.peerMessage ?? {};
+      return {
+        primaryEvents: [
+          turnEvent({
+            id: input.triggerId,
+            kind: "peer_message",
+            time: clock.now,
+            source: String(peer.source ?? `session:${input.sourceSessionId}`),
+            actor: input.requesterUserId ?? undefined,
+            payload: compact({
+              sourceSessionId: input.sourceSessionId,
+              ...(typeof peer.taskId === "string" ? { taskId: peer.taskId } : {}),
+              ...(typeof peer.taskRunId === "string" ? { taskRunId: peer.taskRunId } : {}),
+              hops: input.hops,
+              artifactRefs: input.artifactRefs,
+            }) as Record<string, unknown>,
+          }),
+        ],
+        text: input.instruction,
+      };
+    }
     return {
       primaryEvents: [
         turnEvent({
           id: input.triggerId,
-          kind: eventKind,
+          kind: "schedule_fired",
           time: clock.now,
           source: `session:${input.sourceSessionId}`,
           actor: input.requesterUserId ?? undefined,

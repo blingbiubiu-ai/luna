@@ -16,7 +16,7 @@ import {
   resolveClaudeTranscriptPath,
   seedClaudeTrustState,
 } from "@luna/executor/pty/claude-pty-adapter";
-import { CodexRolloutTurnBridge, codexPtyAdapter } from "@luna/executor/pty/codex-pty-adapter";
+import { CodexRolloutTurnBridge, codexPtyAdapter, inspectCodexRolloutFile } from "@luna/executor/pty/codex-pty-adapter";
 import { PtyIdleDetector } from "@luna/executor/pty/idle-detector";
 import { PtySessionController } from "@luna/executor/pty/pty-session";
 import { HeadlessViewport } from "@luna/executor/pty/viewport";
@@ -227,8 +227,21 @@ describe("ClaudeTranscriptTurnBridge & CodexRolloutTurnBridge", () => {
     expect(spec.args).toContain("--no-alt-screen");
     expect(spec.args.join(" ")).toContain("LUNA_TURN_ENV_FILE");
 
-    // In gateway mode, auth.json is not seeded.
+    // In gateway mode, auth.json is not seeded, and hooks.json uses Codex ConfiguredHookMatcherGroup schema.
     expect(existsSync(join(codexHome, "auth.json"))).toBe(false);
+    const codexHooks = JSON.parse(readFileSync(join(codexHome, "hooks.json"), "utf8")) as {
+      hooks: Record<string, Array<{ hooks: Array<{ type: string; command: string; async: boolean }> }>>;
+    };
+    expect(codexHooks.hooks.PostToolUse?.[0]?.hooks?.[0]).toEqual({
+      type: "command",
+      command: expect.stringContaining("luna internal task-hook post-tool"),
+      async: false,
+    });
+    expect(codexHooks.hooks.Stop?.[0]?.hooks?.[0]).toEqual({
+      type: "command",
+      command: expect.stringContaining("luna internal task-hook stop"),
+      async: false,
+    });
 
     // In direct API-key mode on a fresh home, prepareSpawn creates CODEX_HOME and seeds auth.json.
     const directHome = makeTempDir("luna-codex-direct-");
@@ -295,6 +308,81 @@ describe("ClaudeTranscriptTurnBridge & CodexRolloutTurnBridge", () => {
       { status: "stream", text: "Drafting summary..." },
     ]);
     expect(drained.terminal).toEqual({ kind: "completed", finalText: "Repo has 3 packages." });
+  });
+
+  test("ignores pre-existing completed or wrong-cwd Codex rollouts in shared CODEX_HOME on cold start", () => {
+    const root = makeTempDir("luna-codex-shared-home-");
+    const codexHome = join(root, ".codex");
+    const oldDir = join(codexHome, "sessions", "2026", "11", "23");
+    const newDir = join(codexHome, "sessions", "2026", "11", "24");
+    mkdirSync(oldDir, { recursive: true });
+    mkdirSync(newDir, { recursive: true });
+
+    const staleSid = "01a2094c-6526-7db1-b6d3-0eb43e52ff36";
+    const otherCwdSid = "01a20bf9-cab8-76d0-92ce-425f124e35ce";
+    const realNewSid = "01a20bfa-2205-7c12-8ad4-37a2377f6b6c";
+    const newCwd = "/home/luna/runners/session-new";
+    const historyPath = join(codexHome, "history.jsonl");
+
+    // Pre-existing completed rollout with >24 KiB session_meta (mirroring 28 KiB AGENTS.md / base_instructions)
+    const staleRolloutPath = join(oldDir, `rollout-2026-11-23T16-45-31-${staleSid}.jsonl`);
+    writeFileSync(
+      staleRolloutPath,
+      [
+        JSON.stringify({
+          type: "session_meta",
+          payload: {
+            id: staleSid,
+            cwd: "/home/luna/runners/session-old",
+            base_instructions: { text: "X".repeat(26_000) },
+          },
+        }),
+        JSON.stringify({ type: "event_msg", payload: { type: "task_started", turn_id: "t0" } }),
+        JSON.stringify({ type: "event_msg", payload: { type: "task_complete", turn_id: "t0", last_agent_message: "不客气。" } }),
+      ].join("\n") + "\n",
+    );
+
+    const inspectedStale = inspectCodexRolloutFile(staleRolloutPath);
+    expect(inspectedStale.sessionId).toBe(staleSid);
+    expect(inspectedStale.cwd).toBe("/home/luna/runners/session-old");
+    expect(inspectedStale.hasPriorTurnActivity).toBe(true);
+
+    const bridge = new CodexRolloutTurnBridge({
+      prompt: "Remember passphrase PINEAPPLE-42",
+      codexHome,
+      cwd: newCwd,
+      cliPid: process.pid,
+    });
+
+    // Even before the new rollout exists, bridge must not adopt the stale rollout
+    expect(bridge.drain().terminal).toBeUndefined();
+    expect(bridge.drain().observedSessionId).toBeUndefined();
+
+    // Concurrent session in another cwd receives the same prompt text first -> must be ignored due to cwd mismatch
+    const otherRolloutPath = join(newDir, `rollout-2026-11-24T05-14-10-${otherCwdSid}.jsonl`);
+    writeFileSync(
+      otherRolloutPath,
+      `${JSON.stringify({ type: "session_meta", payload: { id: otherCwdSid, cwd: "/home/luna/runners/session-other" } })}\n`,
+    );
+    appendFileSync(historyPath, `${JSON.stringify({ session_id: otherCwdSid, text: "Remember passphrase PINEAPPLE-42" })}\n`);
+    expect(bridge.drain().observedSessionId).toBeUndefined();
+
+    // Now the real new session writes its history entry and rollout in newCwd
+    appendFileSync(historyPath, `${JSON.stringify({ session_id: realNewSid, text: "Remember passphrase PINEAPPLE-42" })}\n`);
+    const realRolloutPath = join(newDir, `rollout-2026-11-24T05-14-32-${realNewSid}.jsonl`);
+    writeFileSync(
+      realRolloutPath,
+      [
+        JSON.stringify({ type: "session_meta", payload: { id: realNewSid, cwd: newCwd } }),
+        JSON.stringify({ type: "event_msg", payload: { type: "task_started", turn_id: "t1" } }),
+        JSON.stringify({ type: "event_msg", payload: { type: "task_complete", turn_id: "t1", last_agent_message: "已记住暗号 PINEAPPLE-42。" } }),
+      ].join("\n") + "\n",
+    );
+
+    const finalDrained = bridge.drain();
+    expect(finalDrained.submitConfirmed).toBe(true);
+    expect(finalDrained.observedSessionId).toBe(realNewSid);
+    expect(finalDrained.terminal).toEqual({ kind: "completed", finalText: "已记住暗号 PINEAPPLE-42。" });
   });
 });
 

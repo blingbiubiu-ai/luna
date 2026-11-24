@@ -520,7 +520,8 @@ test("Dashboard proactivity overview returns live heartbeats/requests/duties and
   humanMessage("user:alice", Date.now() - 10_000);
   db.db.insert(schema.correlatedRequests).values({
     id: "req_dash_1",
-    kind: "ask",
+    kind: "request",
+    mode: "card",
     agentId: scope.agentId,
     shadowId: scope.shadowId,
     originSessionId: "session",
@@ -530,7 +531,7 @@ test("Dashboard proactivity overview returns live heartbeats/requests/duties and
     instruction: "是否现在合并发布？",
     optionsJson: ["立即合并", "明天再发"],
     hops: 3,
-    status: "pending",
+    status: "open",
     expiresAt: Date.now() + 3_600_000,
     createdAt: Date.now() - 5_000,
     updatedAt: Date.now() - 5_000,
@@ -553,13 +554,14 @@ test("Dashboard proactivity overview returns live heartbeats/requests/duties and
   expect(overviewRes.status).toBe(200);
   const overview = (await overviewRes.json()) as {
     heartbeats: { shadowId: string; sessionId: string | null; pendingActivity: { hasWakeActivity: boolean } }[];
-    requests: { id: string; status: string; options: string[] }[];
+    requests: { id: string; mode: string; status: string; options: string[] }[];
   };
   expect(overview.heartbeats).toHaveLength(1);
   expect(overview.heartbeats[0]?.pendingActivity.hasWakeActivity).toBe(true);
   expect(overview.requests[0]).toMatchObject({
     id: "req_dash_1",
-    status: "pending",
+    mode: "card",
+    status: "open",
     options: ["立即合并", "明天再发"],
   });
 

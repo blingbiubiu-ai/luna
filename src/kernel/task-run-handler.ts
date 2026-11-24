@@ -14,7 +14,8 @@ import { lookupChannelSurfaceKind } from "@/channels/directory-store";
 import { createLogger } from "@/shared";
 const progressLogger = createLogger("task-progress");
 import { InvocationStore } from "@/runners/invocation-store";
-import { taskInvocations, requireTaskReportCompletion } from "@/tasks/task-report-store";
+import { TaskInboxStore } from "@/tasks/task-inbox-store";
+import { taskInvocations, requireTaskReportCompletion, type TaskRunSettlementOutcome } from "@/tasks/task-report-store";
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { setTimeout as delay } from "node:timers/promises";
 
@@ -57,7 +58,7 @@ import {
 import { getKernel } from "@/server/routes/kernel";
 import { runnerArtifactAllowlistFromInput } from "@/main-runner/artifact-allowlist";
 import { TaskSubscriptionStore } from "@/tasks/task-subscription-store";
-import { WAITING_FOR_INPUT, type TaskSubscription } from "@/tasks/types";
+import type { TaskSubscription } from "@/tasks/types";
 import { renderMessageBlocksForRunner } from "@/main-runner/context-builder";
 import { PlatformSettingsStore } from "@/platform/platform-settings-store";
 import type { MessageContentBlock } from "@/sessions/types";
@@ -84,8 +85,25 @@ export interface ExecuteTaskRunInput {
 /**
  * Result contract returned by reusable Task Runner execution.
  */
-export interface ExecuteTaskRunResult {
-  readonly finalReportArtifactId: string;
+export type ExecuteTaskRunResult =
+  | {
+      readonly kind?: "completed";
+      readonly finalReportArtifactId: string;
+    }
+  | {
+      readonly kind: "waiting";
+      readonly pauseReason: string;
+      readonly finalReportArtifactId?: undefined;
+    };
+
+export interface TaskPromptInboxEvent {
+  readonly id: string;
+  readonly kind: string;
+  readonly source: string;
+  readonly correlationId?: string | null | undefined;
+  readonly content: string;
+  readonly payload?: Record<string, unknown> | null | undefined;
+  readonly createdAt: number;
 }
 
 export interface BuildTaskRunPromptInput {
@@ -96,6 +114,7 @@ export interface BuildTaskRunPromptInput {
   readonly pendingText: string;
   readonly launchContext?: readonly TaskRunPromptContextItem[];
   readonly updateContext?: readonly TaskRunPromptContextItem[];
+  readonly taskEvents?: readonly TaskPromptInboxEvent[];
   readonly facts: readonly string[];
   readonly assumptions: readonly string[];
   readonly timezone?: string;
@@ -147,6 +166,8 @@ export async function executeTaskRun(
   const promptPackage = _buildTaskRunPromptPackage({
     db: input.db,
     taskId: input.taskId,
+    taskRunId: input.taskRunId,
+    runnerContextId: runnerContext.id,
     reason: input.reason,
     inputSnapshot: input.inputSnapshot,
     pendingText,
@@ -157,15 +178,13 @@ export async function executeTaskRun(
     taskRunId: input.taskRunId,
     materializedPrompt: promptPackage.materializedPrompt,
   });
-  if (runnerContext.runner_session_id === null) {
-    _recordTaskRunSeedRecords({
-      db: input.db,
-      taskId: input.taskId,
-      runnerContextId: runnerContext.id,
-      launchPacks: promptPackage.launchPacks,
-      launchItemsByPackId: promptPackage.launchItemsByPackId,
-    });
-  }
+  _recordTaskRunSeedRecords({
+    db: input.db,
+    taskId: input.taskId,
+    runnerContextId: runnerContext.id,
+    launchPacks: promptPackage.deliveredPacks,
+    launchItemsByPackId: promptPackage.deliveredItemsByPackId,
+  });
 
   if (input.runnerType === "mock") {
     return await _runFakeTask({
@@ -207,6 +226,8 @@ export async function executeTaskRun(
 function _buildTaskRunPromptPackage(input: {
   readonly db: DrizzleDB;
   readonly taskId: string;
+  readonly taskRunId: string;
+  readonly runnerContextId: string;
   readonly reason: string;
   readonly inputSnapshot: unknown;
   readonly pendingText: string;
@@ -214,24 +235,39 @@ function _buildTaskRunPromptPackage(input: {
 }): {
   readonly promptInput: BuildTaskRunPromptInput;
   readonly materializedPrompt: string;
-  readonly launchPacks: readonly ContextPackRow[];
-  readonly launchItemsByPackId: ReadonlyMap<string, readonly ContextPackItemRow[]>;
+  readonly deliveredPacks: readonly ContextPackRow[];
+  readonly deliveredItemsByPackId: ReadonlyMap<string, readonly ContextPackItemRow[]>;
 } {
   const taskRow = _taskRowById(input.db, input.taskId);
   const contextPackStore = new ContextPackStore(input.db);
   const runContext = _taskRunContextPacks({
     store: contextPackStore,
     taskId: input.taskId,
+    runnerContextId: input.runnerContextId,
     reason: input.reason,
     inputSnapshot: input.inputSnapshot,
     isNewSession: input.isNewSession,
   });
-  const launchItemsByPackId = new Map<string, readonly ContextPackItemRow[]>();
-  for (const pack of runContext.launchPacks) {
-    launchItemsByPackId.set(pack.id, contextPackStore.listItemsForPack(pack.id));
+  const deliveredPacks = [...runContext.launchPacks, ...runContext.updatePacks];
+  const deliveredItemsByPackId = new Map<string, readonly ContextPackItemRow[]>();
+  for (const pack of deliveredPacks) {
+    deliveredItemsByPackId.set(pack.id, contextPackStore.listItemsForPack(pack.id));
   }
-  // Use persisted Task context so replayed or restarted runs see the same facts
-  // and launch assumptions that were recorded at dispatch time.
+  const inboxRows = new TaskInboxStore(input.db).consumePending({
+    taskId: input.taskId,
+    runnerContextId: input.runnerContextId,
+    runId: input.taskRunId,
+    includeContextRebuild: input.isNewSession,
+  });
+  const taskEvents: TaskPromptInboxEvent[] = inboxRows.map(ev => ({
+    id: ev.id,
+    kind: ev.kind,
+    source: ev.source,
+    correlationId: ev.correlationId,
+    content: ev.content,
+    payload: ev.payloadJson,
+    createdAt: ev.createdAt,
+  }));
   const context = _isRecord(taskRow?.context_json) ? taskRow.context_json : {};
   const promptInput: BuildTaskRunPromptInput = {
     taskType: taskRow?.type ?? "task",
@@ -249,6 +285,7 @@ function _buildTaskRunPromptPackage(input: {
       store: contextPackStore,
       packs: runContext.updatePacks,
     }),
+    ...(taskEvents.length > 0 ? { taskEvents } : {}),
     facts: _stringList(context.knownFacts),
     assumptions: _stringList(context.assumptions),
     timezone: new PlatformSettingsStore(input.db).get().general.timezone,
@@ -256,8 +293,8 @@ function _buildTaskRunPromptPackage(input: {
   return {
     promptInput,
     materializedPrompt: buildTaskRunPrompt(promptInput),
-    launchPacks: runContext.launchPacks,
-    launchItemsByPackId,
+    deliveredPacks,
+    deliveredItemsByPackId,
   };
 }
 
@@ -590,15 +627,27 @@ export function buildTaskRunPrompt(input: BuildTaskRunPromptInput): string {
     role: item.role, source: item.source, reason: item.reason, at: formatAt(item.occurredAt),
     text: item.text.trim(),
   }));
+  const events = (input.taskEvents ?? []).map((ev) => compact({
+    id: ev.id,
+    kind: ev.kind,
+    source: ev.source,
+    correlationId: ev.correlationId ?? undefined,
+    at: formatAt(ev.createdAt),
+    content: ev.content,
+    payload: ev.payload ?? undefined,
+  }));
   const launch = context(input.launchContext), update = context(input.updateContext);
   return joinBlocks([
     dataBlock("task", { json: { type: input.taskType, reason: input.reason, title: input.title, summary: input.summary, facts: input.facts, assumptions: input.assumptions } }),
     launch.length ? dataBlock("launch_context", { json: launch }) : "",
     update.length ? dataBlock("update_context", { json: update }) : "",
+    events.length ? dataBlock("task_events", { json: events }) : "",
     dataBlock("user_input", { text: input.pendingText }),
-    promptBlock("report_sections", [
-      "Submit a report with these sections through `luna tasks report --stdin`:",
-      ..._outputRequirements(input.taskType),
+    promptBlock("completion", [
+      "- Milestone updates while continuing work: `luna say --to main --text '...'`",
+      "- Blocking questions or approvals needed from Main: `luna ask --to main --text '...' [--wait 60s]`",
+      "- Suspend cleanly while waiting on external CI/jobs or pending requests: `luna tasks pause [--wake-in 20m] --reason '...'`",
+      "- Final report when the Task is complete: `luna tasks report --stdin` (plain Markdown tailored to the task's scope, evidence, and verification).",
     ].join("\n")),
   ]);
 }
@@ -613,6 +662,7 @@ export function buildTaskRunPromptForRunner(
 function _taskRunContextPacks(input: {
   readonly store: ContextPackStore;
   readonly taskId: string;
+  readonly runnerContextId: string;
   readonly reason: string;
   readonly inputSnapshot: unknown;
   readonly isNewSession: boolean;
@@ -631,11 +681,19 @@ function _taskRunContextPacks(input: {
   if (input.reason !== "restart") {
     return { launchPacks, updatePacks: [] };
   }
-  const updatePacks = selectedPacks.filter((pack) => pack.kind === "task_update");
-  const latestUpdatePack = updatePacks.at(-1);
+  const seededPackIds = new Set(
+    input.store
+      .listSeedRecords("task", input.taskId)
+      .filter((record) => record.runnerContextId === input.runnerContextId)
+      .map((record) => record.seedContextPackId),
+  );
+  const allUpdates = selectedPacks.filter((pack) => pack.kind === "task_update");
+  const unseenUpdates = input.isNewSession
+    ? allUpdates
+    : allUpdates.filter((pack) => !seededPackIds.has(pack.id));
   return {
     launchPacks,
-    updatePacks: latestUpdatePack === undefined ? [] : [latestUpdatePack],
+    updatePacks: unseenUpdates,
   };
 }
 
@@ -837,33 +895,6 @@ function _stableStringify(value: unknown): string {
     .sort()
     .map((key) => `${JSON.stringify(key)}:${_stableStringify(record[key])}`)
     .join(",")}}`;
-}
-
-function _outputRequirements(taskType: string): string[] {
-  switch (taskType) {
-    case "question":
-      return [
-        "- Direct answer",
-        "- Supporting evidence",
-        "- Remaining uncertainty",
-        "- Suggested next checks",
-      ];
-    case "task":
-      return [
-        "- Completed work",
-        "- Files or systems touched",
-        "- Verification",
-        "- Residual risks",
-        "- Follow-up needed",
-      ];
-    default:
-      return [
-        "- Completed work",
-        "- Relevant evidence or context",
-        "- Verification or confidence level",
-        "- Follow-up needed",
-      ];
-  }
 }
 
 function _pendingText(
@@ -1079,9 +1110,6 @@ export function buildTaskResultForMainRunner(
         ? [...scopedArtifactIds]
         : [],
     nextActions: [],
-    ...(status === "completed" && taskRow?.block_reason === WAITING_FOR_INPUT
-      ? { waitingForInput: true }
-      : {}),
   };
 }
 

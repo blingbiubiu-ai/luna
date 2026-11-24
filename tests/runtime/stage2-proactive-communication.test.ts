@@ -14,7 +14,7 @@ import {
   CorrelatedRequestService,
   createCorrelatedRequestExpiryRoutine,
 } from "@/messaging/correlated-request-service";
-import { resolveLunaAddress } from "@/messaging/luna-address";
+import { parseTaskAddress, resolveLunaAddress } from "@/messaging/luna-address";
 import { releaseDeferredOutboundCommands } from "@/messaging/outbound-governance";
 import {
   SessionCommandService,
@@ -29,11 +29,18 @@ import { encodeInvocation } from "@/runners/invocation-codec";
 import { mainInvocations } from "@/runners/main-invocation-registry";
 import { RunnerOperationService } from "@/runners/operation-service";
 import { RunnerContextStore } from "@/runners/runner-context-store";
+import { TaskInboxStore } from "@/tasks/task-inbox-store";
+import { TaskReportService } from "@/tasks/task-report-service";
+import { TaskRunStore } from "@/tasks/task-run-store";
 import { TaskRunSupervisor } from "@/tasks/task-run-supervisor";
 import type { LunaAccessTokenClaims } from "@/server/auth/access-token-service";
 import { createRunnerMessageRoutes } from "@/server/routes/runner-messages";
 import { createRunnerRequestRoutes } from "@/server/routes/runner-requests";
-import { fixtureNamedSession, fixtureUser } from "../helpers/platform-fixtures";
+import {
+  fixtureNamedSession,
+  fixtureTaskOwnership,
+  fixtureUser,
+} from "../helpers/platform-fixtures";
 import { registerTestRunnerJob } from "./support/runner-job";
 
 const MIN = 60_000;
@@ -125,7 +132,7 @@ function mintClaims(
   return claims;
 }
 
-test("unified Luna addresses resolve self, current, and session:<id> while enforcing Shadow scope", () => {
+test("unified Luna addresses resolve self, current, session:<id>, main (Task), and task:<id> while enforcing Shadow scope", () => {
   const selfAddr = resolveLunaAddress(
     db.db,
     { agentId: scope.agentId, shadowId: scope.shadowId, currentSessionId: "group-session" },
@@ -149,9 +156,29 @@ test("unified Luna addresses resolve self, current, and session:<id> while enfor
     `session:${ownerDirectSessionId}`,
   );
   expect(sessionAddr.sessionId).toBe(ownerDirectSessionId);
+
+  db.db.insert(schema.tasks).values({
+    id: "task-addr-1",
+    type: "task",
+    title: "Address test",
+    summary: "Verify main address",
+    status: "running",
+    primary_session_id: "group-session",
+    created_at: 1,
+    updated_at: 1,
+    last_activity_at: 1,
+    ...fixtureTaskOwnership(db.db, "group-session"),
+  }).run();
+  const mainAddr = resolveLunaAddress(
+    db.db,
+    { agentId: scope.agentId, shadowId: scope.shadowId, taskId: "task-addr-1" },
+    "main",
+  );
+  expect(mainAddr).toMatchObject({ kind: "main", sessionId: "group-session" });
+  expect(parseTaskAddress("task:task-addr-1")).toBe("task-addr-1");
 });
 
-test("ask resolves via text answer or card button callback (idempotent) and routes request_result back to origin", async () => {
+test("unified requests support card callbacks (idempotent, 2h default expiry) and multi-turn delegate progress/settlement without post-done mutation", async () => {
   const commands = new SessionCommandService({ db: db.db, channelFor: () => undefined });
   registerSessionCommands(db.db, commands);
 
@@ -167,31 +194,40 @@ test("ask resolves via text answer or card button callback (idempotent) and rout
   app.route("/api/runner", createRunnerMessageRoutes({ db: db.db, channelFor: () => undefined }));
   app.route("/api/runner", createRunnerRequestRoutes({ db: db.db, channelFor: () => undefined }));
 
-  // 1. Create card-backed ask from group-session to ownerDirectSessionId.
-  const askRes = await app.request("/api/runner/asks", {
+  // 1. Create card-backed request from group-session to ownerDirectSessionId.
+  const beforeCreate = Date.now();
+  const cardReqRes = await app.request("/api/runner/requests", {
     method: "POST",
     headers: { "content-type": "application/json", "Idempotency-Key": "confirm-duty-1" },
     body: JSON.stringify({
       to: `session:${ownerDirectSessionId}`,
-      question: "同事希望每天巡检指标看板，是否同意接入？",
+      goal: "同事希望每天巡检指标看板，是否同意接入？",
       context: "来自项目群的委托",
       options: ["同意", "拒绝"],
     }),
   });
-  expect(askRes.status).toBe(201);
-  const createdAsk = (await askRes.json()) as { requestId: string; status: string };
-  expect(createdAsk.status).toBe("pending");
+  expect(cardReqRes.status).toBe(201);
+  const createdCard = (await cardReqRes.json()) as {
+    requestId: string;
+    mode: string;
+    status: string;
+    expiresAt: number;
+  };
+  expect(createdCard.mode).toBe("card");
+  expect(createdCard.status).toBe("open");
+  // Default window is 2 hours (7,200,000 ms).
+  expect(createdCard.expiresAt).toBeGreaterThanOrEqual(beforeCreate + 2 * 60 * 60 * 1000 - 5_000);
 
-  // Pending asks are visible on target session.
+  // Open requests are visible on target session.
   const reqSvc = new CorrelatedRequestService(db.db, () => undefined);
-  expect(reqSvc.pendingAsksForTurn(ownerDirectSessionId).map(r => r.id)).toContain(
-    createdAsk.requestId,
+  expect(reqSvc.openRequestsForTurn(ownerDirectSessionId).map(r => r.id)).toContain(
+    createdCard.requestId,
   );
 
   // 2. Simulate Feishu card button click ("同意").
   const cardRes = await reqSvc.handleCardAction({
     channel: { id: "ch-1", type: "feishu" },
-    actionValue: { requestId: createdAsk.requestId, option: "同意" },
+    actionValue: { requestId: createdCard.requestId, option: "同意" },
     operatorIdentity: { externalId: "ou_owner", kind: "user", displayName: "Alice" },
   });
   expect(cardRes?.toast?.type).toBe("success");
@@ -200,7 +236,7 @@ test("ask resolves via text answer or card button callback (idempotent) and rout
   // Repeat click is idempotent and does not re-queue.
   const repeatRes = await reqSvc.handleCardAction({
     channel: { id: "ch-1", type: "feishu" },
-    actionValue: { requestId: createdAsk.requestId, option: "同意" },
+    actionValue: { requestId: createdCard.requestId, option: "同意" },
     operatorIdentity: { externalId: "ou_owner", kind: "user", displayName: "Alice" },
   });
   expect(repeatRes?.toast?.type).toBe("info");
@@ -208,54 +244,117 @@ test("ask resolves via text answer or card button callback (idempotent) and rout
   const settled = db.db
     .select()
     .from(schema.correlatedRequests)
-    .where(eq(schema.correlatedRequests.id, createdAsk.requestId))
+    .where(eq(schema.correlatedRequests.id, createdCard.requestId))
     .get()!;
-  expect(settled.status).toBe("answered");
+  expect(settled.status).toBe("done");
   expect(settled.returnCommandId).toBeTruthy();
 
   const returnCmd = commands.get(settled.returnCommandId!)!;
   expect(returnCmd.sessionId).toBe("group-session");
-  expect((returnCmd.payload as { requestResult?: { status: string } }).requestResult?.status).toBe(
-    "answered",
+  expect((returnCmd.payload as { requestUpdate?: { status: string } }).requestUpdate?.status).toBe(
+    "done",
   );
 
-  // 3. Create a text-answered ask and resolve via Runner endpoint.
-  const askRes2 = await app.request("/api/runner/asks", {
+  // 3. Multi-turn delegate request: stays open until explicitly settled via `/update`, supports progress + messages, and rejects post-done updates.
+  activeClaims = groupClaims;
+  const delRes = await app.request("/api/runner/requests", {
     method: "POST",
-    headers: { "content-type": "application/json", "Idempotency-Key": "confirm-duty-2" },
+    headers: { "content-type": "application/json", "Idempotency-Key": "delegate-window-1" },
     body: JSON.stringify({
       to: `session:${ownerDirectSessionId}`,
-      question: "巡检时间定在早上 9 点还是 10 点？",
+      goal: "请确认巡检窗口定在早上 9 点还是 10 点，并告知原因",
+      expiresInMs: 3 * 60 * 60 * 1000,
     }),
   });
-  const createdAsk2 = (await askRes2.json()) as { requestId: string };
+  expect(delRes.status).toBe(201);
+  const createdDel = (await delRes.json()) as { requestId: string; mode: string; status: string };
+  expect(createdDel.mode).toBe("delegate");
+  expect(createdDel.status).toBe("open");
+
+  // Origin sends a mid-flight supplemental message on the open request.
+  const msgRes = await app.request(
+    `/api/runner/requests/${encodeURIComponent(createdDel.requestId)}/messages`,
+    {
+      method: "POST",
+      headers: { "content-type": "application/json", "Idempotency-Key": "del-msg-1" },
+      body: JSON.stringify({ message: "补充：周三有例会，9 点可能冲突" }),
+    },
+  );
+  expect(msgRes.status).toBe(202);
+
+  // Target Main posts non-terminal progress (`in_progress`) first.
   activeClaims = ownerClaims;
-  const ansRes = await app.request(`/api/runner/asks/${encodeURIComponent(createdAsk2.requestId)}/answer`, {
+  const progRes = await app.request(
+    `/api/runner/requests/${encodeURIComponent(createdDel.requestId)}/update`,
+    {
+      method: "POST",
+      headers: { "content-type": "application/json", "Idempotency-Key": "del-prog-1" },
+      body: JSON.stringify({ action: "progress", summary: "已询问日历安排，等待确认" }),
+    },
+  );
+  expect(progRes.status).toBe(200);
+  expect(reqSvc.openRequestsForTurn(ownerDirectSessionId).map(r => r.id)).toContain(
+    createdDel.requestId,
+  );
+
+  // Target Main settles the request (`done`).
+  const doneRes = await app.request(
+    `/api/runner/requests/${encodeURIComponent(createdDel.requestId)}/update`,
+    {
+      method: "POST",
+      headers: { "content-type": "application/json", "Idempotency-Key": "del-done-1" },
+      body: JSON.stringify({ action: "done", summary: "定在早上 10 点，避开周三例会" }),
+    },
+  );
+  expect(doneRes.status).toBe(200);
+  expect(reqSvc.openRequestsForTurn(ownerDirectSessionId).map(r => r.id)).not.toContain(
+    createdDel.requestId,
+  );
+
+  // Post-settlement mutation is rejected (`409`); follow-ups use `say --via-main` with zero correlated_requests ticket!
+  const postDoneRes = await app.request(
+    `/api/runner/requests/${encodeURIComponent(createdDel.requestId)}/update`,
+    {
+      method: "POST",
+      headers: { "content-type": "application/json", "Idempotency-Key": "del-late-1" },
+      body: JSON.stringify({ action: "done", summary: "想再改回 9 点" }),
+    },
+  );
+  expect(postDoneRes.status).toBe(409);
+
+  const reqCountBeforeSay = db.db.select().from(schema.correlatedRequests).all().length;
+  const viaMainRes = await app.request("/api/runner/messages", {
     method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ answer: "早上 9 点" }),
+    headers: { "content-type": "application/json", "Idempotency-Key": "post-done-followup" },
+    body: JSON.stringify({
+      to: "session:group-session",
+      viaMain: true,
+      content: [{ type: "text", text: "补充通知：周五特殊窗口临时改为 9:30" }],
+    }),
   });
-  expect(ansRes.status).toBe(200);
+  expect(viaMainRes.status).toBe(202);
+  const viaMainJson = (await viaMainRes.json()) as { commandId: string };
+  expect(commands.get(viaMainJson.commandId)?.kind).toBe("session.invoke");
+  expect(db.db.select().from(schema.correlatedRequests).all().length).toBe(reqCountBeforeSay);
 });
 
-test("overdue pending ask is expired by routine and handoff returns done/declined result to origin", async () => {
+test("overdue open or in_progress request is expired by routine and wakes origin session", () => {
   const commands = new SessionCommandService({ db: db.db, channelFor: () => undefined });
   registerSessionCommands(db.db, commands);
   const reqSvc = new CorrelatedRequestService(db.db, () => undefined);
 
-  // 1. Overdue ask expires and wakes origin session.
-  const askRow = reqSvc.createAsk({
+  const reqRow = reqSvc.createRequest({
     actor: {
       userId: "user:alice",
       agentId: scope.agentId,
       shadowId: scope.shadowId,
       sourceSessionId: "group-session",
       currentSessionId: "group-session",
-      originId: "turn-ask-exp",
+      originId: "turn-req-exp",
     },
     key: "exp-1",
     toAddress: `session:${ownerDirectSessionId}`,
-    question: "请问是否继续？",
+    goal: "请问是否继续？",
     expiresInMs: 60_000,
     now: NOW,
   });
@@ -268,57 +367,9 @@ test("overdue pending ask is expired by routine and handoff returns done/decline
     db.db
       .select()
       .from(schema.correlatedRequests)
-      .where(eq(schema.correlatedRequests.id, askRow.id))
+      .where(eq(schema.correlatedRequests.id, reqRow.id))
       .get()?.status,
   ).toBe("expired");
-
-  // 2. Handoff from Heartbeat session to group-session settles automatically on target turn completion (with approval toggle turned off).
-  new AgentSettingsStore(db.db).save("alice", scope.agentId, {
-    proactivity: { heartbeatApprovalRequired: false },
-  });
-  const selfAddr = resolveLunaAddress(
-    db.db,
-    { agentId: scope.agentId, shadowId: scope.shadowId },
-    "self",
-  );
-  const { command: handoffCmd, request: handoffReq } = reqSvc.createHandoff({
-    actor: {
-      userId: "user:alice",
-      agentId: scope.agentId,
-      shadowId: scope.shadowId,
-      sourceSessionId: selfAddr.sessionId,
-      currentSessionId: selfAddr.sessionId,
-      originId: `${SELF_ROUTINE_ORIGINS.heartbeat}${scope.shadowId}:${NOW}`,
-    },
-    key: "hb-followup-1",
-    targetSessionId: "group-session",
-    targetAddress: "session:group-session",
-    instruction: "跟进昨日未完成的构建失败问题",
-    now: NOW,
-  });
-
-  // Target session Main sends a message during `handoffCmd.id` turn, then trigger settles.
-  commands.accept(
-    {
-      userId: "user:alice",
-      sourceSessionId: "group-session",
-      originId: handoffCmd.id,
-    },
-    "group-session",
-    "message.send",
-    "followup-msg",
-    { content: "提醒一下：昨日构建失败问题还需要确认修复进度。", purpose: "notification" },
-  );
-  reqSvc.settleHandoffFromTrigger(handoffCmd, "completed");
-
-  const settledHandoff = db.db
-    .select()
-    .from(schema.correlatedRequests)
-    .where(eq(schema.correlatedRequests.id, handoffReq.id))
-    .get()!;
-  expect(settledHandoff.status).toBe("done");
-  expect(settledHandoff.returnCommandId).toBeTruthy();
-  expect(commands.get(settledHandoff.returnCommandId!)?.sessionId).toBe(selfAddr.sessionId);
 });
 
 test("outbound governance throttles duplicate/excess proactive sends, defers during quiet hours, and never throttles passive replies", () => {
@@ -428,7 +479,7 @@ test("outbound governance throttles duplicate/excess proactive sends, defers dur
   expect(commands.get(deferredCmd.id)?.status).toBe("pending");
 });
 
-test("owner-targeted approval ask resolves `--to owner` server-side, rejects non-owner answers/clicks, preserves non-owner actor on expiry, and links original sourceMessageIds", async () => {
+test("owner-targeted approval request resolves `--to owner` server-side, rejects non-owner updates/clicks, preserves non-owner actor on expiry, and links original sourceMessageIds", async () => {
   const commands = new SessionCommandService({ db: db.db, channelFor: () => undefined });
   registerSessionCommands(db.db, commands);
   const reqSvc = new CorrelatedRequestService(db.db, () => undefined);
@@ -462,8 +513,8 @@ test("owner-targeted approval ask resolves `--to owner` server-side, rejects non
     content: [{ type: "text", text: "帮我排查一下线上告警并出报告" }],
   }).row;
 
-  // 3. Main sends an approval card to `--to owner` (server resolves `user:alice` and falls back to local session if needed).
-  const ask = reqSvc.createAsk({
+  // 3. Main sends an approval card to `--to owner`.
+  const approvalReq = reqSvc.createRequest({
     actor: {
       userId: "colleague",
       agentId: scope.agentId,
@@ -474,30 +525,31 @@ test("owner-targeted approval ask resolves `--to owner` server-side, rejects non
     },
     key: "owner-approval-1",
     toAddress: "owner",
-    question: "群成员 colleague 请求排查线上告警，是否执行？",
+    goal: "群成员 colleague 请求排查线上告警，是否执行？",
     contextSummary: `sourceMessageId=${groupMsg.id}`,
     options: ["同意执行", "同意（后续免审）", "暂不处理"],
     expiresInMs: 3_600_000,
     now: NOW,
   });
-  expect(ask.targetUserId).toBe("user:alice");
-  expect(ask.targetAddress).toBe("user:user:alice");
+  expect(approvalReq.targetUserId).toBe("user:alice");
+  expect(approvalReq.targetAddress).toBe("user:user:alice");
 
-  // Direct `answerAsk` by a non-target user is rejected with 403 `ask_forbidden`!
+  // Direct `updateRequest` by a non-target user is rejected with 403 `request_forbidden`!
   expect(() =>
-    reqSvc.answerAsk({
-      requestId: ask.id,
-      answer: "同意执行",
+    reqSvc.updateRequest({
+      requestId: approvalReq.id,
+      action: "done",
+      summary: "同意执行",
       selectedOption: "同意执行",
       resolvedByUserId: "colleague",
       source: "runner",
       expectedShadowId: scope.shadowId,
-      expectedTargetSessionId: ask.targetSessionId,
+      expectedTargetSessionId: approvalReq.targetSessionId,
     }),
-  ).toThrow("Ask targets another user");
+  ).toThrow("targets another user");
 
-  // Overdue ask originated by `colleague` keeps `colleague` as return `actorUserId` (does NOT escalate to owner)!
-  const expiringAsk = reqSvc.createAsk({
+  // Overdue request originated by `colleague` keeps `colleague` as return `actorUserId` (does NOT escalate to owner)!
+  reqSvc.createRequest({
     actor: {
       userId: "colleague",
       agentId: scope.agentId,
@@ -508,7 +560,7 @@ test("owner-targeted approval ask resolves `--to owner` server-side, rejects non
     },
     key: "owner-approval-exp",
     toAddress: "owner",
-    question: "是否批准？",
+    goal: "是否批准？",
     expiresInMs: 60_000,
     now: NOW,
   });
@@ -552,7 +604,7 @@ test("owner-targeted approval ask resolves `--to owner` server-side, rejects non
   // Non-owner clicking the card is rejected!
   const rejectedClick = await reqSvc.handleCardAction({
     channel: { id: "ch-1", type: "feishu" },
-    actionValue: { requestId: ask.id, option: "同意执行" },
+    actionValue: { requestId: approvalReq.id, option: "同意执行" },
     operatorIdentity: { externalId: "ou_colleague", kind: "user", displayName: "Colleague" },
   });
   expect(rejectedClick?.toast?.type).toBe("warning");
@@ -560,15 +612,15 @@ test("owner-targeted approval ask resolves `--to owner` server-side, rejects non
   // Unbound stranger (`userId === null`) clicking the card is also rejected!
   const strangerClick = await reqSvc.handleCardAction({
     channel: { id: "ch-1", type: "feishu" },
-    actionValue: { requestId: ask.id, option: "同意执行" },
+    actionValue: { requestId: approvalReq.id, option: "同意执行" },
     operatorIdentity: { externalId: "ou_stranger", kind: "user", displayName: "Stranger" },
   });
   expect(strangerClick?.toast?.type).toBe("warning");
 
-  // Owner clicking the card succeeds and queues `request_result` back to `group-session` with owner actor, role, and `settledCard`.
+  // Owner clicking the card succeeds and queues `request_update` back to `group-session` with owner actor, role, and `settledCard`.
   const ownerClick = await reqSvc.handleCardAction({
     channel: { id: "ch-1", type: "feishu" },
-    actionValue: { requestId: ask.id, option: "同意执行" },
+    actionValue: { requestId: approvalReq.id, option: "同意执行" },
     operatorIdentity: { externalId: "ou_alice", kind: "user", displayName: "Alice" },
   });
   expect(ownerClick?.toast?.type).toBe("success");
@@ -580,23 +632,23 @@ test("owner-targeted approval ask resolves `--to owner` server-side, rejects non
   const settled = db.db
     .select()
     .from(schema.correlatedRequests)
-    .where(eq(schema.correlatedRequests.id, ask.id))
+    .where(eq(schema.correlatedRequests.id, approvalReq.id))
     .get()!;
   expect(settled.returnCommandId).toBeTruthy();
   const approvedReturnCmd = commands.get(settled.returnCommandId!)!;
   expect(approvedReturnCmd.actorUserId).toBe("user:alice");
   expect(
-    (approvedReturnCmd.payload as { requestResult?: { resolvedByRole?: string } })
-      .requestResult?.resolvedByRole,
+    (approvedReturnCmd.payload as { requestUpdate?: { resolvedByRole?: string } })
+      .requestUpdate?.resolvedByRole,
   ).toBe("owner");
 
-  // 4. In the `request_result` (`session_trigger`) turn on `group-session`, Main dispatches `task.create`
+  // 4. In the `request_update` (`session_trigger`) turn on `group-session`, Main dispatches `task.create`
   // referencing `groupMsg.id` — preserving `colleague` as requester and rejecting foreign message IDs!
-  const triggerClaims = mintClaims("group-session", "user:alice", `request-result:${ask.id}`);
+  const triggerClaims = mintClaims("group-session", "user:alice", `request-result:${approvalReq.id}`);
   const supervisor = new TaskRunSupervisor({
     db: db.db,
     runnerType: "mock",
-    executeRun: async () => ({ finalReportArtifactId: "art_1" }),
+    executeRun: async () => ({ kind: "completed", finalReportArtifactId: "art_1" }),
   });
   const opSvc = new RunnerOperationService(db.db, supervisor);
 
@@ -638,7 +690,7 @@ test("owner-targeted approval ask resolves `--to owner` server-side, rejects non
   ).rejects.toThrow("must belong to this session");
 });
 
-test("heartbeatApprovalRequired blocks direct heartbeat handoffs/asks until owner approves card, and can be disabled per Agent", async () => {
+test("heartbeatApprovalRequired requires --via-main on Heartbeat say and blocks non-owner outbound until owner approves card", async () => {
   const commands = new SessionCommandService({ db: db.db, channelFor: () => undefined });
   registerSessionCommands(db.db, commands);
   const reqSvc = new CorrelatedRequestService(db.db, () => undefined);
@@ -650,9 +702,9 @@ test("heartbeatApprovalRequired blocks direct heartbeat handoffs/asks until owne
   );
   const hbOrigin = `${SELF_ROUTINE_ORIGINS.heartbeat}${scope.shadowId}:${NOW}`;
 
-  // 1. Default `heartbeatApprovalRequired` is `true`: direct handoff or non-owner ask from Heartbeat is blocked!
+  // 1. Default `heartbeatApprovalRequired` is `true`: non-owner request from Heartbeat is blocked!
   expect(() =>
-    reqSvc.createHandoff({
+    reqSvc.createRequest({
       actor: {
         userId: "user:alice",
         agentId: scope.agentId,
@@ -661,33 +713,15 @@ test("heartbeatApprovalRequired blocks direct heartbeat handoffs/asks until owne
         currentSessionId: selfAddr.sessionId,
         originId: hbOrigin,
       },
-      key: "unapproved-hb-1",
-      targetSessionId: "group-session",
-      targetAddress: "session:group-session",
-      instruction: "跟进昨日告警",
-      now: NOW,
-    }),
-  ).toThrow("requires owner approval first");
-
-  expect(() =>
-    reqSvc.createAsk({
-      actor: {
-        userId: "user:alice",
-        agentId: scope.agentId,
-        shadowId: scope.shadowId,
-        sourceSessionId: selfAddr.sessionId,
-        currentSessionId: selfAddr.sessionId,
-        originId: hbOrigin,
-      },
-      key: "unapproved-group-ask",
+      key: "unapproved-group-req",
       toAddress: "session:group-session",
-      question: "昨日告警解决了吗？",
+      goal: "昨日告警解决了吗？",
       now: NOW,
     }),
   ).toThrow("requires owner approval first");
 
   // 2. Sending an approval card `--to owner` from Heartbeat IS allowed!
-  const rejectedAsk = reqSvc.createAsk({
+  const rejectedAsk = reqSvc.createRequest({
     actor: {
       userId: "user:alice",
       agentId: scope.agentId,
@@ -698,22 +732,23 @@ test("heartbeatApprovalRequired blocks direct heartbeat handoffs/asks until owne
     },
     key: "hb-owner-ask-reject",
     toAddress: "owner",
-    question: "准备在群里跟进昨日告警，是否发送？",
+    goal: "准备在群里跟进昨日告警，是否发送？",
     options: ["同意跟进", "暂不发送"],
     now: NOW,
   });
-  const { request: rejectedReq } = reqSvc.answerAsk({
+  const { request: rejectedReq } = reqSvc.updateRequest({
     requestId: rejectedAsk.id,
-    answer: "暂不发送",
+    action: "done",
+    summary: "暂不发送",
     selectedOption: "暂不发送",
     resolvedByUserId: "user:alice",
     source: "dashboard",
     now: NOW + 1_000,
   });
 
-  // Negative verdict ("暂不发送") STILL blocks handoff in the return turn (`originId = returnCommandId`)!
+  // Negative verdict ("暂不发送") STILL blocks group request in the return turn (`originId = returnCommandId`)!
   expect(() =>
-    reqSvc.createHandoff({
+    reqSvc.createRequest({
       actor: {
         userId: "user:alice",
         agentId: scope.agentId,
@@ -723,15 +758,14 @@ test("heartbeatApprovalRequired blocks direct heartbeat handoffs/asks until owne
         originId: rejectedReq.returnCommandId!,
       },
       key: "after-reject-hb",
-      targetSessionId: "group-session",
-      targetAddress: "session:group-session",
-      instruction: "跟进昨日告警",
+      toAddress: "session:group-session",
+      goal: "跟进昨日告警",
       now: NOW + 2_000,
     }),
   ).toThrow("requires owner approval first");
 
-  // 3. Positive owner approval unlocks `createHandoff` in the `request-result:` turn on Heartbeat `self` session!
-  const approvedAsk = reqSvc.createAsk({
+  // 3. Positive owner approval unlocks `say --via-main` AND `requests create` in the return turn on Heartbeat `self` session!
+  const approvedAsk = reqSvc.createRequest({
     actor: {
       userId: "user:alice",
       agentId: scope.agentId,
@@ -742,20 +776,21 @@ test("heartbeatApprovalRequired blocks direct heartbeat handoffs/asks until owne
     },
     key: "hb-owner-ask-approve",
     toAddress: "owner",
-    question: "准备在群里跟进构建修复进度，是否发送？",
+    goal: "准备在群里跟进构建修复进度，是否发送？",
     options: ["同意跟进", "暂不发送"],
     now: NOW + 3_000,
   });
-  const { request: answeredReq } = reqSvc.answerAsk({
+  const { request: answeredReq } = reqSvc.updateRequest({
     requestId: approvedAsk.id,
-    answer: "同意跟进",
+    action: "done",
+    summary: "同意跟进",
     selectedOption: "同意跟进",
     resolvedByUserId: "user:alice",
     source: "dashboard",
     now: NOW + 4_000,
   });
 
-  // Capabilities on `request_result` turn in Heartbeat `self` session retain Heartbeat scope (`ignored` terminal output, no `say`, `heartbeatApprovalRequired: true`).
+  // Capabilities on `request_update` turn in Heartbeat `self` session advertise `say --via-main` and `requests`.
   const hbReturnCaps = buildMainCapabilities(
     db.db,
     {
@@ -773,35 +808,48 @@ test("heartbeatApprovalRequired blocks direct heartbeat handoffs/asks until owne
   );
   expect(hbReturnCaps.turn.terminalOutputMode).toBe("ignored");
   expect(hbReturnCaps.addressScope.allowCurrent).toBe(false);
-  expect(hbReturnCaps.commands).not.toContain("say");
+  expect(hbReturnCaps.commands).toContain("say --via-main");
+  expect(hbReturnCaps.commands).toContain("ask | ask message|cancel|get|list");
   expect(hbReturnCaps.outboundGovernance?.heartbeatApprovalRequired).toBe(true);
 
-  // Real `RunnerMessageService.actor` passes `turnId` (`answeredReq.returnCommandId!`, a `session_commands.id` UUID) as `originId`.
-  const { command: approvedHandoff } = reqSvc.createHandoff({
-    actor: {
-      userId: "user:alice",
-      agentId: scope.agentId,
-      shadowId: scope.shadowId,
-      sourceSessionId: selfAddr.sessionId,
-      currentSessionId: selfAddr.sessionId,
-      originId: answeredReq.returnCommandId!,
-    },
-    key: "approved-hb-1",
-    targetSessionId: "group-session",
-    targetAddress: "session:group-session",
-    instruction: "跟进构建修复进度",
-    now: NOW + 5_000,
-  });
-  expect(approvedHandoff.sessionId).toBe("group-session");
-
-  // Heartbeat `self` session is also forbidden from calling `task.create` directly!
   const hbClaims = mintClaims(selfAddr.sessionId, "user:alice", answeredReq.returnCommandId!);
+  const app = new Hono();
+  app.use("*", async (c, next) => {
+    c.set("lunaAccessTokenClaims" as never, hbClaims as never);
+    await next();
+  });
+  app.route("/api/runner", createRunnerMessageRoutes({ db: db.db, channelFor: () => undefined }));
+
+  // Heartbeat calling `/api/runner/messages` WITHOUT `viaMain: true` is rejected (`403 heartbeat_via_main_required`)!
+  const directSay = await app.request("/api/runner/messages", {
+    method: "POST",
+    headers: { "content-type": "application/json", "Idempotency-Key": "hb-direct-bad" },
+    body: JSON.stringify({
+      to: "session:group-session",
+      content: [{ type: "text", text: "直接发言不应允许" }],
+    }),
+  });
+  expect(directSay.status).toBe(403);
+
+  // Heartbeat calling `/api/runner/messages` WITH `viaMain: true` after owner approval succeeds (`202`)!
+  const approvedSay = await app.request("/api/runner/messages", {
+    method: "POST",
+    headers: { "content-type": "application/json", "Idempotency-Key": "hb-via-main-ok" },
+    body: JSON.stringify({
+      to: "session:group-session",
+      viaMain: true,
+      content: [{ type: "text", text: "请跟进昨日构建修复进度" }],
+    }),
+  });
+  expect(approvedSay.status).toBe(202);
+
+  // Heartbeat `self` session is still forbidden from calling `task.create` directly!
   const opSvc = new RunnerOperationService(
     db.db,
     new TaskRunSupervisor({
       db: db.db,
       runnerType: "mock",
-      executeRun: async () => ({ finalReportArtifactId: "art_hb" }),
+      executeRun: async () => ({ kind: "completed", finalReportArtifactId: "art_hb" }),
     }),
   );
   await expect(
@@ -813,4 +861,183 @@ test("heartbeatApprovalRequired blocks direct heartbeat handoffs/asks until owne
       sendStatusCard: false,
     }),
   ).rejects.toThrow("Heartbeat self session cannot create or mutate Tasks");
+});
+
+test("Task Runner -> Main request supports fast-path (--wait) and slow-path (Task enters waiting and auto-resumes when Main settles)", async () => {
+  const commands = new SessionCommandService({ db: db.db, channelFor: () => undefined });
+  registerSessionCommands(db.db, commands);
+  const reqSvc = new CorrelatedRequestService(db.db, () => undefined);
+  const reportSvc = new TaskReportService(db.db, async () => {});
+
+  db.db.insert(schema.tasks).values({
+    id: "task-q-1",
+    type: "task",
+    title: "Migration task",
+    summary: "Run schema migration",
+    status: "new",
+    primary_session_id: "group-session",
+    created_at: 1,
+    updated_at: 1,
+    last_activity_at: 1,
+    ...fixtureTaskOwnership(db.db, "group-session"),
+  }).run();
+
+  let runCounter = 0;
+  let slowRequestId = "";
+  const supervisor = new TaskRunSupervisor({
+    db: db.db,
+    runnerType: "mock",
+    executeRun: async input => {
+      runCounter++;
+      const invId = `task-inv-${runCounter}`;
+      const claims: LunaAccessTokenClaims = {
+        tokenId: `task-tok-${runCounter}`,
+        actorUserId: "user:alice",
+        source: "runner",
+        role: "runner",
+        runnerKind: "task",
+        agentId: scope.agentId,
+        shadowId: scope.shadowId,
+        taskId: input.taskId,
+        taskRunId: input.taskRunId,
+        runnerJobId: input.runnerContext!.id,
+        issuedAt: 1,
+        expiresAt: Date.now() + 60_000,
+      };
+      db.db.insert(schema.accessTokens).values({
+        id: claims.tokenId,
+        agentId: claims.agentId,
+        tokenHash: `task-hash-${runCounter}`,
+        userId: "user:alice",
+        source: "runner",
+        name: "task",
+        role: "runner",
+        issuedAt: 1,
+        expiresAt: claims.expiresAt,
+        createdAt: 1,
+        metadataJson: { invocationId: invId },
+      }).run();
+      const finish = registerTestRunnerJob(
+        db.db,
+        invId,
+        claims,
+        {
+          version: 1,
+          kind: "task",
+          input: {
+            taskId: input.taskId,
+            taskRunId: input.taskRunId,
+            runnerContextId: input.runnerContext!.id,
+          },
+        },
+        input.taskRunId,
+      );
+
+      try {
+        if (runCounter === 1) {
+          // 1. Fast-path: Task asks Main and Main settles within `waitForRequest` window!
+          const fastReq = reqSvc.createRequest({
+            actor: {
+              userId: "user:alice",
+              agentId: scope.agentId,
+              shadowId: scope.shadowId,
+              sourceSessionId: "group-session",
+              currentSessionId: "group-session",
+              originId: input.taskRunId,
+              taskId: input.taskId,
+              taskRunId: input.taskRunId,
+            },
+            key: "fast-q",
+            toAddress: "main",
+            goal: "目标库名称是什么？",
+            now: Date.now(),
+          });
+          setTimeout(() => {
+            reqSvc.updateRequest({
+              requestId: fastReq.id,
+              action: "done",
+              summary: "orders_v2",
+              resolvedByUserId: "user:alice",
+              source: "runner",
+            });
+          }, 15);
+          const fastView = await reqSvc.waitForRequest({
+            shadowId: scope.shadowId,
+            requestId: fastReq.id,
+            timeoutMs: 2_000,
+            consumerTask: {
+              taskId: input.taskId,
+              runnerContextId: input.runnerContext!.id,
+              runId: input.taskRunId,
+            },
+          });
+          expect(fastView.request.status).toBe("done");
+          expect(
+            (fastView.request.resultJson as { summary?: string } | null)?.summary,
+          ).toBe("orders_v2");
+
+          // 2. Slow-path: Task opens a second Request to Main that needs human confirmation, and exits cleanly!
+          const slowReq = reqSvc.createRequest({
+            actor: {
+              userId: "user:alice",
+              agentId: scope.agentId,
+              shadowId: scope.shadowId,
+              sourceSessionId: "group-session",
+              currentSessionId: "group-session",
+              originId: input.taskRunId,
+              taskId: input.taskId,
+              taskRunId: input.taskRunId,
+            },
+            key: "slow-q",
+            toAddress: "main",
+            goal: "是否允许执行 DROP COLUMN legacy_flag？",
+            now: Date.now(),
+          });
+          slowRequestId = slowReq.id;
+          return { kind: "waiting", pauseReason: `Waiting on open Request ${slowReq.id}` };
+        }
+
+        // Run 2 (auto-resumed when Main settled `slowRequestId`!): verify inbox received `request_update`, consume it, and submit final report!
+        const inboxEvents = new TaskInboxStore(db.db).consumePending({
+          taskId: input.taskId,
+          runnerContextId: input.runnerContext!.id,
+          runId: input.taskRunId,
+        });
+        expect(inboxEvents).toHaveLength(1);
+        expect(inboxEvents[0]?.kind).toBe("request_update");
+        expect(inboxEvents[0]?.content).toContain("允许执行");
+
+        const receipt = reportSvc.submit(claims, "final", "Migration orders_v2 completed");
+        return { kind: "completed", finalReportArtifactId: receipt.reportArtifactId };
+      } finally {
+        finish();
+      }
+    },
+  });
+
+  supervisor.startInitialRun({ taskId: "task-q-1", inputSnapshot: {} });
+  await supervisor.waitForIdle();
+
+  // After Run 1 exits with an open Request, Task & Run 1 are suspended in `waiting`!
+  expect(runCounter).toBe(1);
+  expect(
+    db.db.select().from(schema.tasks).where(eq(schema.tasks.id, "task-q-1")).get()?.status,
+  ).toBe("waiting");
+  expect(new TaskRunStore(db.db).listRunsForTask("task-q-1")[0]?.status).toBe("waiting");
+
+  // Main settles `slowRequestId` -> `CorrelatedRequestService` appends `request_update` to `task_inbox_events` AND auto-resumes `task-q-1`!
+  reqSvc.updateRequest({
+    requestId: slowRequestId,
+    action: "done",
+    summary: "允许执行，已完成备份",
+    resolvedByUserId: "user:alice",
+    source: "runner",
+  });
+  await supervisor.waitForIdle();
+
+  expect(runCounter).toBe(2);
+  expect(
+    db.db.select().from(schema.tasks).where(eq(schema.tasks.id, "task-q-1")).get()?.status,
+  ).toBe("completed");
+  expect(new TaskRunStore(db.db).listRunsForTask("task-q-1").at(-1)?.status).toBe("completed");
 });

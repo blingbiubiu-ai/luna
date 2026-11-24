@@ -13,6 +13,10 @@ import {
 import { claudeContainerRunnerProvider } from "./providers/claude";
 import { prepareCodexSkills } from "./providers/codex-skills";
 import type { ContainerRunnerProvider } from "./providers/types";
+import {
+  writeClaudeSubprocessHookSettings,
+  writeCodexHooksJson,
+} from "./task-hooks";
 
 export interface RunnerResult {
   readonly newSessionId?: string;
@@ -46,6 +50,18 @@ export async function runQuery(
     }
     if (provider?.family === "codex" && existsSync(join(skillPlugin, ".codex-plugin", "plugin.json"))) {
       await prepareCodexSkills(env, runnerResourcesPath(env.HOME), env.CODEX_HOME || join(env.HOME, ".codex"));
+    }
+  }
+  if (env.LUNA_RUNNER_KIND === "task") {
+    if (provider?.family === "claude") {
+      const settingsFile = writeClaudeSubprocessHookSettings(
+        join(runnerRootPath, ".luna-task-claude-hooks.json"),
+      );
+      args.unshift("--settings", settingsFile);
+    } else if (provider?.family === "codex") {
+      const codexHome = env.CODEX_HOME || join(env.HOME || runnerRootPath, ".codex");
+      writeCodexHooksJson(codexHome);
+      args.unshift("-c", `projects={${JSON.stringify(runnerRootPath)}={trust_level="trusted"}}`);
     }
   }
   const proc = spawn(command, args, {

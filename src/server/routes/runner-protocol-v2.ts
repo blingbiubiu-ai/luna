@@ -7,7 +7,9 @@ import {
   correlatedRequests,
   runnerOperations,
   sessionCommands,
+  taskInboxEvents,
   taskReportCommands,
+  tasks,
 } from "@/data/schema";
 import {
   buildMainCapabilities,
@@ -189,7 +191,7 @@ export function createRunnerProtocolV2Routes(
         });
       }
 
-      // 3. Correlated requests (`correlatedRequests`: ask / handoff)
+      // 3. Correlated requests (`correlatedRequests`)
       const reqRow = db()
         .select()
         .from(correlatedRequests)
@@ -202,9 +204,11 @@ export function createRunnerProtocolV2Routes(
         return c.json({
           commandId: reqRow.id,
           kind: reqRow.kind,
+          mode: reqRow.mode,
           status: reqRow.status,
           result: {
             requestId: reqRow.id,
+            mode: reqRow.mode,
             targetAddress: reqRow.targetAddress,
             targetSessionId: reqRow.targetSessionId,
             resolvedByUserId: reqRow.resolvedByUserId,
@@ -214,18 +218,52 @@ export function createRunnerProtocolV2Routes(
         });
       }
 
-      // 4. Session command ledger (`sessionCommands`: message.send / session.invoke / task.run / group.*)
+      // 4. Task inbox events (`taskInboxEvents`: Main -> Task `say --to task:<id>`)
+      const inboxRow = db()
+        .select()
+        .from(taskInboxEvents)
+        .where(eq(taskInboxEvents.id, id))
+        .get();
+      if (inboxRow) {
+        const taskRow = db()
+          .select({ shadowId: tasks.shadow_id })
+          .from(tasks)
+          .where(eq(tasks.id, inboxRow.taskId))
+          .get();
+        if (!taskRow || taskRow.shadowId !== invocation.shadowId) {
+          throw new GatewayError("command_not_found", "Command not found", 404);
+        }
+        return c.json({
+          commandId: inboxRow.id,
+          kind: "task.message",
+          status: "accepted",
+          taskId: inboxRow.taskId,
+          result: {
+            taskId: inboxRow.taskId,
+            inboxEventId: inboxRow.id,
+          },
+          error: null,
+        });
+      }
+
+      // 5. Session command ledger (`sessionCommands`: message.send / session.invoke / task.run / group.*)
       const cmdRow = db()
         .select()
         .from(sessionCommands)
         .where(eq(sessionCommands.id, id))
         .get();
+      const allowedForTask =
+        invocation.runnerKind === "task" &&
+        cmdRow?.originId === invocation.originId;
+      const allowedForSession =
+        invocation.runnerKind !== "task" &&
+        cmdRow?.sourceSessionId === invocation.sessionId &&
+        (cmdRow?.sessionId === invocation.sessionId ||
+          cmdRow?.originId === invocation.originId);
       if (
         !cmdRow ||
         cmdRow.actorUserId !== invocation.actorUserId ||
-        cmdRow.sourceSessionId !== invocation.sessionId ||
-        (cmdRow.sessionId !== invocation.sessionId &&
-          cmdRow.originId !== invocation.originId)
+        (!allowedForTask && !allowedForSession)
       ) {
         throw new GatewayError("command_not_found", "Command not found", 404);
       }

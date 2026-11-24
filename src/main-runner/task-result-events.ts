@@ -29,6 +29,7 @@ import {
   type NotificationAttempt,
 } from "@/messaging/notifications/notification-attempt-store";
 import { RunnerContextStore } from "@/runners/runner-context-store";
+import { ensureTurnDeltaPack } from "@/context";
 import type { ReplyChannel } from "@/channels/outbound";
 import { createLogger, uuid } from "@/shared";
 
@@ -259,6 +260,12 @@ export class TaskResultEventPublisher {
       result,
       subscription: input.subscription,
       attemptId: attempt.id,
+      triggerId:
+        this._db
+          .select({ id: sessionTriggers.id })
+          .from(sessionTriggers)
+          .where(eq(sessionTriggers.dedupeKey, dedupeKey))
+          .get()?.id ?? attempt.id,
     }).catch(
       (err) => {
         if (err instanceof RuntimeDetachedError) throw err;
@@ -401,17 +408,38 @@ export class TaskResultEventPublisher {
     readonly result: TaskResultForMainRunner;
     readonly subscription: TaskSubscription;
     readonly attemptId: string;
+    readonly triggerId: string;
   }): Promise<MainRunnerCompletion> {
     const runOnce = async () => {
       const runnerContext = this._runnerContexts.resolveForSession(
         input.subscription.session_id,
         this._runnerType(input.subscription.session_id),
       );
+      const includeLaunchSeed = runnerContext.runner_session_id === null;
+      const baseSeedBuild = includeLaunchSeed
+        ? this._contextBuilder.buildForSessionWithEntries(
+            input.subscription.session_id,
+            {
+              includeLaunchSeed: true,
+              createdForInvocationId: input.triggerId,
+            },
+          )
+        : undefined;
+      const launchSeedEntryIds = new Set(baseSeedBuild?.contextEntryIds ?? []);
+      const deltaPackId = ensureTurnDeltaPack({
+        db: this._db,
+        sessionId: input.subscription.session_id,
+        invocationId: input.triggerId,
+        runnerContext,
+        turnFlavor: "task_result",
+        launchSeedEntryIds,
+      });
       const context = this._contextBuilder.buildForSession(
         input.subscription.session_id,
         {
-          includeLaunchSeed: runnerContext.runner_session_id === null,
-          createdForInvocationId: input.attemptId,
+          includeLaunchSeed,
+          createdForInvocationId: input.triggerId,
+          ...(deltaPackId !== undefined ? { deltaContextPackIds: [deltaPackId] } : {}),
         },
       );
       const taskOrigin = this._db
@@ -450,6 +478,7 @@ export class TaskResultEventPublisher {
       return await this._mainRunner.run({
         input: mainRunnerInput,
         runnerContext,
+        turnId: input.triggerId,
       });
     };
     try {

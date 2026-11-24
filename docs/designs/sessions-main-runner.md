@@ -2,7 +2,7 @@
 
 ## Responsibility Boundary
 
-A session is the user interaction work view. Main Runner is the session-level decision maker: it reads `<capabilities>` and `<events>` on each turn, understands messages, context, attached tasks, correlated requests, and activation reasons, executes task/state commands while running, then returns its final reply for Service delivery. `luna say` remains available for progress, notifications, proactive outbound messages, and early answers. Self-routine turns (`reflection`, `consolidation`, `heartbeat`, `request_expiry`) set `terminalOutputMode: "ignored"` so terminal prose is ignored without requiring a sentinel, whereas passive conversation turns keep terminal-output-as-reply (`LUNA_NOTHING_TO_SEND` only when `allowSilent: true`). When Main creates a topic thread and hands off the current turn's trigger message atomically via `luna sessions create-thread --handoff`, Service suppresses any duplicate reply in the source group. See [Runner Protocol v2](runner-protocol.md).
+A session is the user interaction work view. Main Runner is the session-level decision maker: it reads `<capabilities>` and `<events>` on each turn, understands messages, context, attached tasks, correlated requests, and activation reasons, executes task/state commands while running, then returns its final reply for Service delivery. `luna say` handles progress, notifications, proactive outbound messages (`--via-main` when delegating one-way to another Main), soft Task notes (`--to task:<id>`), and early answers, while `luna ask` handles tracked card and multi-turn delegate requests. Self-routine turns (`reflection`, `consolidation`, `heartbeat`, `request_expiry`) set `terminalOutputMode: "ignored"` so terminal prose is ignored without requiring a sentinel, whereas passive conversation turns keep terminal-output-as-reply (`LUNA_NOTHING_TO_SEND` only when `allowSilent: true`). When Main creates a topic thread anchored to the current turn's group message (`luna sessions create-thread`) and sends an opening (`luna say --to session:<topicId>`) or dispatches a Task (`sessionId: <topicId>`), Service suppresses any duplicate reply in the source group. See [Runner Protocol v2](runner-protocol.md).
 
 Main Runner does not directly:
 
@@ -32,18 +32,21 @@ private turn; unrelated group activations may complete silently. Failed executio
 empty terminal output and streamed tool commentary never become final replies.
 
 Main stays responsible for the work it dispatches, as a developer is for work
-handed to a coding agent. A Task treats Main as its user and brings questions
-and confirmations to it through its report; `waitingForInput: true` on a task
-result marks a report the Task cannot continue past. Main answers what the
-conversation, memory or supplied material settles and says so in its reply;
-it forwards questions about what the request means, in full, to the person who
-asked for the work; and it takes irreversible changes to shared systems,
-unverifiable results and major technical trade-offs to the Agent owner. Work a
-non-owner requests that would write to outside systems under the owner's
+handed to a coding agent. A Task treats Main as its user: it sends non-terminal
+milestone findings via `luna say --to main` (`peer_message`), brings mid-run
+questions and approvals via `luna ask --to main` (`request_opened`),
+and submits its final outcome via `luna tasks report` (`task_result`). Main
+answers a Task's `request_opened` immediately (`luna ask reply <id> --done`)
+when conversation, memory or supplied material settles it; forwards questions
+about what the request means to the requester; and takes irreversible changes to
+shared systems, unverifiable results and major technical trade-offs to the Agent
+owner (`luna ask --to owner --options '[...]'`). Settling a Task's
+request automatically resumes the Task when it is suspended in `waiting` state.
+Work a non-owner requests that would write to outside systems under the owner's
 identity, add standing duties, or match an owner-defined approval rule in
 `persona` / `chat` memory is dispatched only after the owner agrees via
-`luna asks create --to owner` (`src/prompts/main/routing.md`). When
-the owner approves and `request_result` wakes the session, `RunnerOperationService`
+`luna ask --to owner` (`src/prompts/main/routing.md`). When
+the owner approves and `request_update` wakes the session, `RunnerOperationService`
 permits `task.create` to link the requester's original `sourceMessageIds` from
 that session's timeline so requester identity, attachments and thread anchors
 are preserved. A
@@ -205,6 +208,15 @@ For explicit group activation, activation context selection is still determinist
 - If the explicit activation would otherwise have too little context, Runtime can widen to the latest unsent user messages until the configured minimum recent count is satisfied.
 
 This preserves the old "recent local context" meaning while giving first activation after silent buildup or imported history a minimum usable window.
+
+### Out-of-Band Assistant Messages in `deltaContext`
+
+Assistant messages written into a session outside its own Main/Work Runner turns—cross-session `luna ask --options` cards, cross-session `say`, scheduled `message.send` occurrences, self-routine notifications, and Service diagnostics—never enter `session_inbox` or the provider session's native transcript. `TurnDeltaSelector` (`src/context/turn-delta-selector.ts`) surfaces unseen delivered (`status = "sent"`) out-of-band assistant messages once into `<history>.deltaContext` across all Main turn flavors (`user_messages`, `session_trigger`, and `task_result`):
+
+- **Authorship tagging**: `SessionCommandService.accept()` records `payload.authoredBy: "runner" | "cross_session" | "service"` on every `message.send` command (falling back to session/invocation lineage for pre-existing rows). Runner-authored replies in the current session and Task status/result cards are excluded; deferred quiet-hours sends are withheld until released and delivered.
+- **Once-per-provider-context deduplication**: entries attached to completed `session_turns`, recorded in the context's `launchSeed`, or belonging to a `turn_delta` / `group_activation` pack whose invocation already delivered input to the provider session are skipped. Failed turns that never reached provider session init retry on the next turn.
+- **Chronological interleaving & budgets**: on addressed group turns, overheard user messages and out-of-band assistant messages share one `group_activation` delta pack in chronological order; other turns emit a `turn_delta` pack (up to `10` out-of-band messages / `6000` characters, `1500` per item, with `omittedOutOfBandCount` when truncated).
+- **Correlated request snapshot**: each out-of-band item carries `reason` (`out_of_band:cross_session|schedule|routine|service`), `via` (`request|message|schedule|routine|service`), `originSessionId`, and `correlationId`. When `correlationId` references a `correlated_requests` row that is not already surfaced as `open_request` in `<events>`, `<history>.deltaContext` attaches a live `request` snapshot (`mode`, `status`, `contextSummary`, `options`, `selectedOption`, `summary`, `resolvedBy`, `resolvedAt`).
 
 ## Main Runner Output
 

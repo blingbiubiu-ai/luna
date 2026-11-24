@@ -84,11 +84,13 @@ export function addressingFacts(latest: NormalizedInboundMessage) {
 
 export type TurnEventKind =
   | "message"
-  | "pending_ask"
+  | "open_request"
+  | "request_opened"
+  | "request_message"
+  | "request_update"
+  | "peer_message"
   | "task_result"
   | "schedule_fired"
-  | "handoff"
-  | "request_result"
   | "routine"
   | "clarification";
 

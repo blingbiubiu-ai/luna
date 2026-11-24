@@ -18,7 +18,9 @@ import { AgentSettingsStore } from "@/agents/agent-settings-store";
 import type { TaskRunSupervisor } from "./task-run-supervisor";
 
 type TaskRequest = Extract<OperationRequest, {kind: "task.create" | "task.update" | "task.restart" | "task.cancel"}>;
-export type TaskCommandSupervisor = Pick<TaskRunSupervisor, "startInitialRun" | "restartTaskRun" | "cancelTaskRun">;
+export type TaskCommandSupervisor = Pick<TaskRunSupervisor, "startInitialRun" | "restartTaskRun" | "cancelTaskRun"> & {
+  readonly cancelWaitingTask?: TaskRunSupervisor["cancelWaitingTask"];
+};
 
 /** Task mutations are transactional; run dispatch uses the supervisor's durable source deduplication. */
 export class TaskCommandService {
@@ -118,8 +120,12 @@ export class TaskCommandService {
     new AgentStore(this.db).requireAccess(context.actorUserId,scope.agentId);
     new SessionStore(this.db).requireReplyUserId(result.taskSessionId??context.sessionId);
     if (request.kind === "task.cancel") {
-      const run = result.runId ? this.supervisor.cancelTaskRun({taskId, runId: result.runId, reason: request.payload.reason}) : undefined;
-      return {...result, cancelled: run?.status === "cancelled"};
+      if (result.runId) {
+        const run = this.supervisor.cancelTaskRun({taskId, runId: result.runId, reason: request.payload.reason});
+        return {...result, cancelled: run?.status === "cancelled"};
+      }
+      const cancelledWaiting = this.supervisor.cancelWaitingTask?.({taskId, reason: request.payload.reason}) ?? false;
+      return {...result, cancelled: cancelledWaiting};
     }
     const inputSnapshot = {operation: request.kind, operationId, sessionId: result.taskSessionId ?? context.sessionId, messageRowId: result.sourceMessageId,
       messageRowIds: context.sourceMessageIds, inbound: context.inbound,

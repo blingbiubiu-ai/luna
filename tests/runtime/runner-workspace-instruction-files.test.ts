@@ -213,7 +213,7 @@ test("every skill the instructions point to ships with Luna and holds the manual
   const skills = join(import.meta.dir, "../../skills");
   const main = renderRunnerInstructions({ home: "/home/luna", promptsRoot: join(import.meta.dir, "../../src/prompts"), runnerKind: "main", runnerRootPath });
   const manuals: Record<string, string> = {
-    "luna-duties": "luna asks create",
+    "luna-duties": "luna ask --to owner",
     "luna-schedules": "--frequency",
     "luna-users": "luna users search",
     "luna-topics-groups": "luna sessions create-thread",
@@ -227,7 +227,7 @@ test("every skill the instructions point to ships with Luna and holds the manual
         ? "--resend --style card"
         : command === "luna sessions create-thread"
           ? "--anchor-message-id"
-          : command === "luna asks create"
+          : command === "luna ask --to owner"
             ? "NO_ALERT_CHANGE"
             : command,
     );
@@ -236,6 +236,7 @@ test("every skill the instructions point to ships with Luna and holds the manual
     expect(skill).toContain(command);
   }
   expect(main).toContain("luna say --purpose answer --text");
-  expect(main).toContain("luna sessions create-thread --handoff");
+  expect(main).toContain("luna sessions create-thread");
+  expect(main).not.toContain("--handoff");
   expect(main).toContain("never append review, merge, or approval disclaimers");
 });

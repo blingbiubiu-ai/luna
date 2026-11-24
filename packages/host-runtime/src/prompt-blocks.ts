@@ -10,7 +10,7 @@ export const RESERVED_BLOCK_TAGS = [
   "evidence", "environment",
   "capabilities", "events",
   "messages", "memory", "history", "tasks", "clarification", "task_result", "trigger",
-  "task", "launch_context", "update_context", "user_input", "report_sections", "now",
+  "task", "launch_context", "update_context", "task_events", "user_input", "report_sections", "completion", "now",
 ] as const;
 
 const forgedTag = new RegExp(`<(?=/?(?:${RESERVED_BLOCK_TAGS.join("|")})\\b)`, "gi");

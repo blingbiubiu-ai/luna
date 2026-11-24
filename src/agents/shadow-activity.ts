@@ -62,8 +62,10 @@ export interface ActivityScheduleOccurrenceItem {
 
 export interface ActivityCorrelatedRequestItem {
   readonly requestId: string;
-  readonly kind: "ask" | "handoff";
+  readonly kind: "request";
+  readonly mode: "card" | "delegate";
   readonly originSessionId: string;
+  readonly originTaskId: string | null;
   readonly targetSessionId: string;
   readonly status: string;
   readonly updatedAt: number;
@@ -411,7 +413,7 @@ export function queryShadowActivity(
     .where(
       and(
         eq(correlatedRequests.shadowId, shadowId),
-        sql`${correlatedRequests.status} <> 'pending'`,
+        sql`${correlatedRequests.status} NOT IN ('open', 'in_progress')`,
         sql`${correlatedRequests.updatedAt} > ${since}`,
       ),
     )
@@ -422,7 +424,9 @@ export function queryShadowActivity(
   const correlatedList: ActivityCorrelatedRequestItem[] = reqRows.map(r => ({
     requestId: r.id,
     kind: r.kind,
+    mode: r.mode,
     originSessionId: r.originSessionId,
+    originTaskId: r.originTaskId,
     targetSessionId: r.targetSessionId,
     status: r.status,
     updatedAt: r.updatedAt,

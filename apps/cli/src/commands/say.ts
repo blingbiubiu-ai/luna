@@ -27,8 +27,12 @@ const LEGACY_TARGET_FLAGS = [
   "--user-id",
 ] as const;
 
-const SAY_USAGE =
-  "Usage: luna say [--to <address>] (--text <text> | --stdin) [--json] [--purpose progress|answer|notification] [--repeat]\nAddresses: current (default), owner, user:<id>, session:<id>, group:<id>";
+const SAY_USAGE = [
+  "Usage:",
+  "  luna say [--to <address>] (--text <text> | --stdin) [--json] [--purpose progress|answer|notification] [--repeat]",
+  "  luna say --to <address> --via-main (--text <text> | --stdin) [--context-ref <artifact-id>...] [--repeat]",
+  "Addresses: current (default), owner, main (Task Runner), task:<id>, user:<id>, session:<id>, group:<id>",
+].join("\n");
 
 function parseMessageJson(text: string) {
   const input: unknown = JSON.parse(text);
@@ -61,7 +65,7 @@ export async function runSayCli(
       return {
         status: "error",
         code: "legacy_target_removed",
-        message: `${legacy} is removed in Protocol v2; pass a unified address via --to (current, user:<id>, session:<id>, group:<id>)`,
+        message: `${legacy} is removed in Protocol v2; pass a unified address via --to (current, owner, main, task:<id>, user:<id>, session:<id>, group:<id>)`,
       };
     }
     if (argv.includes("--mention") || argv.includes("--mention-bot")) {
@@ -88,7 +92,27 @@ export async function runSayCli(
         message: SAY_USAGE,
       };
     }
-    const to = readOption(argv, "--to")?.trim() || "current";
+    const viaMain = hasFlag(argv, "--via-main");
+    const defaultTo = env.LUNA_RUNNER_KIND === "task" ? "main" : "current";
+    const to = readOption(argv, "--to")?.trim() || defaultTo;
+    if (viaMain && to === "current") {
+      return {
+        status: "error",
+        code: "invalid_say_command",
+        message: "--via-main requires a non-current target address via --to",
+      };
+    }
+    const contextRefs = argv.flatMap((arg, idx) =>
+      arg === "--context-ref" &&
+      argv[idx + 1] &&
+      !argv[idx + 1]!.startsWith("--")
+        ? [
+            argv[idx + 1]!.startsWith("artifact:")
+              ? argv[idx + 1]!.slice("artifact:".length)
+              : argv[idx + 1]!,
+          ]
+        : [],
+    );
     const purpose =
       readOption(argv, "--purpose") ??
       (to === "current" ? "progress" : "notification");
@@ -102,18 +126,25 @@ export async function runSayCli(
     const reply = hasFlag(argv, "--json") ? parseMessageJson(text) : undefined;
     const body = {
       to,
+      ...(viaMain ? { viaMain: true } : {}),
+      ...(contextRefs.length > 0 ? { contextRefs } : {}),
       ...(reply ? { reply } : { content: [{ type: "text", text }] }),
       purpose,
     };
     const key = deriveCommandIdempotencyKey(env, "say", body, {
       repeat: hasFlag(argv, "--repeat"),
     });
-    return await submitAndWaitCommand(env, {
-      method: "POST",
-      path: "/api/runner/messages",
-      idempotencyKey: key,
-      body,
-    });
+    const isAsyncInvoke = viaMain || to === "main" || to.startsWith("task:");
+    return await submitAndWaitCommand(
+      env,
+      {
+        method: "POST",
+        path: "/api/runner/messages",
+        idempotencyKey: key,
+        body,
+      },
+      isAsyncInvoke ? { wait: false } : undefined,
+    );
   } catch (error) {
     return {
       status: "error",

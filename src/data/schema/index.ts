@@ -21,6 +21,7 @@ export * from "./sessions";
 export * from "./task-runs";
 export * from "./task-run-notifications";
 export * from "./tasks";
+export * from "./task-inbox-events";
 export * from "./timeline";
 export * from "./accounts";
 export * from "./users";

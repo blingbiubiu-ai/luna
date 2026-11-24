@@ -4,7 +4,7 @@ import type { DrizzleDB } from "@/data";
 import { taskRuns } from "@/data/schema";
 import { createId } from "@/shared";
 
-export type TaskRunStatus = "running" | "completed" | "cancelled" | "failed";
+export type TaskRunStatus = "running" | "waiting" | "completed" | "cancelled" | "failed";
 export type TaskRunReason = "initial" | "restart";
 
 export interface TaskRun {
@@ -20,6 +20,7 @@ export interface TaskRun {
   readonly sourceMessageId: string | null;
   readonly startedAt: number;
   readonly finishedAt: number | null;
+  readonly pauseReason: string | null;
   readonly cancelReason: string | null;
   readonly error: string | null;
   readonly finalReportArtifactId: string | null;
@@ -40,6 +41,11 @@ export interface CreateTaskRunInput {
 export interface CompleteTaskRunInput {
   readonly finishedAt?: number;
   readonly finalReportArtifactId: string;
+}
+
+export interface WaitTaskRunInput {
+  readonly finishedAt?: number;
+  readonly pauseReason?: string;
 }
 
 export interface CancelTaskRunInput {
@@ -118,6 +124,7 @@ export class TaskRunStore {
         source_message_id: input.sourceMessageId ?? null,
         started_at: now,
         finished_at: null,
+        pause_reason: null,
         cancel_reason: null,
         error: null,
         final_report_artifact_id: null,
@@ -190,9 +197,21 @@ export class TaskRunStore {
     return this._markTerminal(id, "completed", {
       status: "completed",
       finished_at: input.finishedAt ?? Date.now(),
+      pause_reason: null,
       cancel_reason: null,
       error: null,
       final_report_artifact_id: input.finalReportArtifactId,
+    });
+  }
+
+  markWaiting(id: string, input: WaitTaskRunInput = {}): TaskRun {
+    return this._markTerminal(id, "waiting", {
+      status: "waiting",
+      finished_at: input.finishedAt ?? Date.now(),
+      pause_reason: input.pauseReason ?? null,
+      cancel_reason: null,
+      error: null,
+      final_report_artifact_id: null,
     });
   }
 
@@ -200,6 +219,7 @@ export class TaskRunStore {
     return this._markTerminal(id, "cancelled", {
       status: "cancelled",
       finished_at: input.finishedAt ?? Date.now(),
+      pause_reason: null,
       cancel_reason: input.cancelReason ?? null,
       error: null,
       final_report_artifact_id: null,
@@ -210,6 +230,7 @@ export class TaskRunStore {
     return this._markTerminal(id, "failed", {
       status: "failed",
       finished_at: input.finishedAt ?? Date.now(),
+      pause_reason: null,
       cancel_reason: null,
       error: input.error ?? null,
       final_report_artifact_id: null,
@@ -232,6 +253,7 @@ export class TaskRunStore {
         .set({
           status: "failed",
           finished_at: input.finishedAt ?? Date.now(),
+          pause_reason: null,
           cancel_reason: null,
           error:
             input.error ?? "Runtime recovered an interrupted running Task Run.",
@@ -302,6 +324,7 @@ function _toTaskRun(row: typeof taskRuns.$inferSelect): TaskRun {
     sourceMessageId: row.source_message_id,
     startedAt: row.started_at,
     finishedAt: row.finished_at,
+    pauseReason: row.pause_reason,
     cancelReason: row.cancel_reason,
     error: row.error,
     finalReportArtifactId: row.final_report_artifact_id,

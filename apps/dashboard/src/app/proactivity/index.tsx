@@ -34,7 +34,7 @@ export const Route = createFileRoute("/$agentId/proactivity/")({
 });
 
 type LedgerTab = "requests" | "governance";
-type RequestFilter = "all" | "pending" | "ask" | "handoff";
+type RequestFilter = "all" | "open" | "card" | "delegate";
 
 function formatHeartbeatError(raw: string): string {
   if (
@@ -107,7 +107,7 @@ function ProactivityPage() {
     hb => hb.pendingActivity.hasWakeActivity,
   ).length;
   const openRequestsCount = (data?.requests ?? []).filter(
-    r => r.status === "pending",
+    r => r.status === "open" || r.status === "in_progress",
   ).length;
   const deferredCount = data?.governance.deferredQueue.length ?? 0;
   const throttledCount = (data?.governance.recentEvents ?? []).filter(
@@ -121,14 +121,21 @@ function ProactivityPage() {
   const filteredRequests = useMemo(() => {
     const list = data?.requests ?? [];
     return list.filter(item => {
-      if (requestFilter === "pending" && item.status !== "pending") return false;
-      if (requestFilter === "ask" && item.kind !== "ask") return false;
-      if (requestFilter === "handoff" && item.kind !== "handoff") return false;
+      if (
+        requestFilter === "open" &&
+        item.status !== "open" &&
+        item.status !== "in_progress"
+      ) {
+        return false;
+      }
+      if (requestFilter === "card" && item.mode !== "card") return false;
+      if (requestFilter === "delegate" && item.mode !== "delegate") return false;
       if (!normalizedSearch) return true;
       return [
         item.id,
         item.instruction,
         item.originSessionTitle,
+        item.originTaskId ?? "",
         item.targetSessionTitle,
         item.targetUserName ?? "",
         item.shadowName,
@@ -243,15 +250,15 @@ function ProactivityPage() {
                 value={data ? openRequestsCount : "-"}
                 sub={data ? `共 ${data.requests.length} 条记录` : ""}
                 tone={openRequestsCount > 0 ? "slate" : "neutral"}
-                active={ledgerTab === "requests" && requestFilter === "pending"}
+                active={ledgerTab === "requests" && requestFilter === "open"}
                 withSageBar={
                   openRequestsCount > 0 ||
-                  (ledgerTab === "requests" && requestFilter === "pending")
+                  (ledgerTab === "requests" && requestFilter === "open")
                 }
                 onClick={() => {
                   setLedgerTab("requests");
                   setRequestFilter(prev =>
-                    prev === "pending" ? "all" : "pending",
+                    prev === "open" ? "all" : "open",
                   );
                 }}
               />
@@ -442,9 +449,9 @@ function ProactivityPage() {
                         {(
                           [
                             ["all", "全部"],
-                            ["pending", "等待响应"],
-                            ["ask", "提问"],
-                            ["handoff", "委派"],
+                            ["open", "待响应"],
+                            ["card", "确认卡片"],
+                            ["delegate", "多轮委托"],
                           ] as const
                         ).map(([key, label]) => (
                           <button
@@ -802,15 +809,15 @@ const REQUEST_STATUS_STYLE: Record<
   DashboardCorrelatedRequestItem["status"],
   { label: string; dot: string; pill: string }
 > = {
-  pending: {
+  open: {
     label: "等待响应",
     dot: "bg-[#5c7c99] dark:bg-[#86a3be]",
     pill: "bg-[#5c7c99]/14 text-[#5c7c99] border-[#5c7c99]/28 dark:bg-[#86a3be]/16 dark:text-[#86a3be] dark:border-[#86a3be]/30",
   },
-  answered: {
-    label: "已回答",
-    dot: "bg-[#5b8a72] dark:bg-[#7fb096]",
-    pill: "bg-[#5b8a72]/14 text-[#5b8a72] border-[#5b8a72]/28 dark:bg-[#7fb096]/16 dark:text-[#7fb096] dark:border-[#7fb096]/30",
+  in_progress: {
+    label: "处理中",
+    dot: "bg-[#b07d4f] dark:bg-[#d1a273]",
+    pill: "bg-[#b07d4f]/14 text-[#b07d4f] border-[#b07d4f]/28 dark:bg-[#d1a273]/16 dark:text-[#d1a273] dark:border-[#d1a273]/30",
   },
   done: {
     label: "已完成",
@@ -864,11 +871,11 @@ function RequestsLedgerPanel({
     return (
       <LedgerEmptyState
         icon={GitPullRequestArrow}
-        title={hasFilter ? "没有匹配的请求记录" : "暂无追问或跨会话协同"}
+        title={hasFilter ? "没有匹配的请求记录" : "暂无请求协同记录"}
         description={
           hasFilter
             ? "尝试切换筛选标签或清空搜索词。"
-            : "当分身主动向用户发起确认提问，或将待跟进事项委派给目标会话时，处理进度与回执会在此实时闭环。"
+            : "当会话或后台 Task 发起确认卡片或多轮委托请求时，沟通轨迹与回执会在此实时闭环。"
         }
       />
     );
@@ -882,25 +889,28 @@ function RequestsLedgerPanel({
           dot: "bg-muted-foreground",
           pill: "bg-muted text-muted-foreground border-border",
         };
+        const isOpen = item.status === "open" || item.status === "in_progress";
         const selectedOption =
           item.result && typeof item.result.selectedOption === "string"
             ? item.result.selectedOption
             : undefined;
         const answerOrSummary =
-          item.result && typeof item.result.answer === "string"
-            ? item.result.answer
-            : item.result && typeof item.result.summary === "string"
-              ? item.result.summary
-              : item.result && typeof item.result.reason === "string"
-                ? item.result.reason
-                : undefined;
+          item.result && typeof item.result.summary === "string"
+            ? item.result.summary
+            : item.result && typeof item.result.answer === "string"
+              ? item.result.answer
+              : item.result && typeof item.result.latestProgress === "string"
+                ? item.result.latestProgress
+                : item.result && typeof item.result.reason === "string"
+                  ? item.result.reason
+                  : undefined;
 
         return (
           <div
             key={item.id}
             className="group px-4 py-3.5 transition-colors hover:bg-muted/30"
           >
-            {/* Row Top: Status + Kind + Route + Timestamp / Cancel */}
+            {/* Row Top: Status + Mode + Route + Timestamp / Cancel */}
             <div className="flex flex-wrap items-center justify-between gap-2">
               <div className="flex min-w-0 flex-wrap items-center gap-2 text-xs">
                 <span
@@ -914,7 +924,7 @@ function RequestsLedgerPanel({
                 </span>
 
                 <span className="rounded-[5px] bg-secondary px-1.5 py-0.5 text-[11px] font-medium text-secondary-foreground">
-                  {item.kind === "ask" ? "主动提问" : "跨会话委派"}
+                  {item.mode === "card" ? "确认卡片" : "多轮委托"}
                 </span>
 
                 <span className="text-muted-foreground">{item.shadowName}</span>
@@ -923,12 +933,21 @@ function RequestsLedgerPanel({
                 </span>
 
                 <div className="flex min-w-0 items-center gap-1.5 text-muted-foreground">
-                  <a
-                    href={`${base}/sessions/${encodeURIComponent(item.originSessionId)}`}
-                    className="max-w-44 truncate font-medium text-foreground/85 hover:underline"
-                  >
-                    {item.originSessionTitle}
-                  </a>
+                  {item.originTaskId ? (
+                    <a
+                      href={`${base}/tasks/${encodeURIComponent(item.originTaskId)}`}
+                      className="max-w-44 truncate font-medium text-foreground/85 hover:underline"
+                    >
+                      Task · {item.originSessionTitle}
+                    </a>
+                  ) : (
+                    <a
+                      href={`${base}/sessions/${encodeURIComponent(item.originSessionId)}`}
+                      className="max-w-44 truncate font-medium text-foreground/85 hover:underline"
+                    >
+                      {item.originSessionTitle}
+                    </a>
+                  )}
                   <ArrowRight className="size-3 shrink-0 opacity-60" />
                   <a
                     href={`${base}/sessions/${encodeURIComponent(item.targetSessionId)}`}
@@ -945,13 +964,13 @@ function RequestsLedgerPanel({
               </div>
 
               <div className="flex items-center gap-2.5 text-xs text-muted-foreground">
-                {item.status === "pending" && item.expiresAt && (
+                {isOpen && item.expiresAt && (
                   <span>{formatRelative(item.expiresAt, now)}过期</span>
                 )}
                 <span className="tabular-nums">
                   {formatShortTime(item.createdAt, timezone)}
                 </span>
-                {item.status === "pending" && (
+                {isOpen && (
                   <Button
                     type="button"
                     size="xs"
@@ -966,15 +985,15 @@ function RequestsLedgerPanel({
               </div>
             </div>
 
-            {/* Instruction / Question Text */}
+            {/* Goal Text */}
             <p className="mt-2 whitespace-pre-wrap break-words text-[13.5px] leading-relaxed text-foreground">
               {item.instruction}
             </p>
 
-            {/* Options Action Buttons (when pending) or Chips (once settled) */}
+            {/* Options Action Buttons (when open) or Chips (once settled) */}
             {item.options.length > 0 && (
               <div className="mt-2.5 flex flex-wrap items-center gap-2">
-                {item.kind === "ask" && item.status === "pending" && item.canAnswer !== false
+                {item.mode === "card" && isOpen && item.canAnswer !== false
                   ? item.options.map((opt, idx) => {
                       const isReject = /^(婉拒|拒绝|驳回|取消|decline|reject)$/i.test(
                         opt.trim(),
@@ -1017,13 +1036,33 @@ function RequestsLedgerPanel({
               </div>
             )}
 
+            {/* Event Trail (when multi-step messages/progress occurred) */}
+            {item.events.length > 2 && (
+              <div className="mt-2.5 space-y-1 border-l-2 border-border/80 pl-2.5 text-xs text-muted-foreground">
+                {item.events.slice(1, -1).map(ev => (
+                  <div key={ev.id} className="flex items-baseline gap-2">
+                    <span className="shrink-0 font-medium text-foreground/75">
+                      {ev.kind === "message"
+                        ? "补充说明"
+                        : ev.kind === "progress"
+                          ? "阶段进展"
+                          : ev.kind}
+                    </span>
+                    <span className="min-w-0 flex-1 truncate">{ev.content}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+
             {/* Resolution Callout */}
             {answerOrSummary && (
               <div className="mt-2.5 flex flex-wrap items-baseline gap-x-2 gap-y-1 rounded-[9px] bg-muted/65 px-3 py-2 text-[12.5px]">
                 <span className="font-medium text-[#5b8a72] dark:text-[#7fb096]">
-                  {item.resolvedByUserName
-                    ? `${item.resolvedByUserName} 响应：`
-                    : "回执结果："}
+                  {item.status === "in_progress"
+                    ? "阶段进展："
+                    : item.resolvedByUserName
+                      ? `${item.resolvedByUserName} 响应：`
+                      : "回执结果："}
                 </span>
                 <span className="min-w-0 flex-1 whitespace-pre-wrap break-words text-foreground">
                   {answerOrSummary}

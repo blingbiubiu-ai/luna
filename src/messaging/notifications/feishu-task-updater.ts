@@ -163,9 +163,7 @@ export class TaskStatusCardUpdater {
     const persistentTask = taskView.persistentTask;
     if (this._statusCardState(persistentTask.status) === "terminal") {
       if (!options.includeTerminalStatusText) return "";
-      return persistentTask.status === "completed" && persistentTask.block_reason === WAITING_FOR_INPUT
-        ? "等待答复。"
-        : this._statusLabel(persistentTask.status);
+      return this._statusLabel(persistentTask.status);
     }
 
     if (subscription.visibility === "summary") {
@@ -202,6 +200,8 @@ export class TaskStatusCardUpdater {
     switch (status) {
       case "running":
         return "正在执行。";
+      case "waiting":
+        return "等待确认或外部条件中。";
       case "completed":
         return "处理完成。";
       case "cancelled":

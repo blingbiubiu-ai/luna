@@ -593,8 +593,9 @@ export function HomeOverview({
                 dotClass="bg-[#5c7c99] dark:bg-[#86a3be]"
                 label={locale === "zh-CN" ? "待响应请求" : "Open requests"}
                 count={
-                  proactivity.requests.filter((r) => r.status === "pending")
-                    .length
+                  proactivity.requests.filter(
+                    (r) => r.status === "open" || r.status === "in_progress",
+                  ).length
                 }
               />
               <SurfaceMiniStat

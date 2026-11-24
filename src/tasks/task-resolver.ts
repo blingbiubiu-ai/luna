@@ -130,6 +130,8 @@ export class TaskResolver {
       type: input.workflow,
       status: "new",
       block_reason: null,
+      wake_at: null,
+      wake_reason: null,
       priority: input.workflow === "approval" ? "high" : "medium",
       severity: null,
       title: input.title,

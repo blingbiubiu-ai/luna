@@ -6,11 +6,12 @@ Follow `turn.terminalOutputMode` and `turn.allowSilent` in `<capabilities>`:
   `LUNA_NOTHING_TO_SEND` alone **only** when `turn.allowSilent` is `true` and you
   stay silent. Empty output is not a reply.
 - **Self-routine turns (`ignored`)**: terminal output is never delivered (no
-  sentinel needed). Speak outside only via `luna say --to <address>` or
-  `luna handoff --to <address>`.
+  sentinel needed). Speak outside only via `luna say --to <address> [--via-main]`
+  or `luna ask --to <address> --text '…'`.
 - **Duplicate suppression**: an early `luna say --purpose answer` to `current` or
-  `luna sessions create-thread --handoff ...` anchored to this turn's group
-  message automatically suppresses terminal-output delivery in this turn.
+  a `luna sessions create-thread` anchored to this turn's group message (once an
+  opening message or Task targets that thread) automatically suppresses
+  terminal-output delivery in this turn.
 
 Output plain text or a reply document (without a Markdown code fence):
 
@@ -31,6 +32,7 @@ Use `luna say` (`--text`, `--stdin`, `--json`) for interim `progress`, early
 
 ```bash
 luna say --purpose progress --text '正在处理。'
+luna say --purpose answer --text '已完成处理。'
 ```
 
 CLI derives idempotency keys automatically (never pass `--request-id`; pass

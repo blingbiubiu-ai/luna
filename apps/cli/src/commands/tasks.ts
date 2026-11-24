@@ -4,6 +4,7 @@ import {
   assertNoLegacyRequestId,
   callUnifiedService,
   deriveCommandIdempotencyKey,
+  parseDurationMs,
   servicePathWithQuery,
   submitAndWaitCommand,
 } from "@luna/cli-support/service-client";
@@ -15,7 +16,8 @@ const TASKS_USAGE = [
   "  luna tasks progress (--task-id <id> | <id>) [--run-id <id|all>] [--limit <n>] [--cursor <cursor>]",
   "  luna tasks create|update|restart|cancel (--stdin | --json '<object>') [--repeat]",
   "  luna tasks status-card (--task-id <id> | --json '<object>') [--resend] [--style card|native] [--repeat]",
-  "  luna tasks report (--stdin | --text <report>) [--waiting] [--repeat]",
+  "  luna tasks pause [--wake-in <duration>] (--reason <text> | --stdin)",
+  "  luna tasks report (--stdin | --text <report>) [--repeat]",
 ].join("\n");
 
 function resolveSessionParam(
@@ -135,7 +137,45 @@ export async function runTasksCli(
         ),
       });
     }
+    if (command === "pause") {
+      const inlineReason = readOption(argv, "--reason");
+      const stdin = hasFlag(argv, "--stdin");
+      if ((inlineReason !== undefined) === stdin) {
+        return {
+          status: "error",
+          code: "invalid_pause",
+          message:
+            "Use `luna tasks pause [--wake-in <duration>]` with exactly one of --reason <text> or --stdin",
+        };
+      }
+      const reason = (inlineReason ?? (await Bun.stdin.text())).trim();
+      if (!reason) {
+        return {
+          status: "error",
+          code: "invalid_pause",
+          message: "Pause reason must not be empty",
+        };
+      }
+      const wakeInRaw = readOption(argv, "--wake-in");
+      const wakeInMs = wakeInRaw ? parseDurationMs(wakeInRaw) : undefined;
+      return await callUnifiedService(env, {
+        method: "POST",
+        path: "/api/runner/task-reports/pause",
+        body: {
+          reason,
+          ...(wakeInMs !== undefined ? { wakeInMs } : {}),
+        },
+      });
+    }
     if (command === "report") {
+      if (hasFlag(argv, "--waiting")) {
+        return {
+          status: "error",
+          code: "legacy_flag_removed",
+          message:
+            "`--waiting` is removed; ask Main with `luna ask --to main --text '...' [--wait 60s]` or suspend via `luna tasks pause`",
+        };
+      }
       const inline = readOption(argv, "--text");
       const stdin = hasFlag(argv, "--stdin");
       if ((inline !== undefined) === stdin) {
@@ -143,7 +183,7 @@ export async function runTasksCli(
           status: "error",
           code: "invalid_report",
           message:
-            "Use `luna tasks report [--waiting] [--repeat]` with exactly one of --stdin or --text <report>",
+            "Use `luna tasks report [--repeat]` with exactly one of --stdin or --text <report>",
         };
       }
       const content = inline ?? (await Bun.stdin.text());
@@ -154,10 +194,7 @@ export async function runTasksCli(
           message: "Report must not be empty",
         };
       }
-      const body = {
-        content,
-        ...(hasFlag(argv, "--waiting") ? { waiting: true } : {}),
-      };
+      const body = { content };
       const key = deriveCommandIdempotencyKey(env, "tasks.report", body, {
         repeat: hasFlag(argv, "--repeat"),
       });

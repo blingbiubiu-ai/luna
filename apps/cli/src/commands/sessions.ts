@@ -13,7 +13,7 @@ const SESSIONS_USAGE = [
   "  luna sessions list [--kind local|p2p|group|thread] [--with-user <user:<id>>] [--limit <n>]",
   "  luna sessions timeline [--session <address-or-id>] [--before-entry-id <id>] [--after-entry-id <id>] [--limit <n>] [--include-references true|false]",
   "  luna sessions messages [--session <address-or-id>]",
-  "  luna sessions create-thread [--handoff <instruction>] [--title <title>] [--anchor-message-id <id>] [--context-message <id>...] [--json '<object>' | --stdin] [--repeat]",
+  "  luna sessions create-thread [--title <title>] [--anchor-message-id <id>] [--context-message <id>...] [--json '<object>' | --stdin] [--repeat]",
   "  luna sessions clarify|release (--stdin | --json '<object>') [--repeat]",
 ].join("\n");
 
@@ -135,9 +135,16 @@ export async function runSessionsCli(
         throw new Error("Expected a JSON object");
       }
       const body = { ...(base as Record<string, unknown>) };
+      if (effectiveArgv.includes("--handoff") || "handoffInstruction" in body) {
+        return {
+          status: "error",
+          code: "legacy_flag_removed",
+          message:
+            "`--handoff` is removed; create the thread first, then send an opening (`luna say --to session:<id>`) and launch a Task (`luna tasks create` with `sessionId`), or delegate via `luna say --to session:<id> --via-main`",
+        };
+      }
       const title = readOption(effectiveArgv, "--title");
       const anchorMessageId = readOption(effectiveArgv, "--anchor-message-id");
-      const handoff = readOption(effectiveArgv, "--handoff");
       const contextMessages = effectiveArgv.flatMap((arg, i) =>
         arg === "--context-message" &&
         effectiveArgv[i + 1] &&
@@ -148,7 +155,6 @@ export async function runSessionsCli(
       if (title !== undefined) body.title = title;
       if (anchorMessageId !== undefined) body.anchorMessageId = anchorMessageId;
       if (contextMessages.length > 0) body.contextMessageIds = contextMessages;
-      if (handoff !== undefined) body.handoffInstruction = handoff;
 
       const key = deriveCommandIdempotencyKey(
         env,

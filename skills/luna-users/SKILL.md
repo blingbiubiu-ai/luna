@@ -1,7 +1,7 @@
 ---
 name: luna-users
 description: >-
-  Find people and bots and reach them with `luna users`, `luna say`, and `luna asks`: look someone up by name or Feishu ID, send a private message (`--to user:<id>`), ask a question with options, or @-mention a person or bot in a group. Use before mentioning anyone or messaging someone outside the current conversation.
+  Find people and bots and reach them with `luna users`, `luna say`, and `luna ask`: look someone up by name or Feishu ID, send a private message (`--to user:<id>`), open a tracked request (card or multi-turn delegate), or @-mention a person or bot in a group. Use before mentioning anyone or messaging someone outside the current conversation.
 ---
 
 # Luna people and mentions
@@ -14,15 +14,19 @@ luna users search --query '机器人名称' --kind bot
 luna users get USER_ID
 luna users lookup --channel-id CHANNEL_ID --feishu-user-id ou_xxx --id-type open_id
 
-# Send a private message using the unified user address:
+# Send a one-way private message directly to the user:
 luna say --to user:USER_ID --text '消息内容'
 
-# Ask someone a tracked question (with optional Feishu interactive buttons):
-luna asks create --to user:USER_ID --question '请确认是否继续？' --options '["继续","暂缓"]'
+# Delegate one-way to that user's private Main session (no return ticket):
+luna say --to user:USER_ID --via-main --text '结合你们之前的沟通跟进一下进度'
+
+# Ask someone a tracked request (omit --options for multi-turn conversation; pass --options for quick card buttons):
+luna ask --to user:USER_ID --text '请确认今晚发布窗口与回滚负责人'
+luna ask --to user:USER_ID --text '请确认是否继续？' --options '["继续","暂缓"]'
 ```
 
 - Name search queries Luna's visible directory (and in a group, refreshes missing bot/member entries from the current channel adapter). If a person has only a raw Feishu `open_id`/`user_id`/`union_id` and is not yet in the directory, import them once with `luna users lookup`, then use the returned Luna `user.id` (`--to user:<id>`) everywhere.
-- Never pass `--feishu-user-id`, `--chat-id`, or `--channel-id` to `luna say`, `luna handoff`, `luna asks`, or `luna groups create|invite`—only `users lookup` and `groups lookup` take raw channel identifiers.
+- Never pass `--feishu-user-id`, `--chat-id`, or `--channel-id` to `luna say`, `luna ask`, or `luna groups create|invite`—only `users lookup` and `groups lookup` take raw channel identifiers.
 - For an explicit Feishu group `@`-mention or bot handoff in the current session, use `luna say --purpose answer --json --stdin` (or output a `luna.reply` document directly) with ordered blocks:
   `[{"text":"请 "},{"mention":"LUNA_USER_ID"},{"text":" 检查这个方案。"}]`
   Note: inside a `mention` block, `userId` / `mention` is the raw Luna user ID (`<id>`, without the `user:` address prefix).
