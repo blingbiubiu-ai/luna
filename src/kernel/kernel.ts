@@ -25,7 +25,7 @@ import { SessionCommandService, registerSessionCommands } from "@/messaging/sess
 import { createSessionTriggerExecutor } from "@/sessions/trigger-executor";
 import { createScheduledTaskRunExecutor } from "@/tasks/scheduled-task-executor";
 
-import { DataConnection } from "@/data";
+import { DataConnection, ProcessDataRetentionScheduler } from "@/data";
 import * as lunaSchema from "@/data/schema";
 import { TaskRunSupervisor } from "@/tasks/task-run-supervisor";
 import {
@@ -102,6 +102,9 @@ class Kernel {
   private _agentRunnerKey: string | undefined;
   private _operationAuditRetention:
     | OperationAuditRetentionScheduler
+    | undefined;
+  private _processDataRetention:
+    | ProcessDataRetentionScheduler
     | undefined;
   private _pluginRegistry = new PluginRegistry();
   private readonly _channelAdapterRegistry = new ChannelAdapterRegistry();
@@ -296,6 +299,9 @@ class Kernel {
     this._operationAuditRetention = new OperationAuditRetentionScheduler({
       store: new OperationInvocationAuditStore(this._database.db),
     });
+    this._processDataRetention = new ProcessDataRetentionScheduler({
+      db: this._database.db,
+    });
   }
 
   private _initChannelAdapterRegistry(): void {
@@ -369,6 +375,7 @@ class Kernel {
       await this._lunaMessageIngress.start();
       lunaIngressStarted = true;
       this._sessionCommands.start();
+      this._processDataRetention?.start();
       this._lifecycleTimer = setInterval(() => {
         this._lifecycleWork ??= this._reconcileAgentLifecycle()
           .catch(error => this._logger.warn({error}, "Agent lifecycle reconciliation remains pending"))
@@ -410,6 +417,7 @@ class Kernel {
           cleanupErrors.push(cleanupErr);
         }
       }
+      this._processDataRetention?.stop();
       this._operationAuditRetention?.stop();
       try { await this._executionRuntime?.close(); } catch (cleanupErr) { cleanupErrors.push(cleanupErr); }
       this._executionRuntime = undefined;

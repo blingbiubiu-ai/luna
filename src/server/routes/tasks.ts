@@ -4,7 +4,7 @@ import {ResourceRouteAccess} from "../policy/resource-route-access";
 import {AgentError} from "@/agents/agent-store";
 import { deleteDashboardTask } from "@/dashboard-api/task-deletion";
 import { loadDashboardUserRows } from "@/dashboard-api/user-display";
-import { asc, desc, eq, inArray, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, sql } from "drizzle-orm";
 import { Hono, type Context } from "hono";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
 import { HTTPException } from "hono/http-exception";
@@ -105,7 +105,8 @@ export function createTasksRoutes(options: TasksRouteOptions = {}) {
       if(!Number.isInteger(limit)||limit<1||limit>100)return c.json({code:"invalid_progress_limit"},400);
       const page=new TaskProgressStore(db).page(id,{limit,allEvents:true,...(c.req.query("cursor")?{cursor:c.req.query("cursor")!}:{})});
       const signer=dashboardArtifactSignerForContext(c,db),userRows=loadDashboardUserRows(db);
-      return c.json({items:page.rows.map(row=>toDashboardTimelineEvent(row,{artifactSigner:signer,userRows})).reverse(),nextCursor:page.nextCursor});
+      const prunedTools=selectPrunedToolsSummaryForTask(db,id);
+      return c.json({items:page.rows.map(row=>toDashboardTimelineEvent(row,{artifactSigner:signer,userRows})).reverse(),nextCursor:page.nextCursor,prunedTools});
     })
     .get("/:id", (c) => {
       const taskId = c.req.param("id");
@@ -455,6 +456,43 @@ function dashboardTimelineEventSelection() {
     visibility: timelineEvents.visibility,
     created_at: timelineEvents.created_at,
   };
+}
+
+function selectPrunedToolsSummaryForTask(
+  db: DrizzleDB,
+  taskId: string,
+): { totalCount: number; byRunIndex: Record<string, number> } {
+  const rows = db
+    .select({ data: sql<string | null>`${timelineEvents.data}` })
+    .from(timelineEvents)
+    .where(
+      and(
+        eq(timelineEvents.task_id, taskId),
+        eq(timelineEvents.type, "timeline.tools_pruned"),
+      ),
+    )
+    .all();
+  let totalCount = 0;
+  const byRunIndex: Record<string, number> = {};
+  for (const row of rows) {
+    if (!row.data) continue;
+    try {
+      const parsed = JSON.parse(row.data) as Record<string, unknown>;
+      const count =
+        typeof parsed.prunedToolCount === "number" && parsed.prunedToolCount > 0
+          ? parsed.prunedToolCount
+          : 0;
+      if (count <= 0) continue;
+      totalCount += count;
+      if (typeof parsed.runIndex === "number") {
+        const key = String(parsed.runIndex);
+        byRunIndex[key] = (byRunIndex[key] ?? 0) + count;
+      }
+    } catch {
+      // Ignore malformed marker payloads.
+    }
+  }
+  return { totalCount, byRunIndex };
 }
 
 function selectDashboardTimelineEventRowsForTask(

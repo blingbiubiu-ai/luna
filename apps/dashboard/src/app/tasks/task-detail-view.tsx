@@ -215,6 +215,10 @@ export interface TaskDetailViewProps {
   taskDetail: TaskDetailData | undefined;
   runs: TaskRunData[] | undefined;
   timeline: TaskTimelineEventData[] | undefined;
+  prunedTools?: {
+    totalCount: number;
+    byRunIndex: Record<string, number>;
+  } | undefined;
   timelinePagination?: {hasMore: boolean; loading: boolean; loadMore: () => void};
   artifacts: TaskArtifactData[] | undefined;
   loading: {
@@ -260,6 +264,7 @@ export function TaskDetailView({
   taskDetail,
   runs,
   timeline,
+  prunedTools,
   timelinePagination,
   artifacts,
   loading,
@@ -268,7 +273,7 @@ export function TaskDetailView({
   actionsSlot,
 }: TaskDetailViewProps) {
   const base = useAgentBasePath();
-  const { t } = useTranslation();
+  const { t, locale } = useTranslation();
   const [activeTab, setActiveTab] = useState<TaskDetailTab>("Timeline");
   const [timelineRunFilter, setTimelineRunFilter] = useState<number | "all">("all");
 
@@ -282,6 +287,21 @@ export function TaskDetailView({
     timelineRunFilter === "all"
       ? orderedTimeline
       : orderedTimeline.filter((event) => event.runIndex === timelineRunFilter);
+  const totalVisibleTimelineCount = displayTimeline.filter(
+    (event) => event.type !== "timeline.tools_pruned",
+  ).length;
+  const visibleTimelineCount = filteredTimeline.filter(
+    (event) => event.type !== "timeline.tools_pruned",
+  ).length;
+  const inlinePrunedToolCount = filteredTimeline.reduce(
+    (sum, event) => sum + extractPrunedToolCount(event),
+    0,
+  );
+  const activePrunedToolCount = prunedTools
+    ? timelineRunFilter === "all"
+      ? prunedTools.totalCount
+      : (prunedTools.byRunIndex[String(timelineRunFilter)] ?? inlinePrunedToolCount)
+    : inlinePrunedToolCount;
 
   const displayArtifacts = artifacts ?? taskDetail?.artifacts ?? [];
   const latestRun = latestTaskRun(displayRuns);
@@ -348,7 +368,7 @@ export function TaskDetailView({
   }
 
   const tabCounts: Record<TaskDetailTab, number | null> = {
-    Timeline: displayTimeline.length,
+    Timeline: totalVisibleTimelineCount,
     Report: reportArtifacts.length > 0 ? reportArtifacts.length : null,
     Runs: displayRuns.length,
     Artifacts: displayArtifacts.length,
@@ -516,7 +536,7 @@ export function TaskDetailView({
                     {displayArtifacts.length}
                   </div>
                   <div className="truncate text-[11px] tabular-nums text-muted-foreground">
-                    {displayTimeline.length} {t("events")}
+                    {totalVisibleTimelineCount} {t("events")}
                   </div>
                 </button>
 
@@ -806,7 +826,7 @@ export function TaskDetailView({
                         {t("Timeline")}
                       </h2>
                       <span className="rounded-full bg-muted px-2 py-0.5 text-xs tabular-nums text-muted-foreground">
-                        {filteredTimeline.length}
+                        {visibleTimelineCount}
                       </span>
                     </div>
 
@@ -843,6 +863,20 @@ export function TaskDetailView({
                     ) : null}
                   </div>
 
+                  {activePrunedToolCount > 0 ? (
+                    <div
+                      data-testid="task-timeline-pruned-notice"
+                      className="mb-4 flex items-start gap-2 rounded-[8px] border border-border/80 bg-muted/45 px-3 py-2 text-xs leading-5 text-muted-foreground"
+                    >
+                      <Clock className="mt-0.5 size-3.5 shrink-0 text-muted-foreground" />
+                      <span>
+                        {locale === "zh-CN"
+                          ? `已按平台保留策略自动清理 ${activePrunedToolCount} 条过期工具调用明细（runner.tool）；任务关键状态、阶段摘要与产物记录仍完整保留。`
+                          : `${activePrunedToolCount} expired tool-call entries (runner.tool) were automatically pruned by the retention policy; key task states, step summaries, and artifacts remain intact.`}
+                      </span>
+                    </div>
+                  ) : null}
+
                   {filteredTimeline.length === 0 ? (
                     <p className="m-0 text-sm text-muted-foreground">-</p>
                   ) : (
@@ -851,7 +885,46 @@ export function TaskDetailView({
                         aria-hidden="true"
                         className="absolute top-2 bottom-2 left-[11px] w-px bg-border"
                       />
-                      {filteredTimeline.map((event) => (
+                      {filteredTimeline.map((event) => {
+                        if (event.type === "timeline.tools_pruned") {
+                          const count = extractPrunedToolCount(event);
+                          return (
+                            <div
+                              key={event.id}
+                              data-testid={`task-timeline-pruned-marker-${event.id}`}
+                              className="relative rounded-lg border border-dashed border-border bg-muted/25 px-3 py-2 text-xs text-muted-foreground"
+                            >
+                              <span
+                                aria-hidden="true"
+                                className="absolute top-2.5 -left-6 inline-grid size-[22px] place-items-center rounded-full bg-card ring-4 ring-card"
+                              >
+                                <span className="size-2 rounded-full bg-muted-foreground/50" />
+                              </span>
+                              <div className="flex flex-wrap items-center justify-between gap-2">
+                                <div className="flex flex-wrap items-center gap-2">
+                                  {event.runIndex ? (
+                                    <button
+                                      type="button"
+                                      onClick={() => setActiveTab("Runs")}
+                                      className="cursor-pointer rounded bg-secondary px-1.5 py-0.5 text-[11px] font-medium text-secondary-foreground transition-opacity hover:opacity-80"
+                                    >
+                                      #{event.runIndex}
+                                    </button>
+                                  ) : null}
+                                  <span>
+                                    {locale === "zh-CN"
+                                      ? `此处原有的 ${count > 0 ? `${count} 条` : ""}工具调用明细（runner.tool）已按保留策略自动清理`
+                                      : `${count > 0 ? `${count} ` : ""}expired tool-call entries (runner.tool) at this point were automatically pruned`}
+                                  </span>
+                                </div>
+                                <span className="tabular-nums text-muted-foreground/80">
+                                  {formatTaskFullTime(event.created_at)}
+                                </span>
+                              </div>
+                            </div>
+                          );
+                        }
+                        return (
                         <div
                           key={event.id}
                           className="relative rounded-xl px-2.5 py-1.5 transition-colors hover:bg-muted/35"
@@ -928,7 +1001,8 @@ export function TaskDetailView({
                             />
                           </div>
                         </div>
-                      ))}
+                        );
+                      })}
                     </div>
                   )}
 
@@ -1765,6 +1839,15 @@ function artifactGroupBadgeClass(group: ArtifactGroup): string {
     default:
       return "bg-muted text-muted-foreground";
   }
+}
+
+function extractPrunedToolCount(event: TaskTimelineEventData): number {
+  if (event.type !== "timeline.tools_pruned") return 0;
+  if (event.data && typeof event.data === "object" && !Array.isArray(event.data)) {
+    const raw = (event.data as Record<string, unknown>).prunedToolCount;
+    if (typeof raw === "number" && raw > 0) return raw;
+  }
+  return 0;
 }
 
 function timelineEventDotClass(type: string): string {

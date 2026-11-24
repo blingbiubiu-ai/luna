@@ -82,6 +82,12 @@ export interface PlatformProactivitySettings {
   scheduleFailureNotifyIntervalMs: number;
 }
 
+export interface PlatformRetentionSettings {
+  enabled: boolean;
+  retentionDays: number;
+  intervalMinutes: number;
+}
+
 export interface PlatformRuntimeSettings {
   general: PlatformGeneralSettings;
   execution: PlatformExecutionSettings;
@@ -89,6 +95,7 @@ export interface PlatformRuntimeSettings {
   marketplace: PlatformMarketplaceSettings;
   messaging: PlatformMessagingSettings;
   proactivity?: PlatformProactivitySettings;
+  retention?: PlatformRetentionSettings;
 }
 
 export interface PlatformRuntimeSettingsPatch {
@@ -98,7 +105,14 @@ export interface PlatformRuntimeSettingsPatch {
   marketplace?: Partial<PlatformMarketplaceSettings>;
   messaging?: Partial<PlatformMessagingSettings>;
   proactivity?: Partial<PlatformProactivitySettings>;
+  retention?: Partial<PlatformRetentionSettings>;
 }
+
+const DEFAULT_PLATFORM_RETENTION: PlatformRetentionSettings = {
+  enabled: true,
+  retentionDays: 30,
+  intervalMinutes: 60,
+};
 
 const DEFAULT_PLATFORM_PROACTIVITY: PlatformProactivitySettings = {
   heartbeatIntervalMs: 30 * 60_000,
@@ -197,6 +211,7 @@ export function PlatformSettingsPage() {
   const saveMemory = usePatchSection();
   const saveProactivity = usePatchSection();
   const saveMessaging = usePatchSection();
+  const saveRetention = usePatchSection();
   const saveOrphan = useMutation({
     mutationFn: (value: OrphanCleanup) =>
       apiFetch<{ orphanCleanup: OrphanCleanup }>(`${PATH}/orphan-cleanup`, {
@@ -331,6 +346,15 @@ export function PlatformSettingsPage() {
             error={saveMessaging.error}
             saved={saveMessaging.isSuccess}
             onSave={(messaging) => saveMessaging.mutate({ messaging })}
+          />
+          <ProcessDataRetentionForm
+            key={JSON.stringify(query.data.platform.retention ?? DEFAULT_PLATFORM_RETENTION)}
+            settings={query.data.platform.retention ?? DEFAULT_PLATFORM_RETENTION}
+            canEdit={query.data.canEdit}
+            saving={saveRetention.isPending}
+            error={saveRetention.error}
+            saved={saveRetention.isSuccess}
+            onSave={(retention) => saveRetention.mutate({ retention })}
           />
           <OrphanCleanupForm
             key={JSON.stringify(query.data.orphanCleanup)}
@@ -1459,6 +1483,113 @@ export function FeishuMessagingSettingsForm({
           onSave({
             maxVisibleSteps: parsedSteps!,
             feishuDevelopers: parsedDevelopers!,
+          })
+        }
+      />
+    </section>
+  );
+}
+
+export function ProcessDataRetentionForm({
+  settings,
+  canEdit,
+  saving,
+  error,
+  saved,
+  onSave,
+}: {
+  readonly settings: PlatformRetentionSettings;
+  readonly canEdit: boolean;
+  readonly saving: boolean;
+  readonly error: Error | null;
+  readonly saved: boolean;
+  readonly onSave: (value: PlatformRetentionSettings) => void;
+}) {
+  const [enabled, setEnabled] = useState(settings.enabled);
+  const [interval, setIntervalText] = useState(String(settings.intervalMinutes));
+  const [retention, setRetention] = useState(String(settings.retentionDays));
+  const [touched, setTouched] = useState(false);
+  const minutes = intInRange(interval, 5, 1440);
+  const days = intInRange(retention, 1, 365);
+  const disabled = !canEdit || saving;
+  const edit = <T,>(set: (value: T) => void) => (value: T) => {
+    set(value);
+    setTouched(true);
+  };
+  return (
+    <section
+      className="space-y-4 rounded-lg border p-4"
+      aria-labelledby="process-data-retention-title"
+    >
+      <div className="flex items-start justify-between gap-4">
+        <div className="space-y-1">
+          <h2 id="process-data-retention-title" className="font-medium">
+            过期过程数据裁剪
+          </h2>
+          <p className="text-sm text-muted-foreground">
+            定期清理已结束运行中超过保留期的工具调用明细（<code>runner.tool</code>）及其关联的进度卡片投递状态（流式进度 checkpoint、状态卡刷新幂等流水与进度快照回执），
+            永久保留对话消息、公开阶段摘要、Prompt 快照、任务报告、产物文件与长期记忆。
+          </p>
+        </div>
+        <Switch
+          aria-label="过期过程数据裁剪"
+          checked={enabled}
+          disabled={disabled}
+          onCheckedChange={edit(setEnabled)}
+        />
+      </div>
+      <div className="grid gap-4 sm:grid-cols-2">
+        <label className="space-y-1 text-sm">
+          <span className="font-medium">巡检周期（分钟）</span>
+          <Input
+            type="number"
+            inputMode="numeric"
+            min={5}
+            max={1440}
+            value={interval}
+            disabled={disabled || !enabled}
+            aria-invalid={minutes === null}
+            onChange={(event) => edit(setIntervalText)(event.target.value)}
+          />
+          <span className="block text-xs text-muted-foreground">
+            5 到 1440 分钟，默认 60。
+          </span>
+        </label>
+        <label className="space-y-1 text-sm">
+          <span className="font-medium">过程数据保留期（天）</span>
+          <Input
+            type="number"
+            inputMode="numeric"
+            min={1}
+            max={365}
+            value={retention}
+            disabled={disabled || !enabled}
+            aria-invalid={days === null}
+            onChange={(event) => edit(setRetention)(event.target.value)}
+          />
+          <span className="block text-xs text-muted-foreground">
+            1 到 365 天，默认 30。
+          </span>
+        </label>
+      </div>
+      {!enabled && (
+        <p className="text-sm text-muted-foreground">
+          已关闭：所有历史工具调用明细与进度卡投递记录均一直保留。
+        </p>
+      )}
+      <FormFooter
+        canEdit={canEdit}
+        saving={saving}
+        touched={touched}
+        valid={minutes !== null && days !== null}
+        error={error}
+        saved={saved}
+        testId="platform-retention-save"
+        onSave={() =>
+          onSave({
+            enabled,
+            intervalMinutes: minutes!,
+            retentionDays: days!,
           })
         }
       />

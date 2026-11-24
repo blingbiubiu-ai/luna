@@ -964,11 +964,16 @@ export function useTask(taskId: string, agentId: string) {
   return useTaskResource<DashboardTask>(taskId, agentId);
 }
 
+export interface DashboardPrunedToolsSummary {
+  totalCount: number;
+  byRunIndex: Record<string, number>;
+}
+
 export function useTaskTimeline(taskId: string, agentId: string) {
   return useInfiniteQuery({
     queryKey: ["luna", "tasks", taskId, "timeline", agentId],
     initialPageParam: null as string | null,
-    queryFn: ({signal, pageParam}) => apiFetch<{items: DashboardTaskTimelineEvent[]; nextCursor: string | null}>(
+    queryFn: ({signal, pageParam}) => apiFetch<{items: DashboardTaskTimelineEvent[]; nextCursor: string | null; prunedTools?: DashboardPrunedToolsSummary}>(
       `/tasks/${encodeURIComponent(taskId)}/timeline/page?agentId=${encodeURIComponent(agentId)}${pageParam ? `&cursor=${encodeURIComponent(pageParam)}` : ""}`, {signal}),
     getNextPageParam: page => page.nextCursor ?? undefined,
     enabled: Boolean(taskId),

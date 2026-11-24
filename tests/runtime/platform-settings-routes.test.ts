@@ -111,6 +111,8 @@ test("every account reads platform settings; only a platform administrator chang
     expect((await putPlatform("admin", { general: { timezone: "Invalid/Zone" } })).status).toBe(400);
     expect((await putPlatform("admin", { general: { artifactSignedUrlTtlMs: 1000 } })).status).toBe(400);
     expect((await putPlatform("admin", { execution: { maxTransientRetries: 99 } })).status).toBe(400);
+    expect((await putPlatform("admin", { retention: { retentionDays: 0 } })).status).toBe(400);
+    expect((await putPlatform("admin", { retention: { intervalMinutes: 2 } })).status).toBe(400);
 
     // Partial section saves merge atomically without resetting other sections.
     const savedGeneral = await putPlatform("admin", {
@@ -137,6 +139,7 @@ test("every account reads platform settings; only a platform administrator chang
       execution: { containerTimeoutMs: 45 * 60_000, taskTimeoutMs: 720 * 60_000, maxTransientRetries: 3 },
       memory: { recallLimit: 12, coreLimit: 40 },
       messaging: { maxVisibleSteps: 48, feishuDevelopers: { cli_app_1: "dev_corp" } },
+      retention: { enabled: true, retentionDays: 14, intervalMinutes: 120 },
     });
     expect(savedMarketplace.status).toBe(200);
     const mergedPlatform = new PlatformSettingsStore(db).get();
@@ -159,6 +162,11 @@ test("every account reads platform settings; only a platform administrator chang
     expect(mergedPlatform.messaging).toEqual({
       maxVisibleSteps: 48,
       feishuDevelopers: { cli_app_1: "dev_corp" },
+    });
+    expect(mergedPlatform.retention).toEqual({
+      enabled: true,
+      retentionDays: 14,
+      intervalMinutes: 120,
     });
 
     // Resetting general.publicBaseUrl to empty lets legacy/feishuAuth tests exercise fallback cleanly.

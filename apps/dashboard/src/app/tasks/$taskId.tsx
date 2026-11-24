@@ -113,6 +113,7 @@ function TaskDetailPage() {
         taskDetail={taskDetail}
         runs={runs}
         timeline={timeline?.pages.flatMap(page => page.items)}
+        prunedTools={timeline?.pages[0]?.prunedTools}
         timelinePagination={{hasMore: Boolean(hasNextPage), loading: isFetchingNextPage, loadMore: () => { void fetchNextPage(); }}}
         artifacts={displayArtifacts}
         backSlot={backSlot}

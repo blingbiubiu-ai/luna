@@ -84,7 +84,15 @@ the entire Dashboard detail projection.
 100). The Dashboard polls loaded pages and loads older history on demand. A tool
 stays one row while its status changes; public text is inspectable in full. Card
 limits do not truncate durable history. Legacy `/timeline` is bounded to the last
-100 events, and embedded Task detail timelines are also bounded per Task.
+100 events, and embedded Task detail timelines are also bounded per Task. Settled
+`runner.tool` events and associated progress-card delivery rows (`notification_attempts`
+progress updates, non-quarantined `native_progress_deliveries`, and status-card
+`session_reply_dispatches` / `session_channel_deliveries`) on finished Tasks/Turns
+age out after `platform_settings.settings.retention.retentionDays` (default 30 days;
+see [Database schema](database-schema.md#process-data-retention)), replacing deleted
+`runner.tool` rows with one per-Run `timeline.tools_pruned` count marker surfaced in
+Dashboard Task timelines while `runner.step` public text, lifecycle milestones, and
+artifact-linked events remain permanently.
 
 ## Code paths
 

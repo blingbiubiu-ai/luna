@@ -196,6 +196,15 @@ export const PlatformProactivitySettings = z
   .strict();
 export type PlatformProactivitySettings = z.infer<typeof PlatformProactivitySettings>;
 
+export const PlatformRetentionSettings = z
+  .object({
+    enabled: z.boolean().default(true),
+    retentionDays: z.number().int().min(1).max(365).default(30),
+    intervalMinutes: z.number().int().min(5).max(1440).default(60),
+  })
+  .strict();
+export type PlatformRetentionSettings = z.infer<typeof PlatformRetentionSettings>;
+
 export const PlatformRuntimeSettings = z
   .object({
     general: PlatformGeneralSettings.default(() => PlatformGeneralSettings.parse({})),
@@ -204,6 +213,7 @@ export const PlatformRuntimeSettings = z
     marketplace: PlatformMarketplaceSettings.default(() => PlatformMarketplaceSettings.parse({})),
     messaging: PlatformMessagingSettings.default(() => PlatformMessagingSettings.parse({})),
     proactivity: PlatformProactivitySettings.default(() => PlatformProactivitySettings.parse({})),
+    retention: PlatformRetentionSettings.default(() => PlatformRetentionSettings.parse({})),
   })
   .strict();
 export type PlatformRuntimeSettings = z.infer<typeof PlatformRuntimeSettings>;
@@ -216,6 +226,7 @@ export const PlatformRuntimeSettingsPatch = z
     marketplace: PlatformMarketplaceSettings.partial().strict().optional(),
     messaging: PlatformMessagingSettings.partial().strict().optional(),
     proactivity: PlatformProactivitySettings.partial().strict().optional(),
+    retention: PlatformRetentionSettings.partial().strict().optional(),
   })
   .strict()
   .refine(
@@ -225,7 +236,8 @@ export const PlatformRuntimeSettingsPatch = z
       patch.memory !== undefined ||
       patch.marketplace !== undefined ||
       patch.messaging !== undefined ||
-      patch.proactivity !== undefined,
+      patch.proactivity !== undefined ||
+      patch.retention !== undefined,
     "至少需要提供一个设置分组。",
   );
 export type PlatformRuntimeSettingsPatch = z.infer<typeof PlatformRuntimeSettingsPatch>;
@@ -284,6 +296,7 @@ export class PlatformSettingsStore {
         marketplace: { ...current.marketplace, ...patch.marketplace },
         messaging: { ...current.messaging, ...patch.messaging },
         proactivity: { ...current.proactivity, ...patch.proactivity },
+        retention: { ...current.retention, ...patch.retention },
       });
       const values = {
         id: PLATFORM_SETTINGS_ID,

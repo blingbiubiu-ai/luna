@@ -22,7 +22,10 @@ Drizzle's `__drizzle_migrations` is the initialization record.
 
 `DataConnection` accepts an empty database or a database whose first Drizzle
 record matches the current baseline hash and timestamp. It validates the baseline
-before schema writes, enables WAL and foreign keys, and invokes the migrator.
+before schema writes, enables WAL (`synchronous = NORMAL`, `journal_size_limit = 64 MiB`),
+foreign keys, `busy_timeout = 5000`, a 128 MiB page cache (`cache_size = -131072`),
+a 512 MiB `mmap_size` window, and in-memory temporary tables (`temp_store = MEMORY`),
+and invokes the migrator.
 Initialization failure closes the connection. Unknown or retired baselines fail
 without automatic conversion or data deletion. The administrator CLI uses the
 same check and requires an initialized database with an active human user.
@@ -65,3 +68,7 @@ including deferred references, ownership checks and deletion guards. See
 Task progress shares `timeline_events`: `runner.tool` inserts on start and updates on result, while public text and state remain separate rows. Migration 0009 adds `task_run_id`, `updated_at` and Task/Run ordering indexes. See [Progress notifications](progress-notifications.md).
 
 Migration 0010 (`0010_agent_proactivity.sql`) adds proactivity persistence: `shadow_heartbeats` (per-Shadow dedicated Heartbeat local session, activity cursor, covered window and latest command), `correlated_requests` (unified `ask` and `handoff` tracking with options, resolution payload, expiry and callback command), and `schedule_failure_notifications` (rate-limited owner DM notifications for failed schedules), alongside `task.run` schedule actions and `deferred` quiet-hours command state. See [Agent Proactivity](agent-proactivity.md).
+
+## Process-data retention
+
+`ProcessDataRetentionScheduler` (`src/data/process-data-retention.ts`) periodically prunes expired tool-call traces and associated progress-delivery state older than `platform_settings.settings.retention.retentionDays` (default 30 days, checked every `retention.intervalMinutes`, default 60 minutes, live-configurable on Dashboard `/platform/settings`): intermediate `runner.tool` rows in `timeline_events` on finished Tasks (preserving `runner.step`, lifecycle events, and artifact-linked rows, and recording one deterministic `timeline.tools_pruned` summary marker per affected Task Run so Dashboard timelines explicitly indicate pruned tool counts), sent/skipped status-card progress update rows (`update_status_card_progress` / `update_status_card`) in `notification_attempts` on finished Tasks (preserving `create_status_card` and `publish_task_result`), settled `native_progress_deliveries` (preserving quarantined `$.pending` rows and active/waiting Task cards), and settled status-card / `progressSnapshot` rows in `session_reply_dispatches` and `session_channel_deliveries` (leaving ordinary chat replies and active session/task cards untouched), followed by a passive WAL checkpoint. Durable `messages`, `session_timeline_entries`, `tasks`, `artifacts`, prompts, runner attempts, and `agent_memories` are never pruned.

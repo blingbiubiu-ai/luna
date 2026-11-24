@@ -44,7 +44,13 @@ export class DataConnection<
       const migrationsFolder = resolveMigrationsFolder();
       assertDatabaseBaseline(this._sqlite, migrationsFolder);
       this._sqlite.run("PRAGMA journal_mode = WAL");
+      this._sqlite.run("PRAGMA synchronous = NORMAL");
       this._sqlite.run("PRAGMA foreign_keys = ON");
+      this._sqlite.run("PRAGMA busy_timeout = 5000");
+      this._sqlite.run("PRAGMA cache_size = -131072");
+      this._sqlite.run("PRAGMA mmap_size = 536870912");
+      this._sqlite.run("PRAGMA temp_store = MEMORY");
+      this._sqlite.run("PRAGMA journal_size_limit = 67108864");
       this._db = drizzle(this._sqlite, { schema: schemas });
       migrate(this._db, { migrationsFolder });
       repairChannelSurfaceKinds(this._sqlite);
