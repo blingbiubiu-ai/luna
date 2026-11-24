@@ -12,21 +12,14 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { apiFetch } from "@/lib/api/client";
 import {
-  consoleLabels,
-  isBlocked,
-  kindBlockedHint,
   ownerPath,
-  primaryContainer,
   runnerKindBadge,
-  type ConsoleKind,
   type DormantPtyContextItem,
   type LivePtySessionItem,
   type PtySessionsResponse,
 } from "@/lib/containers";
 
 export type { DormantPtyContextItem, LivePtySessionItem, PtySessionsResponse };
-
-const shadowConsoleOrder: readonly ConsoleKind[] = ["terminal", "vnc", "root"];
 
 function formatRelativeTime(ts: number): string {
   const diffSec = Math.max(0, Math.floor((Date.now() - ts) / 1000));
@@ -67,8 +60,6 @@ export function TuiWorkbench({
 
   const liveSessions = ptyQuery.data?.sessions ?? [];
   const dormantContexts = ptyQuery.data?.dormantContexts ?? [];
-  const shadows = consoles.query.data?.shadows ?? [];
-  const containers = consoles.query.data?.containers ?? [];
 
   const liveByContextId = useMemo(
     () => new Map(liveSessions.map(item => [item.contextId, item])),
@@ -140,13 +131,6 @@ export function TuiWorkbench({
     return null;
   }, [ptyQuery.data, liveSessions, dormantContexts, focusSessionId, focusTaskId, agentId]);
 
-  const openBlockedHint = (row: ReturnType<typeof primaryContainer>, kind: ConsoleKind) => {
-    if (consoles.provision.isPending) return "正在启动容器…";
-    if (row?.running) return kindBlockedHint(row, kind);
-    if (row && isBlocked(row)) return kindBlockedHint(row, kind);
-    return consoles.coldHint;
-  };
-
   return (
     <div className="flex min-h-0 flex-1 gap-3 p-3">
       {sidebarOpen && (
@@ -201,17 +185,6 @@ export function TuiWorkbench({
           </div>
 
           <div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-2">
-            {consoles.provision.error && (
-              <p role="alert" className="px-2 text-xs text-destructive">
-                无法启动容器：{consoles.provision.error.message}
-              </p>
-            )}
-            {consoles.stopDesktop.error && (
-              <p role="alert" className="px-2 text-xs text-destructive">
-                无法关闭桌面后台：{consoles.stopDesktop.error.message}
-              </p>
-            )}
-
             {/* Section 1: Live AI PTY Sessions */}
             <section className="space-y-1.5">
               <div className="flex items-center justify-between px-1.5 text-[11px] font-medium tracking-wide text-muted-foreground uppercase">
@@ -286,58 +259,7 @@ export function TuiWorkbench({
               )}
             </section>
 
-            {/* Section 2: Shadow Container Consoles (unified with 数字分身) */}
-            {shadows.length > 0 && (
-              <section className="space-y-1.5">
-                <div className="px-1.5 text-[11px] font-medium tracking-wide text-muted-foreground uppercase">
-                  分身运行环境
-                </div>
-                {shadows.map(shadow => {
-                  const row = primaryContainer(containers, shadow.shadowId);
-                  return (
-                    <div
-                      key={shadow.shadowId}
-                      className="space-y-2 rounded-lg border bg-muted/15 px-2.5 py-2"
-                    >
-                      <div className="flex items-center justify-between gap-2">
-                        <div className="flex min-w-0 items-center gap-1.5 text-xs font-medium">
-                          <span
-                            aria-hidden="true"
-                            className={`size-1.5 shrink-0 rounded-full ${
-                              row?.running ? "bg-emerald-500" : "bg-muted-foreground/40"
-                            }`}
-                          />
-                          <span className="truncate">{shadow.shadowName}</span>
-                        </div>
-                        <span className="shrink-0 text-[11px] text-muted-foreground">
-                          {row?.running ? "运行中" : "按需启动"}
-                        </span>
-                      </div>
-                      <div className="flex flex-wrap gap-1">
-                        {shadowConsoleOrder.map(kind => {
-                          const blocked = openBlockedHint(row, kind);
-                          return (
-                            <Button
-                              key={kind}
-                              size="xs"
-                              variant={kind === "root" ? "ghost" : "outline"}
-                              className={kind === "root" ? "text-muted-foreground" : undefined}
-                              disabled={Boolean(blocked)}
-                              title={blocked}
-                              onClick={() => consoles.openShadow(shadow.shadowId, kind)}
-                            >
-                              {consoleLabels[kind]}
-                            </Button>
-                          );
-                        })}
-                      </div>
-                    </div>
-                  );
-                })}
-              </section>
-            )}
-
-            {/* Section 3: Dormant resumable contexts */}
+            {/* Section 2: Dormant resumable contexts */}
             {filteredDormant.length > 0 && (
               <section className="space-y-1.5">
                 <button
@@ -419,7 +341,7 @@ export function TuiWorkbench({
               </>
             ) : (
               <>
-                <p className="text-sm font-medium text-zinc-200">选择左侧的活跃 AI 伪终端或分身运行环境</p>
+                <p className="text-sm font-medium text-zinc-200">选择左侧的活跃 AI 伪终端</p>
                 <p className="max-w-md text-xs text-zinc-400">
                   默认以安全的「只读观察」模式实时同步 Claude Code / Codex TUI 画面；需要手动干预、查看 /status 或按键确认时，可随时一键「接管输入」。
                 </p>

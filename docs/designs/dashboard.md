@@ -177,7 +177,7 @@ disk, disable or resume, delete), then its runtime environment: state (running, 
 created), the root switch, Worker, resources, whether the image is current, active tasks, and
 Terminal / Desktop / Root terminal buttons. Opening a console narrows the cards to a compact
 column and shows the consoles as tabs beside it; a stopped or not-yet-created container is
-provisioned first. There is no separate Containers page; `/settings/containers` redirects here. The creation form accepts a Shadow name and optional Feishu bot settings. If the bot cannot be bound after the Shadow is created, the form can retry the binding on the same Shadow.
+provisioned first. There is no separate Containers page; `/settings/containers` redirects here. Live AI pseudo-terminal (PTY) sessions and dormant resumable runner contexts are inspected separately in the TUI Workbench at `/agent/<agentId>/terminals`, which resolves session titles from the live channel directory (group surface name or P2P peer identity/user display name) and task titles without duplicating the Shadow shell/desktop launcher cards. The creation form accepts a Shadow name and optional Feishu bot settings. If the bot cannot be bound after the Shadow is created, the form can retry the binding on the same Shadow.
 
 Each Shadow card opens an editor with the bot settings and the Shadow’s lifecycle actions. Removing the bot ends its binding and keeps the Shadow and its history. Deleting a Shadow (or
 Agent) warns that its Worker data — container, HOME (login state, git/ssh, browser data,

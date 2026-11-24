@@ -1,9 +1,21 @@
 import { Hono } from "hono";
 import type { Server } from "bun";
-import { desc, eq } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull } from "drizzle-orm";
 import { z } from "zod";
 import type { DrizzleDB } from "@/data";
-import { runnerContexts, sessions, tasks } from "@/data/schema";
+import {
+  channelIdentities,
+  channelSurfaces,
+  directRecipients,
+  messages,
+  runnerContexts,
+  sessions,
+  sessionTimelineEntries,
+  tasks,
+  userIdentityLinks,
+  users,
+} from "@/data/schema";
+import { resolveSessionDisplayTitle } from "@/dashboard-api/session-display-title";
 import { AgentError, AgentStore } from "@/agents/agent-store";
 import { AgentWorkerAccessStore } from "@/agents/agent-worker-access-store";
 import { ShadowRootAccessStore } from "@/agents/shadow-root-access-store";
@@ -261,11 +273,220 @@ export function createAgentContainerRoutes(
       .where(eq(sessions.agent_id, agent.id))
       .all();
     const sessionById = new Map(sessionRows.map(row => [row.id, row]));
+    const mainSessionBySurfaceKey = new Map<string, (typeof sessionRows)[number]>();
+    for (const row of sessionRows) {
+      if (row.kind === "main" && row.group_id !== null && row.thread_key === null) {
+        const key = `${row.channel_type}:${row.channel_id}:${row.group_id}`;
+        if (!mainSessionBySurfaceKey.has(key)) {
+          mainSessionBySurfaceKey.set(key, row);
+        }
+      }
+    }
 
     const taskRows = db.select().from(tasks)
       .where(eq(tasks.agent_id, agent.id))
       .all();
     const taskById = new Map(taskRows.map(row => [row.id, row]));
+
+    const workers = gateway.list().filter(worker => assigned.has(worker.workerId) && worker.connected && !worker.revoked);
+    const workerResultsRaw = await Promise.all(workers.map(async worker => {
+      const supported = worker.health?.capabilities?.includes(CONTAINER_STREAMS_CAPABILITY) === true;
+      if (!supported) return [];
+      try {
+        const body = await gateway.scheduler.workers.client(worker.workerId)
+          .call<{ sessions?: unknown[] }>("GET", `/v1/pty-sessions?agentId=${encodeURIComponent(agent.id)}`, undefined, AbortSignal.timeout(8000));
+        return z.array(PtySummary).parse(body.sessions ?? []).map(item => ({
+          ...item,
+          workerId: worker.workerId,
+          shadowName: shadowNames.get(item.shadowId) ?? null,
+        }));
+      } catch {
+        return [];
+      }
+    }));
+
+    const rawLiveSessions = workerResultsRaw.flat();
+    const liveContextIds = new Set(rawLiveSessions.map(item => item.contextId));
+
+    const dormantContextRows = contextRows
+      .filter(row => row.runner_session_id && !liveContextIds.has(row.id))
+      .filter(row => {
+        if (row.owner_type === "task") {
+          const task = taskById.get(row.owner_id);
+          return Boolean(task && task.status !== "deleted");
+        }
+        const sess = sessionById.get(row.owner_id);
+        return Boolean(sess && sess.status === "active");
+      })
+      .slice(0, 25);
+
+    const lookupSessionIds = new Set<string>();
+    for (const ctx of [
+      ...rawLiveSessions.map(item => contextById.get(item.contextId)).filter(Boolean),
+      ...dormantContextRows,
+    ]) {
+      if (!ctx || ctx.owner_type === "task") continue;
+      const sess = sessionById.get(ctx.owner_id);
+      if (!sess) continue;
+      lookupSessionIds.add(sess.id);
+      if (sess.parent_session_id) lookupSessionIds.add(sess.parent_session_id);
+      if (sess.group_id !== null) {
+        const mainPeer = mainSessionBySurfaceKey.get(`${sess.channel_type}:${sess.channel_id}:${sess.group_id}`);
+        if (mainPeer) lookupSessionIds.add(mainPeer.id);
+      }
+    }
+
+    const groupIds = [
+      ...new Set(
+        [...lookupSessionIds]
+          .map(id => sessionById.get(id)?.group_id ?? null)
+          .filter((id): id is string => id !== null),
+      ),
+    ];
+    const surfaceRows = groupIds.length === 0
+      ? []
+      : db.select().from(channelSurfaces).where(inArray(channelSurfaces.externalId, groupIds)).all();
+
+    const userMessageRows = lookupSessionIds.size === 0
+      ? []
+      : db
+          .select({
+            id: messages.id,
+            sessionId: sessionTimelineEntries.sessionId,
+            role: messages.role,
+            senderIdentityId: messages.senderIdentityId,
+            senderUserId: messages.senderUserId,
+            occurredAt: messages.occurredAt,
+          })
+          .from(sessionTimelineEntries)
+          .innerJoin(messages, eq(messages.id, sessionTimelineEntries.messageId))
+          .where(
+            and(
+              inArray(sessionTimelineEntries.sessionId, [...lookupSessionIds]),
+              eq(messages.role, "user"),
+              isNull(messages.deletedAt),
+            ),
+          )
+          .all();
+
+    const directRecipientRows = lookupSessionIds.size === 0
+      ? []
+      : db
+          .select()
+          .from(directRecipients)
+          .where(inArray(directRecipients.sessionId, [...lookupSessionIds]))
+          .all();
+    const claimIds = [
+      ...new Set(
+        directRecipientRows
+          .map(row => row.claimId)
+          .filter((id): id is string => id !== null),
+      ),
+    ];
+    const userIdentityLinkRows = claimIds.length === 0
+      ? []
+      : db
+          .select()
+          .from(userIdentityLinks)
+          .where(inArray(userIdentityLinks.id, claimIds))
+          .all();
+
+    const senderIdentityIds = [
+      ...new Set(
+        userMessageRows
+          .map(row => row.senderIdentityId)
+          .filter((id): id is string => id !== null),
+      ),
+    ];
+    const recipientExternalIds = [
+      ...new Set(directRecipientRows.map(row => row.recipientId)),
+    ];
+    const identityRows = [
+      ...(senderIdentityIds.length === 0
+        ? []
+        : db.select().from(channelIdentities).where(inArray(channelIdentities.id, senderIdentityIds)).all()),
+      ...(recipientExternalIds.length === 0
+        ? []
+        : db.select().from(channelIdentities).where(inArray(channelIdentities.externalId, recipientExternalIds)).all()),
+    ];
+    const dedupIdentityRows = [...new Map(identityRows.map(row => [row.id, row])).values()];
+    const identityById = new Map(dedupIdentityRows.map(row => [row.id, row]));
+
+    const displayTitleMessages = userMessageRows.map(row => ({
+      id: row.id,
+      sessionId: row.sessionId,
+      role: row.role,
+      senderExternalId: row.senderIdentityId
+        ? (identityById.get(row.senderIdentityId)?.externalId ?? null)
+        : null,
+      createdAt: row.occurredAt,
+    }));
+
+    const targetUserIds = [
+      ...new Set([
+        ...userMessageRows.map(row => row.senderUserId).filter(id => id !== "luna-system"),
+        ...userIdentityLinkRows.map(row => row.userId),
+      ]),
+    ];
+    const userRows = targetUserIds.length === 0
+      ? []
+      : db
+          .select({ id: users.id, kind: users.kind, displayName: users.displayName })
+          .from(users)
+          .where(inArray(users.id, targetUserIds))
+          .all();
+    const humanUserNameById = new Map(
+      userRows
+        .filter(row => row.kind === "human" && row.displayName.trim().length > 0 && row.displayName.trim() !== "Local dashboard user")
+        .map(row => [row.id, row.displayName.trim()]),
+    );
+
+    const resolvePtySessionTitle = (sess: (typeof sessionRows)[number]): string => {
+      const resolveCandidate = (target: (typeof sessionRows)[number]): string | null => {
+        const resolved = resolveSessionDisplayTitle({
+          row: target,
+          surfaceRows,
+          messageRows: displayTitleMessages,
+          identityRows: dedupIdentityRows,
+          directRecipientRows,
+          userIdentityLinkRows,
+          userRows,
+        }).trim();
+        return resolved && resolved !== target.id ? resolved : null;
+      };
+
+      const parent = sess.parent_session_id ? sessionById.get(sess.parent_session_id) : undefined;
+      const mainPeer = sess.group_id !== null
+        ? mainSessionBySurfaceKey.get(`${sess.channel_type}:${sess.channel_id}:${sess.group_id}`)
+        : undefined;
+
+      let baseTitle = resolveCandidate(sess);
+      if (!baseTitle && parent) baseTitle = resolveCandidate(parent);
+      if (!baseTitle && mainPeer && mainPeer.id !== sess.id) baseTitle = resolveCandidate(mainPeer);
+
+      if (!baseTitle) {
+        const relatedIds = new Set(
+          [sess.id, parent?.id, mainPeer?.id].filter((id): id is string => Boolean(id)),
+        );
+        const latestHumanMsg = userMessageRows
+          .filter(row => relatedIds.has(row.sessionId) && humanUserNameById.has(row.senderUserId))
+          .toSorted((a, b) => b.occurredAt - a.occurredAt)[0];
+        if (latestHumanMsg) {
+          baseTitle = humanUserNameById.get(latestHumanMsg.senderUserId) ?? null;
+        }
+      }
+
+      const explicitTopic = sess.title?.trim();
+      if (baseTitle && explicitTopic && explicitTopic !== baseTitle) {
+        return `${baseTitle} · # ${explicitTopic}`;
+      }
+      if (baseTitle) {
+        return baseTitle;
+      }
+      return sess.channel_type === "dashboard"
+        ? `网页会话 ${sess.id.slice(0, 8)}`
+        : `会话 ${sess.id.slice(0, 8)}`;
+    };
 
     const describeContextOwner = (ctx: (typeof contextRows)[number] | undefined) => {
       if (!ctx) {
@@ -289,69 +510,34 @@ export function createAgentContainerRoutes(
       }
       const sess = sessionById.get(ctx.owner_id);
       const runnerKind = sess?.kind === "work" ? "work" as const : "main" as const;
-      const fallbackTitle = sess?.channel_type === "dashboard"
-        ? `网页会话 ${ctx.owner_id.slice(0, 8)}`
-        : `会话 ${ctx.owner_id.slice(0, 8)}`;
       return {
         ownerType: "session" as const,
         ownerId: ctx.owner_id,
         runnerKind,
-        title: sess?.title?.trim() || fallbackTitle,
+        title: sess ? resolvePtySessionTitle(sess) : `会话 ${ctx.owner_id.slice(0, 8)}`,
         channelType: sess?.channel_type ?? null,
       };
     };
 
-    const workers = gateway.list().filter(worker => assigned.has(worker.workerId) && worker.connected && !worker.revoked);
-    const workerResults = await Promise.all(workers.map(async worker => {
-      const supported = worker.health?.capabilities?.includes(CONTAINER_STREAMS_CAPABILITY) === true;
-      if (!supported) return [];
-      try {
-        const body = await gateway.scheduler.workers.client(worker.workerId)
-          .call<{ sessions?: unknown[] }>("GET", `/v1/pty-sessions?agentId=${encodeURIComponent(agent.id)}`, undefined, AbortSignal.timeout(8000));
-        return z.array(PtySummary).parse(body.sessions ?? []).map(item => {
-          const ctx = contextById.get(item.contextId);
-          const meta = describeContextOwner(ctx);
-          return {
-            ...item,
-            workerId: worker.workerId,
-            shadowName: shadowNames.get(item.shadowId) ?? null,
-            ...meta,
-          };
-        });
-      } catch {
-        return [];
-      }
-    }));
-
-    const liveSessions = workerResults.flat().toSorted((a, b) => {
-      if (a.busy !== b.busy) return a.busy ? -1 : 1;
-      return b.lastActiveAt - a.lastActiveAt;
-    });
-    const liveContextIds = new Set(liveSessions.map(item => item.contextId));
-
-    const dormantContexts = contextRows
-      .filter(row => row.runner_session_id && !liveContextIds.has(row.id))
-      .filter(row => {
-        if (row.owner_type === "task") {
-          const task = taskById.get(row.owner_id);
-          return Boolean(task && task.status !== "deleted");
-        }
-        const sess = sessionById.get(row.owner_id);
-        return Boolean(sess && sess.status === "active");
-      })
-      .slice(0, 25)
-      .map(row => {
-        const meta = describeContextOwner(row);
-        return {
-          contextId: row.id,
-          shadowId: row.shadow_id,
-          shadowName: shadowNames.get(row.shadow_id) ?? null,
-          runnerType: row.runner_type,
-          sessionId: row.runner_session_id,
-          updatedAt: row.updated_at,
-          ...meta,
-        };
+    const liveSessions = rawLiveSessions
+      .map(item => ({
+        ...item,
+        ...describeContextOwner(contextById.get(item.contextId)),
+      }))
+      .toSorted((a, b) => {
+        if (a.busy !== b.busy) return a.busy ? -1 : 1;
+        return b.lastActiveAt - a.lastActiveAt;
       });
+
+    const dormantContexts = dormantContextRows.map(row => ({
+      contextId: row.id,
+      shadowId: row.shadow_id,
+      shadowName: shadowNames.get(row.shadow_id) ?? null,
+      runnerType: row.runner_type,
+      sessionId: row.runner_session_id,
+      updatedAt: row.updated_at,
+      ...describeContextOwner(row),
+    }));
 
     return c.json({
       sessions: liveSessions,

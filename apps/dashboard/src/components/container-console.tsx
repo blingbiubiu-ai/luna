@@ -319,10 +319,11 @@ export function Workspace({
             const selected = item.key === active;
             const itemStatus = status(item.key);
             const connected = itemStatus === "已连接";
-            const itemBusy = item.kind === "pty" && item.pty
-              ? (livePtyByContextId?.get(item.pty.contextId)?.busy ?? item.pty.busy ?? false)
-              : false;
-            const label = consoleTitle(item);
+            const livePty = item.kind === "pty" && item.pty
+              ? livePtyByContextId?.get(item.pty.contextId)
+              : undefined;
+            const itemBusy = livePty?.busy ?? item.pty?.busy ?? false;
+            const label = livePty?.title?.trim() || consoleTitle(item);
             return (
               <div
                 key={item.key}

@@ -8,7 +8,7 @@ import { eq } from "drizzle-orm";
 import { DataConnection } from "@/data";
 import * as schema from "@/data/schema";
 import { setLunaHome } from "@/shared";
-import { fixtureScope } from "../helpers/platform-fixtures";
+import { fixtureScope, fixtureSessionOwnership } from "../helpers/platform-fixtures";
 import { AgentStore } from "@/agents/agent-store";
 import { AgentWorkerAccessStore } from "@/agents/agent-worker-access-store";
 import { createAgentContainerRoutes } from "@/server/routes/agent-containers";
@@ -235,4 +235,247 @@ test("uploads go to an assigned upload-capable Worker for a live Shadow, as base
   connection.db.update(schema.agentShadows).set({ status: "deleted" }).where(eq(schema.agentShadows.id, shadowId)).run();
   expect((await upload("alice", "worker-1", shadowId)).status).toBe(409);
   expect(sent).toHaveLength(1);
+});
+
+test("pty-sessions resolves Feishu group names, topic titles, and P2P user names for live and dormant contexts", async () => {
+  const nowIso = new Date(1_795_348_600_000).toISOString();
+  const nowMs = 1_795_348_600_000;
+  const db = connection.db;
+  const ownership = fixtureSessionOwnership(db, "feishu", "feishu-default", "alice");
+  new AgentWorkerAccessStore(db).setOwned("alice", ownership.agent_id, "worker-1", "active");
+  const ownerUserId = new AgentStore(db).ownerUserId(ownership.agent_id);
+
+  db.insert(schema.channelSurfaces).values([
+    {
+      id: "surf-group",
+      channelType: "feishu",
+      channelId: "feishu-default",
+      externalId: "oc_group_ops",
+      surfaceKind: "group",
+      displayName: "【广州】支付值班群",
+      firstSeenAt: nowIso,
+      lastSeenAt: nowIso,
+      createdAt: nowIso,
+      updatedAt: nowIso,
+    },
+    {
+      id: "surf-p2p",
+      channelType: "feishu",
+      channelId: "feishu-default",
+      externalId: "oc_p2p_zhangsan",
+      surfaceKind: "p2p",
+      displayName: null,
+      firstSeenAt: nowIso,
+      lastSeenAt: nowIso,
+      createdAt: nowIso,
+      updatedAt: nowIso,
+    },
+  ]).run();
+
+  db.insert(schema.channelIdentities).values({
+    id: "ident-zhangsan",
+    channelType: "feishu",
+    channelId: "feishu-default",
+    externalId: "ou_zhangsan",
+    identityKind: "user",
+    displayName: "张三",
+    firstSeenAt: nowIso,
+    lastSeenAt: nowIso,
+    createdAt: nowIso,
+    updatedAt: nowIso,
+  }).run();
+
+  db.insert(schema.sessions).values([
+    {
+      id: "sess-group-main",
+      ...ownership,
+      channel_type: "feishu",
+      channel_id: "feishu-default",
+      group_id: "oc_group_ops",
+      title: null,
+      status: "active",
+      kind: "main",
+      created_at: nowMs,
+      updated_at: nowMs,
+    },
+    {
+      id: "sess-group-topic",
+      ...ownership,
+      channel_type: "feishu",
+      channel_id: "feishu-default",
+      group_id: "oc_group_ops",
+      thread_key: "omt_1",
+      parent_session_id: "sess-group-main",
+      title: "排查 OOM",
+      status: "active",
+      kind: "main",
+      created_at: nowMs,
+      updated_at: nowMs,
+    },
+    {
+      id: "sess-p2p-main",
+      ...ownership,
+      channel_type: "feishu",
+      channel_id: "feishu-default",
+      group_id: "oc_p2p_zhangsan",
+      title: null,
+      status: "active",
+      kind: "main",
+      created_at: nowMs,
+      updated_at: nowMs,
+    },
+    {
+      id: "sess-p2p-work",
+      ...ownership,
+      channel_type: "feishu",
+      channel_id: "feishu-default",
+      group_id: "oc_p2p_zhangsan",
+      thread_key: "omt_work_1",
+      title: null,
+      status: "active",
+      kind: "work",
+      created_at: nowMs,
+      updated_at: nowMs,
+    },
+  ]).run();
+
+  db.insert(schema.messages).values({
+    id: "msg-p2p-1",
+    agentId: ownership.agent_id,
+    shadowId: ownership.shadow_id,
+    bindingId: ownership.binding_id,
+    ownerSessionId: "sess-p2p-main",
+    channelType: "feishu",
+    channelId: "feishu-default",
+    externalMessageId: "om_p2p_1",
+    senderUserId: ownerUserId,
+    senderIdentityId: "ident-zhangsan",
+    role: "user",
+    contentKind: "text",
+    presentationKind: "plain",
+    contentJson: [{ type: "text", text: "你好" }],
+    occurredAt: nowMs,
+    createdAt: nowMs,
+  }).run();
+
+  db.insert(schema.sessionTimelineEntries).values({
+    id: "ste-p2p-1",
+    sessionId: "sess-p2p-main",
+    messageId: "msg-p2p-1",
+    entryKind: "message",
+    createdAt: nowMs,
+  }).run();
+
+  db.insert(schema.runnerContexts).values([
+    {
+      id: "ctx-group-main",
+      agent_id: ownership.agent_id,
+      shadow_id: ownership.shadow_id,
+      owner_type: "session",
+      owner_id: "sess-group-main",
+      runner_type: "codex",
+      runner_session_id: "rs-1",
+      runner_root_path: "/tmp/r1",
+      created_at: nowMs,
+      updated_at: nowMs,
+    },
+    {
+      id: "ctx-group-topic",
+      agent_id: ownership.agent_id,
+      shadow_id: ownership.shadow_id,
+      owner_type: "session",
+      owner_id: "sess-group-topic",
+      runner_type: "claude",
+      runner_session_id: "rs-2",
+      runner_root_path: "/tmp/r2",
+      created_at: nowMs,
+      updated_at: nowMs,
+    },
+    {
+      id: "ctx-p2p-work",
+      agent_id: ownership.agent_id,
+      shadow_id: ownership.shadow_id,
+      owner_type: "session",
+      owner_id: "sess-p2p-work",
+      runner_type: "codex",
+      runner_session_id: "rs-3",
+      runner_root_path: "/tmp/r3",
+      created_at: nowMs,
+      updated_at: nowMs,
+    },
+    {
+      id: "ctx-p2p-dormant",
+      agent_id: ownership.agent_id,
+      shadow_id: ownership.shadow_id,
+      owner_type: "session",
+      owner_id: "sess-p2p-main",
+      runner_type: "claude",
+      runner_session_id: "rs-4",
+      runner_root_path: "/tmp/r4",
+      created_at: nowMs,
+      updated_at: nowMs,
+    },
+  ]).run();
+
+  const fake = fakeGateway();
+  const gateway = fake.gateway as unknown as { scheduler: { workers: { client: (id: string) => unknown } } };
+  gateway.scheduler.workers.client = () => ({
+    call: async () => ({
+      sessions: [
+        {
+          environmentId: "env_shadow",
+          shadowId: ownership.shadow_id,
+          contextId: "ctx-group-main",
+          runnerType: "codex",
+          model: "gpt-5.4",
+          sessionId: "rs-1",
+          busy: true,
+          privileged: true,
+          pid: 101,
+          startedAt: nowMs,
+          lastActiveAt: nowMs,
+        },
+        {
+          environmentId: "env_shadow",
+          shadowId: ownership.shadow_id,
+          contextId: "ctx-group-topic",
+          runnerType: "claude",
+          sessionId: "rs-2",
+          busy: false,
+          privileged: false,
+          pid: 102,
+          startedAt: nowMs,
+          lastActiveAt: nowMs - 1000,
+        },
+        {
+          environmentId: "env_shadow",
+          shadowId: ownership.shadow_id,
+          contextId: "ctx-p2p-work",
+          runnerType: "codex",
+          sessionId: "rs-3",
+          busy: false,
+          privileged: true,
+          pid: 103,
+          startedAt: nowMs,
+          lastActiveAt: nowMs - 2000,
+        },
+      ],
+    }),
+  });
+
+  const res = await app("alice", fake.gateway).request(`/${ownership.agent_id}/pty-sessions`);
+  expect(res.status).toBe(200);
+  const body = (await res.json()) as {
+    sessions: Array<{ contextId: string; title: string | null; runnerKind: string }>;
+    dormantContexts: Array<{ contextId: string; title: string | null; runnerKind: string }>;
+  };
+
+  expect(body.sessions.map(item => [item.contextId, item.runnerKind, item.title])).toEqual([
+    ["ctx-group-main", "main", "【广州】支付值班群"],
+    ["ctx-group-topic", "main", "【广州】支付值班群 · # 排查 OOM"],
+    ["ctx-p2p-work", "work", "张三"],
+  ]);
+  expect(body.dormantContexts.map(item => [item.contextId, item.runnerKind, item.title])).toEqual([
+    ["ctx-p2p-dormant", "main", "张三"],
+  ]);
 });
