@@ -3,7 +3,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "mkdir -p dist && bun build src/main.tsx --outfile dist/main.js --target browser && bun build src/artifact-preview-main.tsx --outfile dist/artifact-preview.js --target browser && ../../node_modules/.bin/tailwindcss -i src/global.css -o dist/main.css && cp index.html dist/index.html && cp artifact-preview.html dist/artifact-preview.html",
+    "build": "mkdir -p dist && NODE_ENV=production bun build src/main.tsx --outfile dist/main.js --target browser --minify-whitespace --minify-syntax && NODE_ENV=production bun build src/artifact-preview-main.tsx --outfile dist/artifact-preview.js --target browser --minify-whitespace --minify-syntax && ../../node_modules/.bin/tailwindcss -i src/global.css -o dist/main.css && cp index.html dist/index.html && cp artifact-preview.html dist/artifact-preview.html",
     "typecheck": "../../node_modules/.bin/tsc --noEmit -p tsconfig.json",
     "test": "cd ../.. && bun test apps/dashboard/tests"
   }
