@@ -211,8 +211,12 @@ Executor and container-side Runner sources live in `apps/executor`. Build with
 `@luna/runner-protocol`. The Dockerfile in `container/` installs a minimal
 workspace and bundles Executor without root Service sources. User-facing Luna
 CLI source lives in `apps/cli`; the Worker mounts its bundled client at
-`/opt/luna-runtime/current/luna-client.js`, and the image keeps a copy at
-`/app/luna-cli/cli.js` for older Workers.
+`/opt/luna-runtime/current/luna-client.js` along with an executable shim at
+`/opt/luna-runtime/current/bin/luna` placed ahead of `/usr/local/bin` in Runner
+`PATH`, and `runExecutor` (`UID 0`) atomically reconciles `/usr/local/bin/luna`
+and `/etc/profile.d/luna-*.sh` on every container boot so base images carry only
+OS/third-party toolchains and never drift behind Worker code; the image keeps a
+fallback copy at `/app/luna-cli/cli.js` for older Workers.
 
 Worker renders instructions from the selected resource snapshot. Remote Service URLs are preserved; only loopback URLs are rewritten to the local Docker host gateway.
 

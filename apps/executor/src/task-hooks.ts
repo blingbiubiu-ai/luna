@@ -1,11 +1,14 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
+const RUN_LUNA_TASK_HOOK =
+  'if [ -f /opt/luna-runtime/current/luna-client.js ]; then bun /opt/luna-runtime/current/luna-client.js internal task-hook "$1"; elif command -v luna >/dev/null 2>&1; then luna internal task-hook "$1"; fi';
+
 export const TASK_POST_TOOL_HOOK_CMD =
-  "/bin/sh -c 'command -v luna >/dev/null 2>&1 && luna internal task-hook post-tool || true'";
+  `/bin/sh -c 'if OUT=$(${RUN_LUNA_TASK_HOOK} 2>/dev/null) && [ -n "$OUT" ]; then printf "%s\\n" "$OUT"; fi; true' sh post-tool`;
 
 export const TASK_STOP_HOOK_CMD =
-  "/bin/sh -c 'command -v luna >/dev/null 2>&1 && luna internal task-hook stop || true'";
+  `/bin/sh -c 'if OUT=$(${RUN_LUNA_TASK_HOOK} 2>/dev/null) && [ -n "$OUT" ]; then printf "%s\\n" "$OUT"; fi; true' sh stop`;
 
 function shellEscapeSingle(value: string): string {
   return `'${value.replace(/'/g, `'\\''`)}'`;
@@ -17,7 +20,7 @@ function shellEscapeSingle(value: string): string {
  * continues working without notifying the PTY idle detector of turn completion.
  */
 export function buildClaudePtyStopHookCommand(hookEventsFile: string): string {
-  return `/bin/sh -c 'OUT=$(command -v luna >/dev/null 2>&1 && luna internal task-hook stop || true); if [ -n "$OUT" ]; then printf "%s\\n" "$OUT"; else printf "{\\"event\\":\\"Stop\\"}\\n" >> "$1"; fi' sh ${shellEscapeSingle(hookEventsFile)}`;
+  return `/bin/sh -c 'if OUT=$(${RUN_LUNA_TASK_HOOK} 2>/dev/null) && [ -n "$OUT" ]; then printf "%s\\n" "$OUT"; else printf "{\\"event\\":\\"Stop\\"}\\n" >> "$2"; fi' sh stop ${shellEscapeSingle(hookEventsFile)}`;
 }
 
 export function writeClaudeSubprocessHookSettings(targetFile: string): string {

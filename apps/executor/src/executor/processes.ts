@@ -115,7 +115,7 @@ export class ExecutorProcesses {
       return claimed;
     });
     if (!retry) return;
-    const environment: NodeJS.ProcessEnv = { PATH: `${runnerAssetPaths(context.home).commands}:${context.home}/.local/bin:/opt/android-sdk/cmdline-tools/latest/bin:/opt/android-sdk/platform-tools:/opt/android-sdk/build-tools/30.0.3:/opt/android-sdk/cmake/3.22.1/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin`, HOME: context.home,
+    const environment: NodeJS.ProcessEnv = { PATH: `${runnerAssetPaths(context.home).commands}:${context.home}/.local/bin:/opt/luna-runtime/current/bin:/opt/android-sdk/cmdline-tools/latest/bin:/opt/android-sdk/platform-tools:/opt/android-sdk/build-tools/30.0.3:/opt/android-sdk/cmake/3.22.1/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin`, HOME: context.home,
       LUNA_RUNNER_HOME: context.cwd, LUNA_HOME: context.home, IS_SANDBOX: "1", LANG: "C.UTF-8" };
     environment.JAVA_TOOL_OPTIONS = `-Djava.net.preferIPv4Stack=true -Duser.home=${context.home}`;
     for (const key of ["JAVA_HOME", "ANDROID_HOME", "ANDROID_SDK_ROOT", "ANDROID_NDK_HOME", "CHROME_BIN", "PUPPETEER_EXECUTABLE_PATH"]) {

@@ -20,13 +20,23 @@ function seedLink(source: string, target: string): void {
 /** Former entrypoint initialization, executed as the Runner UID before every provider. */
 export function prepareRunnerEnvironment(
   input: Readonly<NodeJS.ProcessEnv>,
-  assets = { gradleWrapper: "/opt/luna-cache/gradle-wrapper", fswatch: "/usr/bin/fswatch" },
+  assets: { gradleWrapper: string; fswatch: string; runtimeBin?: string } = {
+    gradleWrapper: "/opt/luna-cache/gradle-wrapper",
+    fswatch: "/usr/bin/fswatch",
+    runtimeBin: "/opt/luna-runtime/current/bin",
+  },
 ): NodeJS.ProcessEnv {
   const env = { ...input };
   if (!env.HOME) throw new Error("Runner HOME is required");
   env.npm_config_prefix ||= env.NPM_CONFIG_PREFIX || join(env.HOME, ".npm-global");
   const npmBin = join(env.npm_config_prefix, "bin");
   const path = (env.PATH ?? "").split(":").filter(Boolean);
+  const runtimeBin = assets.runtimeBin;
+  if (runtimeBin && existsSync(runtimeBin) && !path.includes(runtimeBin)) {
+    const usrLocalIdx = path.indexOf("/usr/local/bin");
+    if (usrLocalIdx >= 0) path.splice(usrLocalIdx, 0, runtimeBin);
+    else path.unshift(runtimeBin);
+  }
   if (!path.includes(npmBin)) path.push(npmBin);
   env.PATH = path.join(":");
   env.GRADLE_USER_HOME ||= join(env.HOME, ".gradle");

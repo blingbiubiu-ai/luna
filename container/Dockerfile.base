@@ -63,7 +63,7 @@ RUN case "${TARGETARCH:-$(dpkg --print-architecture)}" in amd64) CLAUDE_CPU=x64 
     && npm cache clean --force
 
 RUN printf '%s\n' \
-    'export PATH="$HOME/.luna-resources/commands:$HOME/.local/bin:$PATH"' \
+    'export PATH="$HOME/.luna-resources/commands:$HOME/.local/bin:/opt/luna-runtime/current/bin:$PATH"' \
     > /etc/profile.d/luna-path.sh
 
 # Install bun — needed to run the luna CLI (built with bun target)

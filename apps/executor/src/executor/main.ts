@@ -5,7 +5,7 @@ import { Id,ExecutionScope } from "@luna/runner-protocol";
 import { openExecutionDatabase, readPrivateJson } from "@luna/execution-store";
 import { TokenAuthority } from "@luna/execution-transport";
 import { createExecutor } from "./server";
-import { configureRunnerSudo, ensureRunnerAccount } from "./runner-sudo";
+import { configureRunnerSudo, ensureRunnerAccount, reconcileContainerShims } from "./runner-sudo";
 
 import { RunnerLayout } from "@luna/runner-protocol/runner-assets";
 
@@ -25,6 +25,7 @@ export const ExecutorDeployment = z.object({
 
 export async function runExecutor(configFile: string): Promise<void> {
   const config = ExecutorDeployment.parse(readPrivateJson(configFile));
+  reconcileContainerShims();
   ensureRunnerAccount({ uid: config.runnerUid, gid: config.runnerGid, home: config.runnerLayout.home });
   configureRunnerSudo({ uid: config.runnerUid, gid: config.runnerGid, home: config.runnerLayout.home, enabled: config.runnerSudo });
   const db = openExecutionDatabase(join(config.dataRoot, "control", "executor.sqlite"));

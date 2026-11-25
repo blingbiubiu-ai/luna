@@ -91,3 +91,23 @@ test("the image's own account for the Runner UID becomes luna; root stays root",
   expect(ensureRunnerAccount({ root, uid: 0, gid: 0, home: "/home/luna" })).toBe("root");
   expect(readFileSync(join(root, "etc/passwd"), "utf8")).toStartWith("root:x:0:0:root:/root:/bin/bash\n");
 });
+
+test("reconcileContainerShims overwrites stale image /usr/local/bin/luna and stays identical to container/ files", async () => {
+  const { reconcileContainerShims } = await import("../../apps/executor/src/executor/runner-sudo");
+  mkdirSync(join(root, "usr/local/bin"), { recursive: true });
+  writeFileSync(join(root, "usr/local/bin/luna"), "#!/bin/sh\nexec bun /app/luna-cli/cli.js \"$@\"\n", { mode: 0o755 });
+
+  reconcileContainerShims({ root });
+
+  const repoRoot = join(import.meta.dir, "../..");
+  expect(readFileSync(join(root, "usr/local/bin/luna"), "utf8")).toBe(
+    readFileSync(join(repoRoot, "container/luna"), "utf8").replace(/\r\n/g, "\n").replace(/\n*$/, "\n"),
+  );
+  expect(readFileSync(join(root, "etc/profile.d/luna-prompt.sh"), "utf8")).toBe(
+    readFileSync(join(repoRoot, "container/luna-prompt.sh"), "utf8").replace(/\r\n/g, "\n").replace(/\n*$/, "\n"),
+  );
+  expect(readFileSync(join(root, "etc/profile.d/luna-npm-global.sh"), "utf8")).toBe(
+    readFileSync(join(repoRoot, "container/npm-global.sh"), "utf8").replace(/\r\n/g, "\n").replace(/\n*$/, "\n"),
+  );
+  expect(readFileSync(join(root, "etc/profile.d/luna-path.sh"), "utf8")).toContain("/opt/luna-runtime/current/bin");
+});

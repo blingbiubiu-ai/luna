@@ -1,7 +1,79 @@
-import { appendFileSync, chmodSync, existsSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { appendFileSync, chmodSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 
 export const RUNNER_SUDOERS = "etc/sudoers.d/luna-runner";
+
+const CONTAINER_LUNA_WRAPPER = [
+  "#!/usr/bin/env bash",
+  "# The CLI shipped with the Worker (mounted read-only) is current; the baked copy serves older Workers.",
+  'if [ -f /opt/luna-runtime/current/luna-client.js ]; then exec bun /opt/luna-runtime/current/luna-client.js "$@"; fi',
+  'exec bun /app/luna-cli/cli.js "$@"',
+  "",
+].join("\n");
+
+const CONTAINER_LUNA_PATH_PROFILE =
+  'export PATH="$HOME/.luna-resources/commands:$HOME/.local/bin:/opt/luna-runtime/current/bin:$PATH"\n';
+
+const CONTAINER_LUNA_PROMPT_PROFILE = [
+  "# Runners use the Worker host UID, which has no passwd entry in the image;",
+  '# show "luna" instead of bash\'s "I have no name!".',
+  'if [ -n "${BASH-}" ] && [ -n "${PS1-}" ] && ! id -un >/dev/null 2>&1; then',
+  "  PS1=$(printf '%s' \"$PS1\" | sed 's/\\\\u/luna/g')",
+  "  export USER=luna",
+  "fi",
+  "",
+].join("\n");
+
+const CONTAINER_NPM_GLOBAL_PROFILE = [
+  "# The service supplies the persistent home for this runner at launch.",
+  'if [ -n "${HOME:-}" ]; then',
+  '  export npm_config_prefix="${npm_config_prefix:-${NPM_CONFIG_PREFIX:-$HOME/.npm-global}}"',
+  '  case ":$PATH:" in',
+  '    *":$npm_config_prefix/bin:"*) ;;',
+  '    *) export PATH="$PATH:$npm_config_prefix/bin" ;;',
+  "  esac",
+  "fi",
+  "",
+].join("\n");
+
+/**
+ * Reconciles Luna-owned entry shims and login-shell profiles inside the container rootfs on
+ * every Executor boot (`UID 0`). Base images only need to carry third-party OS packages and
+ * runtimes; container-side Luna wrappers never drift behind the Worker-mounted runtime.
+ */
+export function reconcileContainerShims(input: { root?: string } = {}): void {
+  const root = input.root ?? "/";
+  const entries: ReadonlyArray<{ relPath: string; content: string; mode: number }> = [
+    { relPath: "usr/local/bin/luna", content: CONTAINER_LUNA_WRAPPER, mode: 0o755 },
+    { relPath: "etc/profile.d/luna-path.sh", content: CONTAINER_LUNA_PATH_PROFILE, mode: 0o644 },
+    { relPath: "etc/profile.d/luna-prompt.sh", content: CONTAINER_LUNA_PROMPT_PROFILE, mode: 0o644 },
+    { relPath: "etc/profile.d/luna-npm-global.sh", content: CONTAINER_NPM_GLOBAL_PROFILE, mode: 0o644 },
+  ];
+  for (const { relPath, content, mode } of entries) {
+    const dest = join(root, relPath);
+    try {
+      if (existsSync(dest) && readFileSync(dest, "utf8") === content && ( chmodCheck(dest, mode) )) {
+        continue;
+      }
+      mkdirSync(dirname(dest), { recursive: true });
+      const tmp = `${dest}.luna-tmp-${process.pid}`;
+      writeFileSync(tmp, content, { mode });
+      chmodSync(tmp, mode);
+      renameSync(tmp, dest);
+    } catch {
+      // Non-root unit test harnesses without a writable root skip system shim updates gracefully.
+    }
+  }
+}
+
+function chmodCheck(path: string, mode: number): boolean {
+  try {
+    chmodSync(path, mode);
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 /**
  * Shadow root switch: give the Runner UID passwordless sudo inside this container.

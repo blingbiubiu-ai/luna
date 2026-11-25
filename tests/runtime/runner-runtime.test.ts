@@ -23,6 +23,8 @@ test("the runtime installs once per version, readable by the container, with cur
  expect(readFileSync(join(first.root,"current/executor.js"),"utf8")).toBe("executor one");
  expect(statSync(join(first.root,first.version)).mode&0o777).toBe(0o755);
  expect(statSync(join(first.root,first.version,"luna-client.js")).mode&0o777).toBe(0o644);
+ expect(statSync(join(first.root,"current/bin/luna")).mode&0o777).toBe(0o755);
+ expect(readFileSync(join(first.root,"current/bin/luna"),"utf8")).toContain("../luna-client.js");
  expect(installRunnerRuntime(home,files("one"))).toEqual(first);
  const second=installRunnerRuntime(home,files("two"));
  expect(second.version).not.toBe(first.version);
