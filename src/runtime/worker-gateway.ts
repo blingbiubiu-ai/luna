@@ -46,6 +46,7 @@ const healthSchema = z.object({
   capabilities: z.array(z.string().max(128)).max(32).optional(),
   workerId: Id,
   imageDigest: z.string(),
+  imageRepoDigest: z.string().max(128).optional(),
   imageRef: z.string().max(512).optional(),
   imageVariant: z.string().max(64).optional(),
   workerVersion: z.string().max(64).optional(),

@@ -18,8 +18,8 @@ export interface WorkerReleaseManifest {
     downloadPath: string;
   };
   images: {
-    general: { variant: "general"; label: string; image: string };
-    developer: { variant: "developer"; label: string; image: string };
+    general: { variant: "general"; label: string; image: string; digest?: string | null };
+    developer: { variant: "developer"; label: string; image: string; digest?: string | null };
   };
 }
 

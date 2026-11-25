@@ -32,6 +32,7 @@ interface Worker {
     projects?: string[];
     capabilities?: string[];
     imageDigest?: string;
+    imageRepoDigest?: string;
     imageRef?: string;
     imageVariant?: string;
     workerVersion?: string;
@@ -127,6 +128,20 @@ function AgentWorkers({ agent }: { agent: ReturnType<typeof useRouteAgent> }) {
     const hasNewWorkerVersion = Boolean(
       latestWorkerVersion && health?.workerVersion && health.workerVersion !== latestWorkerVersion,
     );
+    const hasWorkerActionableUpdate = hasNewWorkerVersion && health?.managedBinary !== false;
+    const variantKey = health?.imageVariant === "developer" || health?.imageRef?.includes("luna-runner-developer")
+      ? "developer"
+      : health?.imageVariant === "general" || health?.imageRef?.includes("luna-runner")
+        ? "general"
+        : undefined;
+    const targetImageDigest = variantKey ? releaseQuery.data?.images[variantKey]?.digest ?? null : null;
+    const hasNewImageVersion = Boolean(
+      targetImageDigest
+      && health?.imageDigest !== targetImageDigest
+      && health?.imageRepoDigest !== targetImageDigest,
+    );
+    const showUpgradeButton = canUpgrade && (isUpgrading || hasWorkerActionableUpdate || hasNewImageVersion);
+    const isUpToDate = online && supportsUpgrade && !isUpgrading && !hasNewWorkerVersion && !hasNewImageVersion;
 
     return <TableRow key={workerId}>
       <TableCell className="max-w-64 px-3 py-3 whitespace-normal">
@@ -138,6 +153,11 @@ function AgentWorkers({ agent }: { agent: ReturnType<typeof useRouteAgent> }) {
         {hasNewWorkerVersion && (
           <span className="mt-1 inline-block rounded bg-amber-500/15 px-1.5 py-0.5 text-[11px] font-medium text-amber-700 dark:text-amber-400">
             有新版本 ({latestWorkerVersion})
+          </span>
+        )}
+        {isUpToDate && (
+          <span className="mt-1 inline-block rounded bg-emerald-500/15 px-1.5 py-0.5 text-[11px] font-medium text-emerald-700 dark:text-emerald-400">
+            已是最新
           </span>
         )}
       </TableCell>
@@ -158,6 +178,11 @@ function AgentWorkers({ agent }: { agent: ReturnType<typeof useRouteAgent> }) {
             镜像 {health.imageDigest.slice(0, 19)}
           </p>
         ) : null}
+        {hasNewImageVersion && (
+          <span className="mt-1 inline-block rounded bg-amber-500/15 px-1.5 py-0.5 text-[11px] font-medium text-amber-700 dark:text-amber-400">
+            镜像有新版本
+          </span>
+        )}
         {health?.error && <p className="mt-1 break-words text-xs text-destructive">{health.error}</p>}
         {upgradeState && upgradeState.state !== "idle" && (
           <p className={`mt-1 break-words text-xs ${upgradeState.state === "failed" ? "text-destructive" : "text-muted-foreground"}`}>
@@ -173,7 +198,7 @@ function AgentWorkers({ agent }: { agent: ReturnType<typeof useRouteAgent> }) {
       <TableCell className="px-3">{worker?.lastHeartbeatAt ? new Date(worker.lastHeartbeatAt).toLocaleString() : "—"}</TableCell>
       <TableCell className="px-3">
         <div className="flex flex-wrap gap-2">
-          {canUpgrade && worker && <UpgradeWorkerDialog
+          {showUpgradeButton && worker && <UpgradeWorkerDialog
             path={path}
             worker={worker}
             release={releaseQuery.data}
@@ -191,7 +216,7 @@ function AgentWorkers({ agent }: { agent: ReturnType<typeof useRouteAgent> }) {
                 assign.mutate(workerId);
               }
             }}>取消分配</Button>}
-          {!canUpgrade && !canChangeAdmission && !canUnassign && "—"}
+          {!showUpgradeButton && !canChangeAdmission && !canUnassign && "—"}
         </div>
       </TableCell>
     </TableRow>;

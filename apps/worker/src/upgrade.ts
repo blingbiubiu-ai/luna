@@ -6,6 +6,7 @@ import { promisify } from "node:util";
 import { z } from "zod";
 import { ExecutionError, readPrivateJson, writePrivateJson } from "@luna/execution-store";
 import { WorkerLocalConfig, type WorkerConfig } from "./config";
+import { extractImageRepoDigestFromInspect } from "./docker-driver";
 
 const execFileAsync = promisify(execFile);
 
@@ -37,6 +38,7 @@ interface ReleaseManifest {
 export interface WorkerUpgradeManagerOptions {
   onStatusChange?: () => void;
   onRestart?: () => void;
+  onImageRepoDigest?: (repoDigest: string | undefined) => void;
   configFile?: string;
   scriptPath?: string;
   fetchFn?: typeof fetch;
@@ -84,6 +86,7 @@ export class WorkerUpgradeManager {
   private readonly execDocker: (args: string[]) => Promise<string>;
   private readonly onStatusChange: () => void;
   private readonly onRestart: () => void;
+  private readonly onImageRepoDigest: (repoDigest: string | undefined) => void;
   private readonly restartDelayMs: number;
 
   constructor(private readonly config: WorkerConfig, options: WorkerUpgradeManagerOptions = {}) {
@@ -102,6 +105,7 @@ export class WorkerUpgradeManager {
     });
     this.onStatusChange = options.onStatusChange ?? (() => {});
     this.onRestart = options.onRestart ?? (() => {});
+    this.onImageRepoDigest = options.onImageRepoDigest ?? (() => {});
     this.restartDelayMs = options.restartDelayMs ?? 500;
   }
 
@@ -156,6 +160,12 @@ export class WorkerUpgradeManager {
         const inspected = (await this.execDocker(["image", "inspect", targetImage, "--format", "{{.Id}}"])).trim();
         if (!/^sha256:[a-f0-9]{64}$/.test(inspected)) {
           throw new Error(`镜像 digest 格式无效: ${inspected}`);
+        }
+        try {
+          const fullInspect = await this.execDocker(["image", "inspect", targetImage]);
+          this.onImageRepoDigest(extractImageRepoDigestFromInspect(fullInspect));
+        } catch {
+          // optional repo digest refresh
         }
         if (inspected !== this.config.imageDigest || targetImage !== this.config.imageRef) {
           if (existsSync(this.configFile)) {

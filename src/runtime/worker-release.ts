@@ -8,6 +8,7 @@ export interface WorkerImageRelease {
   variant: WorkerImageVariant;
   label: string;
   image: string;
+  digest: string | null;
 }
 
 export interface WorkerReleaseManifest {
@@ -70,12 +71,22 @@ export function readWorkerBundle(
   return { content, sha256, version: sha256.slice(0, 12), size: content.byteLength };
 }
 
+function normalizeDigest(raw?: string): string | null {
+  const trimmed = raw?.trim();
+  if (!trimmed) return null;
+  const atIndex = trimmed.lastIndexOf("@");
+  const candidate = atIndex >= 0 ? trimmed.slice(atIndex + 1) : trimmed;
+  return /^sha256:[a-f0-9]{64}$/i.test(candidate) ? candidate.toLowerCase() : null;
+}
+
 export function getWorkerReleaseManifest(
   env: Record<string, string | undefined> = process.env,
 ): WorkerReleaseManifest {
   const bundle = readWorkerBundle(env);
   const generalImage = env.LUNA_WORKER_IMAGE_GENERAL?.trim() || DEFAULT_GENERAL_IMAGE;
   const developerImage = env.LUNA_WORKER_IMAGE_DEVELOPER?.trim() || DEFAULT_DEVELOPER_IMAGE;
+  const generalDigest = normalizeDigest(env.LUNA_WORKER_IMAGE_GENERAL_DIGEST);
+  const developerDigest = normalizeDigest(env.LUNA_WORKER_IMAGE_DEVELOPER_DIGEST);
   return {
     worker: {
       available: Boolean(bundle),
@@ -89,11 +100,13 @@ export function getWorkerReleaseManifest(
         variant: "general",
         label: "通用版 (General)",
         image: generalImage,
+        digest: generalDigest,
       },
       developer: {
         variant: "developer",
         label: "开发版 (Developer)",
         image: developerImage,
+        digest: developerDigest,
       },
     },
   };

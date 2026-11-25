@@ -14,6 +14,7 @@ export interface UpgradeableWorker {
     workerVersion?: string;
     managedBinary?: boolean;
     imageDigest?: string;
+    imageRepoDigest?: string;
     imageRef?: string;
     imageVariant?: string;
   } | null;
@@ -152,7 +153,16 @@ export function UpgradeWorkerDialog({
           </div>
           <div className="space-y-0.5 font-mono text-xs text-muted-foreground">
             <p>当前镜像：{worker.health?.imageRef ?? "未记录（将按下方目标镜像拉取）"}</p>
-            <p>当前 Digest：{shortDigest(worker.health?.imageDigest)}</p>
+            <p>当前 Digest：{shortDigest(worker.health?.imageRepoDigest ?? worker.health?.imageDigest)}</p>
+            {(() => {
+              const targetDigest =
+                imageRef === release?.images.developer.image
+                  ? release?.images.developer.digest
+                  : imageRef === release?.images.general.image
+                    ? release?.images.general.digest
+                    : null;
+              return targetDigest ? <p>目标 Digest：{shortDigest(targetDigest)}</p> : null;
+            })()}
           </div>
 
           {upgradeImage && (
