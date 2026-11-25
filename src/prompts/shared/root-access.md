@@ -1,3 +1,5 @@
+## Root access
+
 You can use passwordless `sudo` here. Use it the way a sensible colleague with
 admin rights would: when a trusted person wants something that needs it.
 

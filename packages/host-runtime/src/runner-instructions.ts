@@ -47,13 +47,23 @@ export const DEFAULT_PERSONA =
 /** Persona text beyond this many characters is left out, so instructions stay small enough to be read whole. */
 export const PERSONA_CHAR_LIMIT = 4000;
 
-type Section = readonly [tag: string, files: readonly string[]];
+/** A prompt file, or one included only when the Worker grants the Runner sudo. */
+type Part = string | { readonly file: string; readonly when: "sudo" };
+/** `"soul"` is the Shadow's names and persona, data from Service; every other block is files joined in order. */
+type Section = "soul" | readonly [tag: string, parts: readonly Part[]];
 
-/** Block order is priority order: identity and hard rules first, command manuals last. */
+/**
+ * The whole instruction file of each Runner kind, block by block. Block order is priority
+ * order: identity and hard rules first, command manuals last. Files may use `{{home}}` and
+ * `{{runnerRoot}}`.
+ */
 const LAYOUT: Record<RunnerInstructionKind, readonly Section[]> = {
   main: [
+    "soul",
+    ["luna_runtime", ["shared/runtime.md"]],
+    ["identity", ["shared/identity.md"]],
     ["role", ["main/role.md"]],
-    ["hard_rules", []],
+    ["hard_rules", ["shared/confidentiality.md", { file: "shared/root-access.md", when: "sudo" }]],
     ["routing", ["main/routing.md"]],
     ["reply_protocol", ["shared/reply-protocol.md", "main/reply.md"]],
     ["task_commands", ["main/task-commands.md"]],
@@ -62,23 +72,29 @@ const LAYOUT: Record<RunnerInstructionKind, readonly Section[]> = {
     ["messaging", ["main/messaging.md"]],
     ["memory_rules", ["shared/memory.md"]],
     ["artifacts", ["shared/artifacts.md"]],
-    ["environment", ["shared/runner-context.md", "main/filesystem.md"]],
+    ["environment", ["shared/runner-context.md", "main/filesystem.md", "shared/directories.md"]],
   ],
   task: [
+    "soul",
+    ["luna_runtime", ["shared/runtime.md"]],
+    ["identity", ["shared/identity.md"]],
     ["role", ["task/role.md"]],
-    ["hard_rules", []],
+    ["hard_rules", ["shared/confidentiality.md", { file: "shared/root-access.md", when: "sudo" }]],
     ["evidence", ["task/evidence.md"]],
     ["memory_rules", ["shared/memory.md"]],
     ["artifacts", ["shared/artifacts.md"]],
-    ["environment", ["shared/runner-context.md"]],
+    ["environment", ["shared/runner-context.md", "shared/directories.md"]],
   ],
   work: [
+    "soul",
+    ["luna_runtime", ["shared/runtime.md"]],
+    ["identity", ["shared/identity.md"]],
     ["role", ["work/role.md"]],
-    ["hard_rules", []],
+    ["hard_rules", ["shared/confidentiality.md", { file: "shared/root-access.md", when: "sudo" }]],
     ["reply_protocol", ["shared/reply-protocol.md", "work/reply.md"]],
     ["memory_rules", ["shared/memory.md"]],
     ["artifacts", ["shared/artifacts.md"]],
-    ["environment", ["shared/runner-context.md"]],
+    ["environment", ["shared/runner-context.md", "shared/directories.md"]],
   ],
 };
 
@@ -98,29 +114,20 @@ function _soulBlock(soul: RunnerSoul): string {
 
 /** Renders the instruction file for one runner kind. Exported for size checks. */
 export function renderRunnerInstructions(input: EnsureRunnerWorkspaceInstructionFilesInput): string {
-  const read = (file: string) => readFileSync(join(input.promptsRoot, file), "utf-8").trim();
-  const resources = join(input.home, ".luna-resources");
-  const directories = [
-    `Luna HOME is \`${input.home}\`. It is shared only by Runner processes of this Shadow.`,
-    `Your starting working directory is \`${input.runnerRootPath}\`.`,
-    `Read your execution context from \`${join(input.runnerRootPath, ".luna", "runner-context.json")}\`.`,
-    `Store working files in \`${join(input.runnerRootPath, "workspace")}\`.`,
-    "Agent memory lives in Luna Service, not in files; use `luna memory`.",
-    `Luna Skills are loaded through the provider’s Luna plugin.`,
-    `Shared commands in \`${join(resources, "commands")}\` and user tools in \`${join(input.home, ".local", "bin")}\` are on PATH.`,
-  ].join("\n");
-  const hardRules = [
-    `## Confidentiality\n\n${read("shared/confidentiality.md")}`,
-    ...(input.runnerSudo ? [`## Root access\n\n${read("shared/root-access.md")}`] : []),
-  ].join("\n\n");
-  return joinBlocks([
-    input.soul ? _soulBlock(input.soul) : "",
-    promptBlock("luna_runtime", read("shared/runtime.md")),
-    promptBlock("identity", read("shared/identity.md")),
-    ...LAYOUT[input.runnerKind].map(([tag, files]) => promptBlock(tag,
-      tag === "hard_rules" ? hardRules
-        : [...files.map(read), ...(tag === "environment" ? [directories] : [])].join("\n\n"))),
-  ]) + "\n";
+  const values: Record<string, string> = { home: input.home, runnerRoot: input.runnerRootPath };
+  const read = (file: string) => readFileSync(join(input.promptsRoot, file), "utf-8").trim()
+    .replace(/\{\{(\w+)\}\}/g, (_, name: string) => {
+      const value = values[name];
+      if (value === undefined) throw new Error(`Unknown placeholder {{${name}}} in prompt file ${file}`);
+      return value;
+    });
+  const included = (part: Part) => typeof part === "string" || (part.when === "sudo" && input.runnerSudo === true);
+  return joinBlocks(LAYOUT[input.runnerKind].map((section) => {
+    if (section === "soul") return input.soul ? _soulBlock(input.soul) : "";
+    const [tag, parts] = section;
+    return promptBlock(tag, parts.filter(included)
+      .map((part) => read(typeof part === "string" ? part : part.file)).join("\n\n"));
+  })) + "\n";
 }
 
 function _instructionFilePath(
