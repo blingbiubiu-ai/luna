@@ -21,6 +21,8 @@ const workerFields = z.object({
   executorHost: z.literal("127.0.0.1").default("127.0.0.1"), publishHost: z.literal("127.0.0.1").default("127.0.0.1"),
   executorPortStart: z.number().int().min(1024).max(65535).default(41000), executorPortEnd: z.number().int().min(1024).max(65535).default(41100),
   imageDigest: z.string().regex(/^sha256:[a-f0-9]{64}$/),
+  imageRef: z.string().min(1).max(512).optional(),
+  imageVariant: z.enum(["general", "developer"]).optional(),
   network: z.string().regex(/^[A-Za-z0-9_.-]+$/).default("luna-execution"),
   runnerUid: z.number().int().min(1).max(4294967294).default(hostUid || 1000),
   runnerGid: z.number().int().min(0).max(4294967294).default(hostGid ?? 1000),

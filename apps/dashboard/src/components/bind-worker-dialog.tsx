@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { useMutation } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
@@ -10,6 +10,22 @@ interface BindingCode {
   expiresAt: number;
 }
 
+export interface WorkerReleaseManifest {
+  worker: {
+    available: boolean;
+    version: string | null;
+    sha256: string | null;
+    size: number;
+    downloadPath: string;
+  };
+  images: {
+    general: { variant: "general"; label: string; image: string };
+    developer: { variant: "developer"; label: string; image: string };
+  };
+}
+
+type Variant = "general" | "developer";
+
 export function BindWorkerDialog({ path, agentName, disabled }: {
   path: string; agentName: string; disabled?: boolean;
 }) {
@@ -17,9 +33,18 @@ export function BindWorkerDialog({ path, agentName, disabled }: {
   const defaultAddress = location.protocol === "https:" || ["127.0.0.1", "localhost"].includes(location.hostname)
     ? location.origin : "";
   const [address, setAddress] = useState(defaultAddress);
-  const [binding, setBinding] = useState<(BindingCode & { origin: string }) | undefined>();
+  const [variant, setVariant] = useState<Variant>("general");
+  const [binding, setBinding] = useState<(BindingCode & { origin: string; variant: Variant }) | undefined>();
   const [copied, setCopied] = useState("");
   const [now, setNow] = useState(Date.now);
+
+  const releaseQuery = useQuery({
+    queryKey: ["/worker/release/manifest.json"],
+    queryFn: ({ signal }) => apiFetch<WorkerReleaseManifest>("/worker/release/manifest.json", { signal }),
+    enabled: open,
+    staleTime: 30_000,
+  });
+
   const generate = useMutation({
     mutationFn: async () => {
       const origin = new URL(address.trim());
@@ -29,13 +54,14 @@ export function BindWorkerDialog({ path, agentName, disabled }: {
         throw new Error("请输入 Luna 服务的 HTTPS 地址。本机接入可使用本机 HTTP 地址。");
       }
       const code = await apiFetch<BindingCode>(`${path}/binding-code`, { method: "POST" });
-      return { ...code, origin: origin.origin };
+      return { ...code, origin: origin.origin, variant };
     },
     onSuccess: code => {
       setNow(Date.now());
       setBinding(code);
     },
   });
+
   useEffect(() => {
     if (!open || !binding) return;
     const timer = window.setInterval(() => setNow(Date.now()), 1000);
@@ -49,6 +75,11 @@ export function BindWorkerDialog({ path, agentName, disabled }: {
 
   const activeCode = binding && binding.expiresAt > now ? binding : undefined;
   const title = "接入我的 Worker";
+  const selectedImage = releaseQuery.data?.images[variant]?.image;
+  const oneClickCommand = activeCode
+    ? `curl -fsSL ${activeCode.origin}/api/worker/install.sh | bash -s -- --service ${activeCode.origin} --code ${activeCode.code} --variant ${activeCode.variant}`
+    : "";
+
   return <Dialog open={open} onOpenChange={next => {
     if (!next && generate.isPending) return;
     setOpen(next);
@@ -59,36 +90,81 @@ export function BindWorkerDialog({ path, agentName, disabled }: {
     }
   }}>
     <DialogTrigger asChild><Button disabled={disabled}>{title}</Button></DialogTrigger>
-    <DialogContent>
+    <DialogContent className="sm:max-w-xl">
       <DialogHeader>
         <DialogTitle>{title}</DialogTitle>
-        <DialogDescription>{`绑定后自动分配给「${agentName}」。`}</DialogDescription>
+        <DialogDescription>{`部署并绑定后自动分配给「${agentName}」。`}</DialogDescription>
       </DialogHeader>
-      {!activeCode ? <form className="space-y-3" onSubmit={event => {
+      {!activeCode ? <form className="space-y-4" onSubmit={event => {
         event.preventDefault();
         generate.mutate();
       }}>
-        <label htmlFor="worker-service-address" className="text-sm font-medium">Luna 服务地址</label>
-        <Input id="worker-service-address" type="url" required value={address}
-          onChange={event => setAddress(event.target.value)} placeholder="https://luna.example.com" />
-        <p className="text-sm text-muted-foreground">填 Worker 机器能访问的地址。127.0.0.1 和 localhost 仅适用于同一台机器。</p>
+        <div className="space-y-2">
+          <label htmlFor="worker-service-address" className="text-sm font-medium">Luna 服务地址</label>
+          <Input id="worker-service-address" type="url" required value={address}
+            onChange={event => setAddress(event.target.value)} placeholder="https://luna.example.com" />
+          <p className="text-xs text-muted-foreground">填 Worker 机器能访问的地址。127.0.0.1 和 localhost 仅适用于同一台机器。</p>
+        </div>
+
+        <div className="space-y-2">
+          <p className="text-sm font-medium">运行镜像版本</p>
+          <div className="grid grid-cols-2 gap-2">
+            {(["general", "developer"] as const).map(key => {
+              const info = releaseQuery.data?.images[key];
+              const active = variant === key;
+              return <button
+                key={key}
+                type="button"
+                onClick={() => setVariant(key)}
+                className={`rounded-md border p-3 text-left transition-colors ${active ? "border-primary bg-primary/5" : "border-border hover:bg-muted/50"}`}
+              >
+                <p className="text-sm font-medium">{info?.label ?? (key === "general" ? "通用版 (General)" : "开发版 (Developer)")}</p>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  {key === "general" ? "轻量通用运行环境" : "含 JDK / Android SDK / NDK 开发工具链"}
+                </p>
+              </button>;
+            })}
+          </div>
+          {selectedImage && <p className="break-all font-mono text-xs text-muted-foreground">镜像：{selectedImage}</p>}
+        </div>
+
         {binding && <p className="text-sm text-muted-foreground">绑定码已过期，请重新生成。</p>}
-        {generate.error && <p role="alert" className="text-destructive">{generate.error.message}</p>}
-        <Button type="submit" disabled={generate.isPending}>生成绑定码</Button>
-      </form> : <div className="space-y-3 text-sm">
-        <p>在 Worker 机器上运行命令，按提示输入绑定码。</p>
-        <div className="flex items-center gap-2 rounded-md border p-2">
-          <code className="min-w-0 flex-1 break-all">{`luna worker bind --service ${activeCode.origin}`}</code>
-          <Button size="sm" variant="outline" onClick={() => copy(`luna worker bind --service ${activeCode.origin}`, "命令")}>复制命令</Button>
+        {generate.error && <p role="alert" className="text-sm text-destructive">{generate.error.message}</p>}
+        <Button type="submit" disabled={generate.isPending}>生成一键部署命令</Button>
+      </form> : <div className="space-y-4 text-sm">
+        <div className="space-y-2">
+          <p className="font-medium">一键部署（推荐，新机器直接运行）</p>
+          <p className="text-xs text-muted-foreground">
+            自动检查 Docker / 安装 Bun、拉取镜像、下载 Worker、完成初始化与绑定并注册后台自启服务。
+          </p>
+          <div className="flex items-start gap-2 rounded-md border bg-muted/30 p-2.5">
+            <code className="min-w-0 flex-1 break-all text-xs leading-relaxed">{oneClickCommand}</code>
+            <Button size="sm" onClick={() => copy(oneClickCommand, "一键部署命令")}>复制命令</Button>
+          </div>
         </div>
-        <div className="flex items-center gap-2 rounded-md border p-2">
-          <code className="min-w-0 flex-1 break-all">{activeCode.code}</code>
-          <Button size="sm" variant="outline" onClick={() => copy(activeCode.code, "绑定码")}>复制绑定码</Button>
-        </div>
-        <p className="text-muted-foreground">绑定码仅可使用一次，有效期至 {new Date(activeCode.expiresAt).toLocaleTimeString()}。</p>
-        <p>首次绑定后运行 <code>luna worker start</code>。</p>
-        <p className="text-muted-foreground">已接入的 Worker 可再次运行上面的绑定命令，将它分配给当前 Agent。运行中的 Worker 无需重启。</p>
-        <p role="status" className="text-muted-foreground">{copied}</p>
+
+        <p className="text-xs text-muted-foreground">
+          绑定码仅可使用一次，有效期至 {new Date(activeCode.expiresAt).toLocaleTimeString()}。
+        </p>
+
+        <details className="rounded-md border p-3">
+          <summary className="cursor-pointer text-xs font-medium text-muted-foreground">
+            已有 Worker？展开手动绑定命令
+          </summary>
+          <div className="mt-3 space-y-2">
+            <div className="flex items-center gap-2 rounded-md border p-2">
+              <code className="min-w-0 flex-1 break-all text-xs">{`luna worker bind --service ${activeCode.origin}`}</code>
+              <Button size="sm" variant="outline" onClick={() => copy(`luna worker bind --service ${activeCode.origin}`, "绑定命令")}>复制命令</Button>
+            </div>
+            <div className="flex items-center gap-2 rounded-md border p-2">
+              <code className="min-w-0 flex-1 break-all text-xs">{activeCode.code}</code>
+              <Button size="sm" variant="outline" onClick={() => copy(activeCode.code, "绑定码")}>复制绑定码</Button>
+            </div>
+            <p className="text-xs text-muted-foreground">已接入的 Worker 再次运行绑定命令即可分配给当前 Agent，无需重启。</p>
+          </div>
+        </details>
+
+        {copied && <p role="status" className="text-xs text-muted-foreground">{copied}</p>}
       </div>}
     </DialogContent>
   </Dialog>;

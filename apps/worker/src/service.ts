@@ -9,6 +9,7 @@ import { embeddedRunnerRuntime, installRunnerRuntime } from "./runner-runtime";
 import { EnvironmentManager } from "./environment-manager";
 import { workerServer, executorCallbackServer } from "./server";
 import { nosuidStartupWarning } from "./root-host";
+import { WorkerUpgradeManager } from "./upgrade";
 
 export async function runWorker(config: WorkerConfig): Promise<void> {
   const db = openPlatformExecutionDatabase(join(config.dataRoot, "worker.sqlite"));
@@ -26,10 +27,16 @@ export async function runWorker(config: WorkerConfig): Promise<void> {
   const nosuid = nosuidStartupWarning(config.dataRoot);
   if (nosuid) console.error(JSON.stringify({ level: "warn", msg: nosuid }));
   const manager = new EnvironmentManager(new EnvironmentStore(db), driver);
-  const link = config.serviceUrl ? new ServiceLink(manager, grants, config.serviceUrl, config.controlToken) : undefined;
-  const server = workerServer(grants, manager, link ? (job, instance, body) => link.events(job, instance, body) : undefined);
+  let link: ServiceLink | undefined;
+  let stopFn: (() => Promise<void>) | undefined;
+  const upgrade = new WorkerUpgradeManager(config, {
+    onStatusChange: () => link?.heartbeat(),
+    onRestart: () => { void stopFn?.(); },
+  });
+  link = config.serviceUrl ? new ServiceLink(manager, grants, config.serviceUrl, config.controlToken, upgrade) : undefined;
+  const server = workerServer(grants, manager, link ? (job, instance, body) => link!.events(job, instance, body) : undefined, upgrade);
   await new Promise<void>((resolve, reject) => { server.once("error", reject); server.listen(config.port, config.listenHost, resolve); });
-  const callbackServer = callbackPort && link ? executorCallbackServer(grants, (job, instance, body) => link.events(job, instance, body)) : undefined;
+  const callbackServer = callbackPort && link ? executorCallbackServer(grants, (job, instance, body) => link!.events(job, instance, body)) : undefined;
   if (callbackServer) await new Promise<void>((resolve, reject) => {
     callbackServer.once("error", reject); callbackServer.listen(callbackPort, config.callbackHost, resolve);
   });
@@ -40,5 +47,6 @@ export async function runWorker(config: WorkerConfig): Promise<void> {
     void manager.reap().catch(() => { /* Unreachable state retains occupancy and containers. */ }).finally(() => { reaping = false; });
   }, 5000);
   const stop = async () => { link?.stop(); clearInterval(timer); if (callbackServer) await closeExecutionServer(callbackServer); await closeExecutionServer(server); db.close(); process.exit(0); };
+  stopFn = stop;
   process.once("SIGTERM", () => { void stop(); }); process.once("SIGINT", () => { void stop(); });
 }

@@ -3,9 +3,10 @@ import { executionServer, json, readJson, requirePeer, type TokenAuthority } fro
 import { Id, ReleaseProof } from "@luna/runner-protocol";
 import { ExecutionError } from "@luna/execution-store";
 import type { EnvironmentManager } from "./environment-manager";
+import type { WorkerUpgradeManager } from "./upgrade";
 
 /** Private local environment API; authenticated Executor callbacks are relayed to Service. */
-export function workerServer(authority: TokenAuthority, manager: EnvironmentManager, events?: (jobId: string, instanceId: string, body: unknown) => void) {
+export function workerServer(authority: TokenAuthority, manager: EnvironmentManager, events?: (jobId: string, instanceId: string, body: unknown) => void, upgrade?: WorkerUpgradeManager) {
   return executionServer(authority, async ({ peer, request, response, url }) => {
     const ingest = /^\/v1\/ingest\/jobs\/([^/]+)\/events$/.exec(url.pathname);
     if (request.method === "POST" && ingest && events) { requirePeer(peer, "executor"); events(Id.parse(ingest[1]), peer.id, await readJson(request, 16 * 1024 * 1024)); json(response, 204); return; }
@@ -46,6 +47,10 @@ export function workerServer(authority: TokenAuthority, manager: EnvironmentMana
       json(response, 200, await manager.reconcileScopes(await readJson(request, 8 * 1024 * 1024))); return;
     }
     if (request.method === "POST" && url.pathname === "/v1/prune") { json(response, 200, await manager.prune(await readJson(request))); return; }
+    if (request.method === "POST" && url.pathname === "/v1/upgrade") {
+      if (!upgrade) throw new ExecutionError(409, "worker_upgrade_unsupported");
+      json(response, 200, upgrade.startUpgrade(await readJson(request))); return;
+    }
     const shadow = /^\/v1\/shadows\/([^/]+)\/([^/]+)$/.exec(url.pathname);
     if (request.method === "DELETE" && shadow) {
       await manager.purgeShadow({ agentId: Id.parse(shadow[1]), shadowId: Id.parse(shadow[2]) }); json(response, 204); return;

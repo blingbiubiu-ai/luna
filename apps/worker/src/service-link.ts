@@ -6,6 +6,7 @@ import { ExecutionError } from "@luna/execution-store";
 import { CONTAINER_STREAM_PATH, CONTAINER_STREAM_TOKEN_HEADER, Id } from "@luna/runner-protocol";
 import { ContainerStreams } from "./container-streams";
 import type { EnvironmentManager } from "./environment-manager";
+import type { WorkerUpgradeManager } from "./upgrade";
 
 export class ServiceLink {
   private readonly shadowPreparation:ShadowPreparation;
@@ -19,7 +20,7 @@ export class ServiceLink {
   private healthCheck: Promise<void> | undefined;
   private requests = new Set<string>();
   readonly streams: ContainerStreams;
-  constructor(private manager: EnvironmentManager, private grants: TokenAuthority, readonly origin: string, private token: string) {
+  constructor(private manager: EnvironmentManager, private grants: TokenAuthority, readonly origin: string, private token: string, private upgrade?: WorkerUpgradeManager) {
     this.streams = new ContainerStreams(manager, manager.driver.config, (streamId, token) => {
       const url = new URL(CONTAINER_STREAM_PATH + streamId, this.origin); url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
       return new WebSocket(url, { headers: { authorization: `Bearer ${this.token}`, [CONTAINER_STREAM_TOKEN_HEADER]: token } });
@@ -57,9 +58,17 @@ export class ServiceLink {
   private send(value: unknown): void { if (this.socket?.readyState === WebSocket.OPEN) this.socket.send(JSON.stringify(value)); }
   heartbeat(): void {
     const config = this.manager.driver.config;
-    this.send({ type: "heartbeat", health: { workerId: config.workerId, imageDigest: config.imageDigest, capacity: config.capacity,
+    const upgradeStatus = this.upgrade?.status;
+    this.send({ type: "heartbeat", health: { workerId: config.workerId, imageDigest: config.imageDigest,
+      ...(config.imageRef ? { imageRef: config.imageRef } : {}),
+      ...(config.imageVariant ? { imageVariant: config.imageVariant } : {}),
+      ...(this.upgrade?.workerVersion ? { workerVersion: this.upgrade.workerVersion } : {}),
+      ...(this.upgrade ? { managedBinary: this.upgrade.managedBinary } : {}),
+      ...(upgradeStatus && upgradeStatus.state !== "idle" ? { upgrade: upgradeStatus } : {}),
+      capacity: config.capacity,
       occupied: this.manager.store.list().reduce((n, e) => n + this.manager.store.active(e.id).length, 0), ready: this.ready,
-      capabilities:["shadow-scope-v2","container-streams-v1","scope-reconcile-v1","home-upload-v1","owner-workspace-v1"], error: this.localError ?? this.error, projects: config.projects.map(p => p.projectId) } });
+      capabilities:["shadow-scope-v2","container-streams-v1","scope-reconcile-v1","home-upload-v1","owner-workspace-v1",...(this.upgrade ? ["worker-upgrade-v1"] : [])],
+      error: this.localError ?? this.error, projects: config.projects.map(p => p.projectId) } });
   }
   events(jobId: string, instanceId: string, body: unknown): void {
     if (this.socket?.readyState !== WebSocket.OPEN) throw new ExecutionError(503, "service_disconnected");

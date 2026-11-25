@@ -1,5 +1,7 @@
 import {Hono} from "hono";
+import type {ContentfulStatusCode} from "hono/utils/http-status";
 import {z} from "zod";
+import {ExecutionError} from "@luna/execution-store";
 import type {DrizzleDB} from "@/data";
 import {AgentError,AgentStore} from "@/agents/agent-store";
 import {AgentWorkerAccessStore} from "@/agents/agent-worker-access-store";
@@ -7,12 +9,18 @@ import {isGuardResponse,requireDashboardOnly} from "../auth/guards";
 import {getKernel} from "./kernel";
 
 const workerGateway = () => getKernel().executionRuntime?.gateway;
+const upgradeBodySchema = z.object({
+ upgradeWorker: z.boolean().optional(),
+ upgradeImage: z.boolean().optional(),
+ imageRef: z.string().min(1).max(512).optional(),
+}).strict();
 
 export function createAgentWorkerAccessRoutes(db: DrizzleDB, getGateway = workerGateway) {
  const store=new AgentWorkerAccessStore(db);
  const agents=new AgentStore(db);
  return new Hono().onError((error,c)=>{
   if(error instanceof AgentError)return c.json({status:"error",code:error.code},error.status);
+  if(error instanceof ExecutionError)return c.json({status:"error",code:error.code},error.status as ContentfulStatusCode);
   if(error instanceof z.ZodError || error instanceof SyntaxError)return c.json({status:"error",code:"invalid_request"},400);
   throw error;
  }).get("/:agentId/workers",c=>{
@@ -47,6 +55,24 @@ export function createAgentWorkerAccessRoutes(db: DrizzleDB, getGateway = worker
   if(gateway.owner(workerId)!==auth.account.id)throw new AgentError("worker_access_denied",403);
   store.setOwned(auth.account.id,agent.id,workerId,status);
   return c.json({ok:true});
+ }).post("/:agentId/workers/:workerId/upgrade", async c => {
+  const auth = requireDashboardOnly(c);
+  if (isGuardResponse(auth)) return auth;
+  const agent = agents.requireOwner(auth.account.id, c.req.param("agentId"));
+  const workerId = c.req.param("workerId");
+  const assignments = store.list(auth.account.id, agent.id);
+  if (!assignments.some(row => row.workerId === workerId && row.status === "active")) {
+   throw new AgentError("worker_assignment_not_found", 404);
+  }
+  const gateway = getGateway();
+  if (!gateway) return c.json({status:"error",code:"runtime_not_ready"},503);
+  if (gateway.owner(workerId) !== auth.account.id && !gateway.isLocal(workerId)) {
+   throw new AgentError("worker_access_denied", 403);
+  }
+  const rawText = await c.req.text();
+  const body = rawText.trim() ? upgradeBodySchema.parse(JSON.parse(rawText)) : {};
+  const result = await gateway.upgradeWorker(workerId, body);
+  return c.json({ ok: true, result });
  }).post("/:agentId/workers/:workerId/:action", c => {
   const auth = requireDashboardOnly(c);
   if (isGuardResponse(auth)) return auth;

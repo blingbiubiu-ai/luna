@@ -87,8 +87,11 @@ export async function runWorkerCli(argv: string[], env: Env = process.env): Prom
       }
       if (existsSync(file)) return { status: "error", code: "configuration_exists", message: "Worker configuration already exists" };
       if (["--runtime-id", "--runtime-endpoint", "--service", "--id"].some(flag => argv.includes(flag))) return { status: "error", code: "worker_binding_option", message: "Use luna worker bind --service URL for connection identity" };
-      const imageDigest = execFileSync("docker", ["image", "inspect", readOption(argv, "--image") ?? "luna-runner:latest", "--format", "{{.Id}}"], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, ...env } }).trim();
-      const config = WorkerLocalConfig.parse({ dataRoot: dirname(file), imageDigest,
+      const imageRef = readOption(argv, "--image") ?? "luna-runner:latest";
+      const imageVariant = readOption(argv, "--variant");
+      const imageDigest = execFileSync("docker", ["image", "inspect", imageRef, "--format", "{{.Id}}"], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, ...env } }).trim();
+      const config = WorkerLocalConfig.parse({ dataRoot: dirname(file), imageDigest, imageRef,
+        ...(imageVariant ? { imageVariant } : {}),
         projects: [{ projectId: "shared", hostPath: resolveSharedWorkspacePath({ home, configured: env.LUNA_WORKER_PROJECTS_DIR ?? join(home, "projects") }) }],
         port: Number(readOption(argv, "--port") ?? 8092) });
       writePrivateJson(file, config);

@@ -8,6 +8,7 @@ import { ReverseChannel } from "@luna/execution-transport";
 import { z } from "zod";
 import { CONTAINER_STREAM_TOKEN_HEADER, ContainerStreamEnd, Id, type ContainerStreamOpen } from "@luna/runner-protocol";
 import type { RuntimeScheduler } from "./scheduler";
+import { getWorkerReleaseManifest, readWorkerBundle, renderWorkerInstallScript } from "./worker-release";
 export type WorkerResourceSource=(scope:ResourceScope,digest:string)=>ScopedResourceBundle|undefined;
 export interface WorkerBindingTarget { ownerUserId: string; agentId: string }
 export type AssignBoundWorker = (target: WorkerBindingTarget, workerId: string) => void;
@@ -19,6 +20,13 @@ export interface WorkerStreamSocketData { kind: "worker-stream"; streamId: strin
 export const CONTAINER_STREAMS_CAPABILITY = "container-streams-v1";
 /** Workers that write Dashboard uploads into a Shadow's HOME. */
 export const HOME_UPLOAD_CAPABILITY = "home-upload-v1";
+/** Workers that support remote one-click image and binary upgrades. */
+export const WORKER_UPGRADE_CAPABILITY = "worker-upgrade-v1";
+export interface WorkerUpgradeRequest {
+  upgradeWorker?: boolean | undefined;
+  upgradeImage?: boolean | undefined;
+  imageRef?: string | undefined;
+}
 const MAX_STREAMS_PER_WORKER = 32;
 const STREAM_ATTACH_TIMEOUT_MS = 15000;
 const MAX_PENDING_STREAM_BYTES = 1024 * 1024;
@@ -27,7 +35,30 @@ interface StreamState {
   queue: Uint8Array[]; queuedBytes: number; size?: { cols: number; rows: number }; socket?: ServerWebSocket<WorkerStreamSocketData>; endReason?: string;
 }
 const digest = (value: string) => createHash("sha256").update(value).digest("hex");
-const healthSchema = z.object({ capabilities:z.array(z.string().max(128)).max(32).optional(), workerId: Id, imageDigest: z.string(), capacity: z.number().int().positive().max(256), occupied: z.number().int().nonnegative(), ready: z.boolean(), revision: z.string().optional(), desiredRevision: z.string().optional(), error: z.string().max(512).optional(), projects: z.array(Id).max(256) });
+const upgradeStatusSchema = z.object({
+  state: z.enum(["idle", "pulling_image", "downloading_worker", "restarting", "succeeded", "failed"]),
+  targetVersion: z.string().max(64).optional(),
+  targetImage: z.string().max(512).optional(),
+  message: z.string().max(512).optional(),
+  updatedAt: z.number().int().nonnegative(),
+});
+const healthSchema = z.object({
+  capabilities: z.array(z.string().max(128)).max(32).optional(),
+  workerId: Id,
+  imageDigest: z.string(),
+  imageRef: z.string().max(512).optional(),
+  imageVariant: z.string().max(64).optional(),
+  workerVersion: z.string().max(64).optional(),
+  managedBinary: z.boolean().optional(),
+  upgrade: upgradeStatusSchema.optional(),
+  capacity: z.number().int().positive().max(256),
+  occupied: z.number().int().nonnegative(),
+  ready: z.boolean(),
+  revision: z.string().optional(),
+  desiredRevision: z.string().optional(),
+  error: z.string().max(512).optional(),
+  projects: z.array(Id).max(256),
+});
 /** The public Service listener authenticates Worker traffic independently of dashboard sessions. */
 export class WorkerGateway {
   private sockets = new Map<string, ServerWebSocket<WorkerSocketData>>();
@@ -77,6 +108,26 @@ export class WorkerGateway {
   async http(request: Request): Promise<Response> {
     try {
       const path = new URL(request.url).pathname;
+      if (path === "/api/worker/install.sh" && request.method === "GET") {
+        return new Response(renderWorkerInstallScript(), {
+          headers: { "content-type": "text/x-shellscript; charset=utf-8", "cache-control": "no-store" },
+        });
+      }
+      if (path === "/api/worker/release/manifest.json" && request.method === "GET") {
+        return Response.json(getWorkerReleaseManifest(), { headers: { "cache-control": "no-store" } });
+      }
+      if (path === "/api/worker/release/luna-worker.js" && request.method === "GET") {
+        const bundle = readWorkerBundle();
+        if (!bundle) throw new ExecutionError(404, "worker_bundle_unavailable");
+        return new Response(new Uint8Array(bundle.content), {
+          headers: {
+            "content-type": "application/javascript; charset=utf-8",
+            "x-luna-worker-sha256": bundle.sha256,
+            "x-luna-worker-version": bundle.version,
+            "cache-control": "no-store",
+          },
+        });
+      }
       if (path === "/api/worker/bind" && request.method === "POST") {
         const text = await request.text(); if (text.length > 4096) throw new ExecutionError(413, "request_too_large");
         const input = z.object({ code: z.string().length(43) }).strict().parse(JSON.parse(text));
@@ -233,6 +284,15 @@ export class WorkerGateway {
     else if (action === "resume") this.scheduler.workers.resume(id);
     else { this.db.prepare("UPDATE worker_bindings SET revoked=1 WHERE worker_id=?").run(id); this.scheduler.workers.drain(id); this.sockets.get(id)?.close(4003, "revoked");
       for (const [streamId, stream] of this.streams) if (stream.workerId === id) this.finishStream(streamId, "worker_revoked"); }
+  }
+  async upgradeWorker(id: string, request: WorkerUpgradeRequest = {}): Promise<unknown> {
+    const worker = this.list().find(item => item.workerId === id);
+    if (!worker || worker.revoked) throw new ExecutionError(404, "worker_not_found");
+    if (!worker.connected) throw new ExecutionError(503, "worker_disconnected");
+    if (!worker.health?.capabilities?.includes(WORKER_UPGRADE_CAPABILITY)) {
+      throw new ExecutionError(409, "worker_upgrade_unsupported");
+    }
+    return this.scheduler.workers.client(id).call("POST", "/v1/upgrade", request, AbortSignal.timeout(15000));
   }
   close() {
     for (const id of [...this.streams.keys()]) this.finishStream(id, "service_stopping");

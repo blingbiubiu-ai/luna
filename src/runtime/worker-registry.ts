@@ -6,7 +6,30 @@ import { ExecutionClient, type RpcClient } from "@luna/execution-transport";
 const Origin = z.url().refine((input) => { const url = new URL(input); return url.protocol === "http:" && !url.username && !url.password && !url.search && !url.hash && url.pathname === "/"; }, "HTTP origin required");
 export const WorkerRegistration = z.object({ reverse: z.boolean().optional(), workerId: Id, endpoint: Origin, controlToken: z.string().regex(/^[A-Za-z0-9_-]{43}$/), executorHost: z.string().min(1), executorPortStart: z.number().int().min(1).max(65535), executorPortEnd: z.number().int().min(1).max(65535) }).strict().refine((config) => config.executorPortStart <= config.executorPortEnd);
 export type WorkerRegistration = z.infer<typeof WorkerRegistration>;
-export interface Health { capabilities?:string[]|undefined; workerId: string; imageDigest: string; capacity: number; occupied: number; ready?: boolean|undefined; revision?: string | undefined; desiredRevision?: string | undefined; error?: string | undefined; projects?: string[]|undefined; }
+export interface WorkerUpgradeStatus {
+  state: "idle" | "pulling_image" | "downloading_worker" | "restarting" | "succeeded" | "failed";
+  targetVersion?: string | undefined;
+  targetImage?: string | undefined;
+  message?: string | undefined;
+  updatedAt: number;
+}
+export interface Health {
+  capabilities?: string[] | undefined;
+  workerId: string;
+  imageDigest: string;
+  imageRef?: string | undefined;
+  imageVariant?: string | undefined;
+  workerVersion?: string | undefined;
+  managedBinary?: boolean | undefined;
+  upgrade?: WorkerUpgradeStatus | undefined;
+  capacity: number;
+  occupied: number;
+  ready?: boolean | undefined;
+  revision?: string | undefined;
+  desiredRevision?: string | undefined;
+  error?: string | undefined;
+  projects?: string[] | undefined;
+}
 export interface WorkerRecord { reverse?: boolean | undefined; workerId: string; endpoint: string; executorHost: string; executorPortStart: number; executorPortEnd: number; draining: boolean; lastSeen: number; lastHeartbeatAt?: number; health: Health | null; }
 
 /** Placement reads public state; control tokens stay in the private Runtime database. */
