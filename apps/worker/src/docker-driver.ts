@@ -64,7 +64,11 @@ export class DockerEnvironmentDriver {
   async health(): Promise<void> { await this.docker(["image", "inspect", this.config.imageDigest]); }
   async preflight(): Promise<void> {
     new ProjectMounts(this.db, this.config).prepare();
-    await this.docker(["image", "inspect", this.config.imageDigest]);
+    const inspected = await this.docker(["image", "inspect", this.config.imageDigest]);
+    if (!this.config.imageRef) {
+      const detected = extractImageRefFromInspect(inspected);
+      if (detected) this.config.imageRef = detected;
+    }
     try { await this.docker(["network", "inspect", this.config.network]); }
     catch { await this.docker(["network", "create", this.config.network]); }
   }
@@ -317,3 +321,25 @@ function launchedWith(prior: DockerInspection, mounts: ShadowMountPlan["mounts"]
 
 /** Docker Desktop may report its VM-side /host_mnt path after starting a bind mount. */
 function hostSourceNames(path: string): string[] { return process.platform === "darwin" ? [path, `/host_mnt${path}`] : [path]; }
+
+/** Derive a display/pull image reference from `docker image inspect` JSON when worker.json has no imageRef. */
+export function extractImageRefFromInspect(raw: string): string | undefined {
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    const item = Array.isArray(parsed) ? parsed[0] : parsed;
+    if (!item || typeof item !== "object") return undefined;
+    const record = item as { RepoTags?: unknown; RepoDigests?: unknown };
+    const tags = Array.isArray(record.RepoTags)
+      ? record.RepoTags.filter((t): t is string => typeof t === "string" && t.length > 0 && t !== "<none>:<none>")
+      : [];
+    if (tags.length > 0) {
+      return tags.find(tag => tag.includes("/")) ?? tags[0];
+    }
+    const digests = Array.isArray(record.RepoDigests)
+      ? record.RepoDigests.filter((d): d is string => typeof d === "string" && d.length > 0)
+      : [];
+    return digests[0];
+  } catch {
+    return undefined;
+  }
+}
