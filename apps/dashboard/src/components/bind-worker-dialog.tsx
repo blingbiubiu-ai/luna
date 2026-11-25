@@ -2,7 +2,6 @@ import { useEffect, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
-import { Input } from "@/components/ui/input";
 import { apiFetch } from "@/lib/api/client";
 
 interface BindingCode {
@@ -24,15 +23,30 @@ export interface WorkerReleaseManifest {
   };
 }
 
+interface PlatformSettingsSnippet {
+  platform?: { general?: { publicBaseUrl?: string } };
+  feishuAuth?: { publicBaseUrl?: string };
+}
+
 type Variant = "general" | "developer";
+
+function resolveServiceOrigin(settings?: PlatformSettingsSnippet): { origin: string; fromPlatform: boolean } {
+  const configured = settings?.platform?.general?.publicBaseUrl?.trim()
+    || settings?.feishuAuth?.publicBaseUrl?.trim()
+    || "";
+  if (configured) {
+    return { origin: configured.replace(/\/+$/, ""), fromPlatform: true };
+  }
+  const fallback = location.protocol === "https:" || ["127.0.0.1", "localhost"].includes(location.hostname)
+    ? location.origin
+    : "";
+  return { origin: fallback, fromPlatform: false };
+}
 
 export function BindWorkerDialog({ path, agentName, disabled }: {
   path: string; agentName: string; disabled?: boolean;
 }) {
   const [open, setOpen] = useState(false);
-  const defaultAddress = location.protocol === "https:" || ["127.0.0.1", "localhost"].includes(location.hostname)
-    ? location.origin : "";
-  const [address, setAddress] = useState(defaultAddress);
   const [variant, setVariant] = useState<Variant>("general");
   const [binding, setBinding] = useState<(BindingCode & { origin: string; variant: Variant }) | undefined>();
   const [copied, setCopied] = useState("");
@@ -45,13 +59,25 @@ export function BindWorkerDialog({ path, agentName, disabled }: {
     staleTime: 30_000,
   });
 
+  const platformQuery = useQuery({
+    queryKey: ["/platform-settings"],
+    queryFn: ({ signal }) => apiFetch<PlatformSettingsSnippet>("/platform-settings", { signal }),
+    enabled: open,
+    staleTime: 30_000,
+  });
+
+  const { origin: resolvedOrigin, fromPlatform } = resolveServiceOrigin(platformQuery.data);
+
   const generate = useMutation({
     mutationFn: async () => {
-      const origin = new URL(address.trim());
+      if (!resolvedOrigin) {
+        throw new Error("平台尚未配置对外访问地址，请先在「平台设置」中配置对外访问地址（HTTPS）。");
+      }
+      const origin = new URL(resolvedOrigin);
       const local = ["127.0.0.1", "localhost"].includes(origin.hostname);
       if (!/^[a-z0-9.-]+(?::[0-9]+)?$/i.test(origin.host) || origin.username || origin.password || origin.search || origin.hash || origin.pathname !== "/" ||
         (origin.protocol !== "https:" && !(local && origin.protocol === "http:"))) {
-        throw new Error("请输入 Luna 服务的 HTTPS 地址。本机接入可使用本机 HTTP 地址。");
+        throw new Error("平台对外访问地址无效，请在「平台设置」中配置合法的 HTTPS 根地址。");
       }
       const code = await apiFetch<BindingCode>(`${path}/binding-code`, { method: "POST" });
       return { ...code, origin: origin.origin, variant };
@@ -99,11 +125,18 @@ export function BindWorkerDialog({ path, agentName, disabled }: {
         event.preventDefault();
         generate.mutate();
       }}>
-        <div className="space-y-2">
-          <label htmlFor="worker-service-address" className="text-sm font-medium">Luna 服务地址</label>
-          <Input id="worker-service-address" type="url" required value={address}
-            onChange={event => setAddress(event.target.value)} placeholder="https://luna.example.com" />
-          <p className="text-xs text-muted-foreground">填 Worker 机器能访问的地址。127.0.0.1 和 localhost 仅适用于同一台机器。</p>
+        <div className="space-y-1.5">
+          <p className="text-sm font-medium">Luna 服务地址</p>
+          <div className="rounded-md border bg-muted/40 px-3 py-2 font-mono text-xs break-all">
+            {platformQuery.isLoading
+              ? "正在读取平台地址…"
+              : resolvedOrigin || "未配置（请前往「平台设置」配置对外访问地址）"}
+          </div>
+          <p className="text-xs text-muted-foreground">
+            {fromPlatform
+              ? "自动使用平台设置的对外访问地址，不可在此修改。"
+              : "当前平台未单独配置对外访问地址，自动使用当前访问地址。如需固定地址请在「平台设置」中配置。"}
+          </p>
         </div>
 
         <div className="space-y-2">
@@ -130,7 +163,9 @@ export function BindWorkerDialog({ path, agentName, disabled }: {
 
         {binding && <p className="text-sm text-muted-foreground">绑定码已过期，请重新生成。</p>}
         {generate.error && <p role="alert" className="text-sm text-destructive">{generate.error.message}</p>}
-        <Button type="submit" disabled={generate.isPending}>生成一键部署命令</Button>
+        <Button type="submit" disabled={generate.isPending || platformQuery.isLoading || !resolvedOrigin}>
+          生成一键部署命令
+        </Button>
       </form> : <div className="space-y-4 text-sm">
         <div className="space-y-2">
           <p className="font-medium">一键部署（推荐，新机器直接运行）</p>

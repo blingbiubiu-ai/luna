@@ -3,6 +3,7 @@ import { createFileRoute } from "@tanstack/react-router";
 import { Button } from "@/components/ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { BindWorkerDialog, type WorkerReleaseManifest } from "@/components/bind-worker-dialog";
+import { UpgradeWorkerDialog } from "@/components/upgrade-worker-dialog";
 import { useRouteAgent } from "@/lib/agent-route";
 import { apiFetch } from "@/lib/api/client";
 
@@ -108,13 +109,6 @@ function AgentWorkers({ agent }: { agent: ReturnType<typeof useRouteAgent> }) {
     ),
     onSuccess: () => client.invalidateQueries({ queryKey: [path] }),
   });
-  const upgradeWorker = useMutation({
-    mutationFn: (workerId: string) => apiFetch(
-      `${path}/${encodeURIComponent(workerId)}/upgrade`,
-      { method: "POST", body: JSON.stringify({}) },
-    ),
-    onSuccess: () => client.invalidateQueries({ queryKey: [path] }),
-  });
   const assigned = query.data?.assignments.filter(row => row.status === "active") ?? [];
   const canAssign = agent.status === "active";
   const latestWorkerVersion = releaseQuery.data?.worker.version ?? null;
@@ -155,11 +149,15 @@ function AgentWorkers({ agent }: { agent: ReturnType<typeof useRouteAgent> }) {
       </TableCell>
       <TableCell className="max-w-64 px-3 whitespace-normal">
         <p>{health ? health.ready ? "就绪" : "未就绪" : "—"}</p>
-        {health?.imageRef && (
+        {health?.imageRef ? (
           <p className="mt-1 break-all font-mono text-xs text-muted-foreground" title={health.imageDigest}>
             {health.imageVariant ? `[${health.imageVariant}] ` : ""}{health.imageRef}
           </p>
-        )}
+        ) : health?.imageDigest ? (
+          <p className="mt-1 break-all font-mono text-xs text-muted-foreground" title={health.imageDigest}>
+            镜像 {health.imageDigest.slice(0, 19)}
+          </p>
+        ) : null}
         {health?.error && <p className="mt-1 break-words text-xs text-destructive">{health.error}</p>}
         {upgradeState && upgradeState.state !== "idle" && (
           <p className={`mt-1 break-words text-xs ${upgradeState.state === "failed" ? "text-destructive" : "text-muted-foreground"}`}>
@@ -175,18 +173,14 @@ function AgentWorkers({ agent }: { agent: ReturnType<typeof useRouteAgent> }) {
       <TableCell className="px-3">{worker?.lastHeartbeatAt ? new Date(worker.lastHeartbeatAt).toLocaleString() : "—"}</TableCell>
       <TableCell className="px-3">
         <div className="flex flex-wrap gap-2">
-          {canUpgrade && <Button
-            size="sm"
-            variant={hasNewWorkerVersion ? "default" : "outline"}
-            disabled={isUpgrading || (upgradeWorker.isPending && upgradeWorker.variables === workerId)}
-            onClick={() => {
-              if (confirm("确认触发一键升级？将自动拉取最新镜像并更新 Worker 程序（运行中的任务不受中断）。")) {
-                upgradeWorker.mutate(workerId);
-              }
-            }}
-          >
-            {isUpgrading ? upgradeStateLabel(upgradeState!.state) : "一键升级"}
-          </Button>}
+          {canUpgrade && worker && <UpgradeWorkerDialog
+            path={path}
+            worker={worker}
+            release={releaseQuery.data}
+            hasNewWorkerVersion={hasNewWorkerVersion}
+            isUpgrading={isUpgrading}
+            upgradingLabel={upgradeState ? upgradeStateLabel(upgradeState.state) : "升级中…"}
+          />}
           {canChangeAdmission && <Button size="sm" variant="outline" disabled={changeAdmission.isPending}
             onClick={() => changeAdmission.mutate(assignment)}>
             {paused ? "恢复接单" : "暂停接单"}
@@ -218,7 +212,6 @@ function AgentWorkers({ agent }: { agent: ReturnType<typeof useRouteAgent> }) {
     {query.error && <p role="alert" className="text-destructive">无法加载 Worker。{query.error.message}</p>}
     {assign.error && <p role="alert" className="text-destructive">无法更新分配。{assign.error.message}</p>}
     {changeAdmission.error && <p role="alert" className="text-destructive">无法更新接单状态。{changeAdmission.error.message}</p>}
-    {upgradeWorker.error && <p role="alert" className="text-destructive">无法触发升级。{upgradeWorker.error.message}</p>}
     {query.isLoading && <p>正在加载…</p>}
     {query.data && <section className="space-y-3">
       <h2 className="font-medium">已分配</h2>
