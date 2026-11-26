@@ -346,6 +346,100 @@ describe("TasksWorkspaceView", () => {
     expect(html).toContain("打开 TUI");
   });
 
+  test("renders suspended task badge, pause reason, and next wake-up time in both list and detail views", () => {
+    const wakeAt = Date.now() + 45 * 60_000;
+    const suspendedTask = makeTask({
+      id: "task-suspended",
+      title: "异步跟进线上灰度指标",
+      status: "waiting",
+      block_reason: "waiting_external",
+      blockReason: "waiting_external",
+      wake_at: wakeAt,
+      wakeAt,
+      wake_reason: "已发送阶段汇报，等待 45 分钟后自动回读监控指标",
+      wakeReason: "已发送阶段汇报，等待 45 分钟后自动回读监控指标",
+      runs: [
+        {
+          id: "run-suspended",
+          task_id: "task-suspended",
+          taskId: "task-suspended",
+          run_index: 3,
+          runIndex: 3,
+          status: "waiting",
+          reason: "scheduled_wake",
+          input_snapshot: "check metrics",
+          inputSnapshot: "check metrics",
+          materialized_prompt: null,
+          materializedPrompt: null,
+          runner_type: "codex",
+          runnerType: "codex",
+          runner_context_id: "ctx-3",
+          runnerContextId: "ctx-3",
+          source_message_id: null,
+          sourceMessageId: null,
+          started_at: 10_000,
+          startedAt: 10_000,
+          finished_at: 20_000,
+          finishedAt: 20_000,
+          pause_reason: "已发送阶段汇报，等待 45 分钟后自动回读监控指标",
+          pauseReason: "已发送阶段汇报，等待 45 分钟后自动回读监控指标",
+          cancel_reason: null,
+          cancelReason: null,
+          error: null,
+          final_report_artifact_id: null,
+          finalReportArtifactId: null,
+          contextPackIds: [],
+          contextPacks: [],
+          hasMaterializedPrompt: false,
+          seedRecords: [],
+        },
+      ],
+    });
+
+    const listHtml = renderToStaticMarkup(
+      createElement(
+        LocaleProvider,
+        { initialLocale: "zh-CN" },
+        createElement(TasksWorkspaceView, {
+          tasks: [suspendedTask],
+          loading: false,
+          error: null,
+        }),
+      ),
+    );
+    expect(listHtml).toContain("已挂起");
+    expect(listHtml).toContain("挂起原因");
+    expect(listHtml).toContain("已发送阶段汇报，等待 45 分钟后自动回读监控指标");
+    expect(listHtml).toContain("下次唤醒");
+    expect(listHtml).toContain("45 分钟后");
+
+    const detailHtml = renderToStaticMarkup(
+      createElement(
+        LocaleProvider,
+        { initialLocale: "zh-CN" },
+        createElement(TaskDetailView, {
+          taskDetail: suspendedTask as unknown as TaskDetailData,
+          runs: suspendedTask.runs,
+          timeline: [],
+          artifacts: [],
+          loading: {
+            taskDetail: false,
+            runs: false,
+            timeline: false,
+            artifacts: false,
+          },
+        }),
+      ),
+    );
+    expect(detailHtml).toContain('data-testid="task-suspension-callout"');
+    expect(detailHtml).toContain('data-testid="task-next-wake-badge"');
+    expect(detailHtml).toContain('data-testid="task-overview-next-wake"');
+    expect(detailHtml).toContain("任务已挂起");
+    expect(detailHtml).toContain("等待外部条件 / 定时回读");
+    expect(detailHtml).toContain("已发送阶段汇报，等待 45 分钟后自动回读监控指标");
+    expect(detailHtml).toContain("下次唤醒");
+  });
+
   test("HomeOverview renders pure runtime health, KPI summary cards, and status distributions without duplicating subpage lists", () => {
     const html = renderToStaticMarkup(
       createElement(

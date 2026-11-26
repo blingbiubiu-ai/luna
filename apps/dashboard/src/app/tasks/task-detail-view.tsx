@@ -35,9 +35,12 @@ import { cn } from "@/lib/utils";
 import {
   formatRunDuration,
   formatTaskFullTime,
+  formatTaskWakeTime,
   identityForCanonicalUser,
+  isPausedWaitingTask,
   parseTaskContext,
   resolveTaskEffectiveState,
+  suspendedTaskClasses,
   TaskPriorityPill,
   taskStateClasses,
   TaskStateIcon,
@@ -49,6 +52,12 @@ export interface TaskDetailData {
   id: string;
   type: string;
   status: string;
+  block_reason?: string | null;
+  blockReason?: string | null;
+  wake_at?: number | null;
+  wakeAt?: number | null;
+  wake_reason?: string | null;
+  wakeReason?: string | null;
   priority: string | null;
   severity: string | null;
   title: string;
@@ -170,6 +179,8 @@ export interface TaskRunData {
   startedAt: number;
   finished_at: number | null;
   finishedAt: number | null;
+  pause_reason?: string | null;
+  pauseReason?: string | null;
   cancel_reason: string | null;
   cancelReason: string | null;
   error: string | null;
@@ -325,6 +336,19 @@ export function TaskDetailView({
     status: taskDetail?.status ?? "new",
     taskContext: taskDetail?.taskContext,
   });
+  const isSuspended = isPausedWaitingTask(taskDetail);
+  const blockReason = taskDetail?.blockReason ?? taskDetail?.block_reason ?? null;
+  const wakeAt = taskDetail?.wakeAt ?? taskDetail?.wake_at ?? null;
+  const pauseReason =
+    taskDetail?.wakeReason ??
+    taskDetail?.wake_reason ??
+    latestRun?.pauseReason ??
+    latestRun?.pause_reason ??
+    null;
+  const wakeDisplay =
+    taskDetail?.status === "waiting" && typeof wakeAt === "number" && wakeAt > 0
+      ? formatTaskWakeTime(wakeAt, locale)
+      : null;
   const sourceMessages = taskDetail?.sourceMessages ?? [];
   const sourceTurnMessages = taskDetail?.sourceTurnMessages ?? [];
   const sourceSessionIds = new Set(sourceMessages.map((item) => item.sessionId));
@@ -406,6 +430,7 @@ export function TaskDetailView({
                     ? "completed"
                     : effectiveState
                 }
+                paused={isSuspended}
                 showDot
                 className="rounded-full px-2.5 py-0.5 text-xs font-semibold"
               />
@@ -564,7 +589,20 @@ export function TaskDetailView({
                 taskStateClasses("waiting").calloutClass,
               )}
             >
-              <div className="font-semibold">{t("Waiting for confirmation")}</div>
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="font-semibold">{t("Waiting for confirmation")}</div>
+                {wakeDisplay ? (
+                  <span
+                    data-testid="task-next-wake-badge"
+                    className="inline-flex items-center gap-1.5 rounded-full border border-current/25 bg-background/65 px-2.5 py-0.5 text-[11.5px] font-semibold tabular-nums"
+                  >
+                    <Clock className="size-3 shrink-0" />
+                    <span>
+                      {t("Next wake-up")}: {wakeDisplay.full} · {wakeDisplay.relative}
+                    </span>
+                  </span>
+                ) : null}
+              </div>
               <div className="mt-1 space-y-1 text-[13px] leading-relaxed">
                 {taskContext.pendingQuestions.map((question, idx) => (
                   <div key={idx} className="break-words">
@@ -572,6 +610,46 @@ export function TaskDetailView({
                   </div>
                 ))}
               </div>
+            </div>
+          ) : taskDetail?.status === "waiting" &&
+            (isSuspended || pauseReason || wakeDisplay || blockReason) ? (
+            <div
+              data-testid="task-suspension-callout"
+              className={cn(
+                "rounded-xl border px-4 py-3 text-xs",
+                isSuspended
+                  ? suspendedTaskClasses().calloutClass
+                  : taskStateClasses("waiting").calloutClass,
+              )}
+            >
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="font-semibold">
+                    {isSuspended ? t("Task suspended") : t("Waiting for input")}
+                  </span>
+                  {blockReason ? (
+                    <span className="rounded bg-background/60 px-1.5 py-0.5 text-[11px] font-medium">
+                      <UiText>{blockReason}</UiText>
+                    </span>
+                  ) : null}
+                </div>
+                {wakeDisplay ? (
+                  <span
+                    data-testid="task-next-wake-badge"
+                    className="inline-flex items-center gap-1.5 rounded-full border border-current/25 bg-background/65 px-2.5 py-0.5 text-[11.5px] font-semibold tabular-nums"
+                  >
+                    <Clock className="size-3 shrink-0" />
+                    <span>
+                      {t("Next wake-up")}: {wakeDisplay.full} · {wakeDisplay.relative}
+                    </span>
+                  </span>
+                ) : null}
+              </div>
+              {pauseReason ? (
+                <div className="mt-1.5 text-[13px] leading-relaxed break-words whitespace-pre-wrap">
+                  {pauseReason}
+                </div>
+              ) : null}
             </div>
           ) : null}
 
@@ -712,6 +790,10 @@ export function TaskDetailView({
               ) : (
                 orderedRuns.map((run) => {
                   const runState = resolveTaskEffectiveState({ status: run.status });
+                  const runPauseReason = run.pauseReason ?? run.pause_reason ?? null;
+                  const runPaused =
+                    runState === "waiting" &&
+                    (run.id === latestRun?.id ? isSuspended : Boolean(runPauseReason));
                   const duration = formatRunDuration(run.startedAt, run.finishedAt);
                   return (
                     <div
@@ -720,11 +802,15 @@ export function TaskDetailView({
                     >
                       <div className="flex flex-wrap items-center justify-between gap-3">
                         <div className="flex flex-wrap items-center gap-2">
-                          <TaskStateIcon state={runState} />
+                          <TaskStateIcon state={runState} paused={runPaused} />
                           <span className="text-[15px] font-semibold text-foreground">
                             #{run.runIndex}
                           </span>
-                          <TaskStatusPill status={run.status} effectiveState={runState} />
+                          <TaskStatusPill
+                            status={run.status}
+                            effectiveState={runState}
+                            paused={runPaused}
+                          />
                           <span className="rounded-full bg-secondary px-2.5 py-0.5 font-mono text-xs text-secondary-foreground">
                             {run.runnerType}
                           </span>
@@ -767,6 +853,20 @@ export function TaskDetailView({
                       {run.cancelReason ? (
                         <div className="rounded-xl border border-border bg-muted/50 p-3 text-xs text-muted-foreground">
                           {t("Cancelled:")} {run.cancelReason}
+                        </div>
+                      ) : null}
+
+                      {runPauseReason ? (
+                        <div
+                          className={cn(
+                            "rounded-xl border p-3 text-xs break-words whitespace-pre-wrap",
+                            runPaused
+                              ? suspendedTaskClasses().calloutClass
+                              : taskStateClasses("waiting").calloutClass,
+                          )}
+                        >
+                          <span className="font-semibold">{t("Pause reason")}:</span>{" "}
+                          {runPauseReason}
                         </div>
                       ) : null}
 
@@ -1313,6 +1413,7 @@ export function TaskDetailView({
                           ? "completed"
                           : effectiveState
                       }
+                      paused={isSuspended}
                       showDot
                     />
                     {effectiveState === "waiting" && taskDetail?.status !== "waiting" ? (
@@ -1327,6 +1428,26 @@ export function TaskDetailView({
 
                 {taskDetail ? (
                   <>
+                    {taskDetail.status === "waiting" && blockReason ? (
+                      <div className="flex items-center justify-between gap-3">
+                        <dt className="text-muted-foreground">{t("Block reason")}</dt>
+                        <dd className="m-0 text-right font-medium text-foreground">
+                          <UiText>{blockReason}</UiText>
+                        </dd>
+                      </div>
+                    ) : null}
+
+                    {wakeDisplay ? (
+                      <div className="flex items-center justify-between gap-3">
+                        <dt className="text-muted-foreground">{t("Next wake-up")}</dt>
+                        <dd
+                          className="m-0 text-right font-medium tabular-nums text-[#7d6b91] dark:text-[#a997bd]"
+                          data-testid="task-overview-next-wake"
+                        >
+                          {wakeDisplay.full} · {wakeDisplay.relative}
+                        </dd>
+                      </div>
+                    ) : null}
                     <div className="flex items-center justify-between gap-3">
                       <dt className="text-muted-foreground">{t("Creator")}</dt>
                       <dd className="m-0 min-w-0">

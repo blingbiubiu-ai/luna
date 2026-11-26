@@ -5,6 +5,7 @@ import {
   Clock3,
   Loader2,
   Minus,
+  Pause,
 } from "lucide-react";
 
 import { avatarColorForKey } from "@/app/sessions/session-avatar";
@@ -125,11 +126,44 @@ export function taskStateClasses(state: TaskEffectiveState): {
   }
 }
 
+export function isPausedWaitingTask(
+  input?: {
+    readonly status?: string | null;
+    readonly blockReason?: string | null;
+    readonly block_reason?: string | null;
+    readonly wakeAt?: number | null;
+    readonly wake_at?: number | null;
+  } | null,
+): boolean {
+  if (!input || input.status !== "waiting") {
+    return false;
+  }
+  const blockReason = input.blockReason ?? input.block_reason ?? null;
+  const wakeAt = input.wakeAt ?? input.wake_at ?? null;
+  return blockReason === "waiting_external" || (typeof wakeAt === "number" && wakeAt > 0);
+}
+
+export function suspendedTaskClasses(): {
+  readonly pillClass: string;
+  readonly dotClass: string;
+  readonly calloutClass: string;
+} {
+  return {
+    pillClass:
+      "bg-[#7d6b91]/14 text-[#7d6b91] border-[#7d6b91]/28 dark:bg-[#a997bd]/16 dark:text-[#a997bd] dark:border-[#a997bd]/30",
+    dotClass: "bg-[#7d6b91] dark:bg-[#a997bd]",
+    calloutClass:
+      "bg-[#7d6b91]/11 text-[#7d6b91] border-[#7d6b91]/25 dark:bg-[#a997bd]/14 dark:text-[#a997bd] dark:border-[#a997bd]/28",
+  };
+}
+
 export function TaskStateIcon({
   state,
+  paused = false,
   size = "md",
 }: {
   readonly state: TaskEffectiveState;
+  readonly paused?: boolean;
   readonly size?: "sm" | "md";
 }) {
   const boxClass = size === "sm" ? "size-5" : "size-6";
@@ -145,6 +179,19 @@ export function TaskStateIcon({
         )}
       >
         <Loader2 className={cn(iconClass, "animate-spin")} />
+      </span>
+    );
+  }
+  if (state === "waiting" && paused) {
+    return (
+      <span
+        aria-hidden="true"
+        className={cn(
+          "inline-grid shrink-0 place-items-center rounded-full bg-[#7d6b91]/14 text-[#7d6b91] dark:bg-[#a997bd]/16 dark:text-[#a997bd]",
+          boxClass,
+        )}
+      >
+        <Pause className={iconClass} />
       </span>
     );
   }
@@ -216,17 +263,24 @@ export function TaskStateIcon({
 export function TaskStatusPill({
   status,
   effectiveState,
+  paused = false,
   showDot = false,
   className,
 }: {
   readonly status: string;
   readonly effectiveState?: TaskEffectiveState;
+  readonly paused?: boolean;
   readonly showDot?: boolean;
   readonly className?: string;
 }) {
   const state = effectiveState ?? resolveTaskEffectiveState({ status });
-  const styles = taskStateClasses(state);
-  const displayLabel = state === "waiting" ? "Waiting" : status;
+  const isSuspended = state === "waiting" && paused;
+  const styles = isSuspended ? suspendedTaskClasses() : taskStateClasses(state);
+  const displayLabel = isSuspended
+    ? "Suspended"
+    : state === "waiting"
+      ? "Waiting"
+      : status;
   return (
     <span
       className={cn(
@@ -455,6 +509,55 @@ export function formatTaskFullTime(timestamp: number): string {
     hour: "2-digit",
     minute: "2-digit",
   }).format(new Date(timestamp));
+}
+
+export function formatTaskWakeTime(
+  wakeAt: number,
+  locale: "en" | "zh-CN" = "zh-CN",
+  nowMs = Date.now(),
+): {
+  readonly clock: string;
+  readonly full: string;
+  readonly relative: string;
+} {
+  const date = new Date(wakeAt);
+  const now = new Date(nowMs);
+  const sameDay =
+    date.getFullYear() === now.getFullYear() &&
+    date.getMonth() === now.getMonth() &&
+    date.getDate() === now.getDate();
+  const clock = new Intl.DateTimeFormat(locale, {
+    ...(sameDay ? {} : { month: "2-digit", day: "2-digit" }),
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).format(date);
+  const full = new Intl.DateTimeFormat(locale, {
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
+  }).format(date);
+  const diffSec = Math.round((wakeAt - nowMs) / 1000);
+  let relative: string;
+  if (diffSec <= 15) {
+    relative = locale === "zh-CN" ? "即将唤醒" : "due soon";
+  } else if (diffSec < 3600) {
+    const mins = Math.max(1, Math.ceil(diffSec / 60));
+    relative = locale === "zh-CN" ? `${mins} 分钟后` : `in ${mins}m`;
+  } else {
+    const totalMins = Math.ceil(diffSec / 60);
+    const hours = Math.floor(totalMins / 60);
+    const remMins = totalMins % 60;
+    if (locale === "zh-CN") {
+      relative = remMins > 0 ? `${hours} 小时 ${remMins} 分钟后` : `${hours} 小时后`;
+    } else {
+      relative = remMins > 0 ? `in ${hours}h ${remMins}m` : `in ${hours}h`;
+    }
+  }
+  return { clock, full, relative };
 }
 
 export function formatRunDuration(

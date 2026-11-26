@@ -854,6 +854,12 @@ export interface DashboardTask {
   id: string;
   type: string;
   status: string;
+  block_reason?: string | null;
+  blockReason?: string | null;
+  wake_at?: number | null;
+  wakeAt?: number | null;
+  wake_reason?: string | null;
+  wakeReason?: string | null;
   priority: string | null;
   severity: string | null;
   title: string;
@@ -902,6 +908,8 @@ export interface DashboardTaskRun {
   startedAt: number;
   finished_at: number | null;
   finishedAt: number | null;
+  pause_reason?: string | null;
+  pauseReason?: string | null;
   cancel_reason: string | null;
   cancelReason: string | null;
   error: string | null;

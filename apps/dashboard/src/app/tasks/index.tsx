@@ -2,6 +2,7 @@ import { createFileRoute } from "@tanstack/react-router";
 import {
   ChevronRight,
   CircleCheck,
+  Clock3,
   FileText,
   MessageSquare,
   Play,
@@ -26,10 +27,13 @@ import {
   formatRunDuration,
   formatTaskFullTime,
   formatTaskRelativeTime,
+  formatTaskWakeTime,
   identityForCanonicalUser,
+  isPausedWaitingTask,
   MiniUserBadgeAvatar,
   parseTaskContext,
   resolveTaskEffectiveState,
+  suspendedTaskClasses,
   TaskPriorityPill,
   taskStateClasses,
   TaskStateIcon,
@@ -596,6 +600,13 @@ function TaskRowItem({
   const detailHref = `${base}/tasks/${encodeURIComponent(task.id)}`;
   const tuiHref = `${base}/terminals?taskId=${encodeURIComponent(task.id)}`;
   const effectiveState = resolveTaskEffectiveState(task);
+  const isSuspended = isPausedWaitingTask(task);
+  const wakeAt =
+    task.status === "waiting" ? (task.wakeAt ?? task.wake_at ?? null) : null;
+  const wakeDisplay =
+    typeof wakeAt === "number" && wakeAt > 0
+      ? formatTaskWakeTime(wakeAt, locale)
+      : null;
   const parsedContext = parseTaskContext(task.taskContext);
   const latestRun = latestTaskRun(task.runs ?? []);
   const latestEvent = (task.timeline ?? []).at(-1);
@@ -633,7 +644,7 @@ function TaskRowItem({
       className="group relative grid cursor-pointer grid-cols-[26px_minmax(0,1fr)_auto] items-start gap-3.5 border-b border-border/60 px-4 py-3.5 transition-colors last:border-b-0 hover:bg-muted/45"
     >
       <div className="pt-0.5">
-        <TaskStateIcon state={effectiveState} />
+        <TaskStateIcon state={effectiveState} paused={isSuspended} />
       </div>
 
       <div className="min-w-0 space-y-1.5">
@@ -646,7 +657,11 @@ function TaskRowItem({
           >
             {task.title}
           </a>
-          <TaskStatusPill status={task.status} effectiveState={effectiveState} />
+          <TaskStatusPill
+            status={task.status}
+            effectiveState={effectiveState}
+            paused={isSuspended}
+          />
           <TaskPriorityPill priority={task.priority} />
           <TaskTypePill type={task.type} />
         </div>
@@ -655,6 +670,7 @@ function TaskRowItem({
         <TaskRowSecondaryLine
           task={task}
           effectiveState={effectiveState}
+          isSuspended={isSuspended}
           latestRun={latestRun}
           latestEventSummary={latestEvent?.summary}
           waitingQuestion={parsedContext.pendingQuestions[0]}
@@ -662,6 +678,18 @@ function TaskRowItem({
 
         {/* Line 3: Provenance Chips */}
         <div className="flex flex-wrap items-center gap-x-3 gap-y-1 pt-0.5 text-xs text-muted-foreground">
+          {wakeDisplay ? (
+            <span
+              data-testid={`task-row-wake-${task.id}`}
+              className="inline-flex items-center gap-1 font-medium tabular-nums text-[#7d6b91] dark:text-[#a997bd]"
+              title={`${t("Next wake-up")}: ${wakeDisplay.full}`}
+            >
+              <Clock3 className="size-3 shrink-0" />
+              <span>
+                {t("Next wake-up")} {wakeDisplay.clock} · {wakeDisplay.relative}
+              </span>
+            </span>
+          ) : null}
           {primarySession ? (
             <a
               href={`${base}/sessions/${encodeURIComponent(primarySession.id)}`}
@@ -778,17 +806,25 @@ function TaskRowItem({
 function TaskRowSecondaryLine({
   task,
   effectiveState,
+  isSuspended,
   latestRun,
   latestEventSummary,
   waitingQuestion,
 }: {
   readonly task: DashboardTask;
   readonly effectiveState: TaskEffectiveState;
+  readonly isSuspended: boolean;
   readonly latestRun: DashboardTaskRun | undefined;
   readonly latestEventSummary: string | undefined;
   readonly waitingQuestion: string | undefined;
 }) {
   const { t } = useTranslation();
+  const pauseReason =
+    task.wakeReason ??
+    task.wake_reason ??
+    latestRun?.pauseReason ??
+    latestRun?.pause_reason ??
+    undefined;
 
   if (effectiveState === "failed" && latestRun?.error) {
     const styles = taskStateClasses("failed");
@@ -804,7 +840,22 @@ function TaskRowSecondaryLine({
     );
   }
 
-  if (effectiveState === "waiting" && waitingQuestion) {
+  if (effectiveState === "waiting" && isSuspended && (pauseReason || waitingQuestion)) {
+    const styles = suspendedTaskClasses();
+    return (
+      <div
+        className={cn(
+          "flex items-center gap-1.5 truncate rounded-md border px-2 py-1 text-xs",
+          styles.calloutClass,
+        )}
+      >
+        <span className="shrink-0 font-medium">{t("Pause reason")}:</span>
+        <span className="truncate">{pauseReason ?? waitingQuestion}</span>
+      </div>
+    );
+  }
+
+  if (effectiveState === "waiting" && (waitingQuestion || pauseReason)) {
     const styles = taskStateClasses("waiting");
     return (
       <div
@@ -814,7 +865,7 @@ function TaskRowSecondaryLine({
         )}
       >
         <span className="shrink-0 font-medium">{t("Waiting for confirmation")}:</span>
-        <span className="truncate">{waitingQuestion}</span>
+        <span className="truncate">{waitingQuestion ?? pauseReason}</span>
       </div>
     );
   }

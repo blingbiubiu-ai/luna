@@ -35,6 +35,62 @@ describe("Dashboard task DTOs", () => {
 
     expect(task?.status).toBe("completed");
   });
+
+  test("projects blockReason, wakeAt, wakeReason, and run pauseReason for waiting tasks and clears task wake metadata once completed", () => {
+    const [waitingTask] = buildDashboardTasks(
+      [
+        taskRow({
+          status: "waiting",
+          block_reason: "waiting_external",
+          wake_at: 1_800_000_000_000,
+          wake_reason: "等待 2h 增量实验指标稳定后回读",
+        }),
+      ],
+      projectionRows({
+        runRows: [
+          taskRunRow({
+            id: "run-1",
+            run_index: 1,
+            status: "waiting",
+            pause_reason: "等待 2h 增量实验指标稳定后回读",
+          }),
+        ],
+      }),
+    );
+
+    expect(waitingTask?.status).toBe("waiting");
+    expect(waitingTask?.blockReason).toBe("waiting_external");
+    expect(waitingTask?.wakeAt).toBe(1_800_000_000_000);
+    expect(waitingTask?.wakeReason).toBe("等待 2h 增量实验指标稳定后回读");
+    expect(waitingTask?.runs[0]?.pauseReason).toBe("等待 2h 增量实验指标稳定后回读");
+
+    const [completedTask] = buildDashboardTasks(
+      [
+        taskRow({
+          status: "waiting",
+          block_reason: "waiting_external",
+          wake_at: 1_800_000_000_000,
+          wake_reason: "stale wake reason",
+        }),
+      ],
+      projectionRows({
+        runRows: [
+          taskRunRow({
+            id: "run-2",
+            run_index: 2,
+            status: "completed",
+            pause_reason: "previous pause",
+          }),
+        ],
+      }),
+    );
+
+    expect(completedTask?.status).toBe("completed");
+    expect(completedTask?.blockReason).toBeNull();
+    expect(completedTask?.wakeAt).toBeNull();
+    expect(completedTask?.wakeReason).toBeNull();
+    expect(completedTask?.runs[0]?.pauseReason).toBe("previous pause");
+  });
 });
 
 function taskRow(overrides: Partial<TaskRow> = {}): TaskRow {

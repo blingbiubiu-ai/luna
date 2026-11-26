@@ -64,6 +64,9 @@ export interface TaskRow {
   readonly title: string;
   readonly summary: string | null;
   readonly status: string;
+  readonly block_reason?: string | null;
+  readonly wake_at?: number | null;
+  readonly wake_reason?: string | null;
   readonly priority: string;
   readonly severity: string | null;
   readonly creator_user_id: string | null;
@@ -90,6 +93,7 @@ export interface TaskRunRow {
   readonly source_message_id: string | null;
   readonly started_at: number;
   readonly finished_at: number | null;
+  readonly pause_reason?: string | null;
   readonly cancel_reason: string | null;
   readonly error: string | null;
   readonly final_report_artifact_id: string | null;
@@ -202,6 +206,8 @@ export interface DashboardTaskRun {
   readonly startedAt: number;
   readonly finished_at: number | null;
   readonly finishedAt: number | null;
+  readonly pause_reason: string | null;
+  readonly pauseReason: string | null;
   readonly cancel_reason: string | null;
   readonly cancelReason: string | null;
   readonly error: string | null;
@@ -253,6 +259,12 @@ export interface DashboardTask {
   readonly id: string;
   readonly type: string;
   readonly status: string;
+  readonly block_reason: string | null;
+  readonly blockReason: string | null;
+  readonly wake_at: number | null;
+  readonly wakeAt: number | null;
+  readonly wake_reason: string | null;
+  readonly wakeReason: string | null;
   readonly priority: string | null;
   readonly severity: string | null;
   readonly title: string;
@@ -445,18 +457,29 @@ export function toDashboardTask(
         artifactSigner: input.artifactSigner,
       }),
     );
-  const latestRunStatus = taskRuns.reduce<
-    { readonly runIndex: number; readonly status: string } | undefined
-  >((latest, run) =>
-    latest === undefined || run.runIndex > latest.runIndex
-      ? { runIndex: run.runIndex, status: run.status }
-      : latest
-  , undefined)?.status;
+  const latestRun = taskRuns.reduce<DashboardTaskRun | undefined>(
+    (latest, run) =>
+      latest === undefined || run.runIndex > latest.runIndex ? run : latest,
+    undefined,
+  );
+  const resolvedStatus = latestRun?.status ?? row.status;
+  const isWaiting = resolvedStatus === "waiting";
+  const blockReason = isWaiting ? (row.block_reason ?? null) : null;
+  const wakeAt = isWaiting ? (row.wake_at ?? null) : null;
+  const wakeReason = isWaiting
+    ? (row.wake_reason ?? latestRun?.pauseReason ?? null)
+    : null;
 
   return signDashboardArtifactReferencesInValue({
     id: row.id,
     type: row.type,
-    status: latestRunStatus ?? row.status,
+    status: resolvedStatus,
+    block_reason: blockReason,
+    blockReason,
+    wake_at: wakeAt,
+    wakeAt,
+    wake_reason: wakeReason,
+    wakeReason,
     priority: row.priority,
     severity: row.severity,
     title: row.title,
@@ -772,6 +795,8 @@ export function toDashboardTaskRun(
     startedAt: row.started_at,
     finished_at: row.finished_at,
     finishedAt: row.finished_at,
+    pause_reason: row.pause_reason ?? null,
+    pauseReason: row.pause_reason ?? null,
     cancel_reason: row.cancel_reason,
     cancelReason: row.cancel_reason,
     error: row.error,
