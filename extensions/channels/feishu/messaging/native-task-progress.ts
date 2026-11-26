@@ -130,7 +130,7 @@ export class NativeTaskProgress {
               }
               const ellipsisId = `${parent}-tool-ellipsis`;
               events.push(
-                event("TOOL_CALL_START", {toolCallId: ellipsisId, toolCallName: "more", title: "...", icon: "default", parentMessageId: parent}),
+                event("TOOL_CALL_START", {toolCallId: ellipsisId, toolCallName: "more", title: "更多工具调用已省略…", icon: "default", parentMessageId: parent}),
                 event("TOOL_CALL_END", {toolCallId: ellipsisId}),
                 toolResult(ellipsisId, "更多工具调用已省略"),
               );

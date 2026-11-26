@@ -98,10 +98,10 @@ test("caps displayed tools at 10 per reasoning group with an ellipsis and resets
     ...group2,
   ]});
   const starts = events().filter(e => e.event_type === "TOOL_CALL_START").map(e => JSON.parse(e.content) as {title: string; parentMessageId: string});
-  // Group 1: 10 real tools + 1 "..." = 11; Group 2: 10 real tools + 1 "..." = 11 -> 22 total.
+  // Group 1: 10 real tools + 1 ellipsis = 11; Group 2: 10 real tools + 1 ellipsis = 11 -> 22 total.
   expect(starts).toHaveLength(22);
-  expect(starts[10]!.title).toBe("...");
-  expect(starts[21]!.title).toBe("...");
+  expect(starts[10]!.title).toBe("更多工具调用已省略…");
+  expect(starts[21]!.title).toBe("更多工具调用已省略…");
   expect(starts[11]!.title).toBe("读取 0");
   expect(starts[11]!.parentMessageId).toContain("msg-next");
   // Group 1 results close only the 10 displayed tools (+ 2 ellipsis tool results).
