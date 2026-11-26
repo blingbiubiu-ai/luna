@@ -58,6 +58,8 @@ export interface TaskDetailData {
   wakeAt?: number | null;
   wake_reason?: string | null;
   wakeReason?: string | null;
+  primary_session_id?: string | null;
+  primarySessionId?: string | null;
   priority: string | null;
   severity: string | null;
   title: string;
@@ -105,6 +107,7 @@ export interface TaskDetailData {
     thread_id: string | null;
     thread_key?: string | null;
     visibility: string;
+    notification_level?: string;
     created_at: number;
     updated_at: number;
   }>;
@@ -352,9 +355,18 @@ export function TaskDetailView({
   const sourceMessages = taskDetail?.sourceMessages ?? [];
   const sourceTurnMessages = taskDetail?.sourceTurnMessages ?? [];
   const sourceSessionIds = new Set(sourceMessages.map((item) => item.sessionId));
-  const notificationSessionIds = new Set(
-    (taskDetail?.subscriptions ?? []).map((subscription) => subscription.session_id),
+  const primarySessionId =
+    taskDetail?.primarySessionId ??
+    taskDetail?.primary_session_id ??
+    taskDetail?.workSession?.id ??
+    null;
+  const subscriptionBySessionId = new Map(
+    (taskDetail?.subscriptions ?? []).map((subscription) => [
+      subscription.session_id,
+      subscription,
+    ]),
   );
+  const notificationSessionIds = new Set(subscriptionBySessionId.keys());
   const linkedSessions =
     taskDetail?.linkedSessions ??
     taskDetail?.linked_sessions.map((session) => ({
@@ -1557,17 +1569,43 @@ export function TaskDetailView({
                           </div>
                         </div>
 
-                        {sourceSessionIds.has(session.id) ||
+                        {primarySessionId === session.id ||
+                        sourceSessionIds.has(session.id) ||
                         notificationSessionIds.has(session.id) ? (
                           <div className="flex flex-wrap gap-1.5 border-t border-border/60 pt-2 text-[11px]">
+                            {primarySessionId === session.id ? (
+                              <span className="rounded bg-[#5b8a72]/14 px-2 py-0.5 font-medium text-[#5b8a72] dark:bg-[#7fb096]/16 dark:text-[#7fb096]">
+                                {t("Primary session")}
+                              </span>
+                            ) : notificationSessionIds.has(session.id) ? (
+                              (() => {
+                                const level =
+                                  subscriptionBySessionId.get(session.id)
+                                    ?.notification_level ?? "major_updates";
+                                if (level === "none") {
+                                  return (
+                                    <span className="rounded bg-muted px-2 py-0.5 font-medium text-muted-foreground">
+                                      {t("Silent watcher")}
+                                    </span>
+                                  );
+                                }
+                                if (level === "result_only") {
+                                  return (
+                                    <span className="rounded bg-[#5c7c99]/14 px-2 py-0.5 font-medium text-[#5c7c99] dark:bg-[#86a3be]/16 dark:text-[#86a3be]">
+                                      {t("Result watcher")}
+                                    </span>
+                                  );
+                                }
+                                return (
+                                  <span className="rounded bg-[#5b8a72]/14 px-2 py-0.5 font-medium text-[#5b8a72] dark:bg-[#7fb096]/16 dark:text-[#7fb096]">
+                                    {t("Progress watcher")}
+                                  </span>
+                                );
+                              })()
+                            ) : null}
                             {sourceSessionIds.has(session.id) ? (
                               <span className="rounded bg-secondary px-2 py-0.5 text-secondary-foreground">
                                 {t("Source session")}
-                              </span>
-                            ) : null}
-                            {notificationSessionIds.has(session.id) ? (
-                              <span className="rounded bg-[#5b8a72]/14 px-2 py-0.5 font-medium text-[#5b8a72] dark:bg-[#7fb096]/16 dark:text-[#7fb096]">
-                                {t("Notification thread")}
                               </span>
                             ) : null}
                           </div>
@@ -1641,37 +1679,44 @@ export function TaskDetailView({
                 </p>
               ) : (
                 <div className="space-y-2">
-                  {(taskDetail?.subscriptions ?? []).map((subscription) => (
-                    <div
-                      className="rounded-xl border border-border/80 bg-card px-3 py-2.5 shadow-2xs"
-                      key={subscription.id}
-                    >
-                      <div className="text-xs font-medium text-foreground">
-                        <UiText>
-                          {subscription.visibility === "full"
-                            ? "Full updates"
-                            : subscription.visibility === "summary"
-                              ? "Summary updates"
-                              : `${subscription.visibility} updates`}
-                        </UiText>
+                  {(taskDetail?.subscriptions ?? []).map((subscription) => {
+                    const isPrimarySub = primarySessionId === subscription.session_id;
+                    const level = subscription.notification_level ?? "major_updates";
+                    const modeLabel = isPrimarySub
+                      ? level === "none"
+                        ? "Primary session (result only)"
+                        : "Primary session (cards + result)"
+                      : level === "none"
+                        ? "Silent watcher"
+                        : level === "result_only"
+                          ? "Result watcher"
+                          : "Progress watcher";
+                    return (
+                      <div
+                        className="rounded-xl border border-border/80 bg-card px-3 py-2.5 shadow-2xs"
+                        key={subscription.id}
+                      >
+                        <div className="text-xs font-medium text-foreground">
+                          <UiText>{modeLabel}</UiText>
+                        </div>
+                        <div className="mt-1 flex flex-wrap gap-1.5 text-[11px] text-muted-foreground">
+                          <span>{subscription.channel_type}</span>
+                          <span>·</span>
+                          <span>{subscription.channel_id}</span>
+                          {subscription.group_id ? (
+                            <span>
+                              · {t("Group")} {subscription.group_id}
+                            </span>
+                          ) : null}
+                          {subscriptionThreadKey(subscription) ? (
+                            <span>
+                              · {t("Thread")} {subscriptionThreadKey(subscription)}
+                            </span>
+                          ) : null}
+                        </div>
                       </div>
-                      <div className="mt-1 flex flex-wrap gap-1.5 text-[11px] text-muted-foreground">
-                        <span>{subscription.channel_type}</span>
-                        <span>·</span>
-                        <span>{subscription.channel_id}</span>
-                        {subscription.group_id ? (
-                          <span>
-                            · {t("Group")} {subscription.group_id}
-                          </span>
-                        ) : null}
-                        {subscriptionThreadKey(subscription) ? (
-                          <span>
-                            · {t("Thread")} {subscriptionThreadKey(subscription)}
-                          </span>
-                        ) : null}
-                      </div>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               )}
             </section>

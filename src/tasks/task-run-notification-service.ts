@@ -506,7 +506,12 @@ export class TaskRunNotificationService {
       .select()
       .from(taskSubscriptions)
       .where(eq(taskSubscriptions.task_id, taskId))
-      .all().filter(subscription => subscription.notification_level !== "none") as TaskSubscription[];
+      .all()
+      .filter(
+        (subscription) =>
+          subscription.notification_level === "major_updates" ||
+          subscription.notification_level === "all",
+      ) as TaskSubscription[];
   }
 
   private _requireSubscription(subscriptionId: string): TaskSubscription {

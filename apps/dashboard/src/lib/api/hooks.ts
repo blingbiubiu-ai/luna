@@ -813,6 +813,7 @@ export interface DashboardTaskSubscription {
   group_id: string | null;
   thread_id: string | null;
   visibility: string;
+  notification_level?: string;
   created_at: number;
   updated_at: number;
 }
@@ -860,6 +861,8 @@ export interface DashboardTask {
   wakeAt?: number | null;
   wake_reason?: string | null;
   wakeReason?: string | null;
+  primary_session_id?: string | null;
+  primarySessionId?: string | null;
   priority: string | null;
   severity: string | null;
   title: string;

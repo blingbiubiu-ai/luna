@@ -213,10 +213,17 @@ export class RunnerOperationService {
           return tx.update(runnerOperations).set({result, status: "prepared", error: null, updatedAt: Date.now()}).where(eq(runnerOperations.id, row.id)).returning().get()!;
         });
       }
-      const result = row.request.kind === "task.status_card"
-        ? await (this.cards ?? new TaskRunNotificationService({db: this.db, channelForNotification: () => undefined})).applyStatusCardCommand(row.id, row.result!, row.request.payload.resend, row.request.payload.style)
-        : row.request.kind === "session.create_thread" || row.request.kind === "session.clarify" || row.request.kind === "session.release" ? row.result! :
-        new TaskCommandService(this.db, this.supervisor).dispatch(row.id, row.request, row.context, row.result!);
+      const req = row.request;
+      const result = req.kind === "task.status_card"
+        ? await (this.cards ?? new TaskRunNotificationService({db: this.db, channelForNotification: () => undefined})).applyStatusCardCommand(row.id, row.result!, req.payload.resend, req.payload.style)
+        : req.kind === "session.create_thread" || req.kind === "session.clarify" || req.kind === "session.release" ? row.result! :
+        await (async () => {
+          const dispatched = new TaskCommandService(this.db, this.supervisor).dispatch(row.id, req, row.context, row.result!);
+          if ((req.kind === "task.transfer" || req.kind === "task.watch") && dispatched.spawnStatusCard && dispatched.runId && dispatched.taskId && this.cards) {
+            await this.cards.onRunCreated({taskId: dispatched.taskId, taskRunId: dispatched.runId, reason: "restart"}).catch(() => {});
+          }
+          return dispatched;
+        })();
       row = this.db.update(runnerOperations).set({result, status: "applied", error: null, updatedAt: Date.now()}).where(eq(runnerOperations.id, row.id)).returning().get()!;
       return this.receipt(row);
     } catch (error) {
@@ -226,12 +233,14 @@ export class RunnerOperationService {
   }
 
   private receipt(row: Operation) {
-    const cleanResult = row.result ? (({ cardDelivery: _cd, ...rest }) => rest)(row.result) : null;
+    const cleanResult = row.result ? (({ cardDelivery: _cd, spawnStatusCard: _sc, ...rest }) => rest)(row.result) : null;
     return {commandId: row.id, kind: row.request.kind, sessionId: row.sessionId, operation: row.request.kind, status: row.status, result: cleanResult,
       ...(row.result?.targetSessionId ? {targetSessionId: row.result.targetSessionId} : {}),
+      ...(row.result?.previousSessionId ? {previousSessionId: row.result.previousSessionId} : {}),
       ...(row.result?.statusMessageId ? {statusMessageId: row.result.statusMessageId} : {}),
       ...(row.result?.taskSessionId ? {taskSessionId: row.result.taskSessionId} : {}),
       ...(row.result?.cancelled !== undefined ? {cancelled: row.result.cancelled} : {}),
+      ...(row.result?.unwatched !== undefined ? {unwatched: row.result.unwatched} : {}),
       taskIds: row.result?.taskId ? [row.result.taskId] : [], ...(row.result?.runId ? {runId: row.result.runId} : {}), error: row.error};
   }
 }

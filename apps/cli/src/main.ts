@@ -135,7 +135,7 @@ function clientHelpText(): string {
     "  luna ask --to <address|main> (--text <text> | --stdin) [--context <text>] [--options '<json-array>'] [--expires-in <duration>] [--wait [<duration>]]",
     "  luna ask reply|message|wait|cancel|get|list ...",
     "  luna commands status|wait <command-id> [--timeout-ms <ms>]",
-    "  luna tasks list|get|progress|create|update|restart|cancel|status-card|pause|report",
+    "  luna tasks list|get|progress|create|update|restart|cancel|transfer|watch|unwatch|status-card|pause|report",
     "  luna sessions list|timeline|messages|create-thread|clarify|release",
     "  luna schedules create|list|get|update|pause|resume|cancel",
     "  luna activity --since <ISO-8601-or-epoch-ms> [--limit <n>]",

@@ -440,6 +440,115 @@ describe("TasksWorkspaceView", () => {
     expect(detailHtml).toContain("下次唤醒");
   });
 
+  test("renders Primary session vs Silent watcher and Result watcher badges in TaskDetailView", () => {
+    const taskWithWatchers = makeTask({
+      id: "task-transferred",
+      title: "影视搜索分发死链检测",
+      primary_session_id: "ses-group",
+      primarySessionId: "ses-group",
+      linked_sessions: [
+        {
+          id: "ses-group",
+          title: "需求同步群",
+          display_title: "【悟空】影视搜索死链检测 - [需求同步群]",
+          displayTitle: "【悟空】影视搜索死链检测 - [需求同步群]",
+          channel_type: "feishu",
+          channelType: "feishu",
+          channel_id: "feishu-default",
+          group_id: "oc_group",
+          thread_id: null,
+        },
+        {
+          id: "ses-p2p",
+          title: "王华杰",
+          display_title: "王华杰",
+          displayTitle: "王华杰",
+          channel_type: "feishu",
+          channelType: "feishu",
+          channel_id: "feishu-default",
+          group_id: "oc_p2p",
+          thread_id: null,
+        },
+        {
+          id: "ses-lead",
+          title: "负责人私聊",
+          display_title: "负责人私聊",
+          displayTitle: "负责人私聊",
+          channel_type: "feishu",
+          channelType: "feishu",
+          channel_id: "feishu-default",
+          group_id: "oc_lead",
+          thread_id: null,
+        },
+      ],
+      subscriptions: [
+        {
+          id: "sub-group",
+          task_id: "task-transferred",
+          session_id: "ses-group",
+          channel_type: "feishu",
+          channel_id: "feishu-default",
+          group_id: "oc_group",
+          thread_id: null,
+          visibility: "full",
+          notification_level: "major_updates",
+          created_at: 1000,
+          updated_at: 2000,
+        },
+        {
+          id: "sub-p2p",
+          task_id: "task-transferred",
+          session_id: "ses-p2p",
+          channel_type: "feishu",
+          channel_id: "feishu-default",
+          group_id: "oc_p2p",
+          thread_id: null,
+          visibility: "full",
+          notification_level: "none",
+          created_at: 1000,
+          updated_at: 2000,
+        },
+        {
+          id: "sub-lead",
+          task_id: "task-transferred",
+          session_id: "ses-lead",
+          channel_type: "feishu",
+          channel_id: "feishu-default",
+          group_id: "oc_lead",
+          thread_id: null,
+          visibility: "full",
+          notification_level: "result_only",
+          created_at: 1000,
+          updated_at: 2000,
+        },
+      ],
+    });
+
+    const html = renderToStaticMarkup(
+      createElement(
+        LocaleProvider,
+        { initialLocale: "zh-CN" },
+        createElement(TaskDetailView, {
+          taskDetail: taskWithWatchers as unknown as TaskDetailData,
+          runs: taskWithWatchers.runs,
+          timeline: [],
+          artifacts: [],
+          loading: {
+            taskDetail: false,
+            runs: false,
+            timeline: false,
+            artifacts: false,
+          },
+        }),
+      ),
+    );
+
+    expect(html).toContain("主会话");
+    expect(html).toContain("静默旁听");
+    expect(html).toContain("旁听（同步结果）");
+    expect(html).toContain("主会话（进度卡 + 结果）");
+  });
+
   test("HomeOverview renders pure runtime health, KPI summary cards, and status distributions without duplicating subpage lists", () => {
     const html = renderToStaticMarkup(
       createElement(

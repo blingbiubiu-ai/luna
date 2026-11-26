@@ -15,6 +15,9 @@ const TASKS_USAGE = [
   "  luna tasks get (--task-id <id> | <id>)",
   "  luna tasks progress (--task-id <id> | <id>) [--run-id <id|all>] [--limit <n>] [--cursor <cursor>]",
   "  luna tasks create|update|restart|cancel (--stdin | --json '<object>') [--repeat]",
+  "  luna tasks transfer (--task-id <id> --to <address> [--origin-notify none|result_only|major_updates] [--send-status-card true|false] [--style card|native] | --stdin | --json '<object>') [--repeat]",
+  "  luna tasks watch (--task-id <id> [--to <address>] [--notify none|result_only|major_updates] | --stdin | --json '<object>') [--repeat]",
+  "  luna tasks unwatch (--task-id <id> [--to <address>] | --stdin | --json '<object>') [--repeat]",
   "  luna tasks status-card (--task-id <id> | --json '<object>') [--resend] [--style card|native] [--repeat]",
   "  luna tasks pause [--wake-in <duration>] (--reason <text> | --stdin)",
   "  luna tasks report (--stdin | --text <report>) [--repeat]",
@@ -231,8 +234,104 @@ export async function runTasksCli(
         body,
       });
     }
+    if (command === "transfer" && readOption(argv, "--task-id")) {
+      if (readOption(argv, "--json") !== undefined || hasFlag(argv, "--stdin")) {
+        return {
+          status: "error",
+          code: "invalid_operation",
+          message:
+            "Use --task-id <id> --to <address> [--origin-notify none|result_only|major_updates] [--send-status-card true|false] [--style card|native] [--repeat], without --json/--stdin",
+        };
+      }
+      const to = readOption(argv, "--to")?.trim();
+      if (!to) {
+        return {
+          status: "error",
+          code: "invalid_operation",
+          message: "missing --to <address> for tasks transfer",
+        };
+      }
+      const sendCardRaw = readOption(argv, "--send-status-card");
+      const sendStatusCard =
+        sendCardRaw === undefined
+          ? undefined
+          : sendCardRaw === "true"
+            ? true
+            : sendCardRaw === "false"
+              ? false
+              : (() => {
+                  throw new Error("--send-status-card must be true or false");
+                })();
+      const body = {
+        taskId: readOption(argv, "--task-id")!.trim(),
+        to,
+        ...(readOption(argv, "--origin-notify")
+          ? { originNotify: readOption(argv, "--origin-notify") }
+          : {}),
+        ...(sendStatusCard !== undefined ? { sendStatusCard } : {}),
+        ...(readOption(argv, "--style")
+          ? { statusCardStyle: readOption(argv, "--style") }
+          : {}),
+      };
+      const key = deriveCommandIdempotencyKey(env, "tasks.transfer", body, {
+        repeat: hasFlag(argv, "--repeat"),
+      });
+      return await submitAndWaitCommand(env, {
+        method: "POST",
+        path: "/api/runner/tasks/transfer",
+        idempotencyKey: key,
+        body,
+      });
+    }
+    if (command === "watch" && readOption(argv, "--task-id")) {
+      if (readOption(argv, "--json") !== undefined || hasFlag(argv, "--stdin")) {
+        return {
+          status: "error",
+          code: "invalid_operation",
+          message:
+            "Use --task-id <id> [--to <address>] [--notify none|result_only|major_updates] [--repeat], without --json/--stdin",
+        };
+      }
+      const body = {
+        taskId: readOption(argv, "--task-id")!.trim(),
+        ...(readOption(argv, "--to") ? { to: readOption(argv, "--to")!.trim() } : {}),
+        ...(readOption(argv, "--notify") ? { notify: readOption(argv, "--notify") } : {}),
+      };
+      const key = deriveCommandIdempotencyKey(env, "tasks.watch", body, {
+        repeat: hasFlag(argv, "--repeat"),
+      });
+      return await submitAndWaitCommand(env, {
+        method: "POST",
+        path: "/api/runner/tasks/watch",
+        idempotencyKey: key,
+        body,
+      });
+    }
+    if (command === "unwatch" && readOption(argv, "--task-id")) {
+      if (readOption(argv, "--json") !== undefined || hasFlag(argv, "--stdin")) {
+        return {
+          status: "error",
+          code: "invalid_operation",
+          message:
+            "Use --task-id <id> [--to <address>] [--repeat], without --json/--stdin",
+        };
+      }
+      const body = {
+        taskId: readOption(argv, "--task-id")!.trim(),
+        ...(readOption(argv, "--to") ? { to: readOption(argv, "--to")!.trim() } : {}),
+      };
+      const key = deriveCommandIdempotencyKey(env, "tasks.unwatch", body, {
+        repeat: hasFlag(argv, "--repeat"),
+      });
+      return await submitAndWaitCommand(env, {
+        method: "POST",
+        path: "/api/runner/tasks/unwatch",
+        idempotencyKey: key,
+        body,
+      });
+    }
     if (
-      !["create", "update", "restart", "cancel", "status-card"].includes(command)
+      !["create", "update", "restart", "cancel", "transfer", "watch", "unwatch", "status-card"].includes(command)
     ) {
       return {
         status: "error",

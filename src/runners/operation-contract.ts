@@ -6,12 +6,16 @@ const sourceMessageIds = z.array(text).min(1).max(100).optional();
 const assumptions = z.array(text).max(5).optional();
 /** `sendStatusCard` switches the Task's progress card from this run on; `quiet` marks a background check nobody is waiting on. */
 const runOptions = {sendStatusCard: z.boolean().optional(), quiet: z.boolean().optional()};
+const watchNotify = z.enum(["none", "result_only", "major_updates"]);
 export const operationSchemas = {
   "task.create": z.object({title: text, summary: text, facts: z.array(text).max(100), sessionId: text.optional(), sendStatusCard: z.boolean().optional(), statusCardStyle: z.enum(["card", "native"]).optional(), taskType: z.enum(["task", "question"]).default("task"), assumptions, sourceMessageIds}).strict(),
   "task.update": z.object({taskId: text, updateSummary: text, updatedTaskTitle: text.optional(), updatedTaskSummary: text.optional(), assumptions, sourceMessageIds, ...runOptions}).strict(),
   "task.status_card": z.object({taskId: text, resend: z.boolean().default(false), style: z.enum(["card", "native"]).optional()}).strict(),
   "task.cancel": z.object({taskId: text, reason: text.default("用户取消任务"), sourceMessageIds}).strict(),
   "task.restart": z.object({taskId: text, sourceMessageIds, ...runOptions}).strict(),
+  "task.transfer": z.object({taskId: text, to: text, originNotify: watchNotify.default("none"), sendStatusCard: z.boolean().optional(), statusCardStyle: z.enum(["card", "native"]).optional(), sourceMessageIds}).strict(),
+  "task.watch": z.object({taskId: text, to: text.default("current"), notify: watchNotify.default("none")}).strict(),
+  "task.unwatch": z.object({taskId: text, to: text.default("current")}).strict(),
   "session.create_thread": z.object({anchorMessageId: text, contextMessageIds: z.array(text).max(100).default([]), title: text.optional()}).strict(),
   "session.clarify": z.object({pendingIntent: z.enum(["task", "question"]), missingFields: z.array(text).min(1), collectedFacts: z.array(text), question: text, reason: text}).strict(),
   "session.release": z.object({reason: text}).strict(),
@@ -30,4 +34,4 @@ export interface StatusCardDelivery {
   previousMessageId: string | null;
   operation: Omit<import("@/channels/outbound").OutboundChannelOperation, "id" | "channelId">;
 }
-export interface OperationResult { cancelled?: boolean; cardDelivery?: StatusCardDelivery; statusMessageId?: string; notificationId?: string; taskId?: string; sourceMessageId?: string; runId?: string; taskSessionId?: string; targetSessionId?: string; }
+export interface OperationResult { cancelled?: boolean; unwatched?: boolean; spawnStatusCard?: boolean; cardDelivery?: StatusCardDelivery; statusMessageId?: string; notificationId?: string; taskId?: string; sourceMessageId?: string; runId?: string; taskSessionId?: string; targetSessionId?: string; previousSessionId?: string; originNotify?: "none" | "result_only" | "major_updates"; notify?: "none" | "result_only" | "major_updates"; }

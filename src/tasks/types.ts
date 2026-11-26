@@ -62,7 +62,7 @@ export const REUSABLE_TASK_STATUSES: readonly TaskStatus[] = [
 /**
  * Represents Task Notification Level values used by task workflow.
  */
-export type TaskNotificationLevel = "major_updates" | "all" | "none";
+export type TaskNotificationLevel = "major_updates" | "result_only" | "all" | "none";
 /**
  * Represents Task Visibility values used by task workflow.
  */

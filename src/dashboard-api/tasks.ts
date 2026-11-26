@@ -265,6 +265,8 @@ export interface DashboardTask {
   readonly wakeAt: number | null;
   readonly wake_reason: string | null;
   readonly wakeReason: string | null;
+  readonly primary_session_id?: string | null;
+  readonly primarySessionId?: string | null;
   readonly priority: string | null;
   readonly severity: string | null;
   readonly title: string;
@@ -480,6 +482,8 @@ export function toDashboardTask(
     wakeAt,
     wake_reason: wakeReason,
     wakeReason,
+    primary_session_id: row.primary_session_id,
+    primarySessionId: row.primary_session_id,
     priority: row.priority,
     severity: row.severity,
     title: row.title,

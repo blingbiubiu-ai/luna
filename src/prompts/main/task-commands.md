@@ -11,21 +11,22 @@ Task payloads contain only domain fields; send acknowledgments as your final rep
   `sendStatusCard`, `statusCardStyle` (`card` | `native`).
 - `luna tasks update`: `taskId`, `updateSummary`; optional `updatedTaskTitle`,
   `updatedTaskSummary`, `assumptions`, `sourceMessageIds`, `sendStatusCard`,
-  `quiet`. Preempts any active run and restarts with new facts/attachments (use
-  `luna say --to task:<id> --text '…'` instead for non-disruptive hints).
-- `luna tasks cancel`: `taskId`, optional `reason`, `sourceMessageIds`. Always
-  use `cancel` for stop intent (`/stop` targets the referenced task; ask if
-  ambiguous; never cancel all by default). `cancelled: false` means no active Run
-  existed—do not claim a completed task was cancelled.
+  `quiet`. Preempts any active run (use `luna say --to task:<id> --text '…'` for
+  non-disruptive hints).
+- `luna tasks cancel`: `taskId`, optional `reason`, `sourceMessageIds`. Always use
+  for stop intent (`/stop` targets the referenced task; ask if ambiguous; never
+  cancel all by default). `cancelled: false` means no active Run existed.
 - `luna tasks restart`: `taskId`; optional `sourceMessageIds`, `sendStatusCard`, `quiet`.
+- `luna tasks transfer --task-id <id> --to <session:ID|group:ID> [--origin-notify none|result_only|major_updates]`:
+  moves primary ownership (`main` routing, cards, result) without restarting;
+  keeps origin as silent watcher (`none`) by default (`result_only` when asked to
+  sync final outcome). `luna tasks watch|unwatch --task-id <id> [--notify …]`
+  manages watcher sessions (`luna-topics-groups` skill).
 - `luna tasks status-card`: progress cards (`luna-status-card` skill).
-- `luna tasks list --session current`: this session's Tasks (`create` receipt
-  already returns `taskIds`).
-- `luna tasks get --task-id <id>`: Task details/progress; `luna commands status <id>`
-  inspects operation receipts.
+- `luna tasks list --session current` | `luna tasks get --task-id <id>`: list
+  primary/watched Tasks or read live progress; `luna commands status <id>` reads receipts.
 
-Mutations take `--stdin` or `--json '<object>'` (idempotency derived automatically)
-and return `commandId`, `status: "applied"`, `taskIds`, `runId`. Acknowledge only
-after `applied`. Issue separate `create` calls for multiple tasks, selecting
-`sourceMessageIds` from this session when needed (including in trigger turns).
-Tasks cannot send chat messages or DMs—never instruct a Task to remind or message people via external IM CLIs (e.g. `lark-cli im`); send chat messages yourself via `luna say`/`luna ask`, or have the Task report who needs messaging so you deliver it through Luna.
+Mutations take `--stdin` or `--json '<object>'` and return `commandId`,
+`status: "applied"`, `taskIds`, `runId`—acknowledge only after `applied` (issue
+separate `create` calls for multiple tasks, selecting `sourceMessageIds` when needed).
+Tasks cannot send chat messages or DMs—never tell a Task to remind/message people via `lark-cli im`; use `luna say`/`luna ask` yourself, or have the Task report back so you deliver through Luna.

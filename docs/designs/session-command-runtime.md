@@ -99,6 +99,11 @@ For a newly provisioned Feishu topic, Group Main runs `luna sessions create-thre
 sends the opening into `session:<topicId>` via `luna say --to session:<topicId>`,
 and dispatches `luna tasks create` (`sessionId: <topicId>`) in the same turn;
 Service automatically suppresses duplicate terminal reply in the source group.
+When a Task was already started before the target group or topic existed, Main can
+move primary ownership live via `luna tasks transfer` (`task.transfer`) without
+restarting the active run, keeping the origin session as a silent (`none`) or
+result-synced (`result_only`) watcher via `task_subscriptions`, or attach/detach
+watcher sessions via `luna tasks watch|unwatch` (`task.watch`, `task.unwatch`).
 Commands issued by a receiving Main use its current session as `sourceSessionId`,
 propagating `correlationId` and remaining hop budget without attributing the
 receiving Main's commands to the previous session.

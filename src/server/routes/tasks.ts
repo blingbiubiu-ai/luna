@@ -51,11 +51,34 @@ export interface TasksRouteOptions {
  * update, restart or cancel one. Details come from `GET /api/tasks/:id`.
  */
 function sessionTasks(db: DrizzleDB, sessionId: string) {
-  const rows = db.select({id: tasks.id, type: tasks.type, status: tasks.status, title: tasks.title, updatedAt: tasks.updated_at})
+  const rows = db.select({
+    id: tasks.id,
+    type: tasks.type,
+    status: tasks.status,
+    title: tasks.title,
+    primarySessionId: tasks.primary_session_id,
+    updatedAt: tasks.updated_at,
+  })
     .from(tasks)
-    .where(sql`${tasks.id} IN (SELECT ${taskSubscriptions.task_id} FROM ${taskSubscriptions} WHERE ${taskSubscriptions.session_id} = ${sessionId})`)
+    .where(sql`${tasks.id} IN (SELECT ${taskSubscriptions.task_id} FROM ${taskSubscriptions} WHERE ${taskSubscriptions.session_id} = ${sessionId}) OR ${tasks.primary_session_id} = ${sessionId}`)
     .orderBy(desc(tasks.updated_at), asc(tasks.id)).limit(20).all();
-  return rows.map(row => ({taskId: row.id, taskType: row.type, status: row.status, title: row.title, updatedAt: new Date(row.updatedAt).toISOString()}));
+  const subsByTaskId = new Map(
+    db.select({ taskId: taskSubscriptions.task_id, notificationLevel: taskSubscriptions.notification_level })
+      .from(taskSubscriptions)
+      .where(eq(taskSubscriptions.session_id, sessionId))
+      .all()
+      .map(sub => [sub.taskId, sub.notificationLevel] as const),
+  );
+  return rows.map(row => ({
+    taskId: row.id,
+    taskType: row.type,
+    status: row.status,
+    title: row.title,
+    sessionRole: row.primarySessionId === sessionId || row.primarySessionId === null ? "primary" : "watcher",
+    notificationLevel: subsByTaskId.get(row.id) ?? "none",
+    ...(row.primarySessionId && row.primarySessionId !== sessionId ? { primarySessionId: row.primarySessionId } : {}),
+    updatedAt: new Date(row.updatedAt).toISOString(),
+  }));
 }
 
 export function createTasksRoutes(options: TasksRouteOptions = {}) {
@@ -117,8 +140,16 @@ export function createTasksRoutes(options: TasksRouteOptions = {}) {
         throw new HTTPException(404, { message: `Task not found: ${taskId}` });
       }
       const claims=lunaAccessTokenClaimsFromContext(c);
-      if(claims?.source==="runner")return c.json({id:taskId,taskId,title:row.title,summary:row.summary,status:row.status,
-        progress:new TaskProgressStore(db).query(taskId)});
+      if(claims?.source==="runner")return c.json({
+        id:taskId,
+        taskId,
+        title:row.title,
+        summary:row.summary,
+        status:row.status,
+        primarySessionId:row.primary_session_id,
+        ...(row.status==="waiting"?{blockReason:row.block_reason,wakeAt:row.wake_at,wakeReason:row.wake_reason}:{}),
+        progress:new TaskProgressStore(db).query(taskId),
+      });
       const [dashboardTask] = buildDashboardTasks(
         [row],
         selectDashboardTaskProjectionRows(db, [row], { artifactSigner }),

@@ -53,3 +53,21 @@ luna groups invite [--to group:GROUP_ID] --member user:USER_C
      luna say --to session:RESULT_SESSION_ID --via-main --text '<purpose, requirements, constraints>'
      ```
      The receiving group Main owns the opening (`luna say --purpose answer --text '…'`) and subsequent `luna tasks create` (use `luna ask` instead of `say --via-main` only if a result must be returned back to the source chat).
+
+## Moving or Watching an Existing Task (`tasks transfer` / `watch`)
+
+A Task has **1 primary session** (`primary_session_id`, receiving `luna say/ask --to main`, progress cards, and `task_result`) plus **0..N watcher sessions** (`task_subscriptions`).
+
+- **Live transfer without restarting the Task** (e.g. a Task started in private chat before the bot joined the project/Meego group, or moved into a newly opened topic):
+  ```bash
+  luna tasks transfer --task-id TASK_ID --to group:GROUP_ID
+  luna tasks transfer --task-id TASK_ID --to session:TARGET_SESSION_ID --origin-notify result_only
+  ```
+  - `--origin-notify none` (default): keeps the previous primary session as a **silent watcher**—no intermediate messages or completion push, while `luna tasks list --session current` and `luna tasks get TASK_ID` still inspect progress anytime on demand.
+  - `--origin-notify result_only`: silent during runs/wake-ups, but automatically delivers the final `task_result` to the origin session when the Task finishes (use when the user asks to also be notified of the final result).
+  - `--origin-notify major_updates`: keeps both progress cards and final result in the origin session too.
+- **Add, adjust, or remove watcher sessions**:
+  ```bash
+  luna tasks watch --task-id TASK_ID [--to current|owner|session:ID|group:ID] [--notify none|result_only|major_updates]
+  luna tasks unwatch --task-id TASK_ID [--to current|session:ID]
+  ```

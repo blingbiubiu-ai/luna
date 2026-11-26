@@ -71,7 +71,7 @@ export interface RunnerCapabilitiesManifest {
 const MAIN_COMMANDS = [
   "say",
   "ask | ask reply|message|wait|cancel|get|list",
-  "tasks create|update|restart|cancel|list|get|status-card",
+  "tasks create|update|restart|cancel|transfer|watch|unwatch|list|get|status-card",
   "sessions list|timeline|messages|create-thread|clarify|release",
   "schedules create|list|get|update|pause|resume|cancel",
   "activity",

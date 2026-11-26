@@ -60,6 +60,11 @@ Supplemental input from Main uses two distinct channels depending on urgency:
 - **Preemptive restart (`luna tasks update`)**: used when changed direction, conflicting facts, or new attachments (`sourceMessageIds`) make keeping the current run wasteful. `TaskRunSupervisor.restartTaskRun()` records a `task_update` context pack, cancels any active run, and starts a replacement run (`--resume` receives all unseen `task_update` packs recorded since the last delivered run on that `runnerContextId`).
 - `luna tasks restart` retries a failed or cancelled task with existing information unchanged.
 - `luna tasks cancel` cancels an active `running` run or transitions a suspended `waiting` task directly to `cancelled` (clearing `wake_at`, `wake_reason`, and `block_reason`).
+- **Primary session vs. Watcher sessions (`luna tasks transfer | watch | unwatch`)**:
+  - Every Task has **1 primary session** (`tasks.primary_session_id`) and **0..N subscribed sessions** (`task_subscriptions`). Task Runner mid-run communication (`luna say --to main`, `luna ask --to main`) routes exclusively to `primary_session_id`.
+  - `luna tasks transfer --task-id <id> --to <address> [--origin-notify none|result_only|major_updates]` atomically switches `primary_session_id` and progress-card ownership to the target session without interrupting any active `TaskRun`, while retaining the previous primary session in `task_subscriptions` as a **silent watcher** (`notification_level = "none"`) by default, or `"result_only"` / `"major_updates"` when requested.
+  - `luna tasks watch --task-id <id> [--to <address>] [--notify none|result_only|major_updates]` and `luna tasks unwatch` attach, adjust, or remove watcher sessions within the same Shadow.
+  - Watcher notification levels: `none` (silent on-demand inspection via `tasks list/get/progress`, zero status cards and zero terminal `task_result` wakeups), `result_only` (no intermediate status cards, automatic terminal `task_result` delivery on completion/failure), and `major_updates` (both status cards and terminal `task_result`).
 - For status/progress questions, Main reads `luna tasks get --task-id TASK_ID` and replies directly without starting another run.
 
 ## Launch Prompt

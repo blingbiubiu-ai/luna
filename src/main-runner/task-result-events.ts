@@ -492,12 +492,24 @@ export class TaskResultEventPublisher {
   }
 
   private _activeStatusCardSubscriptions(taskId: string): TaskSubscription[] {
+    const taskRow = this._db
+      .select({ primarySessionId: tasks.primary_session_id })
+      .from(tasks)
+      .where(eq(tasks.id, taskId))
+      .get();
+    const primarySessionId = taskRow?.primarySessionId ?? null;
     return this._db
       .select()
       .from(taskSubscriptions)
       .where(eq(taskSubscriptions.task_id, taskId))
       .orderBy(asc(taskSubscriptions.id))
-      .all();
+      .all()
+      .filter((subscription) =>
+        primarySessionId === null
+          ? true
+          : subscription.session_id === primarySessionId ||
+            subscription.notification_level !== "none",
+      ) as TaskSubscription[];
   }
 
   private _relatedUserIdForTask(taskId: string): string | undefined {
