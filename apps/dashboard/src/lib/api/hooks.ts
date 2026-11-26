@@ -1914,7 +1914,7 @@ export interface CreateAgentProfileInput {
   executionDriver?: DashboardExecutionDriver;
   resumeOnModelChange: boolean;
   env: Record<string, string>;
-  secrets: Record<string, { set: string }>;
+  secrets: Record<string, { set: string } | { clear: true }>;
   customSensitiveKeys?: string[];
   customNonSensitiveKeys?: string[];
 }

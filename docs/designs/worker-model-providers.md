@@ -65,8 +65,10 @@ Worker shutdown closes the listener, aborts in-flight requests and stops childre
 
 ## Dashboard and validation
 
-The Model Configuration page and Agent plugin pages display a shared Worker model panel with
+The Model Configuration page and Agent plugin pages share Worker catalog/account controllers with
 browser authorization, masked account summary, expiration, catalog refresh and API protocol/addresses.
+Plugin details use an account workspace; model configuration uses a saved-model workspace,
+Provider directory and two-step model picker, all backed by the same generic management APIs.
 The platform Plugins page links to the owner's Agent model configuration. A disabled provider can
 be enabled by the explicit sign-in action. File import remains a fallback under a disclosure.
 "Add from Provider" opens a Codex Profile editor that selects an enabled provider/account/model,

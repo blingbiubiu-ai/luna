@@ -48,6 +48,28 @@ version history are shown on the detail page. Mutations disable conflicting acti
 while in flight, display failures inline, and reload installation state after success.
 The service remains the source of truth for installation and restart semantics.
 
+Agent plugin details use an installed-plugin sidebar and capability-driven overview,
+model directory and configuration sections. Core renders these sections from the
+generic Provider catalog; plugins do not supply Dashboard components. Enablement
+and JSON/secret changes use revision-checked Service writes. Section changes retain
+unsaved configuration and authorization polling, and a dirty draft prevents a
+conflicting enablement change.
+
+## Model Configuration
+
+The model workspace shows the actual active revision separately from the latest
+saved configurations. Saved rows retain connection validation, activation and
+version semantics, while a Provider directory and account sidebar share the
+Agent/plugin/Provider/Worker-scoped catalog with plugin details.
+
+Adding a model uses two steps: choose a logged-in Provider model or enter manual
+API connection fields, then confirm the name and execution options. Provider
+selection binds the existing account/credential/release reference automatically.
+Deep links preselect only an owned, ready source and a model in its catalog.
+Manual edits preserve write-only secrets unless explicitly replaced; switching
+to a Worker Provider clears retained manual gateway URL/Key. Saving creates a
+revision; the real connection test must pass before that revision can activate.
+
 ## Session View
 
 The session workspace is a two-column Feishu-style chat workbench (collapsing into separate list and detail screens below `760px`):

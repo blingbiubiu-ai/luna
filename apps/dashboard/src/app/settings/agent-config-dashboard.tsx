@@ -1,346 +1,81 @@
-import { UiText } from "@/lib/i18n";
 import { useTranslation } from "@/lib/i18n";
 import { useMemo, useRef, useState, type FormEvent } from "react";
-import { BotIcon, CheckCircle2Icon, FlaskConicalIcon, Trash2Icon, PlusIcon, PencilIcon, SearchIcon, Loader2Icon, XIcon } from "lucide-react";
-
+import { ArrowLeft, ArrowRight, Check, CheckCircle2, ChevronDown, FlaskConical, Loader2, Pencil, Plus, Search, Server, Settings2, ShieldCheck, Terminal, Trash2, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from "@/components/ui/sheet";
 import { Input } from "@/components/ui/input";
+import { Switch } from "@/components/ui/switch";
 import { SelectField } from "@/components/ui/select-field";
-import {WorkerModels} from "../plugins/worker-models";
-import type {DashboardModelProviderReference} from "@/lib/api/hooks";
-import type {
-  CreateAgentProfileInput,
-  DashboardAgentConfigStatus,
-  DashboardAgentProfile,
-  DashboardAgentType,
-  DashboardAgentTypeDescriptor,
-  DashboardExecutionDriver,
-} from "@/lib/api";
+import { ModelAccountSidebar, ModelMark, ModelSourcePicker, ModelStatus, ProviderDirectory, useProviderSources, type ModelSelectionHint, type ProviderSource } from "../plugins/worker-models";
+import { buildProfileRevision, envValue, formatPairs, setEnvValue } from "./model-profile-input";
+import type { CreateAgentProfileInput, DashboardAgentConfigStatus, DashboardAgentProfile, DashboardAgentType, DashboardAgentTypeDescriptor, DashboardExecutionDriver, DashboardModelProviderReference } from "@/lib/api/hooks";
 
-export function AgentConfigDashboardView({
-  agentId,
-  status,
-  types,
-  profiles,
-  loading = false,
-  error,
-  onCreate,
-  onCreateRevision,
-  onTest,
-  onActivate,
-  onDelete,
-}: {
-  readonly agentId?:string;
-  readonly status: DashboardAgentConfigStatus;
-  readonly types: readonly DashboardAgentTypeDescriptor[];
-  readonly profiles: readonly DashboardAgentProfile[];
-  readonly loading?: boolean;
-  readonly error?: unknown;
-  readonly onCreate: (input: CreateAgentProfileInput) => Promise<unknown>;
-  readonly onCreateRevision?: (
-    profileId: string,
-    input: Omit<CreateAgentProfileInput, "name" | "agentType">,
-  ) => Promise<unknown>;
-  readonly onTest: (revisionId: string) => Promise<unknown>;
-  readonly onActivate: (revisionId: string) => Promise<unknown>;
-  readonly onDelete: (profileId: string) => Promise<unknown>;
-}) {
-  const { t } = useTranslation();
-  const [editing, setEditing] = useState<DashboardAgentProfile | null>(null);
-  const [open, setOpen] = useState(false);
-  const [fromProvider,setFromProvider]=useState(false);
-  const [saving, setSaving] = useState(false);
-  const [selected, setSelected] = useState<DashboardAgentType | "all">("all");
-  const [query, setQuery] = useState("");
-  const [busy, setBusy] = useState<string | null>(null);
-  const [actionError, setActionError] = useState<string | null>(null);
-  const testingRef = useRef(false);
-  const [testResults, setTestResults] = useState<Record<string, { success: boolean; message: string }>>({});
-  async function testConnection(profile: DashboardAgentProfile) {
-    if (testingRef.current) return;
-    testingRef.current = true;
-    const revisionId = profile.latestRevision.id;
-    setBusy(`test-${profile.id}`);
-    setTestResults((previous) => { const next = { ...previous }; delete next[revisionId]; return next; });
-    try {
-      await onTest(revisionId);
-      setTestResults((previous) => ({ ...previous, [revisionId]: { success: true, message: "Connection succeeded" } }));
-    } catch (cause) {
-      setTestResults((previous) => ({ ...previous, [revisionId]: { success: false, message: cause instanceof Error ? cause.message : String(cause) } }));
-    } finally { testingRef.current = false; setBusy(null); }
-  }
+interface Props {
+  agentId?: string; status: DashboardAgentConfigStatus; types: readonly DashboardAgentTypeDescriptor[]; profiles: readonly DashboardAgentProfile[]; loading?: boolean; error?: unknown;
+  onCreate(input: CreateAgentProfileInput): Promise<unknown>; onCreateRevision?(profileId: string, input: Omit<CreateAgentProfileInput, "name" | "agentType">): Promise<unknown>;
+  onTest(revisionId: string): Promise<unknown>; onActivate(revisionId: string): Promise<unknown>; onDelete(profileId: string): Promise<unknown>;
+}
+export function AgentConfigDashboardView(props: Props) { return props.agentId ? <ConnectedConfigView {...props} agentId={props.agentId} /> : <ConfigView {...props} sources={[]} />; }
+function ConnectedConfigView(props: Props & { agentId: string }) { const { sources } = useProviderSources(props.agentId); return <ConfigView {...props} sources={sources} />; }
+function profileName(profile: DashboardAgentProfile, sources: ProviderSource[]) { const ref = profile.latestRevision.modelProvider; return (ref && sources.find(s => s.target.pluginId === ref.pluginId && s.target.providerId === ref.providerId && s.target.workerId === ref.workerId)?.account?.models.find(m => m.id === profile.latestRevision.model)?.name) || profile.latestRevision.model; }
+function ConfigView({ agentId, status, types, profiles, loading = false, error, onCreate, onCreateRevision, onTest, onActivate, onDelete, sources }: Props & { sources: ProviderSource[] }) {
+  const { t } = useTranslation(); const params = new URLSearchParams(typeof window === "undefined" ? "" : window.location.search);
+  const queryHint: ModelSelectionHint | undefined = params.get("addModel") && params.get("modelPlugin") && params.get("modelProvider") && params.get("modelWorker") ? { pluginId: params.get("modelPlugin")!, providerId: params.get("modelProvider")!, workerId: params.get("modelWorker")!, model: params.get("addModel")! } : undefined;
+  const [editing, setEditing] = useState<DashboardAgentProfile | null>(null); const [open, setOpen] = useState(!!queryHint); const [fromProvider, setFromProvider] = useState(!!queryHint); const [hint, setHint] = useState(queryHint);
+  const [saving, setSaving] = useState(false); const [selected, setSelected] = useState<DashboardAgentType | "all">("all"); const [section, setSection] = useState("saved"); const [query, setQuery] = useState(""); const [busy, setBusy] = useState<string | null>(null); const [actionError, setError] = useState("");
+  const testingRef = useRef(false); const [testResults, setTestResults] = useState<Record<string, { success: boolean; message: string }>>({});
   const active = status.status === "ready" ? status.active : null;
-  const visible = profiles.filter((profile) =>
-    (selected === "all" || profile.agentType === selected) &&
-    [profile.name, profile.latestRevision.model, ...Object.values(profile.latestRevision.env)].join(" ").toLowerCase().includes(query.toLowerCase()),
-  );
-  async function run(key: string, action: () => Promise<unknown>) {
-    setBusy(key);
-    setActionError(null);
-    try { await action(); } catch (cause) { setActionError(String(cause)); }
-    finally { setBusy(null); }
+  const activeProfile = profiles.find(p => p.id === active?.profileId); const currentActive = activeProfile?.latestRevision.id === active?.revisionId;
+  const activeLabel = active ? (currentActive && activeProfile ? profileName(activeProfile, sources) : active.model) : "尚未选择模型";
+  const visible = profiles.filter(p => (selected === "all" || p.agentType === selected) && [p.name, p.latestRevision.model, ...Object.values(p.latestRevision.env)].join(" ").toLowerCase().includes(query.toLowerCase())).sort((a, b) => Number(b.latestRevision.id === active?.revisionId) - Number(a.latestRevision.id === active?.revisionId));
+  function edit(profile: DashboardAgentProfile | null, provider = false, initial?: ModelSelectionHint) { setEditing(profile); setFromProvider(provider || !!profile?.latestRevision.modelProvider); setHint(initial); setOpen(true); }
+  async function run(key: string, action: () => Promise<unknown>) { setBusy(key); setError(""); try { await action(); } catch (cause) { setError(cause instanceof Error ? cause.message : "操作失败，请重试。"); } finally { setBusy(null); } }
+  async function testConnection(profile: DashboardAgentProfile) {
+    if (testingRef.current) return; testingRef.current = true; setBusy(`test-${profile.id}`); const id = profile.latestRevision.id;
+    setTestResults(previous => { const next = { ...previous }; delete next[id]; return next; });
+    try { await onTest(id); setTestResults(previous => ({ ...previous, [id]: { success: true, message: "Connection succeeded" } })); }
+    catch (cause) { setTestResults(previous => ({ ...previous, [id]: { success: false, message: cause instanceof Error ? cause.message : "Connection failed" } })); }
+    finally { testingRef.current = false; setBusy(null); }
   }
-  function edit(profile: DashboardAgentProfile | null,provider=false) { setEditing(profile);setFromProvider(provider);setOpen(true); }
-
-  return (
-    <div className="mx-auto w-full max-w-7xl space-y-6 px-5 py-7 sm:px-8">
-      <header className="flex flex-wrap items-start justify-between gap-4">
-        <h1 className="text-2xl font-semibold tracking-tight">{t("Model Configuration")}</h1>
-        <div className="flex flex-wrap items-center gap-2">
-          <Button disabled={loading || types.length === 0} onClick={() => edit(null)}><PlusIcon />{t("New Profile")}</Button>
-          {agentId?<Button variant="outline" disabled={loading} onClick={()=>edit(null,true)}>从 Provider 添加</Button>:null}
-        </div>
-      </header>
-      <div className="flex flex-wrap gap-2 text-xs text-muted-foreground">
-        <span className="rounded-md border bg-muted/30 px-3 py-2">{profiles.length}{t("profiles")}</span>
-        <span className="rounded-md border bg-muted/30 px-3 py-2">{types.length}{t("agent types")}</span>
-        {active ? <span className="flex items-center gap-2 rounded-md border bg-muted/30 px-3 py-2"><span className="size-1.5 rounded-full bg-emerald-500" />{t("Current Agent:")}<span className="font-medium text-foreground">{active.name}</span> · {active.model}{active.executionDriver === "pty" ? " · PTY" : ""}</span> : null}
-      </div>
-      {!loading && status.status === "setup_required" ? <div className="rounded-lg border border-amber-500/30 bg-amber-500/5 p-4 text-sm"><h2 className="font-medium">{t("Agent setup required")}</h2><p className="mt-1 text-muted-foreground">{t("Create a profile, test its connection, then activate it to start running work.")}</p></div> : null}
-      {error || actionError ? <p role="alert" className="rounded-lg border border-destructive/20 bg-destructive/5 p-3 text-sm text-destructive">{String(actionError ?? error)}</p> : null}
-      <div className="grid grid-cols-1 items-start gap-4 lg:grid-cols-[200px_minmax(0,1fr)]">
-        <nav aria-label={t("Agent types")} className="min-w-0 rounded-xl border bg-card p-3">
-          <p className="px-3 py-2 text-[11px] font-medium tracking-wider text-muted-foreground">{t("AGENT TYPES")}</p>
-          <div className="flex gap-1 overflow-x-auto lg:flex-col">
-            {[{ type: "all" as const, label: "All agents" }, ...types].map((type) => {
-              const count = profiles.filter((p) => type.type === "all" || p.agentType === type.type).length;
-              return <button key={type.type} aria-pressed={selected === type.type} onClick={() => setSelected(type.type)} className={`flex shrink-0 items-center gap-3 rounded-lg px-3 py-3 text-left text-sm transition-colors hover:bg-muted/60 ${selected === type.type ? "bg-muted font-medium" : "text-muted-foreground"}`}><BotIcon className={`size-5 ${type.type === "claude" ? "text-orange-500" : type.type === "codex" ? "text-indigo-500" : ""}`} /><span className="flex-1"><UiText>{type.label}</UiText></span><span className="rounded-md border bg-background px-1.5 text-xs">{count}</span></button>;
-            })}
-          </div>
-        </nav>
-        <section className="min-w-0 rounded-xl border bg-card p-4 sm:p-5">
-          <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
-            <h2 className="flex items-center gap-2 text-lg font-semibold"><BotIcon className="size-5" />{selected === "all" ? t("All agents") : types.find((t) => t.type === selected)?.label}</h2>
-            <div className="relative w-full sm:w-64"><SearchIcon className="absolute left-3 top-2.5 size-4 text-muted-foreground" /><Input aria-label={t("Search profiles")} className="pl-9" placeholder={t("Search profiles, models, URLs…")} value={query} onChange={(e) => setQuery(e.target.value)} /></div>
-          </div>
-          {loading ? <p className="py-12 text-center text-sm text-muted-foreground">{t("Loading profiles…")}</p> : visible.length === 0 ? <div className="rounded-lg border border-dashed px-4 py-12 text-center"><BotIcon className="mx-auto mb-3 size-7 text-muted-foreground/50" /><p className="text-sm font-medium">{query ? t("No matching profiles") : t("No profiles yet")}</p><p className="mt-1 text-xs text-muted-foreground">{query ? t("Try a different name or model.") : t("Add a profile to configure this agent.")}</p></div> : <div className="overflow-x-auto rounded-lg border"><table className="w-full text-left text-sm"><thead className="border-b bg-muted/40 text-xs text-muted-foreground"><tr><th className="p-3 font-medium">{t("Profile")}</th><th className="p-3 font-medium">{t("Model / Connection")}</th><th className="p-3 font-medium">{t("Status")}</th><th className="p-3 text-right font-medium">{t("Actions")}</th></tr></thead><tbody className="divide-y">
-            {visible.map((profile) => {
-              const revision = profile.latestRevision;
-              const isActive = active?.profileId === profile.id;
-              const currentRevision = active?.revisionId === revision.id;
-              const validated = revision.validationState === "validated";
-              const testing = busy === `test-${profile.id}`;
-              const savedMessage = revision.validationResult && typeof revision.validationResult === "object" && "message" in revision.validationResult && typeof revision.validationResult.message === "string" ? revision.validationResult.message : "";
-              const testResult = testResults[revision.id] ?? (revision.validatedAt !== null ? { success: validated, message: savedMessage } : undefined);
-              return <tr key={profile.id} className="align-top">
-                <td className="min-w-36 p-3"><p className="font-medium">{profile.name}</p><p className="mt-1 text-xs capitalize text-muted-foreground">{profile.agentType}{t("· Revision")}{revision.revisionNumber}</p></td>
-                <td className="min-w-44 max-w-64 p-3"><p className="font-mono text-xs">{revision.model}{(revision.executionDriver ?? "stdio") === "pty" ? <span className="ml-2 rounded border px-1.5 py-0.5 font-sans text-[10px] uppercase text-muted-foreground">PTY</span> : null}</p><details className="mt-2 text-xs text-muted-foreground"><summary className="cursor-pointer hover:text-foreground">{t("Connection details")}</summary><dl className="mt-3 space-y-2"><div><dt>{t("Execution driver")}</dt><dd>{(revision.executionDriver ?? "stdio") === "pty" ? t("Interactive PTY (pty)") : t("Standard pipe (stdio)")}</dd></div>{Object.entries(revision.env).map(([key, value]) => <div key={key}><dt className="break-all font-mono">{key}</dt><dd className="break-all">{value}</dd></div>)}{Object.keys(revision.secrets).map((key) => <div key={key}><dt className="break-all font-mono">{key}</dt><dd>{t("Configured (write-only)")}</dd></div>)}<div><dt>{t("Resume on model change")}</dt><dd>{revision.resumeOnModelChange ? t("Enabled") : t("Disabled")}</dd></div></dl></details></td>
-                <td className="min-w-28 p-3"><span className={`inline-flex rounded-md border px-2 py-0.5 text-xs ${currentRevision ? "border-emerald-500/20 bg-emerald-500/10 text-emerald-600" : "bg-muted/40 text-muted-foreground"}`}>{currentRevision ? t("Active") : t(revision.validationState)}</span>{isActive && !currentRevision ? <p className="mt-2 text-xs text-muted-foreground">{t("Earlier revision active")}</p> : null}<div aria-live="polite" aria-atomic="true" className="mt-2 max-w-64 text-xs">{testing ? <p role="status" className="text-muted-foreground">{t("Testing connection… This may take up to 60 seconds.")}</p> : testResult ? <div role={testResult.success ? "status" : "alert"} className={testResult.success ? "text-emerald-600" : "text-destructive"}><p className="font-medium">{testResult.success ? t("Connection succeeded") : t("Connection failed")}</p>{!testResult.success ? <p className="mt-1 max-h-48 overflow-y-auto whitespace-pre-wrap break-words [overflow-wrap:anywhere]">{t(testResult.message || "The test did not return the expected reply.")}</p> : null}</div> : null}</div></td>
-                <td className="p-3"><div className="flex flex-nowrap items-center justify-end gap-1 whitespace-nowrap"><Button disabled={!!busy || !onCreateRevision} onClick={() => edit(profile)} size="sm" variant="outline"><PencilIcon />{t("Edit")}</Button><Button aria-label={`${t("Test connection")}: ${profile.name}`} title={t("Test connection")} disabled={!!busy} onClick={() => void testConnection(profile)} size="sm" variant="outline">{testing ? <Loader2Icon className="animate-spin" /> : <FlaskConicalIcon />}{testing ? t("Testing…") : t("Test")}</Button><Button title={currentRevision ? t("Already active") : validated ? t("Activate this revision") : t("Test the connection before activation")} disabled={currentRevision || !validated || !!busy} onClick={() => void run(`activate-${profile.id}`, () => onActivate(revision.id))} size="sm" variant="outline"><CheckCircle2Icon />{t("Activate")}</Button><Button aria-label={`${t("Delete")} ${profile.name}`} title={isActive ? t("Active profiles cannot be deleted") : t("Delete profile")} disabled={isActive || !!busy} onClick={() => void run(`delete-${profile.id}`, () => onDelete(profile.id))} size="icon" variant="ghost" className="text-muted-foreground hover:text-destructive"><Trash2Icon /></Button></div></td>
-              </tr>;
-            })}
-          </tbody></table></div>}
-        </section>
-      </div>
-      <Sheet open={open} onOpenChange={(value) => { if (!saving) setOpen(value); }}>
-        <SheetContent side="right" className="w-full overflow-y-auto sm:max-w-xl" showCloseButton={!saving}>
-          <SheetHeader className="border-b px-6 py-5"><SheetTitle>{editing ? `${t("Edit")} ${editing.name}` : t("New Profile")}</SheetTitle><SheetDescription>{editing ? t("Save your changes as a new revision, then test and activate it.") : t("Configure an agent and test its connection before activation.")}</SheetDescription></SheetHeader>
-          {open ? <ProfileEditor key={`${editing?.id ?? "new"}/${fromProvider}`} fromProvider={fromProvider} {...(agentId ? {agentId} : {})} editing={editing} types={types} onCreate={onCreate} onCreateRevision={onCreateRevision} onCancel={() => setOpen(false)} onSavingChange={setSaving} /> : null}
-        </SheetContent>
-      </Sheet>
-    </div>
-  );
+  return <div className="mx-auto w-full max-w-7xl space-y-5 px-4 py-6 md:px-7"><header className="flex flex-wrap items-end justify-between gap-3"><div><p className="mb-1 text-[11px] text-muted-foreground">运行环境 / 模型</p><h1 className="text-2xl font-semibold tracking-tight">{t("Model Configuration")}</h1><p className="mt-1 text-xs text-muted-foreground">选择模型、验证连接，为 Agent 设置默认配置。</p></div><div className="flex items-center gap-3"><button type="button" disabled={loading || !types.length} className="text-xs text-muted-foreground disabled:opacity-40" onClick={() => edit(null)}>手动配置 API</button><Button size="sm" disabled={loading || !types.length} onClick={() => edit(null, !!agentId)}><Plus className="size-3.5" />添加模型</Button></div></header>
+    <div className="rounded-2xl border bg-[#f7f9f3] p-5 dark:bg-card"><div className="flex flex-wrap items-center gap-4"><ModelMark /><div className="min-w-0 flex-1"><span className="text-[10px] font-medium text-muted-foreground">当前默认模型</span><h2 className="mt-1 truncate text-lg font-semibold">{activeLabel}</h2><p className="mt-1 text-xs text-muted-foreground">{active ? `${t("Current Agent:")} ${active.name} · ${active.agentType === "codex" ? "Codex" : "Claude Code"}` : "添加配置并验证连接后，即可设为默认。"}</p></div><Button size="sm" variant="outline" onClick={() => { setSection("saved"); setSelected("all"); }}><ArrowRight className="size-3.5" />切换模型</Button></div>{active && <div className="mt-4 flex flex-wrap gap-4 border-t pt-3 text-[11px] text-muted-foreground"><span className="flex items-center gap-2"><Server className="size-3.5" />{currentActive ? activeProfile?.latestRevision.modelProvider?.workerId ?? "按执行环境调用" : t("Earlier revision active")}</span><span>{active.executionDriver === "pty" ? "交互终端 · PTY" : "标准管道 · stdio"}</span><span className="ml-auto">新任务使用此配置</span></div>}</div>
+    {!loading && status.status === "setup_required" && <div className="rounded-xl border border-amber-500/20 bg-amber-500/5 p-4 text-xs"><h2 className="font-medium">{t("Agent setup required")}</h2><p className="mt-1 text-muted-foreground">{t("Create a profile, test its connection, then activate it to start running work.")}</p></div>}
+    {(error || actionError) && <p role="alert" className="rounded-xl border border-destructive/20 bg-destructive/5 p-3 text-xs text-destructive">{actionError || String(error)}</p>}
+    <div className="grid items-start gap-5 xl:grid-cols-[minmax(0,1fr)_272px]"><section className="min-w-0 rounded-2xl border p-5"><nav className="flex gap-5 border-b" aria-label="模型配置分区"><button type="button" aria-pressed={section === "saved"} onClick={() => setSection("saved")} className={`border-b-2 pb-3 text-xs ${section === "saved" ? "border-[#748960] font-medium" : "border-transparent text-muted-foreground"}`}>已配置模型 <span className="ml-1 text-[10px]">{profiles.length}</span></button>{agentId && <button type="button" aria-pressed={section === "directory"} onClick={() => setSection("directory")} className={`border-b-2 pb-3 text-xs ${section === "directory" ? "border-[#748960] font-medium" : "border-transparent text-muted-foreground"}`}>Provider 目录</button>}</nav>
+    {section === "directory" ? <ProviderDirectory sources={sources} onAdd={(source, model) => edit(null, true, { ...source.target, model: model.id })} /> : <><div className="my-4 flex flex-wrap items-center justify-between gap-3"><nav aria-label="执行客户端" className="flex flex-wrap gap-1">{[{ type: "all" as const, label: "全部模型" }, ...types].map(type => <button type="button" key={type.type} aria-pressed={selected === type.type} onClick={() => setSelected(type.type)} className={`flex items-center gap-2 rounded-lg px-3 py-2 text-xs ${selected === type.type ? "bg-[#e9eee1] font-medium text-[#566847] dark:bg-accent dark:text-foreground" : "text-muted-foreground"}`}><Terminal className="size-3.5" />{type.label}<span className="text-[10px] opacity-60">{profiles.filter(p => type.type === "all" || p.agentType === type.type).length}</span></button>)}</nav><div className="relative w-full sm:w-56"><Search className="absolute left-3 top-2.5 size-4 text-muted-foreground" /><Input aria-label={t("Search profiles")} className="h-9 bg-muted/20 pl-9 text-xs" placeholder="搜索模型、配置或地址…" value={query} onChange={e => setQuery(e.target.value)} /></div></div>
+    {loading ? <p className="py-8 text-center text-xs text-muted-foreground">{t("Loading profiles…")}</p> : !visible.length ? <div className="py-10 text-center text-xs text-muted-foreground">{query ? t("No matching profiles") : selected === "claude" ? "还没有 Claude Code 配置，可通过手动 API 添加。" : "先从已登录 Provider 添加模型，或手动配置 API。"}</div> : <div className="divide-y divide-border/70">{visible.map(profile => {
+      const revision = profile.latestRevision; const isActive = active?.profileId === profile.id; const current = active?.revisionId === revision.id; const valid = revision.validationState === "validated"; const testing = busy === `test-${profile.id}`;
+      const savedMessage = revision.validationResult && typeof revision.validationResult === "object" && "message" in revision.validationResult && typeof revision.validationResult.message === "string" ? revision.validationResult.message : "";
+      const result = testResults[revision.id] ?? (revision.validatedAt !== null ? { success: valid, message: savedMessage } : undefined);
+      return <article key={profile.id} className="py-4"><div className="flex flex-wrap items-center gap-3"><ModelMark /><div className="min-w-0 flex-1"><p className="truncate text-xs font-semibold">{profileName(profile, sources)}</p><p className="mt-1 truncate text-[10px] text-muted-foreground" title={profile.name}>{profile.name} · v{revision.revisionNumber}{revision.executionDriver === "pty" ? " · PTY" : ""}</p></div><ModelStatus good={current || valid}>{current ? "当前使用" : valid ? "已验证" : revision.validationState === "invalid" || revision.validationState === "failed" ? "验证失败" : "待验证"}</ModelStatus><div className="flex shrink-0 items-center gap-1"><Button size="icon-xs" variant="ghost" aria-label={`${t("Edit")} ${profile.name}`} disabled={!!busy || !onCreateRevision} onClick={() => edit(profile)}><Pencil className="size-3.5" /></Button><Button size="xs" variant="ghost" aria-label={`${t("Test connection")}: ${profile.name}`} disabled={!!busy} onClick={() => void testConnection(profile)}>{testing ? <Loader2 className="size-3 animate-spin" /> : <FlaskConical className="size-3" />}{testing ? "测试中…" : "测试"}</Button><Button size="xs" variant={current ? "secondary" : "outline"} title={current ? t("Already active") : valid ? t("Activate this revision") : t("Test the connection before activation")} disabled={current || !valid || !!busy} onClick={() => void run(`activate-${profile.id}`, () => onActivate(revision.id))}>{current && <Check className="size-3" />}{current ? "使用中" : "使用"}</Button></div></div>
+        {isActive && !current && <p className="mt-2 text-[11px] text-muted-foreground">{t("Earlier revision active")}</p>}
+        <div aria-live="polite" className="mt-2 text-xs">{testing ? <p role="status" className="text-muted-foreground">正在测试连接…</p> : result && !result.success ? <div role="alert" className="rounded-lg bg-destructive/5 p-3 text-destructive"><p className="font-medium">{t("Connection failed")}</p><p className="mt-1 max-h-40 overflow-y-auto whitespace-pre-wrap break-words">{t(result.message || "The test did not return the expected reply.")}</p></div> : result?.success ? <span className="sr-only">{t("Connection succeeded")}</span> : null}</div>
+        <details className="mt-2 text-[11px] text-muted-foreground"><summary className="cursor-pointer">{t("Connection details")}</summary><dl className="mt-3 space-y-2 rounded-lg bg-muted/20 p-3"><div><dt>{t("Execution driver")}</dt><dd>{revision.executionDriver === "pty" ? t("Interactive PTY (pty)") : t("Standard pipe (stdio)")}</dd></div>{revision.modelProvider && <div><dt>Provider / Worker</dt><dd className="break-all">{revision.modelProvider.providerId} · {revision.modelProvider.workerId}</dd></div>}{Object.entries(revision.env).map(([key, value]) => <div key={key}><dt className="break-all font-mono">{key}</dt><dd className="break-all">{value}</dd></div>)}{Object.keys(revision.secrets).map(key => <div key={key}><dt className="font-mono">{key}</dt><dd>{t("Configured (write-only)")}</dd></div>)}<div><dt>{t("Resume on model change")}</dt><dd>{revision.resumeOnModelChange ? t("Enabled") : t("Disabled")}</dd></div><Button size="xs" variant="ghost" className="text-muted-foreground hover:text-destructive" disabled={isActive || !!busy} aria-label={`${t("Delete")} ${profile.name}`} title={isActive ? t("Active profiles cannot be deleted") : t("Delete profile")} onClick={() => void run(`delete-${profile.id}`, () => onDelete(profile.id))}><Trash2 className="size-3" />删除配置</Button></dl></details>
+      </article>;
+    })}</div>}</>}
+    </section><aside className="space-y-4">{agentId && <ModelAccountSidebar agentId={agentId} sources={sources} onAdd={source => edit(null, true, source.target)} />}<div className="rounded-xl border p-4"><h3 className="mb-2 flex items-center gap-2 text-xs font-medium"><FlaskConical className="size-3.5 text-muted-foreground" />先验证，再使用</h3><p className="text-xs leading-5 text-muted-foreground">新配置和编辑后的配置都需要测试连接。验证通过后才能设为默认。</p></div></aside></div>
+    <Sheet open={open} onOpenChange={value => { if (!saving) setOpen(value); }}><SheetContent side="right" className="w-full gap-0 overflow-hidden sm:max-w-[860px]" showCloseButton={!saving}>{open && <ProfileEditor key={`${editing?.id ?? "new"}/${fromProvider}/${hint?.pluginId ?? ""}/${hint?.model ?? ""}`} {...{ fromProvider, agentId, editing, types, onCreate, onCreateRevision }} hint={hint} onCancel={() => setOpen(false)} onSavingChange={setSaving} />}</SheetContent></Sheet>
+  </div>;
 }
 
-function ProfileEditor({
-  fromProvider,
-  agentId,
-  editing,
-  types,
-  onCreate,
-  onCreateRevision,
-  onCancel,
-  onSavingChange,
-}: {
-  readonly fromProvider:boolean;
-  readonly agentId?:string;
-  readonly editing: DashboardAgentProfile | null;
-  readonly types: readonly DashboardAgentTypeDescriptor[];
-  readonly onCreate: (input: CreateAgentProfileInput) => Promise<unknown>;
-  readonly onCreateRevision?: (
-    profileId: string,
-    input: Omit<CreateAgentProfileInput, "name" | "agentType">,
-  ) => Promise<unknown>;
-  readonly onCancel: () => void;
-  readonly onSavingChange: (value: boolean) => void;
-}) {
-  const { t } = useTranslation();
-  const defaultType = editing?.agentType ?? (fromProvider?"codex":types[0]?.type ?? "claude");
-  const [agentType, setAgentType] = useState<DashboardAgentType>(defaultType);
-  const [name, setName] = useState(editing?.name ?? "");
-  const [model, setModel] = useState(editing?.latestRevision.model ?? "");
-  const [executionDriver, setExecutionDriver] = useState<DashboardExecutionDriver>(editing?.latestRevision.executionDriver ?? "stdio");
-  const [resume, setResume] = useState(editing?.latestRevision.resumeOnModelChange ?? true);
-  const { CODEX_PROVIDER_MODE: initialConnection, ...initialEnv } = editing?.latestRevision.env ?? {};
-  const [gateway, setGateway] = useState(initialConnection === "gateway");
-  const [workerMode,setWorkerMode]=useState(fromProvider||!!editing?.latestRevision.modelProvider);
-  const [source,setSource]=useState<DashboardModelProviderReference|null>(editing?.latestRevision.modelProvider??null);
-  const [envText, setEnvText] = useState(formatPairs(initialEnv));
-  const [replacements, setReplacements] = useState<Record<string, string>>({});
-  const [newSecrets, setNewSecrets] = useState<Array<{ id: number; key: string; value: string }>>([]);
-  const nextSecretId = useRef(0);
-  const configuredKeys = Object.keys(editing?.latestRevision.secrets ?? {});
-  const [saving, setSaving] = useState(false);
-  const [saveError, setSaveError] = useState<string | null>(null);
-  const descriptor = useMemo(
-    () => types.find((item) => item.type === agentType),
-    [agentType, types],
-  );
-
-  async function submit(event: FormEvent) {
-    event.preventDefault();
-    setSaving(true);
-    onSavingChange(true);
-    setSaveError(null);
-    try {
-      const env = parsePairs(envText);
-      if(workerMode && (agentType!=="codex" || !source || !model))throw new Error("请选择 Worker 账号和插件模型。");
-      if (agentType === "codex") {
-        if (gateway && !workerMode) env.CODEX_PROVIDER_MODE = "gateway";
-        else delete env.CODEX_PROVIDER_MODE;
-      }
-      if(workerMode)delete env.OPENAI_BASE_URL;
-      const secretValues: Record<string, string> = { ...replacements };
-      for (const secret of newSecrets) {
-        const key = secret.key.trim();
-        if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) throw new Error("Each new secret needs a valid environment variable name.");
-        if (configuredKeys.includes(key) || Object.hasOwn(secretValues, key)) throw new Error(`Secret ${key} already exists. Use Replace to update it.`);
-        secretValues[key] = secret.value;
-      }
-      if (Object.values(secretValues).some((value) => value.trim().length === 0)) throw new Error("Enter a value for each new or replacement secret, or cancel that change.");
-      const common = {
-        modelProvider:workerMode?source:null,
-        model,
-        executionDriver,
-        resumeOnModelChange: resume,
-        env,
-        secrets: Object.fromEntries(
-          [...Object.entries(secretValues).filter(([key])=>!workerMode||key!=="OPENAI_API_KEY").map(([key, value]) => [key, { set: value }]),...(workerMode&&configuredKeys.includes("OPENAI_API_KEY")?[["OPENAI_API_KEY",{clear:true as const}]]:[])],
-        ),
-        customSensitiveKeys: Object.keys(secretValues).filter(
-          (key) => !descriptor?.envFields.some((field) => field.key === key),
-        ),
-        customNonSensitiveKeys: Object.keys(env).filter(
-          (key) => !descriptor?.envFields.some((field) => field.key === key),
-        ),
-      };
-      if (editing !== null && onCreateRevision !== undefined) {
-        await onCreateRevision(editing.id, common);
-        onCancel();
-      } else {
-        await onCreate({ name, agentType, ...common });
-        setName("");
-        setModel("");
-        setEnvText("");
-        setReplacements({});
-        setNewSecrets([]);
-        setGateway(false);
-        onCancel();
-      }
-    } catch (cause) {
-      setSaveError(String(cause));
-    } finally {
-      setSaving(false);
-      onSavingChange(false);
-    }
+function ProfileEditor({ fromProvider, agentId, editing, types, hint, onCreate, onCreateRevision, onCancel, onSavingChange }: { fromProvider: boolean; agentId?: string; editing: DashboardAgentProfile | null; types: readonly DashboardAgentTypeDescriptor[]; hint?: ModelSelectionHint; onCreate(input: CreateAgentProfileInput): Promise<unknown>; onCreateRevision?(id: string, input: Omit<CreateAgentProfileInput, "name" | "agentType">): Promise<unknown>; onCancel(): void; onSavingChange(value: boolean): void }) {
+  const { t } = useTranslation(); const form = useRef<HTMLFormElement>(null); const autoName = useRef(""); const defaultType = editing?.agentType ?? (fromProvider ? "codex" : types[0]?.type ?? "claude");
+  const [agentType, setType] = useState<DashboardAgentType>(defaultType); const [name, setName] = useState(editing?.name ?? ""); const [model, setModel] = useState(editing?.latestRevision.model ?? hint?.model ?? ""); const [modelLabel, setModelLabel] = useState(model);
+  const [driver, setDriver] = useState<DashboardExecutionDriver>(editing?.latestRevision.executionDriver ?? "stdio"); const [resume, setResume] = useState(editing?.latestRevision.resumeOnModelChange ?? true);
+  const { CODEX_PROVIDER_MODE: initialMode, ...initialEnv } = editing?.latestRevision.env ?? {}; const [gateway, setGateway] = useState(initialMode === "gateway" || (!editing && !fromProvider && defaultType === "codex"));
+  const [workerMode, setWorkerMode] = useState(fromProvider || !!editing?.latestRevision.modelProvider); const [source, setSource] = useState<DashboardModelProviderReference | null>(editing?.latestRevision.modelProvider ?? null); const [step, setStep] = useState(editing && !workerMode ? 2 : 1);
+  const [envText, setEnvText] = useState(formatPairs(initialEnv)); const [replacements, setReplacements] = useState<Record<string, string>>({}); const [newSecrets, setNewSecrets] = useState<{ id: number; key: string; value: string }[]>([]); const nextSecretId = useRef(0);
+  const configuredKeys = Object.keys(editing?.latestRevision.secrets ?? {}); const descriptor = useMemo(() => types.find(item => item.type === agentType), [types, agentType]); const [saving, setSaving] = useState(false); const [error, setError] = useState("");
+  const apiKey = agentType === "codex" ? "OPENAI_API_KEY" : "ANTHROPIC_API_KEY"; const baseKey = agentType === "codex" ? "OPENAI_BASE_URL" : "ANTHROPIC_BASE_URL"; const configured = configuredKeys.includes(apiKey); const replacing = Object.hasOwn(replacements, apiKey); const newBasic = newSecrets.find(row => row.id === -1);
+  const canContinue = workerMode ? !!source && !!model : !!model.trim();
+  function selectModel(reference: DashboardModelProviderReference | null, nextModel: string, label?: string) { setSource(reference); setModel(nextModel); setModelLabel(label ?? nextModel); if (!editing && (!name || name === autoName.current)) { const next = label ?? nextModel; autoName.current = next; setName(next); } }
+  function next() { if (!canContinue || !form.current?.reportValidity()) return; if (!name && !editing) setName(modelLabel || model); setStep(2); setError(""); }
+  async function submit(event: FormEvent) { event.preventDefault(); if (saving) return; if (step === 1) { next(); return; } setSaving(true); onSavingChange(true); setError("");
+    try { const revision = buildProfileRevision({ agentType, model, executionDriver: driver, resume, gateway, workerMode, source, envText, replacements, newSecrets, configuredKeys, descriptor }); if (editing && onCreateRevision) await onCreateRevision(editing.id, revision); else await onCreate({ name, agentType, ...revision }); onCancel(); }
+    catch (cause) { setError(cause instanceof Error ? cause.message : "保存失败，请重试。"); } finally { setSaving(false); onSavingChange(false); }
   }
-
-  return (
-    <form className="space-y-5 px-6 pb-6" onSubmit={submit}>
-      {saveError ? <p role="alert" className="text-sm text-destructive">{saveError}</p> : null}
-      <div className="grid gap-4 sm:grid-cols-2">
-        <label className="space-y-1 text-sm"><span className="block">{t("Agent type")}</span>
-          <SelectField
-            aria-label={t("Agent type")}
-            disabled={editing !== null}
-            fullWidth
-            value={agentType}
-            onValueChange={(next) => setAgentType(next as DashboardAgentType)}
-            options={types.map((type) => ({ value: type.type, label: t(type.label) }))}
-          />
-        </label>
-        <label className="space-y-1 text-sm"><span className="block">{t("Profile name")}</span><Input disabled={editing !== null} onChange={(e) => setName(e.target.value)} required value={name} />
-        </label>
-        <label className="space-y-1 text-sm"><span className="block">{t("Model")}</span><Input readOnly={workerMode} onChange={(e) => setModel(e.target.value)} required value={model} />
-        </label>
-        <label className="space-y-1 text-sm"><span className="block">{t("Execution driver")}</span>
-          <SelectField
-            aria-label={t("Execution driver")}
-            fullWidth
-            value={executionDriver}
-            onValueChange={(next) => setExecutionDriver(next as DashboardExecutionDriver)}
-            options={[
-              { value: "stdio", label: t("Standard pipe (stdio)") },
-              { value: "pty", label: t("Interactive PTY (pty)") },
-            ]}
-          />
-        </label>
-      </div>
-      {agentType === "codex" ? (
-        <label className="block space-y-1 text-sm"><span className="block">{t("Connection")}</span>
-          <SelectField
-            aria-label={t("Connection")}
-            fullWidth
-            value={workerMode ? "worker" : gateway ? "gateway" : "default"}
-            onValueChange={(next) => {setGateway(next === "gateway");setWorkerMode(next==="worker");}}
-            options={[
-              { value: "default", label: t("Default OpenAI") },
-              { value: "gateway", label: t("Custom gateway") },
-              ...(agentId?[{value:"worker",label:"已登录 Provider"}]:[]),
-            ]}
-          />
-          {gateway ? <span className="block text-xs text-muted-foreground">{t("Set OPENAI_BASE_URL in Environment variables and OPENAI_API_KEY in Secrets.")}</span> : null}
-        </label>
-      ) : null}
-      {workerMode && agentType==="codex" && agentId ? <WorkerModels key={agentId} agentId={agentId} {...(source?{selected:source}:{})} model={model} onSelect={(reference,nextModel)=>{setSource(reference);setModel(nextModel);if(!name&&reference&&nextModel)setName(`${reference.providerId} / ${nextModel}`);}}/>:null}
-      <label className="flex items-center gap-2 text-sm">
-        <input checked={resume} onChange={(e) => setResume(e.target.checked)} type="checkbox" />{t("Resume after model-only changes")}</label>
-      {!workerMode?<><div className="grid gap-4 sm:grid-cols-1">
-        <label className="space-y-1 text-sm">{t("Environment variables")}<textarea className="block min-h-24 w-full rounded-md border bg-background p-3 font-mono text-xs" onChange={(e) => setEnvText(e.target.value)} placeholder={agentType === "claude" ? "ANTHROPIC_BASE_URL=https://…" : "OPENAI_BASE_URL=https://…"} value={envText} />
-        </label>
-        <details open className="group rounded-xl border">
-          <summary className="cursor-pointer border-b px-4 py-3 text-sm font-medium">{t("Secrets")}<span className="ml-2 text-xs font-normal text-muted-foreground">{configuredKeys.length + newSecrets.length}</span></summary>
-          <section aria-label={t("Secrets")} className="space-y-3 p-4">
-            <p className="text-xs text-muted-foreground">{t("Configured values are hidden. Unchanged secrets are kept.")}</p>
-            {configuredKeys.map((key) => {
-              const replacing = Object.hasOwn(replacements, key);
-              return <div key={key} className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-2 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto]">
-                <Input aria-label={`${t("Secret key")} ${key}`} className="col-span-2 font-mono text-xs sm:col-span-1" readOnly value={key} title={key} />
-                <Input aria-label={replacing ? `${t("New value for")} ${key}` : `${t("Configured value for")} ${key}`} type="password" autoComplete="new-password" spellCheck={false} disabled={saving} readOnly={!replacing} required={replacing} placeholder={t("New value")} value={replacing ? replacements[key] : "••••••••"} onChange={(e) => setReplacements((previous) => ({ ...previous, [key]: e.target.value }))} />
-                <Button type="button" size="sm" variant="ghost" disabled={saving} aria-label={`${replacing ? t("Cancel replacement for") : t("Replace")} ${key}`} onClick={() => setReplacements((previous) => {
-                  const next = { ...previous };
-                  if (replacing) delete next[key]; else next[key] = "";
-                  return next;
-                })}>{replacing ? t("Cancel") : t("Replace")}</Button>
-              </div>;
-            })}
-            {newSecrets.map((secret) => <div key={secret.id} className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-2 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto]">
-              <Input aria-label={t("New secret key")} autoComplete="off" spellCheck={false} className="col-span-2 font-mono text-xs sm:col-span-1" disabled={saving} required placeholder={agentType === "claude" ? "ANTHROPIC_API_KEY" : "OPENAI_API_KEY"} value={secret.key} onChange={(e) => setNewSecrets((rows) => rows.map((row) => row.id === secret.id ? { ...row, key: e.target.value } : row))} />
-              <Input aria-label={t("New secret value")} type="password" autoComplete="new-password" spellCheck={false} disabled={saving} required placeholder={t("Value")} value={secret.value} onChange={(e) => setNewSecrets((rows) => rows.map((row) => row.id === secret.id ? { ...row, value: e.target.value } : row))} />
-              <Button type="button" size="icon" variant="ghost" className="text-destructive/60 hover:text-destructive" disabled={saving} aria-label={t("Remove new secret")} onClick={() => setNewSecrets((rows) => rows.filter((row) => row.id !== secret.id))}><XIcon /></Button>
-            </div>)}
-            <Button type="button" size="sm" variant="outline" className="border-dashed" disabled={saving} onClick={() => setNewSecrets((rows) => [...rows, { id: nextSecretId.current++, key: "", value: "" }])}><PlusIcon />{t("Add secret")}</Button>
-          </section>
-        </details>
-      </div>
-      <p className="text-xs text-muted-foreground">{t("Allowed custom prefixes:")}{" "}{descriptor?.allowedCustomPrefixes.join(", ") || "none"}{t(". Existing secrets remain unchanged when omitted.")}</p></>:<p className="text-xs text-muted-foreground">API 地址、凭据和 Worker 绑定从 Provider 自动继承。</p>}
-      <div className="sticky bottom-0 flex justify-end gap-2 border-t bg-background py-4">
-        <Button disabled={saving} type="submit">{saving ? t("Saving…") : editing ? t("Save changes") : t("Create Profile")}</Button>
-        <Button disabled={saving} onClick={onCancel} type="button" variant="outline">{t("Cancel")}</Button>
-      </div>
-    </form>
-  );
-}
-
-function parsePairs(text: string): Record<string, string> {
-  return Object.fromEntries(text.split("\n").map((line) => line.trim()).filter(Boolean).map((line) => {
-    const separator = line.indexOf("=");
-    if (separator < 1) throw new Error("Enter one KEY=value pair per line.");
-    return [line.slice(0, separator).trim(), line.slice(separator + 1)];
-  }));
-}
-
-function formatPairs(values: Record<string, string>): string {
-  return Object.entries(values).map(([key, value]) => `${key}=${value}`).join("\n");
+  function basicKey(value: string) { if (configured) setReplacements(previous => ({ ...previous, [apiKey]: value })); else setNewSecrets(previous => [...previous.filter(row => row.id !== -1), ...(value ? [{ id: -1, key: apiKey, value }] : [])]); }
+  return <form ref={form} className="flex min-h-0 flex-1 flex-col" onSubmit={submit}><SheetHeader className="border-b px-6 py-5 pr-12"><div className="mb-3 flex items-center gap-2 text-[10px] text-muted-foreground"><span className={`rounded-full px-2 py-1 ${step === 1 ? "bg-[#e9eee1] text-[#566847] dark:bg-accent" : "bg-muted"}`}>1 · {workerMode ? "选择模型" : "连接信息"}</span><ArrowRight className="size-3" /><span className={`rounded-full px-2 py-1 ${step === 2 ? "bg-[#e9eee1] text-[#566847] dark:bg-accent" : "bg-muted"}`}>2 · 确认配置</span></div><SheetTitle className="text-xl">{editing ? "编辑模型配置" : workerMode ? "从 Provider 添加模型" : "手动配置 API"}</SheetTitle><SheetDescription className="text-xs">{workerMode ? "选择已登录账号的模型，连接信息自动绑定。" : "填写模型与 API 信息，再确认执行配置。"}</SheetDescription></SheetHeader><div className="min-h-0 flex-1 space-y-5 overflow-y-auto px-6 py-5">{error && <p role="alert" className="rounded-xl bg-destructive/5 p-3 text-xs text-destructive">{error}</p>}
+    {step === 1 ? workerMode && agentId && agentType === "codex" ? <ModelSourcePicker agentId={agentId} selected={source ?? undefined} initial={hint} model={model} disabled={saving} onSelect={selectModel} /> : <><div className="grid gap-4 sm:grid-cols-2"><label className="space-y-2 text-xs"><span className="block text-muted-foreground">客户端</span><SelectField aria-label={t("Agent type")} fullWidth value={agentType} disabled={!!editing} onValueChange={value => { setType(value as DashboardAgentType); if (!editing && value === "codex") setGateway(true); }} options={types.map(type => ({ value: type.type, label: type.label }))} /></label><label className="space-y-2 text-xs"><span className="block text-muted-foreground">模型 ID</span><Input aria-label="模型 ID" required value={model} onChange={e => { setModel(e.target.value); setModelLabel(e.target.value); }} /></label></div>{agentType === "codex" && <label className="block space-y-2 text-xs"><span className="text-muted-foreground">连接方式</span><SelectField aria-label={t("Connection")} fullWidth value={gateway ? "gateway" : "default"} onValueChange={value => { if (value === "worker") { setWorkerMode(true); setSource(null); setModel(""); } else setGateway(value === "gateway"); }} options={[{ value: "default", label: t("Default OpenAI") }, { value: "gateway", label: t("Custom gateway") }, ...(agentId ? [{ value: "worker", label: "已登录 Provider" }] : [])]} /></label>}<label className="block space-y-2 text-xs"><span className="text-muted-foreground">API 地址</span><Input aria-label="API 地址" type="url" required={agentType === "codex" && gateway} value={envValue(envText, baseKey)} onChange={e => setEnvText(previous => setEnvValue(previous, baseKey, e.target.value))} placeholder="https://…" /></label><div className="space-y-2 text-xs"><span className="block text-muted-foreground">API Key</span><div className="flex gap-2"><Input aria-label="API Key" type="password" autoComplete="new-password" readOnly={configured && !replacing} required={replacing || (!configured && !!descriptor?.envFields.find(field => field.key === apiKey)?.required)} value={configured ? replacing ? replacements[apiKey] : "••••••••" : newBasic?.value ?? ""} onChange={e => basicKey(e.target.value)} placeholder={configured ? "保留已有凭据，或替换新值" : "填写调用凭据"} />{configured && <Button type="button" variant="outline" size="sm" onClick={() => setReplacements(previous => { const next = { ...previous }; if (replacing) delete next[apiKey]; else next[apiKey] = ""; return next; })}>{replacing ? "取消替换" : "替换"}</Button>}</div><p className="text-[11px] text-muted-foreground">已有凭据保持隐藏，未替换的值会继续保留。</p></div></> : <><div className="flex items-center gap-4 rounded-2xl border bg-[#f7f9f3] p-4 dark:bg-muted"><ModelMark /><div className="min-w-0 flex-1"><h3 className="truncate text-base font-semibold">{modelLabel || model}</h3><code className="mt-1 block truncate text-[10px] text-muted-foreground">{model}</code><p className="mt-2 text-[11px] text-muted-foreground">{workerMode ? `${source?.providerId} · ${source?.workerId}` : `${agentType === "codex" ? "Codex" : "Claude Code"} · ${envValue(envText, baseKey) || "默认 API"}`}</p></div><CheckCircle2 className="size-4 text-[#718466]" /></div><label className="block space-y-2 text-xs"><span className="font-medium">配置名称</span><Input aria-label={t("Profile name")} required readOnly={!!editing} value={name} onChange={e => setName(e.target.value)} /></label><div className="grid gap-5 sm:grid-cols-2"><div className="space-y-2 text-xs"><span className="font-medium">客户端</span><div className="rounded-lg border bg-muted/20 p-3">{agentType === "codex" ? "Codex" : "Claude Code"}</div></div><div className="space-y-2 text-xs"><span className="font-medium">连接方式</span><div className="rounded-lg border bg-muted/20 p-3">{workerMode ? "Provider 自动绑定" : gateway ? "自定义 API" : "默认 API"}</div></div></div>{workerMode && <p className="flex items-start gap-2 rounded-xl border p-4 text-xs leading-5 text-muted-foreground"><ShieldCheck className="mt-0.5 size-4 shrink-0 text-[#718466]" />账号、Worker 与调用凭据由 Luna 自动提供。当前 Provider 模型使用 Codex / OpenAI Responses。</p>}<details className="rounded-xl border px-4 py-3"><summary className="flex cursor-pointer list-none items-center gap-2 text-xs font-medium"><Settings2 className="size-3.5 text-muted-foreground" />高级配置<ChevronDown className="ml-auto size-3" /></summary><div className="mt-4 space-y-4"><label className="block space-y-2 text-xs"><span className="text-muted-foreground">执行方式</span><SelectField aria-label={t("Execution driver")} fullWidth value={driver} onValueChange={value => setDriver(value as DashboardExecutionDriver)} options={[{ value: "stdio", label: t("Standard pipe (stdio)") }, { value: "pty", label: t("Interactive PTY (pty)") }]} /></label><label className="flex items-center justify-between text-xs">仅切换模型时继续原会话<Switch aria-label={t("Resume after model-only changes")} checked={resume} onCheckedChange={setResume} /></label>{!workerMode && <><label className="block space-y-2 text-xs"><span>{t("Environment variables")}</span><textarea aria-label={t("Environment variables")} className="min-h-24 w-full rounded-lg border bg-background p-3 font-mono text-xs" value={envText} onChange={e => setEnvText(e.target.value)} /></label><section aria-label={t("Secrets")} className="space-y-3"><h4 className="text-xs font-medium">额外密钥</h4>{configuredKeys.filter(key => key !== apiKey).map(key => { const replacing = Object.hasOwn(replacements, key); return <div key={key} className="grid gap-2 sm:grid-cols-[1fr_1fr_auto]"><Input className="font-mono text-xs" readOnly value={key} /><Input aria-label={`${t("New value for")} ${key}`} type="password" autoComplete="new-password" readOnly={!replacing} required={replacing} value={replacing ? replacements[key] : "••••••••"} onChange={e => setReplacements(previous => ({ ...previous, [key]: e.target.value }))} /><Button type="button" size="sm" variant="ghost" onClick={() => setReplacements(previous => { const next = { ...previous }; if (replacing) delete next[key]; else next[key] = ""; return next; })}>{replacing ? "取消" : "替换"}</Button></div>; })}{newSecrets.filter(row => row.id !== -1).map(secret => <div key={secret.id} className="grid gap-2 sm:grid-cols-[1fr_1fr_auto]"><Input aria-label={t("New secret key")} className="font-mono text-xs" required value={secret.key} onChange={e => setNewSecrets(previous => previous.map(row => row.id === secret.id ? { ...row, key: e.target.value } : row))} placeholder="环境变量名" /><Input aria-label={t("New secret value")} type="password" autoComplete="new-password" required value={secret.value} onChange={e => setNewSecrets(previous => previous.map(row => row.id === secret.id ? { ...row, value: e.target.value } : row))} /><Button type="button" size="icon-xs" variant="ghost" aria-label={t("Remove new secret")} onClick={() => setNewSecrets(previous => previous.filter(row => row.id !== secret.id))}><X className="size-3" /></Button></div>)}<Button type="button" size="xs" variant="outline" onClick={() => setNewSecrets(previous => [...previous, { id: nextSecretId.current++, key: "", value: "" }])}><Plus className="size-3" />添加密钥</Button><p className="text-[11px] text-muted-foreground">{t("Allowed custom prefixes:")} {descriptor?.allowedCustomPrefixes.join(", ")}</p></section></>}</div></details><p className="flex items-start gap-2 text-xs leading-5 text-muted-foreground"><FlaskConical className="mt-0.5 size-3.5 shrink-0" />保存后先测试连接，验证通过后才能设为默认。编辑现有配置会创建新版本。</p></>}
+    </div><footer className="flex shrink-0 items-center justify-between gap-3 border-t bg-background px-6 py-4"><span className="max-w-44 truncate text-[11px] text-muted-foreground">{step === 1 ? modelLabel || "选择模型继续" : editing ? "保存为新版本" : "新配置需要验证连接"}</span><div className="flex gap-2"><Button type="button" size="sm" variant="ghost" disabled={saving} onClick={step === 1 ? onCancel : () => setStep(1)}>{step === 1 ? "取消" : <><ArrowLeft className="size-3.5" />上一步</>}</Button>{step === 1 ? <Button key="next" type="button" size="sm" disabled={!canContinue || saving} onClick={event => { event.preventDefault(); next(); }}>下一步<ArrowRight className="size-3.5" /></Button> : <Button key="save" type="submit" size="sm" disabled={saving}>{saving ? t("Saving…") : "保存配置"}</Button>}</div></footer></form>;
 }

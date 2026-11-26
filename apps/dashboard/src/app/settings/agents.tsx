@@ -3,7 +3,7 @@ import { createFileRoute } from "@tanstack/react-router";
 import { useRouteAgent } from "@/lib/agent-route";
 import { useTranslation } from "@/lib/i18n";
 import { AgentConfigDashboardView } from "./agent-config-dashboard";
-import {WorkerModels} from "../plugins/worker-models";
+import { WorkerModels } from "../plugins/worker-models";
 import {
   useActivateAgentProfileRevision,
   useAgentConfigStatus,
@@ -47,8 +47,9 @@ function AgentProfiles({ agentId }: { agentId: string }) {
   const activate = useActivateAgentProfileRevision(agentId);
   const remove = useDeleteAgentProfile(agentId);
 
+
   return (
-    <div><section className="mx-auto max-w-7xl px-5 pt-7 sm:px-8"><h2 className="mb-3 text-xl font-semibold">模型账号登录与 API</h2><WorkerModels key={agentId} agentId={agentId} onUseModel={async(reference,model)=>{await create.mutateAsync({name:`${reference.providerId} / ${model} / ${new Date().toLocaleTimeString()}`,agentType:"codex",model,modelProvider:reference,resumeOnModelChange:true,env:{},secrets:{}});}}/></section><AgentConfigDashboardView
+    <div>{typeof window !== "undefined" && new URLSearchParams(window.location.search).has("modelLogin") ? <section className="mx-auto max-w-7xl px-4 pt-6 md:px-7"><h2 className="mb-3 text-sm font-semibold">完成账号绑定</h2><WorkerModels agentId={agentId} view="embedded" /></section> : null}<AgentConfigDashboardView
       key={agentId}
       agentId={agentId}
       error={status.error ?? types.error ?? profiles.error}

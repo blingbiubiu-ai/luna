@@ -24,7 +24,8 @@ describe("AgentConfigDashboardView", () => {
     expect(html).toContain("Claude");
     expect(html).toContain("Codex");
     expect(html).not.toContain("Codex (fixed args)");
-    expect(html).toContain("New Profile");
+    expect(html).toContain("添加模型");
+    expect(html).toContain("手动配置 API");
     expect(html).not.toContain("<textarea");
     expect(html).toContain("Search profiles");
   });
@@ -53,7 +54,7 @@ describe("AgentConfigDashboardView", () => {
       },
     };
     const html = renderToStaticMarkup(createElement(AgentConfigDashboardView, {
-      status: { status: "ready", active: { profileId: "profile-1", revisionId: "revision-0", name: "Primary Codex", agentType: "codex", model: "gpt-5", resumeOnModelChange: true } },
+      status: { status: "ready", active: { profileId: "profile-1", revisionId: "revision-0", name: "Primary Codex", agentType: "codex", model: "old-active-model", resumeOnModelChange: true } },
       types,
       profiles: [profile],
       onCreate: async () => undefined,
@@ -64,6 +65,7 @@ describe("AgentConfigDashboardView", () => {
     expect(html).toContain("Current Agent");
     expect(html).toContain("Primary Codex");
     expect(html).toContain("gpt-5");
+    expect(html).toContain("old-active-model</h2>");
     expect(html).toContain("Configured (write-only)");
     expect(html).toContain("Test connection");
     expect(html).toContain("Test the connection before activation");
