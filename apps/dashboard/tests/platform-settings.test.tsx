@@ -17,7 +17,7 @@ import { LocaleProvider } from "../src/lib/i18n";
 
 const noop = () => {};
 
-test("platform settings forms render all migrated runtime sections for admins and read-only viewers", () => {
+test("platform settings forms render all migrated sections and honor read-only state", () => {
   const generalHtml = renderToStaticMarkup(
     createElement(GeneralSettingsForm, {
       settings: {

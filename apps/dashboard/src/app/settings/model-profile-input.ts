@@ -1,4 +1,8 @@
 import type { CreateAgentProfileInput, DashboardAgentType, DashboardAgentTypeDescriptor, DashboardExecutionDriver, DashboardModelProviderReference } from "@/lib/api/hooks";
+/** New Dashboard configurations prefer TUI; editing keeps the saved driver. */
+export function initialProfileExecutionDriver(revision?: { executionDriver?: DashboardExecutionDriver } | null): DashboardExecutionDriver {
+  return revision ? revision.executionDriver ?? "stdio" : "pty";
+}
 export interface ProfileDraft {
   agentType: DashboardAgentType; model: string; executionDriver: DashboardExecutionDriver; resume: boolean; gateway: boolean; workerMode: boolean;
   source: DashboardModelProviderReference | null; envText: string; replacements: Record<string, string>; newSecrets: { key: string; value: string }[]; configuredKeys: string[]; descriptor?: DashboardAgentTypeDescriptor;

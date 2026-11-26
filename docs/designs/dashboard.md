@@ -48,6 +48,15 @@ version history are shown on the detail page. Mutations disable conflicting acti
 while in flight, display failures inline, and reload installation state after success.
 The service remains the source of truth for installation and restart semantics.
 
+Platform settings (`/platform/settings`) are administrator-only, like platform
+plugins and accounts. The account menu shows the settings entry only after
+`/api/auth/me` confirms platform administrator authority. Direct navigation
+checks that authority before mounting the settings workspace or querying its
+configuration. The full `/api/platform-settings` read and all writes require
+administrator authentication. Worker onboarding reads only the advertised
+Service origin from `/api/platform-settings/worker-connection`, which remains
+available to signed-in Dashboard accounts and exposes no other settings.
+
 Agent plugin details use an installed-plugin sidebar and capability-driven overview,
 model directory and configuration sections. Core renders these sections from the
 generic Provider catalog; plugins do not supply Dashboard components. Enablement
@@ -69,6 +78,12 @@ Deep links preselect only an owned, ready source and a model in its catalog.
 Manual edits preserve write-only secrets unless explicitly replaced; switching
 to a Worker Provider clears retained manual gateway URL/Key. Saving creates a
 revision; the real connection test must pass before that revision can activate.
+
+The confirmation step exposes terminal type directly: TUI maps to the existing
+`pty` execution driver, and stdio maps to `stdio`. New Dashboard configurations
+default to TUI. Editing preserves the revision's saved driver, and legacy
+revisions without a driver retain their stdio behavior. Existing configuration
+and activation records are not migrated by this UI default.
 
 ## Session View
 

@@ -29,7 +29,13 @@ export function PlatformShell({ pathname }: { readonly pathname: string }) {
   let page: ReactNode = <AgentsLanding />;
   if (path === "/platform/settings") {
     title = "设置";
-    page = <PlatformSettingsPage />;
+    page = me.isPending
+      ? <p role="status" className="p-6">正在加载…</p>
+      : me.isError
+        ? <p role="alert" className="p-6 text-sm text-muted-foreground">无法验证平台管理员权限，请刷新后重试。</p>
+        : !isAdmin
+          ? <p role="alert" className="p-6 text-sm text-muted-foreground">平台设置需要平台管理员权限。</p>
+          : <PlatformSettingsPage />;
   } else if (path === "/platform/accounts") {
     title = "账号管理";
     page = me.isPending

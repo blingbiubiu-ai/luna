@@ -60,8 +60,8 @@ export function BindWorkerDialog({ path, agentName, disabled }: {
   });
 
   const platformQuery = useQuery({
-    queryKey: ["/platform-settings"],
-    queryFn: ({ signal }) => apiFetch<PlatformSettingsSnippet>("/platform-settings", { signal }),
+    queryKey: ["/platform-settings/worker-connection"],
+    queryFn: ({ signal }) => apiFetch<PlatformSettingsSnippet>("/platform-settings/worker-connection", { signal }),
     enabled: open,
     staleTime: 30_000,
   });

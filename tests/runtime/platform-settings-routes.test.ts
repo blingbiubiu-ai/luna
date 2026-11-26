@@ -29,7 +29,7 @@ function testCipher(): AgentSecretCipher {
   });
 }
 
-test("every account reads platform settings; only a platform administrator changes platform, orphan cleanup, or feishu auth settings", async () => {
+test("only administrators read or change platform settings; members read only the Worker connection origin", async () => {
   const sqlite = new Database(":memory:"), runtimeDb = openExecutionDatabase(":memory:");
   try {
     const db = drizzle(sqlite, { schema });
@@ -84,7 +84,20 @@ test("every account reads platform settings; only a platform administrator chang
       });
 
     expect((await app.request("/api/platform-settings")).status).toBe(401);
-    expect(await (await app.request("/api/platform-settings", { headers: await as("member") })).json()).toEqual({
+    const denied = await app.request("/api/platform-settings", { headers: await as("member") });
+    expect(denied.status).toBe(403);
+    expect(await denied.json()).toEqual({ status: "error", code: "platform_admin_required", message: "Platform administrator permission is required" });
+    expect((await app.request("/api/platform-settings/worker-connection")).status).toBe(401);
+    expect(await (await app.request("/api/platform-settings/worker-connection", { headers: await as("member") })).json()).toEqual({platform:{general:{publicBaseUrl:""}}});
+    const previousOrigin = process.env.LUNA_FEISHU_PUBLIC_BASE_URL;
+    try {
+      process.env.LUNA_FEISHU_PUBLIC_BASE_URL = "https://fallback.example.test";
+      expect(await (await app.request("/api/platform-settings/worker-connection", { headers: await as("member") })).json()).toEqual({platform:{general:{publicBaseUrl:"https://fallback.example.test"}}});
+    } finally {
+      if (previousOrigin === undefined) delete process.env.LUNA_FEISHU_PUBLIC_BASE_URL;
+      else process.env.LUNA_FEISHU_PUBLIC_BASE_URL = previousOrigin;
+    }
+    expect(await (await app.request("/api/platform-settings", { headers: await as("admin") })).json()).toEqual({
       platform: defaultPlatformRuntimeSettings(),
       orphanCleanup: { enabled: true, intervalMinutes: 60, retentionDays: 7 },
       feishuAuth: {
@@ -97,7 +110,7 @@ test("every account reads platform settings; only a platform administrator chang
         feishuHost: "https://open.feishu.cn",
         publicBaseUrl: "",
       },
-      canEdit: false,
+      canEdit: true,
     });
 
     expect((await putPlatform("member", { general: { timezone: "UTC" } })).status).toBe(403);
@@ -133,6 +146,7 @@ test("every account reads platform settings; only a platform administrator chang
       artifactSignedUrlTtlMs: 24 * 3_600_000,
     });
     expect(savedGeneralJson.feishuAuth.publicBaseUrl).toBe("http://10.37.108.127:8090");
+    expect(await (await app.request("/api/platform-settings/worker-connection", { headers: await as("member") })).json()).toEqual({platform:{general:{publicBaseUrl:"http://10.37.108.127:8090"}}});
 
     const savedMarketplace = await putPlatform("admin", {
       marketplace: { gitUrl: "https://git.example.com/luna-plugins.git", branch: "release" },

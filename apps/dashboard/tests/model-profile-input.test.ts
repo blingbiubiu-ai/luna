@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { buildProfileRevision, type ProfileDraft } from "../src/app/settings/model-profile-input";
+import { buildProfileRevision, initialProfileExecutionDriver, type ProfileDraft } from "../src/app/settings/model-profile-input";
 import { accountReference, resolveModelHint, type AccountTarget, type ModelAccount, type ProviderSource } from "../src/app/plugins/worker-models";
 
 const target: AccountTarget = { agentId: "agent-a", pluginId: "plugin-a", providerId: "provider-a", workerId: "worker-a" };
@@ -24,6 +24,13 @@ describe("Provider selection ownership", () => {
 });
 
 describe("Profile revision input", () => {
+  test("new configurations default to TUI while edits retain the existing execution driver", () => {
+    expect(initialProfileExecutionDriver()).toBe("pty");
+    expect(initialProfileExecutionDriver({ executionDriver: "stdio" })).toBe("stdio");
+    expect(initialProfileExecutionDriver({ executionDriver: "pty" })).toBe("pty");
+    expect(initialProfileExecutionDriver({})).toBe("stdio");
+    for (const executionDriver of ["pty", "stdio"] as const) expect(buildProfileRevision({ ...draft, executionDriver }).executionDriver).toBe(executionDriver);
+  });
   test("Provider conversion clears retained gateway credentials and preserves unrelated settings", () => {
     const input = buildProfileRevision({ ...draft, workerMode: true, source: reference });
     expect(input.modelProvider).toEqual(reference);

@@ -158,11 +158,11 @@ function RailUserMenuContent({
           <UserIdentity userInfo={userInfo} isAdmin={isAdmin} isSuperAdmin={isSuperAdmin} />
         </div>
         <DropdownMenuSeparator />
-        <DropdownMenuItem data-testid="sidebar-settings-menu-item" onSelect={() => { if (appHistory.location.pathname !== "/platform/settings") appHistory.push("/platform/settings"); }}>
+        {isAdmin && <><DropdownMenuItem data-testid="sidebar-settings-menu-item" onSelect={() => { if (appHistory.location.pathname !== "/platform/settings") appHistory.push("/platform/settings"); }}>
           <SettingsIcon />
           <span>{t("Settings")}</span>
         </DropdownMenuItem>
-        <DropdownMenuSeparator />
+        <DropdownMenuSeparator /></>}
         <DropdownMenuItem data-testid="sidebar-logout-button" onClick={handleLogout}>
           <LogOutIcon />
           <span>{t("Log out")}</span>

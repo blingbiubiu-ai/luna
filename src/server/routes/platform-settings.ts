@@ -2,14 +2,13 @@ import { Hono } from "hono";
 import { ZodError } from "zod";
 
 import type { DrizzleDB } from "@/data";
-import { PlatformSettingsStore } from "@/platform/platform-settings-store";
+import { PlatformSettingsStore, resolvePublicBaseUrl } from "@/platform/platform-settings-store";
 import type { OrphanCleanupStore } from "@/runtime/orphan-cleanup";
 import { FeishuAuthConfigError, FeishuAuthConfigStore } from "../auth/feishu-oauth";
 import { isGuardResponse, requireAdmin, requireDashboardOnly } from "../auth/guards";
-import { isPlatformAdministrator } from "../policy/platform-administrator";
 import { getKernel } from "./kernel";
 
-/** Platform settings: every signed-in account reads them, platform administrators change them. */
+/** Full platform configuration is restricted to platform administrators. */
 export function createPlatformSettingsRoutes(
   db: DrizzleDB,
   store: () => OrphanCleanupStore | undefined = runtimeSettings,
@@ -17,8 +16,15 @@ export function createPlatformSettingsRoutes(
   platformStore: PlatformSettingsStore = new PlatformSettingsStore(db),
 ) {
   return new Hono()
-    .get("/", (c) => {
+    .get("/worker-connection", (c) => {
       const auth = requireDashboardOnly(c);
+      if (isGuardResponse(auth)) return auth;
+      c.header("Cache-Control", "no-store");
+      // Worker onboarding needs the advertised Service origin, not platform configuration.
+      return c.json({ platform: { general: { publicBaseUrl: resolvePublicBaseUrl(db) } } });
+    })
+    .get("/", (c) => {
+      const auth = requireAdmin(c);
       if (isGuardResponse(auth)) return auth;
       const settings = store();
       if (!settings) return c.json({ status: "error", code: "runtime_unavailable" }, 503);
@@ -26,7 +32,7 @@ export function createPlatformSettingsRoutes(
         platform: platformStore.get(),
         orphanCleanup: settings.get(),
         feishuAuth: feishuAuth.getPublicSettings(),
-        canEdit: isPlatformAdministrator(db, auth.account.id),
+        canEdit: true,
       });
     })
     .put("/", async (c) => {

@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
-import { apiFetch } from "@/lib/api/client";
+import { ApiFetchError, apiFetch } from "@/lib/api/client";
 import { copyTextToClipboard } from "@/lib/clipboard";
 
 export interface OrphanCleanup {
@@ -189,7 +189,7 @@ function parseDeveloperMap(text: string): Record<string, string> | null {
   return result;
 }
 
-/** Platform-wide settings; every account sees them, platform administrators change them. */
+/** Only platform administrators can open the platform configuration workspace. */
 export function PlatformSettingsPage() {
   const client = useQueryClient();
   const query = useQuery({
@@ -248,7 +248,7 @@ export function PlatformSettingsPage() {
         </p>
       )}
       {query.isLoading && <p role="status">正在加载…</p>}
-      {query.data && (
+      {query.data && !(query.error instanceof ApiFetchError && query.error.status === 403) && (
         <>
           {query.data.canEdit && (
             <section

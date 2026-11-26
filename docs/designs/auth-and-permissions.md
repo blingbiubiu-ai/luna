@@ -230,6 +230,12 @@ the execution settlement and draining flows retain that responsibility.
 
 ## Platform administration and Dashboard scope
 
+Opening `/platform/settings` and reading `/api/platform-settings` require
+platform administrator authority. Non-administrators have no settings menu
+entry, and a direct page visit shows an access-denied message without loading
+the configuration. Worker onboarding has a separate authenticated origin-only
+projection at `/api/platform-settings/worker-connection`.
+
 The built-in access-token operator account (`local-dashboard-user`, authenticated with `LUNA_DASHBOARD_TOKEN`) is the platform's unrevokable **Super Administrator** (`isSuperAdministrator`): it always satisfies `isPlatformAdministrator` / `requireAdmin` and cannot be disabled, deleted, or stripped of administrator authority.
 
 Feishu OAuth accounts (`feishu:<union_id|open_id>`) start with no platform privileges (they only own and manage the Agents they create). Platform administrators and the Super Administrator manage accounts and grant or revoke platform-scoped `system.admin` on `/platform/accounts` (`GET /api/accounts`, `PUT /api/accounts/:id/admin`, `PUT /api/accounts/:id/status`, `DELETE /api/accounts/:id`), entered from `/platform/settings`. Host operators can also grant `system.admin` via `luna service admin grant --home <service-home> --account-id <account-id>`. Agent grants and Runner identity never confer platform administrator status, and administrators cannot revoke or disable their own currently signed-in account.
