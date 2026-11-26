@@ -3,6 +3,7 @@ import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, existsSync, rmSync
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { runWorkerCli } from "../../apps/worker/src/cli";
+import { WorkerBindingConfig } from "../../apps/worker/src/config";
 
 test("init is local; bind preserves execution settings and start requires a binding", async () => {
   const root = mkdtempSync(join(tmpdir(), "luna-init-bind-"));
@@ -33,4 +34,12 @@ test("init is local; bind preserves execution settings and start requires a bind
     expect((await runWorkerCli(["bind", "--service", server.url.origin, "--image", "other", ...args], env)).code).toBe("worker_local_option");
     expect((await runWorkerCli(["init", ...args], env)).code).toBe("configuration_exists");
   } finally { server.stop(true); rmSync(root, { recursive: true, force: true }); }
+});
+
+test("WorkerBindingConfig accepts non-loopback HTTP and HTTPS origins and rejects paths or other schemes", () => {
+  const base = { workerId: "remote", runtimeId: "runtime", controlToken: "t".repeat(43) };
+  expect(WorkerBindingConfig.safeParse({ ...base, serviceUrl: "http://10.37.108.127:8090" }).success).toBe(true);
+  expect(WorkerBindingConfig.safeParse({ ...base, serviceUrl: "https://luna.example.com" }).success).toBe(true);
+  expect(WorkerBindingConfig.safeParse({ ...base, serviceUrl: "http://10.37.108.127:8090/sub" }).success).toBe(false);
+  expect(WorkerBindingConfig.safeParse({ ...base, serviceUrl: "ftp://10.37.108.127:8090" }).success).toBe(false);
 });

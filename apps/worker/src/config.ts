@@ -11,7 +11,7 @@ export function defaultWorkerHome(env: Record<string, string | undefined> = proc
 }
 
 const workerFields = z.object({
-  serviceUrl: z.url().refine(value => { const url = new URL(value); return !url.username && !url.password && !url.search && !url.hash && url.pathname === "/" && (url.protocol === "https:" || (url.protocol === "http:" && ["127.0.0.1", "localhost"].includes(url.hostname))); }, "HTTPS Service origin required (HTTP is allowed only on loopback)").optional(),
+  serviceUrl: z.url().refine(value => { const url = new URL(value); return !url.username && !url.password && !url.search && !url.hash && url.pathname === "/" && (url.protocol === "https:" || url.protocol === "http:"); }, "HTTP(S) Service origin required").optional(),
   workerId: Id, runtimeId: Id, dataRoot: z.string().min(1),
   callbackPort: z.number().int().min(1024).max(65535).optional(),
   callbackHost: z.string().default("0.0.0.0"),

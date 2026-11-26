@@ -35,7 +35,7 @@ export async function runWorkerCli(argv: string[], env: Env = process.env): Prom
       const serviceUrl = readOption(argv, "--service");
       if (!serviceUrl) throw new Error("Service URL required");
       const origin = new URL(serviceUrl);
-      if (origin.username || origin.password || origin.search || origin.hash || origin.pathname !== "/" || (origin.protocol !== "https:" && !(origin.protocol === "http:" && ["127.0.0.1", "localhost"].includes(origin.hostname)))) throw new Error("HTTPS Service origin required");
+      if (origin.username || origin.password || origin.search || origin.hash || origin.pathname !== "/" || (origin.protocol !== "https:" && origin.protocol !== "http:")) throw new Error("HTTP(S) Service origin required");
       const local = argv.includes("--local");
       if (local && !["127.0.0.1", "localhost"].includes(origin.hostname)) throw new Error("Local binding requires a loopback Service");
       const existing = existsSync(bindingFile) ? WorkerBindingConfig.parse(readPrivateJson(bindingFile)) : undefined;

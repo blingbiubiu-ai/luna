@@ -37,7 +37,7 @@ function resolveServiceOrigin(settings?: PlatformSettingsSnippet): { origin: str
   if (configured) {
     return { origin: configured.replace(/\/+$/, ""), fromPlatform: true };
   }
-  const fallback = location.protocol === "https:" || ["127.0.0.1", "localhost"].includes(location.hostname)
+  const fallback = location.protocol === "https:" || location.protocol === "http:"
     ? location.origin
     : "";
   return { origin: fallback, fromPlatform: false };
@@ -71,13 +71,12 @@ export function BindWorkerDialog({ path, agentName, disabled }: {
   const generate = useMutation({
     mutationFn: async () => {
       if (!resolvedOrigin) {
-        throw new Error("平台尚未配置对外访问地址，请先在「平台设置」中配置对外访问地址（HTTPS）。");
+        throw new Error("平台尚未配置对外访问地址，请联系管理员在「平台设置」中配置对外访问地址。");
       }
       const origin = new URL(resolvedOrigin);
-      const local = ["127.0.0.1", "localhost"].includes(origin.hostname);
       if (!/^[a-z0-9.-]+(?::[0-9]+)?$/i.test(origin.host) || origin.username || origin.password || origin.search || origin.hash || origin.pathname !== "/" ||
-        (origin.protocol !== "https:" && !(local && origin.protocol === "http:"))) {
-        throw new Error("平台对外访问地址无效，请在「平台设置」中配置合法的 HTTPS 根地址。");
+        (origin.protocol !== "https:" && origin.protocol !== "http:")) {
+        throw new Error("平台对外访问地址无效，请联系管理员在「平台设置」中配置合法的 http(s) 根地址。");
       }
       const code = await apiFetch<BindingCode>(`${path}/binding-code`, { method: "POST" });
       return { ...code, origin: origin.origin, variant };
