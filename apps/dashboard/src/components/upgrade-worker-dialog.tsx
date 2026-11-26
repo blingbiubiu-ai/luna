@@ -30,6 +30,7 @@ export function UpgradeWorkerDialog({
   worker,
   release,
   hasNewWorkerVersion,
+  hasNewImageVersion,
   isUpgrading,
   upgradingLabel,
 }: {
@@ -37,6 +38,7 @@ export function UpgradeWorkerDialog({
   worker: UpgradeableWorker;
   release: WorkerReleaseManifest | undefined;
   hasNewWorkerVersion: boolean;
+  hasNewImageVersion: boolean;
   isUpgrading: boolean;
   upgradingLabel: string;
 }) {
@@ -52,17 +54,17 @@ export function UpgradeWorkerDialog({
         : release?.images.general.image)
     ?? "";
 
-  const [upgradeWorker, setUpgradeWorker] = useState(true);
-  const [upgradeImage, setUpgradeImage] = useState(true);
+  const [upgradeWorker, setUpgradeWorker] = useState(hasNewWorkerVersion && worker.health?.managedBinary !== false);
+  const [upgradeImage, setUpgradeImage] = useState(hasNewImageVersion);
   const [imageRef, setImageRef] = useState(defaultImage);
 
   useEffect(() => {
     if (open) {
-      setUpgradeWorker(Boolean(worker.health?.managedBinary !== false));
-      setUpgradeImage(true);
+      setUpgradeWorker(Boolean(hasNewWorkerVersion && worker.health?.managedBinary !== false));
+      setUpgradeImage(Boolean(hasNewImageVersion));
       setImageRef(defaultImage);
     }
-  }, [open, defaultImage, worker.health?.managedBinary]);
+  }, [open, defaultImage, hasNewWorkerVersion, hasNewImageVersion, worker.health?.managedBinary]);
 
   const mutation = useMutation({
     mutationFn: () => {

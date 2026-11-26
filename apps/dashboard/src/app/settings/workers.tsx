@@ -203,6 +203,7 @@ function AgentWorkers({ agent }: { agent: ReturnType<typeof useRouteAgent> }) {
             worker={worker}
             release={releaseQuery.data}
             hasNewWorkerVersion={hasNewWorkerVersion}
+            hasNewImageVersion={hasNewImageVersion}
             isUpgrading={isUpgrading}
             upgradingLabel={upgradeState ? upgradeStateLabel(upgradeState.state) : "升级中…"}
           />}
