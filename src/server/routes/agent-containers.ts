@@ -72,7 +72,7 @@ export function createAgentContainerRoutes(
   getResourceBuilder: () => Pick<AgentResourceBuilder, "capture"> = defaultResourceBuilder,
 ) {
   const agents = new AgentStore(db);
-  const access = new AgentWorkerAccessStore(db);
+  const access = new AgentWorkerAccessStore(db,()=>getGateway()?.scheduler.config.homeWorkerId);
   const assignedWorkers = (userId: string, agentId: string) =>
     new Set(access.list(userId, agentId).filter(row => row.status === "active").map(row => row.workerId));
 

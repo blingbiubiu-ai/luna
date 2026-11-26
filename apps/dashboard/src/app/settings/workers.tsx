@@ -147,7 +147,7 @@ function AgentWorkers({ agent }: { agent: ReturnType<typeof useRouteAgent> }) {
       <TableCell className="max-w-64 px-3 py-3 whitespace-normal">
         <p className="break-all font-mono">{workerId}</p>
         <p className="mt-1 text-xs text-muted-foreground">
-          {worker ? (worker.local ? "同机 Worker" : worker.owned ? "我的 Worker" : "已有绑定") : ""}
+          {worker ? (worker.local ? "同机 Worker · 管理员专用" : worker.owned ? "我的 Worker" : "已有绑定") : ""}
           {health?.workerVersion ? ` · v:${health.workerVersion}` : ""}
         </p>
         {hasNewWorkerVersion && (

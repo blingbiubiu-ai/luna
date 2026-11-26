@@ -2,6 +2,7 @@ import { and, eq } from "drizzle-orm";
 import type { DrizzleDB } from "@/data";
 import { agentWorkerAccess, shadowWorkerRouting } from "@/data/schema";
 import { AgentError, AgentStore, type AgentScope } from "./agent-store";
+import { AgentWorkerAccessStore } from "./agent-worker-access-store";
 
 export type WorkerRouting = { mode: "automatic"; workerId: null } | { mode: "bound"; workerId: string };
 
@@ -18,7 +19,9 @@ export class ShadowWorkerRoutingStore {
 
   read(actor: string, scope: AgentScope): WorkerRouting {
     this.authorize(actor, scope);
-    return this.get(scope);
+    const routing=this.get(scope);
+    if(routing.mode==="bound")new AgentWorkerAccessStore(this.db).requireWorkerAccess(actor,routing.workerId);
+    return routing;
   }
 
   save(actor: string, scope: AgentScope, routing: WorkerRouting): WorkerRouting {
@@ -27,6 +30,7 @@ export class ShadowWorkerRoutingStore {
       const agents = new AgentStore(this.db);
       agents.requireAccess(agents.ownerUserId(scope.agentId), scope.agentId);
       if (routing.mode === "bound") {
+        new AgentWorkerAccessStore(this.db).requireWorkerAccess(actor,routing.workerId);
         const assigned = this.db.select().from(agentWorkerAccess).where(and(
           eq(agentWorkerAccess.agentId, scope.agentId), eq(agentWorkerAccess.workerId, routing.workerId),
           eq(agentWorkerAccess.status, "active"),

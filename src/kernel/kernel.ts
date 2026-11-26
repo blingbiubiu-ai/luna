@@ -521,14 +521,15 @@ class Kernel {
 
   private async _prepareContainerRuntimeForStartup(): Promise<void> {
     const file = runtimeConfigFile(config.paths.home, config.sandbox);
+    const workerAccess=new AgentWorkerAccessStore(this._database.db);
     this._executionRuntime = await Runtime.start(file, (scope, options)=>{
       new TaskScopeResolver(this._database.db).active(scope);
-      return new AgentWorkerAccessStore(this._database.db).allowed(scope.agentId, options);
+      return workerAccess.allowed(scope.agentId, options);
     },(scope,digest)=>new InvocationResources(this._database.db,config.paths.home).download(scope,digest),
     id=>new InvocationStore(this._database.db).canReleasePreparation(id),
     ({ownerUserId,agentId},workerId)=>{
       try {
-        new AgentWorkerAccessStore(this._database.db).setOwned(ownerUserId,agentId,workerId,"active");
+        workerAccess.setOwned(ownerUserId,agentId,workerId,"active");
       } catch (error) {
         if (error instanceof AgentError) throw new ExecutionError(error.status,error.code);
         throw error;

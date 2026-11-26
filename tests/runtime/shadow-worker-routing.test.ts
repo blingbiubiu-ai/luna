@@ -10,6 +10,8 @@ import { fixtureScope } from "../helpers/platform-fixtures";
 import { AgentWorkerAccessStore } from "@/agents/agent-worker-access-store";
 import { ShadowWorkerRoutingStore } from "@/agents/shadow-worker-routing-store";
 import { createPlatformAgentRoutes } from "@/server/routes/platform-agents";
+import { writePrivateJson } from "@luna/execution-store";
+import { AuthorizationRuleStore } from "@/server/policy/authorization-rule-store";
 
 let home: string, previousHome: string, db: DataConnection<typeof schema>;
 let alice: ReturnType<typeof fixtureScope>, bob: ReturnType<typeof fixtureScope>;
@@ -47,4 +49,19 @@ test("routing rejects foreign, disabled and missing Workers, wrong Shadow scope 
   expect((await save({mode:"bound",workerId:"worker-a"})).status).toBe(409);
   expect((await app().request(`/agents/${alice.agentId}/shadows/${bob.shadowId}/worker-routing`)).status).toBe(409);
   expect((await save({mode:"automatic",workerId:"worker-a"})).status).toBe(400);
+});
+
+test("local Worker routing rejects non-administrators and hides an old binding after role revocation",async()=>{
+  writePrivateJson(join(home,"runtime","runtime.json"),{runtimeId:"runtime",serviceId:"service",dataRoot:home,homeWorkerId:"worker-a",serviceToken:"s".repeat(43),adminToken:"a".repeat(43)});
+  expect((await save({mode:"bound",workerId:"worker-a"})).status).toBe(403);
+  const grants=new AuthorizationRuleStore(db.db,{kind:"platform"});
+  const grant=grants.addGrant({subjectType:"user",subjectId:"alice",target:"system.admin",effect:"allow"});
+  expect((await save({mode:"bound",workerId:"worker-a"})).status).toBe(200);
+  grants.deleteGrant(grant.id);
+  const read=await app().request(path());
+  expect(read.status).toBe(403);
+  expect(await read.json()).toEqual({status:"error",code:"local_worker_admin_required"});
+  expect(new AgentWorkerAccessStore(db.db).allowed(alice.agentId,{includePaused:true})).toEqual([]);
+  // The owner can still clear the old routing policy and use their remote Workers.
+  expect((await save({mode:"automatic"})).status).toBe(200);
 });

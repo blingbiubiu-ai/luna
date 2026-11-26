@@ -12,9 +12,11 @@ import type { Runtime } from "@/runtime/runtime";
 
 export class ModelProviderService {
   private readonly plugins: AgentPluginStore;
+  private readonly access: AgentWorkerAccessStore;
   private logins=new Map<string,{actor:string;agentId:string;workerId:string;pluginId:string;providerId:string;configRevision:string;callbackPath:string;expiresAt:number}>();
   constructor(private db: DrizzleDB, private registry: PluginRegistry, private runtime: () => Runtime | undefined) {
     this.plugins = new AgentPluginStore(db, registry);
+    this.access = new AgentWorkerAccessStore(db,()=>this.runtime()?.config?.homeWorkerId);
   }
   callbackPaths():string[]{
     return [...new Set(["/api/model-providers/login/callback",...this.registry.listPlugins().flatMap(plugin=>
@@ -31,14 +33,15 @@ export class ModelProviderService {
   }
   workers(actor: string, agentId: string) {
     const workers = this.runtime()?.gateway?.scheduler.workers.list() ?? [];
-    return new AgentWorkerAccessStore(this.db).list(actor, agentId).filter(row => row.status === "active")
+    return this.access.list(actor, agentId).filter(row => row.status === "active")
       .map(row => { const worker = workers.find(w => w.workerId === row.workerId);
         return { workerId: row.workerId, supported: !!worker?.health?.capabilities?.includes(WORKER_MODEL_PROVIDER_CAPABILITY),
           ready: !!worker?.health?.ready && Date.now() - worker.lastSeen < 30000 && !worker.draining, paused: row.paused }; });
   }
   private context(actor: string, agentId: string, workerId: string, pluginId: string, providerId: string) {
     new AgentStore(this.db).requireOwner(actor, agentId);
-    if (!new AgentWorkerAccessStore(this.db).allowed(agentId).includes(workerId)) throw new AgentError("agent_worker_access_denied", 403);
+    this.access.requireWorkerAccess(actor,workerId);
+    if (!this.access.allowed(agentId).includes(workerId)) throw new AgentError("agent_worker_access_denied", 403);
     const config = this.plugins.requireEnabled(agentId, pluginId);
     const plugin = this.registry.getPlugin(pluginId);
     const provider = plugin?.manifest.workerModelProviders?.find(p => p.id === providerId);
@@ -113,7 +116,8 @@ export class ModelProviderService {
     new AgentStore(this.db).requireOwner(actor,agentId);
     const provider=this.registry.getPlugin(input.pluginId)?.manifest.workerModelProviders?.find(p=>p.id===input.providerId);
     if(!provider?.login)throw new AgentError("model_login_unsupported",409);
-    if(!new AgentWorkerAccessStore(this.db).allowed(agentId).includes(input.workerId))throw new AgentError("agent_worker_access_denied",403);
+    this.access.requireWorkerAccess(actor,input.workerId);
+    if(!this.access.allowed(agentId).includes(input.workerId))throw new AgentError("agent_worker_access_denied",403);
     const current=this.plugins.get(actor,agentId,input.pluginId);
     if(!current.enabled)this.plugins.put(actor,agentId,input.pluginId,agentPluginWrite.parse({expectedRevision:current.revision,enabled:true,config:current.config,secrets:{}}));
     const context=this.context(actor,agentId,input.workerId,input.pluginId,input.providerId);await this.install(context);
@@ -164,7 +168,7 @@ export class ModelProviderService {
   }
   async disable(actor: string, agentId: string, pluginId: string): Promise<void> {
     new AgentStore(this.db).requireOwner(actor, agentId);
-    const workers = new AgentWorkerAccessStore(this.db).allowed(agentId, { includePaused: true });
+    const workers = this.access.allowed(agentId, { includePaused: true });
     await Promise.allSettled(workers.map(workerId => this.runtime()?.gateway?.scheduler.workers.client(workerId)
       .call("POST", "/v1/model-providers/disable", { agentId, pluginId }, AbortSignal.timeout(3000))));
   }

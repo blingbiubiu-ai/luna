@@ -142,7 +142,9 @@ export class WorkerGateway {
           if (!this.assignBoundWorker) throw new ExecutionError(503, "worker_assignment_unavailable");
           if (existingWorkerId) {
             const owner = this.owner(existingWorkerId);
-            if (owner !== target.ownerUserId && !(owner === undefined && this.isLocal(existingWorkerId)))
+            // The shared local Worker is authorized by Service's assignment policy;
+            // its first binding owner does not exclude other platform administrators.
+            if (owner !== target.ownerUserId && !this.isLocal(existingWorkerId))
               throw new ExecutionError(403, "worker_access_denied");
             if (owner === undefined) {
               this.db.prepare("INSERT INTO worker_owners VALUES (?,?)").run(existingWorkerId, target.ownerUserId);

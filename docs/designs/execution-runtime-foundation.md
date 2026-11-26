@@ -142,6 +142,13 @@ Deleting a session or task removes its Service invocation/job payloads, resource
 
 Local pairing is explicit: `luna worker bind --local --service http://127.0.0.1:8090` reads the Service Runtime admin configuration once, registers over its authenticated local API, and persists the binding in Worker home. Service startup never scans Worker files; Worker startup never reads Service files. Deployments may run Service without a local Worker. When deployed, the configured home Worker is protected from unbinding; Dashboard pause or resume changes admission for that Agent only. Jobs already assigned to a Worker can finish. Runtime maintenance can drain the entire Worker. A local Worker still needs an explicit Agent assignment using that Agent’s binding code. Remote `luna worker bind --service https://…` consumes a ten-minute, single-use code issued from the target Agent’s Workers page and persists a distinct Worker credential in `$LUNA_WORKER_HOME/binding.json`. Worker starts its outbound connection and sends health every ten seconds. Dashboard shows connection state, readiness, desired/applied resources, capacity, projects and pause/resume controls. Disconnected or unready Workers do not receive new placements. Existing contexts normally retain affinity; idle contexts and unreserved jobs can rebuild after the bounded failure checks below.
 
+The deployment-owned `homeWorkerId` is available only to Agents whose owner
+currently holds platform administrator authority. Service's shared Worker
+access store filters lists and Runtime admission and rejects local assignment
+mutations by non-administrators. Role revocation takes effect without removing
+old assignments or context data. Remote Worker ownership and assignment rules
+remain independent of platform administrator status.
+
 Service publishes immutable scoped resource snapshots. Worker downloads only the snapshot authorized for its Shadow placement; the former global resource download and in-place synchronization are removed. Invocation preparation references remain until trusted Service settlement and reservation release, without a timeout-based expiry. Job selection must match the prepared snapshot and mounted environment. Executor images must still be provisioned on each host with the configured digest; resource downloads do not distribute images.
 
 Project names are scoped by the selected Worker for reverse-connected Workers; two Workers advertising `shared` do not imply shared files. The scheduler chooses an eligible node for a new context and normally preserves that choice; recovery can explicitly replace it before execution reservation. The first release uses capacity/project readiness selection; explicit per-task Worker selection is not exposed in Dashboard.

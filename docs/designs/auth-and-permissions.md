@@ -175,7 +175,7 @@ Session commands and schedules persist the actor and session scope used for thes
 
 ## Worker bindings
 
-Worker protocol endpoints `/api/worker/*` have their own authentication before Dashboard middleware. Binding requires an unexpired one-time 256-bit code; Service consumes it transactionally and stores only the hash of the issued Worker token. The private Worker configuration stores the token. Each WebSocket is bound to that authenticated Worker; replacement connections invalidate old pending calls. Event ingestion checks Job/Worker/Executor assignment identity. Downloads require a valid binding. Pausing or resuming an assigned Worker requires Agent ownership and either ownership of the local Worker or a valid platform `system.admin` grant. Dashboard pause and resume apply to the selected Agent–Worker assignment. Runtime operator controls can drain the entire Worker for maintenance. Local automatic enrollment uses the existing private Runtime admin credential and Worker configuration; it is not an unauthenticated localhost registration endpoint.
+Worker protocol endpoints `/api/worker/*` have their own authentication before Dashboard middleware. Binding requires an unexpired one-time 256-bit code; Service consumes it transactionally and stores only the hash of the issued Worker token. The private Worker configuration stores the token. Each WebSocket is bound to that authenticated Worker; replacement connections invalidate old pending calls. Event ingestion checks Job/Worker/Executor assignment identity. Downloads require a valid binding. Pausing or resuming an assigned Worker requires Agent ownership. The configured local Worker additionally requires current platform `system.admin` authority. Dashboard pause and resume apply to the selected Agent–Worker assignment. Runtime operator controls can drain the entire Worker for maintenance. Local automatic enrollment uses the existing private Runtime admin credential and Worker configuration; it is not an unauthenticated localhost registration endpoint.
 
 ## Agent authorization foundation
 
@@ -212,6 +212,17 @@ Agent. Rebinding verifies the existing Worker credential and owner. The
 configured local `homeWorkerId` has protected assignment semantics. Initial
 local registration uses Runtime management credentials once; Agent assignment
 then uses Worker credentials and the Agent's binding code.
+
+The deployment's `homeWorkerId` is restricted to platform administrators
+(`system.admin`, including the built-in Super Administrator). Worker assignment
+lists and Provider catalogs omit that Worker for other accounts. Binding,
+pause/resume, upgrade, Shadow routing and container management enforce the same
+policy server-side. Runtime admission resolves the Agent owner's current
+administrator authority, so a prior assignment or pinned context cannot admit
+new work after the owner loses that authority. Existing accepted Jobs retain
+their settlement path; stored assignments, credentials and files are preserved.
+Each administrator still needs an explicit assignment for their own Agent;
+the local Worker's first binding owner does not exclude other administrators.
 
 `/api/agents/:agentId/workers` exposes owner-scoped lists, codes, pause/resume and
 unassignment. Revoking access alone does not cancel Jobs or release placement;

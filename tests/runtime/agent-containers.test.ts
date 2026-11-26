@@ -100,6 +100,21 @@ test("lists only the owner's assigned Workers, scoped to the Agent, with Shadow 
   expect(fake.calls).toHaveLength(1);
 });
 
+test("non-administrators cannot list or provision a local Worker through an old assignment", async () => {
+  const fake=fakeGateway();
+  fake.gateway.scheduler.config.homeWorkerId="worker-1";
+  const api=app("alice",fake.gateway);
+  const base=`/${alice.agentId}/containers`;
+  const listed=await api.request(base);
+  expect(listed.status).toBe(200);
+  expect(await listed.json()).toMatchObject({workers:[],containers:[]});
+  const provisioned=await api.request(base,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({shadowId,workerId:"worker-1"})});
+  expect(provisioned.status).toBe(404);
+  const reset=await api.request(base+"/worker-1/env_shadow/reset",{method:"POST"});
+  expect(reset.status).toBe(404);
+  expect(fake.calls).toEqual([]);
+});
+
 test("stream requests check owner, Origin, assignment and container before upgrading", async () => {
   const fake = fakeGateway();
   const base = `http://luna.test/${alice.agentId}/containers`;

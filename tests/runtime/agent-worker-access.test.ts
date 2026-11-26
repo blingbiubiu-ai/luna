@@ -16,6 +16,9 @@ import {AgentError, AgentStore} from "@/agents/agent-store";
 import {WorkerGateway} from "@/runtime/worker-gateway";
 import {RuntimeConfig} from "@/runtime/config";
 import {RuntimeScheduler} from "@/runtime/scheduler";
+import {AuthorizationRuleStore} from "@/server/policy/authorization-rule-store";
+import {ModelProviderService} from "@/model-providers/service";
+import {PluginRegistry} from "@/plugins/registry";
 let home:string,connection:DataConnection<typeof schema>,store:AgentWorkerAccessStore;
 let a:ReturnType<typeof fixtureScope>,b:ReturnType<typeof fixtureScope>;
 beforeEach(()=>{home=mkdtempSync(join(tmpdir(),"luna-worker-access-"));setLunaHome(home);connection=new DataConnection(schema);a=fixtureScope(connection.db,"alice");b=fixtureScope(connection.db,"bob");fixturePlatformAdmin(connection.db,"admin");store=new AgentWorkerAccessStore(connection.db);});
@@ -105,7 +108,7 @@ test("a private pairing code assigns a new Worker to the issuing Agent and only 
  }
 });
 
-test("the deployed local Worker can be assigned and paused, but its binding cannot be removed", async () => {
+test("only platform administrators can bind, see and use the shared local Worker", async () => {
  const runtimeDb = openExecutionDatabase(":memory:");
  try {
   const workerId = "same-host";
@@ -115,16 +118,28 @@ test("the deployed local Worker can be assigned and paused, but its binding cann
     serviceToken: "s".repeat(43), adminToken: "a".repeat(43),
   });
   const scheduler = new RuntimeScheduler(runtimeDb, config, new TokenAuthority(runtimeDb));
-  const gateway = new WorkerGateway(runtimeDb, scheduler, undefined, (target, id) =>
-   store.setOwned(target.ownerUserId, target.agentId, id, "active"));
+  writePrivateJson(join(home,"runtime","runtime.json"),config);
+  store=new AgentWorkerAccessStore(connection.db);
+  const gateway = new WorkerGateway(runtimeDb, scheduler, undefined, (target, id) => {
+   try { store.setOwned(target.ownerUserId, target.agentId, id, "active"); }
+   catch(error) { if(error instanceof AgentError)throw new ExecutionError(error.status,error.code);throw error; }
+  });
   gateway.registerLocal({workerId, controlToken, port: 8092, executorPortStart: 41000, executorPortEnd: 41100});
   const alice = app("alice", gateway);
   const path = `/${a.agentId}/workers`;
   const issued = await alice.request(path + "/binding-code", {method: "POST"});
   const {code} = await issued.json() as {code: string};
-  const bound = await gateway.http(new Request("http://localhost/api/worker/bind", {
+  const bind=()=>gateway.http(new Request("http://localhost/api/worker/bind", {
    method: "POST", headers: {authorization: `Bearer ${controlToken}`}, body: JSON.stringify({code}),
   }));
+  const denied=await bind();
+  expect(denied.status).toBe(403);
+  expect(await denied.json()).toMatchObject({code:"local_worker_admin_required"});
+  expect(gateway.owner(workerId)).toBeUndefined();
+  expect(store.allowed(a.agentId)).toEqual([]);
+  const grants=new AuthorizationRuleStore(connection.db,{kind:"platform"});
+  const grant=grants.addGrant({subjectType:"user",subjectId:"alice",target:"system.admin",effect:"allow"});
+  const bound = await bind();
   expect(bound.status).toBe(200);
   expect(gateway.owner(workerId)).toBe("alice");
   const list = await alice.request(path);
@@ -160,6 +175,27 @@ test("the deployed local Worker can be assigned and paused, but its binding cann
   expect((await alice.request(workerPath + "/resume", {method: "POST"})).status).toBe(200);
   expect(store.allowed(a.agentId)).toEqual([workerId]);
   expect(store.allowed(second.id)).toEqual([workerId]);
+
+  // Another administrator can bind the shared node to their own Agent.
+  fixturePlatformAdmin(connection.db,"bob");
+  const bobIssued=await (await app("bob",gateway).request(`/${b.agentId}/workers/binding-code`,{method:"POST"})).json() as {code:string};
+  expect((await gateway.http(new Request("http://localhost/api/worker/bind",{method:"POST",headers:{authorization:`Bearer ${controlToken}`},body:JSON.stringify({code:bobIssued.code})}))).status).toBe(200);
+  expect(store.allowed(b.agentId)).toEqual([workerId]);
+
+  // Revocation takes effect on old assignments and old placements without deleting data.
+  grants.deleteGrant(grant.id);
+  expect(await (await alice.request(path)).json()).toMatchObject({workers:[],assignments:[]});
+  expect(store.allowed(a.agentId,{includePaused:true})).toEqual([]);
+  expect(()=>scheduler.placements.route(a,store.allowed(a.agentId))).toThrow("agent_worker_access_denied");
+  for(const action of ["drain","resume","upgrade"]){
+   const response=await alice.request(workerPath+"/"+action,{method:"POST"});
+   expect(response.status).toBe(403);
+   expect(await response.json()).toMatchObject({code:"local_worker_admin_required"});
+  }
+  const providers=new ModelProviderService(connection.db,new PluginRegistry(),()=>({config,gateway}) as any);
+  expect(providers.workers("alice",a.agentId)).toEqual([]);
+  await expect(providers.account("alice",a.agentId,workerId,"unknown-plugin","unknown-provider")).rejects.toThrow("local_worker_admin_required");
+  expect(store.allowed(b.agentId)).toEqual([workerId]);
  } finally {
   runtimeDb.close();
  }

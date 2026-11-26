@@ -16,7 +16,7 @@ const upgradeBodySchema = z.object({
 }).strict();
 
 export function createAgentWorkerAccessRoutes(db: DrizzleDB, getGateway = workerGateway) {
- const store=new AgentWorkerAccessStore(db);
+ const store=new AgentWorkerAccessStore(db,()=>getGateway()?.scheduler.config.homeWorkerId);
  const agents=new AgentStore(db);
  return new Hono().onError((error,c)=>{
   if(error instanceof AgentError)return c.json({status:"error",code:error.code},error.status);
@@ -51,6 +51,7 @@ export function createAgentWorkerAccessRoutes(db: DrizzleDB, getGateway = worker
   const workerId=c.req.param("workerId");
   const gateway=getGateway();
   if(!gateway)return c.json({status:"error",code:"runtime_not_ready"},503);
+  store.requireWorkerAccess(auth.account.id,workerId);
   if(gateway.isLocal(workerId))throw new AgentError("local_worker_cannot_unbind",409);
   if(gateway.owner(workerId)!==auth.account.id)throw new AgentError("worker_access_denied",403);
   store.setOwned(auth.account.id,agent.id,workerId,status);
@@ -60,6 +61,7 @@ export function createAgentWorkerAccessRoutes(db: DrizzleDB, getGateway = worker
   if (isGuardResponse(auth)) return auth;
   const agent = agents.requireOwner(auth.account.id, c.req.param("agentId"));
   const workerId = c.req.param("workerId");
+  store.requireWorkerAccess(auth.account.id,workerId);
   const assignments = store.list(auth.account.id, agent.id);
   if (!assignments.some(row => row.workerId === workerId && row.status === "active")) {
    throw new AgentError("worker_assignment_not_found", 404);
@@ -78,6 +80,7 @@ export function createAgentWorkerAccessRoutes(db: DrizzleDB, getGateway = worker
   if (isGuardResponse(auth)) return auth;
   const agentId = c.req.param("agentId");
   const workerId = c.req.param("workerId");
+  store.requireWorkerAccess(auth.account.id,workerId);
   const action = z.enum(["drain", "resume"]).parse(c.req.param("action"));
   const assignments = store.list(auth.account.id, agentId);
   if (!assignments.some(row => row.workerId === workerId && row.status === "active")) {
