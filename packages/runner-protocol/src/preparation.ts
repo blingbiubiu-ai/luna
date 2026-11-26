@@ -3,9 +3,11 @@ import {Id,RunnerKind} from "./job.js";
 import {absoluteRunnerPath} from "./runner-assets.js";
 
 import {AgentScope,ExecutionScope,ResourceSelection} from "./scope.js";
+import {ModelProviderReference} from "./model-provider.js";
 export {AgentScope,ExecutionScope,ResourceSelection} from "./scope.js";
 export const ContextPreparation=z.object({
  protocolVersion:z.literal(2),scope:AgentScope,resources:ResourceSelection,
+ modelProvider:ModelProviderReference.optional(),
  invocationId:Id,contextId:Id,
  /** The context's directory under runners/: its owner's (`session-<id>`, `task-<id>`), shared by the owner's contexts. */
  runnerId:Id,scopeKey:z.string().min(1).max(512),runnerKind:RunnerKind,

@@ -1,5 +1,13 @@
 # Database schema
 
+Migration `0013_worker_model_providers.sql` adds `agent_profile_revisions.model_provider_json` and
+`agent_model_provider_accounts` (Agent/Worker/plugin/provider/credential-revision key plus summary JSON).
+These Service records contain references and metadata, not upstream tokens. Worker creates its own
+`worker_model_accounts`, `worker_model_current`, `worker_model_imports`, `worker_model_grants`,
+`worker_model_jobs` and `worker_model_releases` tables. Credentials are encrypted, revisions retained,
+grant keys stored as hashes, and accepted Job model bindings kept separately from Executor secrets.
+See [Worker Model Providers](worker-model-providers.md).
+
 Service stores its business database at `$LUNA_HOME/data/luna.db`.
 `src/data/schema/` contains domain-specific TypeScript ORM definitions.
 `src/data/drizzle/0001_luna_baseline.sql` defines the initial SQLite baseline, with

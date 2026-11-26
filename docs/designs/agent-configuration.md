@@ -1,5 +1,16 @@
 # Agent Configuration
 
+Codex Profiles can select a [Worker plugin model source](worker-model-providers.md). The nullable
+`model_provider_json` revision field pins Worker, provider, account, credential revision and release
+digest. This source participates in execution fingerprints and is retained when a revision omits
+the field; explicit null returns to ordinary connection mode. Gateway URL/Key and plugin source
+are mutually exclusive. Plugin validation runs on the binding Worker and is checked again before activation.
+
+The Model Configuration page exposes account login and catalog management. "Add from Provider"
+uses the same Profile store/test/activation workflow, resolves an authorized Worker and imported
+account reference, and automatically supplies connection settings. API URL and upstream credentials
+are not copied into the Profile form. A manual gateway option remains available for other sources.
+
 ## Responsibility Boundary
 
 Agent configuration is Dashboard-managed runtime state. `config.yaml` does not

@@ -31,7 +31,7 @@ interface PluginActions {
 
 export function PluginsDashboard({
   error, actionError, isLoading = false, isRefreshing = false,
-  onRefreshMarketplace, plugins, ...actions
+  onRefreshMarketplace, plugins, modelConfigHref, ...actions
 }: PluginActions & {
   readonly error?: unknown;
   readonly actionError?: unknown;
@@ -39,6 +39,7 @@ export function PluginsDashboard({
   readonly isRefreshing?: boolean;
   readonly onRefreshMarketplace?: () => void;
   readonly plugins: readonly DashboardPluginMarketplaceSummary[];
+  readonly modelConfigHref?:string;
 }) {
   const { t } = useTranslation();
   const [search, setSearch] = useState("");
@@ -56,6 +57,7 @@ export function PluginsDashboard({
           <header className="space-y-2">
             <h1 className="text-2xl font-semibold tracking-tight">{t("Plugins")}</h1>
             <p className="text-sm leading-6 text-muted-foreground">{t("Manage your plugins, review versions, and choose what runs in Luna.")}</p>
+            {modelConfigHref?<Button asChild variant="outline"><a href={modelConfigHref}>模型账号登录与 API</a></Button>:null}
           </header>
 
           {!isLoading && loadError === undefined ? (

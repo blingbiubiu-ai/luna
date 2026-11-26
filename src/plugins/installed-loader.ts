@@ -56,6 +56,7 @@ export async function loadInstalledPlugins(
         pluginDefinition.createRuntime,
         input.configByPluginId?.[installation.pluginId] ?? {},
         pluginDefinition.parseCommandInput,
+        { path: installedPath, sha256: installation.desiredReleaseSha256! },
       );
       store.markActivation({
         pluginId: installation.pluginId,

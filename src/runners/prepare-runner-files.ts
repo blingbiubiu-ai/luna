@@ -65,6 +65,7 @@ export async function prepareRunnerFiles(input: {
           ...(runtime.sharedProject ? { projectId: runtime.sharedProject.projectId } : {}),
           ...(new ShadowRootAccessStore(db).enabled(invocation.shadowId) ? { rootAccess: true } : {}),
           ...soulField(db, invocation),
+          ...(invocation.agentConfig?.modelProvider ? { modelProvider: invocation.agentConfig.modelProvider } : {}),
         }, signal);
         const current=new InvocationStore(db).require(invocationId);
         if(current.state!=="active" || current.settledAt!==null)throw new ExecutionError(409,"invocation_preparation_mismatch");

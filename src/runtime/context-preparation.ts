@@ -1,5 +1,5 @@
 import {contentHash,ExecutionError,transaction,type SqlDatabase} from "@luna/execution-store";
-import {ContextPreparation,PreparedContext,WorkerPreparedContext} from "@luna/runner-protocol";
+import {ContextPreparation,PreparedContext,WorkerPreparedContext,WORKER_MODEL_PROVIDER_CAPABILITY} from "@luna/runner-protocol";
 import type {RuntimeScheduler} from "./scheduler";
 import {retryableDelivery} from "./delivery";
 import type {ShadowPlacement} from "./shadow-placements";
@@ -58,7 +58,7 @@ export class ContextPreparationManager {
   try{
    const intent=this.db.prepare("SELECT * FROM runtime_preparation_intents WHERE invocation_id=?").get(input.invocationId) as PreparationIntent|undefined;
    if(intent && (intent.state==="released" || contentHash(JSON.parse(intent.input_json))!==contentHash(input)))throw new ExecutionError(409,"invocation_preparation_conflict");
-   const allowed=this.scheduler.allowedWorkers(input.scope);
+   const allowed=this.allowed(input);
    const bound=this.scheduler.placements.boundWorkerId(input.scope);
    const executing=this.scheduler.jobs.list(true).some(job=>job.job.runnerContextId===input.contextId && job.workerId && job.placementState!=="terminal");
    if(!intent && !executing) {
@@ -101,7 +101,7 @@ export class ContextPreparationManager {
    const result=parsedReply.data;
    if(result.workerId!==placement.workerId || contentHash(result.scope)!==contentHash(scope) || contentHash(result.resources)!==contentHash(input.resources))throw new ExecutionError(409,"prepared_context_scope_mismatch");
    // Recheck authorization and placement after the asynchronous Worker operation.
-   this.scheduler.placements.bindContext(input.scope,input.contextId,input.scopeKey,this.scheduler.allowedWorkers(input.scope),input.projectId);
+   this.scheduler.placements.bindContext(input.scope,input.contextId,input.scopeKey,this.allowed(input),input.projectId);
    this.scheduler.placements.require(input.scope,placement.workerId,placement.generation,input.contextId);
    // Only a change here starts a fresh provider session: another Worker or placement, whose HOME holds
    // different provider sessions. Instructions and resources (prompts, skills, tools) are left out on
@@ -115,7 +115,7 @@ export class ContextPreparationManager {
   }finally{this.busy.delete(input.contextId);}
  }
  private async deliver(input:ContextPreparation,placement:ShadowPlacement,signal?:AbortSignal):Promise<unknown> {
-  this.scheduler.placements.bindContext(input.scope,input.contextId,input.scopeKey,this.scheduler.allowedWorkers!(input.scope),input.projectId);
+  this.scheduler.placements.bindContext(input.scope,input.contextId,input.scopeKey,this.allowed(input),input.projectId);
   // Older Workers name every context's directory after the context and refuse anything else.
   const shared=this.scheduler.workers.list().find(worker=>worker.workerId===placement.workerId)?.health?.capabilities?.includes(OWNER_WORKSPACE_CAPABILITY)===true;
   let lastError:unknown;
@@ -135,6 +135,7 @@ export class ContextPreparationManager {
   throw new ExecutionError(502,"worker_delivery_failed",{cause:String(lastError)});
  }
  private replace(input:ContextPreparation,placement:ShadowPlacement):ShadowPlacement|undefined {
+  if(input.modelProvider)return;
   return transaction(this.db,()=>{
    if(this.scheduler.isContextFileBusy(input.contextId) || this.scheduler.jobs.list(true).some(job=>
     job.job.runnerContextId===input.contextId && job.workerId && job.placementState!=="terminal"))return;
@@ -146,6 +147,18 @@ export class ContextPreparationManager {
    this.db.prepare("DELETE FROM runtime_prepared_contexts WHERE context_id=?").run(input.contextId);
    return replacement;
   });
+ }
+ private allowed(input:ContextPreparation):readonly string[]{
+  const allowed=this.scheduler.allowedWorkers!(input.scope);
+  const reference=input.modelProvider;
+  if(!reference)return allowed;
+  if(!allowed.includes(reference.workerId))throw new ExecutionError(403,"agent_worker_access_denied");
+  const bound=this.scheduler.placements.boundWorkerId(input.scope);
+  const current=this.scheduler.placements.context(input.scope,input.contextId);
+  if((bound && bound!==reference.workerId) || (current && current.workerId!==reference.workerId))throw new ExecutionError(409,"model_worker_binding_conflict");
+  const worker=this.scheduler.workers.require(reference.workerId);
+  if(!worker.health?.capabilities?.includes(WORKER_MODEL_PROVIDER_CAPABILITY))throw new ExecutionError(409,"worker_model_provider_unsupported");
+  return [reference.workerId];
  }
  /** Service settlement authorizes release on the current Worker; a replaced prepare can be released immediately. */
  async releaseSettled():Promise<void> {

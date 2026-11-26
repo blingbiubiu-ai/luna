@@ -3,6 +3,7 @@ import { createFileRoute } from "@tanstack/react-router";
 import { useRouteAgent } from "@/lib/agent-route";
 import { useTranslation } from "@/lib/i18n";
 import { AgentConfigDashboardView } from "./agent-config-dashboard";
+import {WorkerModels} from "../plugins/worker-models";
 import {
   useActivateAgentProfileRevision,
   useAgentConfigStatus,
@@ -47,7 +48,9 @@ function AgentProfiles({ agentId }: { agentId: string }) {
   const remove = useDeleteAgentProfile(agentId);
 
   return (
-    <AgentConfigDashboardView
+    <div><section className="mx-auto max-w-7xl px-5 pt-7 sm:px-8"><h2 className="mb-3 text-xl font-semibold">模型账号登录与 API</h2><WorkerModels key={agentId} agentId={agentId} onUseModel={async(reference,model)=>{await create.mutateAsync({name:`${reference.providerId} / ${model} / ${new Date().toLocaleTimeString()}`,agentType:"codex",model,modelProvider:reference,resumeOnModelChange:true,env:{},secrets:{}});}}/></section><AgentConfigDashboardView
+      key={agentId}
+      agentId={agentId}
       error={status.error ?? types.error ?? profiles.error}
       loading={status.isLoading || types.isLoading || profiles.isLoading}
       onActivate={(revisionId) => activate.mutateAsync(revisionId)}
@@ -59,6 +62,6 @@ function AgentProfiles({ agentId }: { agentId: string }) {
       profiles={profiles.data ?? []}
       status={status.data ?? { status: "setup_required", active: null }}
       types={types.data ?? []}
-    />
+    /></div>
   );
 }

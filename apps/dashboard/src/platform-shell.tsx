@@ -101,6 +101,9 @@ export function NoAgents() {
 }
 
 function PlatformPlugins() {
+  const agents=useDashboardAgents();const me=useDashboardMe();
+  const modelAgent=agents.data?.agents.find(agent=>agent.ownerAccountId===me.data?.account?.id&&agent.status==="active");
+  const modelConfigHref=modelAgent?`/agent/${encodeURIComponent(modelAgent.id)}/settings/agents`:undefined;
   const plugins = usePlugins();
   const refresh = useRefreshPlugins();
   const enable = useEnablePlugin();
@@ -122,10 +125,11 @@ function PlatformPlugins() {
     catch (error) { setActionError(error); }
   }
   if (plugins.error instanceof ApiFetchError && plugins.error.code === "plugin_marketplace_unconfigured") {
-    return <PluginSourceUnconfigured />;
+    return <div>{modelConfigHref?<div className="px-6 pt-6"><Button asChild variant="outline"><a href={modelConfigHref}>模型账号登录与 API</a></Button></div>:null}<PluginSourceUnconfigured /></div>;
   }
   return (
     <PluginsDashboard
+      {...(modelConfigHref?{modelConfigHref}:{})}
       error={plugins.error}
       actionError={actionError}
       pendingPluginId={pendingPluginId}

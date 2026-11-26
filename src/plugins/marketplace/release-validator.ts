@@ -212,6 +212,12 @@ function verifyListedFiles(releaseRoot: string, checksums: ChecksumsFile): void 
 }
 
 function validateManifestPaths(releaseRoot: string, manifest: PluginManifest): void {
+  for (const provider of manifest.workerModelProviders ?? []) {
+    assertReleaseRelative(releaseRoot, provider.entrypoint, `model provider ${provider.id}`);
+    if (!existsSync(resolve(releaseRoot, provider.entrypoint)) || !statSync(resolve(releaseRoot, provider.entrypoint)).isFile()) {
+      throw new Error(`Model provider entrypoint missing: ${provider.id}`);
+    }
+  }
   assertReleaseRelative(
     releaseRoot,
     manifest.runtime?.entrypoint ?? "plugin.js",

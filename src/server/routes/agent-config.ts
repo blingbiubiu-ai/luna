@@ -10,18 +10,26 @@ import {
   type AgentSecretCipher,
 } from "@/agent-config";
 import type { DrizzleDB } from "@/data";
+import type {ModelProviderService} from "@/model-providers/service";
+import {ExecutionError} from "@luna/execution-store";
 import { isGuardResponse, requireDashboardOnly } from "../auth/guards";
 
 export interface AgentConfigRouteOptions {
   readonly db: DrizzleDB;
   readonly cipher: AgentSecretCipher | undefined;
   readonly connectionExecutor?: AgentConnectionTestExecutor;
+  readonly modelProviders?: ModelProviderService;
 }
 
 export function createAgentConfigRoutes(options: AgentConfigRouteOptions) {
   const profiles = (c: Context) => new AgentProfileStore(options.db, options.cipher, (c as any).get("agentConfigAgentId") as string);
   const active = new ActiveAgentConfigService(options.db, options.cipher);
   const tester = new AgentProfileConnectionTester(options.connectionExecutor);
+  const validate = async(c:Context, source:unknown, model:string) => {
+    if(source == null)return;
+    if(!options.modelProviders)throw new AgentError("worker_model_provider_unsupported",409);
+    await options.modelProviders.validateReference((c as any).get("agentConfigActorId"),profiles(c).agentId,source,model);
+  };
 
   return new Hono()
     .use("*", async (c, next) => {
@@ -59,6 +67,7 @@ export function createAgentConfigRoutes(options: AgentConfigRouteOptions) {
     .post("/profiles", async (c) => {
       try {
         const body = await c.req.json<Record<string, unknown>>();
+        await validate(c,body.modelProvider,body.model as string);
         const profile = profiles(c).createProfile({
           ...body,
           actorId: (c as any).get("agentConfigActorId") as string,
@@ -77,6 +86,7 @@ export function createAgentConfigRoutes(options: AgentConfigRouteOptions) {
     .post("/profiles/:id/revisions", async (c) => {
       try {
         const body = await c.req.json<Record<string, unknown>>();
+        await validate(c,body.modelProvider === undefined ? profiles(c).getProfile(c.req.param("id"))?.latestRevision.modelProvider : body.modelProvider,body.model as string);
         const revision = profiles(c).createRevision(c.req.param("id"), {
           ...body,
           actorId: (c as any).get("agentConfigActorId") as string,
@@ -91,7 +101,10 @@ export function createAgentConfigRoutes(options: AgentConfigRouteOptions) {
         const revisionId = c.req.param("id");
         if (!profiles(c).getRevision(revisionId)) return c.json({status:"error",code:"not_found"},404);
         const snapshot = active.resolveRevisionSnapshot(profiles(c).agentId, revisionId);
-        const result = await tester.testSnapshot(snapshot);
+        const result = snapshot.modelProvider
+          ? await options.modelProviders!.test((c as any).get("agentConfigActorId"),profiles(c).agentId,snapshot.modelProvider,snapshot.model,snapshot.env,snapshot.executionDriver)
+          : await tester.testSnapshot(snapshot);
+        await validate(c,snapshot.modelProvider,snapshot.model);
         new AgentStore(options.db).requireOwner((c as any).get("agentConfigActorId"),(c as any).get("agentConfigAgentId"));
         const revision = profiles(c).recordValidation(revisionId, result);
         return c.json({ result, revision }, result.success ? 200 : 422);
@@ -99,9 +112,11 @@ export function createAgentConfigRoutes(options: AgentConfigRouteOptions) {
         return domainError(c, error);
       }
     })
-    .post("/revisions/:id/activate", (c) => {
+    .post("/revisions/:id/activate", async (c) => {
       try {
         if (!profiles(c).getRevision(c.req.param("id"))) return c.json({status:"error",code:"not_found"},404);
+        const revision=profiles(c).getRevision(c.req.param("id"))!;
+        await validate(c,revision.modelProvider,revision.model);
         const snapshot = active.activate(
           profiles(c).agentId,
           c.req.param("id"),
@@ -141,6 +156,7 @@ function publicSnapshot(snapshot: ReturnType<ActiveAgentConfigService["resolveEx
 function domainError(c: Parameters<Parameters<Hono["onError"]>[0]>[1], error: unknown) {
   if(error instanceof AgentError && error.code==="agent_profile_in_use")return c.json({status:"error",code:error.code,message:"该模型配置正在被分身使用，请先在分身设置中改为跟随激活配置或选择其他模型。"},409);
   if (error instanceof AgentError) return c.json({status:"error",code:error.code},error.status);
+  if (error instanceof ExecutionError) return c.json({status:"error",code:error.code},error.status as 400);
   const message = error instanceof Error ? error.message : String(error);
   const conflict = /validated before activation|active Agent profile/i.test(message);
   return c.json({

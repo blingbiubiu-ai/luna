@@ -4,10 +4,11 @@ import type {DrizzleDB} from "@/data";
 import {AgentError} from "@/agents/agent-store";
 import {AgentPluginStore,PluginConfigConflictError,agentPluginWrite} from "@/plugins/agent-plugin-store";
 import type {PluginRegistry} from "@/plugins/registry";
+import type {ModelProviderService} from "@/model-providers/service";
 import {isGuardResponse,requireDashboardOnly} from "../auth/guards";
 
 /** Agent owner controls activation and write-only secrets; installation remains a platform operation. */
-export function createAgentPluginRoutes(db:DrizzleDB,registry:PluginRegistry){
+export function createAgentPluginRoutes(db:DrizzleDB,registry:PluginRegistry,models?:ModelProviderService){
  const store=new AgentPluginStore(db,registry);
  return new Hono().onError((error,c)=>{
   if(error instanceof PluginConfigConflictError)return c.json({status:"error",code:error.code,currentRevision:error.currentRevision},409);
@@ -23,6 +24,8 @@ export function createAgentPluginRoutes(db:DrizzleDB,registry:PluginRegistry){
  }).put("/:agentId/plugins/:pluginId",async c=>{
   const auth=requireDashboardOnly(c);if(isGuardResponse(auth))return auth;
   const body=agentPluginWrite.parse(await c.req.json());
-  return c.json(store.put(auth.account.id,c.req.param("agentId"),c.req.param("pluginId"),body));
+  const saved=store.put(auth.account.id,c.req.param("agentId"),c.req.param("pluginId"),body);
+  if(!body.enabled)await models?.disable(auth.account.id,c.req.param("agentId"),c.req.param("pluginId"));
+  return c.json(saved);
  });
 }

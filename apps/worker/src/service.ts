@@ -10,6 +10,8 @@ import { EnvironmentManager } from "./environment-manager";
 import { workerServer, executorCallbackServer } from "./server";
 import { nosuidStartupWarning } from "./root-host";
 import { WorkerUpgradeManager } from "./upgrade";
+import { WorkerModelProviderManager } from "./model-providers/manager";
+import { testModelProfile } from "./model-providers/test";
 
 export async function runWorker(config: WorkerConfig): Promise<void> {
   const db = openPlatformExecutionDatabase(join(config.dataRoot, "worker.sqlite"));
@@ -28,13 +30,27 @@ export async function runWorker(config: WorkerConfig): Promise<void> {
   if (nosuid) console.error(JSON.stringify({ level: "warn", msg: nosuid }));
   const manager = new EnvironmentManager(new EnvironmentStore(db), driver);
   let link: ServiceLink | undefined;
+  const models = new WorkerModelProviderManager({ db, dataRoot: config.dataRoot, workerId: config.workerId,
+    ready: () => !link || link.ready,
+    active: assignment => {
+      const reservation = manager.store.byReservationId(assignment.executionEnvironmentId, assignment.reservationId);
+      const occupant = reservation?.occupant;
+      return reservation?.state === "ready" && occupant?.kind === "job" && occupant.jobId === assignment.jobId
+        && occupant.assignmentId === assignment.assignmentId && occupant.requestHash === assignment.requestHash
+        && occupant.scope.agentId === assignment.scope.agentId && occupant.scope.shadowId === assignment.scope.shadowId;
+    },
+    test: (model, env, executionDriver) => testModelProfile(config, runtime, model, env, executionDriver),
+  });
+  const modelPort = config.modelPort ?? config.port + 200;
+  if (modelPort > 65535 || modelPort === config.port || modelPort === callbackPort) throw new Error("Invalid Worker model port");
+  models.start(modelPort, config.modelHost);
   let stopFn: (() => Promise<void>) | undefined;
   const upgrade = new WorkerUpgradeManager(config, {
     onStatusChange: () => link?.heartbeat(),
     onRestart: () => { void stopFn?.(); },
   });
-  link = config.serviceUrl ? new ServiceLink(manager, grants, config.serviceUrl, config.controlToken, upgrade) : undefined;
-  const server = workerServer(grants, manager, link ? (job, instance, body) => link!.events(job, instance, body) : undefined, upgrade);
+  link = config.serviceUrl ? new ServiceLink(manager, grants, config.serviceUrl, config.controlToken, upgrade, models) : undefined;
+  const server = workerServer(grants, manager, link ? (job, instance, body) => link!.events(job, instance, body) : undefined, upgrade, models);
   await new Promise<void>((resolve, reject) => { server.once("error", reject); server.listen(config.port, config.listenHost, resolve); });
   const callbackServer = callbackPort && link ? executorCallbackServer(grants, (job, instance, body) => link!.events(job, instance, body)) : undefined;
   if (callbackServer) await new Promise<void>((resolve, reject) => {
@@ -43,10 +59,11 @@ export async function runWorker(config: WorkerConfig): Promise<void> {
   link?.start();
   let reaping = false;
   const timer = setInterval(() => {
+    models.reconcile();
     if (reaping) return; reaping = true;
     void manager.reap().catch(() => { /* Unreachable state retains occupancy and containers. */ }).finally(() => { reaping = false; });
   }, 5000);
-  const stop = async () => { link?.stop(); clearInterval(timer); if (callbackServer) await closeExecutionServer(callbackServer); await closeExecutionServer(server); db.close(); process.exit(0); };
+  const stop = async () => { link?.stop(); clearInterval(timer); await models.close(); if (callbackServer) await closeExecutionServer(callbackServer); await closeExecutionServer(server); db.close(); process.exit(0); };
   stopFn = stop;
   process.once("SIGTERM", () => { void stop(); }); process.once("SIGINT", () => { void stop(); });
 }

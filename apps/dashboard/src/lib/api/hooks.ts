@@ -1855,6 +1855,7 @@ export interface DashboardAgentTypeDescriptor {
 export type DashboardExecutionDriver = "stdio" | "pty";
 
 export interface DashboardAgentProfileRevision {
+  modelProvider?:DashboardModelProviderReference;
   id: string;
   revisionNumber: number;
   model: string;
@@ -1867,6 +1868,9 @@ export interface DashboardAgentProfileRevision {
   validationResult: unknown;
   validatedAt: number | null;
   createdAt: number;
+}
+export interface DashboardModelProviderReference {
+  kind:"worker-plugin";pluginId:string;providerId:string;workerId:string;accountId:string;credentialRevision:string;releaseSha256:string;
 }
 
 export interface DashboardAgentProfile {
@@ -1895,6 +1899,7 @@ export type DashboardAgentConfigStatus =
     };
 
 export interface CreateAgentProfileInput {
+  modelProvider?:DashboardModelProviderReference|null;
   name: string;
   agentType: DashboardAgentType;
   model: string;

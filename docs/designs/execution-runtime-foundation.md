@@ -1,5 +1,11 @@
 # Luna Execution Runtime
 
+Worker plugin model sources are pinned in Profile/invocation references, context preparation and
+hashed Job input. The binding Worker supplies execution-scoped model keys through private Credentials
+after checking the accepted Job/assignment. Direct and reverse Workers both mediate those Executor
+calls; model sources disable cross-Worker failover and reject routing conflicts. Model APIs run on a
+separate Worker listener, not the callback listener. See [Worker Model Providers](worker-model-providers.md).
+
 Shared execution modules are Bun workspace packages. Consumers declare
 `workspace:*` dependencies and import `@luna/runner-protocol`,
 `@luna/execution-store`, or `@luna/execution-transport` through their package

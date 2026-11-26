@@ -7,6 +7,8 @@ import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from "@/components/ui/sheet";
 import { Input } from "@/components/ui/input";
 import { SelectField } from "@/components/ui/select-field";
+import {WorkerModels} from "../plugins/worker-models";
+import type {DashboardModelProviderReference} from "@/lib/api/hooks";
 import type {
   CreateAgentProfileInput,
   DashboardAgentConfigStatus,
@@ -17,6 +19,7 @@ import type {
 } from "@/lib/api";
 
 export function AgentConfigDashboardView({
+  agentId,
   status,
   types,
   profiles,
@@ -28,6 +31,7 @@ export function AgentConfigDashboardView({
   onActivate,
   onDelete,
 }: {
+  readonly agentId?:string;
   readonly status: DashboardAgentConfigStatus;
   readonly types: readonly DashboardAgentTypeDescriptor[];
   readonly profiles: readonly DashboardAgentProfile[];
@@ -45,6 +49,7 @@ export function AgentConfigDashboardView({
   const { t } = useTranslation();
   const [editing, setEditing] = useState<DashboardAgentProfile | null>(null);
   const [open, setOpen] = useState(false);
+  const [fromProvider,setFromProvider]=useState(false);
   const [saving, setSaving] = useState(false);
   const [selected, setSelected] = useState<DashboardAgentType | "all">("all");
   const [query, setQuery] = useState("");
@@ -76,7 +81,7 @@ export function AgentConfigDashboardView({
     try { await action(); } catch (cause) { setActionError(String(cause)); }
     finally { setBusy(null); }
   }
-  function edit(profile: DashboardAgentProfile | null) { setEditing(profile); setOpen(true); }
+  function edit(profile: DashboardAgentProfile | null,provider=false) { setEditing(profile);setFromProvider(provider);setOpen(true); }
 
   return (
     <div className="mx-auto w-full max-w-7xl space-y-6 px-5 py-7 sm:px-8">
@@ -84,6 +89,7 @@ export function AgentConfigDashboardView({
         <h1 className="text-2xl font-semibold tracking-tight">{t("Model Configuration")}</h1>
         <div className="flex flex-wrap items-center gap-2">
           <Button disabled={loading || types.length === 0} onClick={() => edit(null)}><PlusIcon />{t("New Profile")}</Button>
+          {agentId?<Button variant="outline" disabled={loading} onClick={()=>edit(null,true)}>从 Provider 添加</Button>:null}
         </div>
       </header>
       <div className="flex flex-wrap gap-2 text-xs text-muted-foreground">
@@ -130,7 +136,7 @@ export function AgentConfigDashboardView({
       <Sheet open={open} onOpenChange={(value) => { if (!saving) setOpen(value); }}>
         <SheetContent side="right" className="w-full overflow-y-auto sm:max-w-xl" showCloseButton={!saving}>
           <SheetHeader className="border-b px-6 py-5"><SheetTitle>{editing ? `${t("Edit")} ${editing.name}` : t("New Profile")}</SheetTitle><SheetDescription>{editing ? t("Save your changes as a new revision, then test and activate it.") : t("Configure an agent and test its connection before activation.")}</SheetDescription></SheetHeader>
-          {open ? <ProfileEditor key={editing?.id ?? "new"} editing={editing} types={types} onCreate={onCreate} onCreateRevision={onCreateRevision} onCancel={() => setOpen(false)} onSavingChange={setSaving} /> : null}
+          {open ? <ProfileEditor key={`${editing?.id ?? "new"}/${fromProvider}`} fromProvider={fromProvider} {...(agentId ? {agentId} : {})} editing={editing} types={types} onCreate={onCreate} onCreateRevision={onCreateRevision} onCancel={() => setOpen(false)} onSavingChange={setSaving} /> : null}
         </SheetContent>
       </Sheet>
     </div>
@@ -138,6 +144,8 @@ export function AgentConfigDashboardView({
 }
 
 function ProfileEditor({
+  fromProvider,
+  agentId,
   editing,
   types,
   onCreate,
@@ -145,6 +153,8 @@ function ProfileEditor({
   onCancel,
   onSavingChange,
 }: {
+  readonly fromProvider:boolean;
+  readonly agentId?:string;
   readonly editing: DashboardAgentProfile | null;
   readonly types: readonly DashboardAgentTypeDescriptor[];
   readonly onCreate: (input: CreateAgentProfileInput) => Promise<unknown>;
@@ -156,7 +166,7 @@ function ProfileEditor({
   readonly onSavingChange: (value: boolean) => void;
 }) {
   const { t } = useTranslation();
-  const defaultType = editing?.agentType ?? types[0]?.type ?? "claude";
+  const defaultType = editing?.agentType ?? (fromProvider?"codex":types[0]?.type ?? "claude");
   const [agentType, setAgentType] = useState<DashboardAgentType>(defaultType);
   const [name, setName] = useState(editing?.name ?? "");
   const [model, setModel] = useState(editing?.latestRevision.model ?? "");
@@ -164,6 +174,8 @@ function ProfileEditor({
   const [resume, setResume] = useState(editing?.latestRevision.resumeOnModelChange ?? true);
   const { CODEX_PROVIDER_MODE: initialConnection, ...initialEnv } = editing?.latestRevision.env ?? {};
   const [gateway, setGateway] = useState(initialConnection === "gateway");
+  const [workerMode,setWorkerMode]=useState(fromProvider||!!editing?.latestRevision.modelProvider);
+  const [source,setSource]=useState<DashboardModelProviderReference|null>(editing?.latestRevision.modelProvider??null);
   const [envText, setEnvText] = useState(formatPairs(initialEnv));
   const [replacements, setReplacements] = useState<Record<string, string>>({});
   const [newSecrets, setNewSecrets] = useState<Array<{ id: number; key: string; value: string }>>([]);
@@ -183,10 +195,12 @@ function ProfileEditor({
     setSaveError(null);
     try {
       const env = parsePairs(envText);
+      if(workerMode && (agentType!=="codex" || !source || !model))throw new Error("请选择 Worker 账号和插件模型。");
       if (agentType === "codex") {
-        if (gateway) env.CODEX_PROVIDER_MODE = "gateway";
+        if (gateway && !workerMode) env.CODEX_PROVIDER_MODE = "gateway";
         else delete env.CODEX_PROVIDER_MODE;
       }
+      if(workerMode)delete env.OPENAI_BASE_URL;
       const secretValues: Record<string, string> = { ...replacements };
       for (const secret of newSecrets) {
         const key = secret.key.trim();
@@ -196,12 +210,13 @@ function ProfileEditor({
       }
       if (Object.values(secretValues).some((value) => value.trim().length === 0)) throw new Error("Enter a value for each new or replacement secret, or cancel that change.");
       const common = {
+        modelProvider:workerMode?source:null,
         model,
         executionDriver,
         resumeOnModelChange: resume,
         env,
         secrets: Object.fromEntries(
-          Object.entries(secretValues).map(([key, value]) => [key, { set: value }]),
+          [...Object.entries(secretValues).filter(([key])=>!workerMode||key!=="OPENAI_API_KEY").map(([key, value]) => [key, { set: value }]),...(workerMode&&configuredKeys.includes("OPENAI_API_KEY")?[["OPENAI_API_KEY",{clear:true as const}]]:[])],
         ),
         customSensitiveKeys: Object.keys(secretValues).filter(
           (key) => !descriptor?.envFields.some((field) => field.key === key),
@@ -247,7 +262,7 @@ function ProfileEditor({
         </label>
         <label className="space-y-1 text-sm"><span className="block">{t("Profile name")}</span><Input disabled={editing !== null} onChange={(e) => setName(e.target.value)} required value={name} />
         </label>
-        <label className="space-y-1 text-sm"><span className="block">{t("Model")}</span><Input onChange={(e) => setModel(e.target.value)} required value={model} />
+        <label className="space-y-1 text-sm"><span className="block">{t("Model")}</span><Input readOnly={workerMode} onChange={(e) => setModel(e.target.value)} required value={model} />
         </label>
         <label className="space-y-1 text-sm"><span className="block">{t("Execution driver")}</span>
           <SelectField
@@ -267,19 +282,21 @@ function ProfileEditor({
           <SelectField
             aria-label={t("Connection")}
             fullWidth
-            value={gateway ? "gateway" : "default"}
-            onValueChange={(next) => setGateway(next === "gateway")}
+            value={workerMode ? "worker" : gateway ? "gateway" : "default"}
+            onValueChange={(next) => {setGateway(next === "gateway");setWorkerMode(next==="worker");}}
             options={[
               { value: "default", label: t("Default OpenAI") },
               { value: "gateway", label: t("Custom gateway") },
+              ...(agentId?[{value:"worker",label:"已登录 Provider"}]:[]),
             ]}
           />
           {gateway ? <span className="block text-xs text-muted-foreground">{t("Set OPENAI_BASE_URL in Environment variables and OPENAI_API_KEY in Secrets.")}</span> : null}
         </label>
       ) : null}
+      {workerMode && agentType==="codex" && agentId ? <WorkerModels key={agentId} agentId={agentId} {...(source?{selected:source}:{})} model={model} onSelect={(reference,nextModel)=>{setSource(reference);setModel(nextModel);if(!name&&reference&&nextModel)setName(`${reference.providerId} / ${nextModel}`);}}/>:null}
       <label className="flex items-center gap-2 text-sm">
         <input checked={resume} onChange={(e) => setResume(e.target.checked)} type="checkbox" />{t("Resume after model-only changes")}</label>
-      <div className="grid gap-4 sm:grid-cols-1">
+      {!workerMode?<><div className="grid gap-4 sm:grid-cols-1">
         <label className="space-y-1 text-sm">{t("Environment variables")}<textarea className="block min-h-24 w-full rounded-md border bg-background p-3 font-mono text-xs" onChange={(e) => setEnvText(e.target.value)} placeholder={agentType === "claude" ? "ANTHROPIC_BASE_URL=https://…" : "OPENAI_BASE_URL=https://…"} value={envText} />
         </label>
         <details open className="group rounded-xl border">
@@ -307,7 +324,7 @@ function ProfileEditor({
           </section>
         </details>
       </div>
-      <p className="text-xs text-muted-foreground">{t("Allowed custom prefixes:")}{" "}{descriptor?.allowedCustomPrefixes.join(", ") || "none"}{t(". Existing secrets remain unchanged when omitted.")}</p>
+      <p className="text-xs text-muted-foreground">{t("Allowed custom prefixes:")}{" "}{descriptor?.allowedCustomPrefixes.join(", ") || "none"}{t(". Existing secrets remain unchanged when omitted.")}</p></>:<p className="text-xs text-muted-foreground">API 地址、凭据和 Worker 绑定从 Provider 自动继承。</p>}
       <div className="sticky bottom-0 flex justify-end gap-2 border-t bg-background py-4">
         <Button disabled={saving} type="submit">{saving ? t("Saving…") : editing ? t("Save changes") : t("Create Profile")}</Button>
         <Button disabled={saving} onClick={onCancel} type="button" variant="outline">{t("Cancel")}</Button>

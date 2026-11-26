@@ -35,6 +35,7 @@ export const agentProfileRevisions = sqliteTable(
       mode: "boolean",
     }).notNull().default(true),
     env_json: text("env_json").notNull().default("{}"),
+    model_provider_json: text("model_provider_json"),
     config_fingerprint: text("config_fingerprint").notNull(),
     validation_state: text("validation_state").notNull().default("draft"),
     validation_result_json: text("validation_result_json"),

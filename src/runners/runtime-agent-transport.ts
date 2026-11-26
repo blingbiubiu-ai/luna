@@ -126,7 +126,7 @@ export class RuntimeAgentTransport implements AgentAttemptTransport {
         runnerContextId: options.runnerContextId, scopeKey, runnerKind: invocation.runnerKind,
         ...(projectId ? { projectId } : {}),
         ...(invocation.sessionId ? { sessionId: invocation.sessionId } : {}), ...(invocation.taskId ? { taskId: invocation.taskId } : {}), ...(invocation.taskRunId ? { taskRunId: invocation.taskRunId } : {}),
-        input: { runnerType, ...(executionDriver && executionDriver !== "stdio" ? { executionDriver, ...(ptyIdleTimeoutMs !== undefined ? { ptyIdleTimeoutMs } : {}) } : {}), prompt: extractTextContent(message), ...(model ? { model } : {}), ...(options.runnerSessionId ? { sessionId: options.runnerSessionId } : {}) },
+        input: { runnerType, ...(invocation.agentConfig?.modelProvider ? { modelProvider: invocation.agentConfig.modelProvider } : {}), ...(executionDriver && executionDriver !== "stdio" ? { executionDriver, ...(ptyIdleTimeoutMs !== undefined ? { ptyIdleTimeoutMs } : {}) } : {}), prompt: extractTextContent(message), ...(model ? { model } : {}), ...(options.runnerSessionId ? { sessionId: options.runnerSessionId } : {}) },
         retryPolicy: { maxConsecutiveRetries: new PlatformSettingsStore(this.db).get().execution.maxTransientRetries, maxTotalRetries: 10, baseDelayMs: 2000, maxDelayMs: 30000 },
         credentialsRevision: 1, timeoutMs: jobTimeoutMs(this.db, invocation) });
       job = this.store.createJob(this.client.runtimeId, request);
@@ -157,7 +157,7 @@ export class RuntimeAgentTransport implements AgentAttemptTransport {
           initialCredentials = renewInvocationCredentials(this.db, invocationId, initialCredentials.env, secret);
         }
         this.requireInvocationScope(invocationId);
-        const credentials = this.store.credentials(id, initialCredentials);
+        const credentials = this.store.credentials(id, { ...initialCredentials, ...(job.request.input.modelProvider ? { modelProvider: job.request.input.modelProvider } : {}) });
         await this.updateCredentials(id, credentials, invocationId);
       }
       let output = new RunnerOutputState(message.session_id, hooks);

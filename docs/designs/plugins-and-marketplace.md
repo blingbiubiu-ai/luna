@@ -2,6 +2,16 @@
 
 ## Purpose
 
+Plugins may also contribute Agent-scoped Worker model providers through `workerModelProviders`.
+These use a lightweight Service entrypoint and a checksummed Worker entrypoint rather than operation
+invocation. See [Worker Model Providers](worker-model-providers.md) for release delivery, isolated
+processes, credential import and execution authorization. Operation runtimes retain their existing location.
+
+Model providers can contribute an optional OAuth login label and adapter login methods. Dashboard
+links installed providers to Agent-scoped model configuration, where browser authorization binds
+an account to the selected Worker using the existing encrypted account import. Provider Profiles
+reuse that binding and model catalog instead of requiring manual API settings.
+
 Plugins keep Luna Core generic while allowing trusted extensions to contribute domain-specific operations, CLI commands, runner tools, and skills. Luna Core owns installation, authorization, runtime dispatch, artifact attribution, and Dashboard management. Plugin source code and release packages live outside the core repository.
 
 The first supported distribution channel is a trusted Git marketplace. This is intentionally simpler than a public marketplace: Luna is configured with a Git URL, an operator refreshes it manually, and installed or enabled plugin changes take effect after the Luna Service restarts.

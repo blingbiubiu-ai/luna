@@ -67,6 +67,7 @@ export class RuntimeScheduler {
     const job = this.jobs.require(id);
     if (job.placementState === "terminal") throw new ExecutionError(409, "job_already_terminal");
     const credentials = Credentials.parse(input);
+    if(contentHash(credentials.modelProvider??null)!==contentHash(job.job.input.modelProvider??null))throw new ExecutionError(409,"model_job_binding_conflict");
     const prior = this.credentials(id);
     if (credentials.revision < job.job.credentialsRevision || (prior && (credentials.revision < prior.revision || (credentials.revision === prior.revision && contentHash(credentials) !== contentHash(prior))))) throw new ExecutionError(409, "credentials_revision_conflict");
     writePrivateJson(this.secretPath("job", id), credentials);
@@ -137,7 +138,7 @@ export class RuntimeScheduler {
     const binding = this.binding(id); if (!binding) throw new ExecutionError(503, "job_not_placed");
     this.workers.validateExecutor(binding.handle.workerId, binding.handle.executorEndpoint);
     const credential = readPrivateJson(this.secretPath("control", binding.handle.instanceId)) as PrivateCredential;
-    if (this.workers.require(binding.handle.workerId).reverse) {
+    if (this.workers.require(binding.handle.workerId).reverse || this.jobs.require(id).job.input.modelProvider) {
       return { call: (method, path, body, signal) => this.workers.client(binding.handle.workerId).call("POST", "/v1/executor", { environmentId: binding.handle.environmentId, method, path, body, token: credential.token }, signal) };
     }
     return new ExecutionClient(binding.handle.executorEndpoint, credential.token);
@@ -168,6 +169,7 @@ export class RuntimeScheduler {
         const prepared = this.preparation.cached(current.job.runnerContextId);
         const input=this.preparation.input(current.job.runnerContextId);
         if(!prepared || !input)throw new ExecutionError(409,"context_preparation_required");
+        if(contentHash(input.modelProvider??null)!==contentHash(current.job.input.modelProvider??null) || (current.job.input.modelProvider && prepared.workerId!==current.job.input.modelProvider.workerId))throw new ExecutionError(409,"model_job_binding_conflict");
         if(input.invocationId!==current.job.invocationId || input.scopeKey!==current.job.scopeKey || input.projectId!==current.job.projectId || input.runnerKind!==current.job.runnerKind)
           throw new ExecutionError(409,"context_preparation_mismatch");
         if(contentHash(current.job.scope)!==contentHash(prepared.scope))throw new ExecutionError(409,"context_preparation_mismatch");

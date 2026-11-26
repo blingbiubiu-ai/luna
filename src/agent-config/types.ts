@@ -26,6 +26,7 @@ export type SecretUpdate =
   | { readonly clear: true };
 
 export interface AgentProfileInput {
+  readonly modelProvider?: import("@luna/runner-protocol").ModelProviderReference | null;
   readonly agentType: string;
   readonly model: string;
   readonly executionDriver?: string;
@@ -37,6 +38,7 @@ export interface AgentProfileInput {
 }
 
 export interface ValidatedAgentProfileInput {
+  readonly modelProvider?: import("@luna/runner-protocol").ModelProviderReference;
   readonly agentType: AgentType;
   readonly model: string;
   readonly executionDriver: ExecutionDriver;

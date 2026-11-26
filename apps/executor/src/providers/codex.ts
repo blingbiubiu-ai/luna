@@ -122,6 +122,7 @@ export const codexContainerRunnerProvider: ContainerRunnerProvider = {
   buildCliArgs(input: ContainerInput, sessionId?: string): string[] {
     // Avoid waiting for best-effort analytics uploads after the turn completes.
     const args = ["codex", "-c", "analytics.enabled=false", "-c", `project_doc_max_bytes=${CODEX_PROJECT_DOC_MAX_BYTES}`];
+    if(input.env?.CODEX_WEB_SEARCH_MODE==="disabled")args.push("-c",'web_search="disabled"');
     if (input.env?.CODEX_PROVIDER_MODE === "gateway") {
       const baseUrl = input.env.OPENAI_BASE_URL;
       if (!baseUrl || !input.env.OPENAI_API_KEY?.trim()) {

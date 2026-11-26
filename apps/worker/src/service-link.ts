@@ -1,3 +1,4 @@
+import {proxyExecutor} from "./model-providers/executor-proxy";
 import {ShadowPreparation} from "./shadow-preparation";
 import { statSync } from "node:fs";
 import { z } from "zod";
@@ -7,6 +8,8 @@ import { CONTAINER_STREAM_PATH, CONTAINER_STREAM_TOKEN_HEADER, Id } from "@luna/
 import { ContainerStreams } from "./container-streams";
 import type { EnvironmentManager } from "./environment-manager";
 import type { WorkerUpgradeManager } from "./upgrade";
+import type { WorkerModelProviderManager } from "./model-providers/manager";
+import { WORKER_MODEL_PROVIDER_CAPABILITY } from "@luna/runner-protocol";
 
 export class ServiceLink {
   private readonly shadowPreparation:ShadowPreparation;
@@ -20,7 +23,7 @@ export class ServiceLink {
   private healthCheck: Promise<void> | undefined;
   private requests = new Set<string>();
   readonly streams: ContainerStreams;
-  constructor(private manager: EnvironmentManager, private grants: TokenAuthority, readonly origin: string, private token: string, private upgrade?: WorkerUpgradeManager) {
+  constructor(private manager: EnvironmentManager, private grants: TokenAuthority, readonly origin: string, private token: string, private upgrade?: WorkerUpgradeManager, private models?: WorkerModelProviderManager) {
     this.streams = new ContainerStreams(manager, manager.driver.config, (streamId, token) => {
       const url = new URL(CONTAINER_STREAM_PATH + streamId, this.origin); url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
       return new WebSocket(url, { headers: { authorization: `Bearer ${this.token}`, [CONTAINER_STREAM_TOKEN_HEADER]: token } });
@@ -67,10 +70,11 @@ export class ServiceLink {
       ...(upgradeStatus && upgradeStatus.state !== "idle" ? { upgrade: upgradeStatus } : {}),
       capacity: config.capacity,
       occupied: this.manager.store.list().reduce((n, e) => n + this.manager.store.active(e.id).length, 0), ready: this.ready,
-      capabilities:["shadow-scope-v2","container-streams-v1","scope-reconcile-v1","home-upload-v1","owner-workspace-v1",...(this.upgrade ? ["worker-upgrade-v1"] : [])],
+      capabilities:["shadow-scope-v2","container-streams-v1","scope-reconcile-v1","home-upload-v1","owner-workspace-v1",...(this.models ? [WORKER_MODEL_PROVIDER_CAPABILITY] : []),...(this.upgrade ? ["worker-upgrade-v1"] : [])],
       error: this.localError ?? this.error, projects: config.projects.map(p => p.projectId) } });
   }
   events(jobId: string, instanceId: string, body: unknown): void {
+    this.models?.observeEvents(jobId,instanceId,body);
     if (this.socket?.readyState !== WebSocket.OPEN) throw new ExecutionError(503, "service_disconnected");
     this.send({ type: "events", jobId, instanceId, body });
   }
@@ -94,15 +98,7 @@ export class ServiceLink {
       if (request.path === "/v2/context-prepare") result = await this.shadowPreparation.prepare(request.body);
       else if(request.path==="/v2/context-preparations/release")result=this.shadowPreparation.store.release(request.body);
       else if (request.path === "/v1/executor") {
-        const call = z.object({ environmentId: Id, method: z.enum(["GET", "POST", "PUT", "DELETE"]), path: z.string(), body: z.unknown().optional(), token: z.string() }).parse(request.body);
-        this.manager.store.require(call.environmentId);
-        if (!/^\/v1\/(health|contexts|ingest-credentials|jobs)(\/|$)/.test(call.path)) throw new ExecutionError(403, "executor_route_denied");
-        if (call.path === "/v1/ingest-credentials" && call.method === "PUT") {
-          const body = z.object({ credentialId: Id, token: z.string(), runtimeId: Id }).parse(call.body);
-          const env = this.manager.store.require(call.environmentId);
-          this.grants.register(body.credentialId, body.token, { role: "executor", id: env.instanceId });
-        }
-        result = await new ExecutionClient(this.manager.driver.endpoint(call.environmentId), call.token).call(call.method, call.path, call.body);
+        result = await proxyExecutor(this.manager,this.grants,this.models,request.body);
       } else {
         if (["/v1/environments/prepare", "/v1/files", "/v1/containers/provision"].includes(request.path) && !this.ready) throw new ExecutionError(503, "worker_not_ready");
         result = await new ExecutionClient(`http://127.0.0.1:${this.manager.driver.config.port}`, this.manager.driver.config.controlToken).call(request.method, request.path, request.body);

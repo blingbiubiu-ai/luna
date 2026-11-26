@@ -6,6 +6,7 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { useDashboardAuthSession } from "@/lib/api";
 import { ApiFetchError, apiFetch } from "@/lib/api/client";
+import {WorkerModels} from "./worker-models";
 
 interface PluginChoice {
   id: string;
@@ -75,7 +76,7 @@ function AgentPlugins({ agentId }: { agentId: string }) {
         ))}
       </ul>
       {selected
-        ? <PluginConfigPanel key={selected.id} agentId={agentId} plugin={selected} path={`${path}/${encodeURIComponent(selected.id)}`} />
+        ? <div className="space-y-4"><PluginConfigPanel key={`${agentId}/${selected.id}`} agentId={agentId} plugin={selected} path={`${path}/${encodeURIComponent(selected.id)}`} /><WorkerModels key={`${agentId}/${selected.id}/${selected.enabled}`} agentId={agentId} pluginId={selected.id}/></div>
         : <p className="p-4 text-sm text-muted-foreground">请选择插件。</p>}
     </div>
   );

@@ -1,5 +1,11 @@
 # Service and Worker storage
 
+Worker model providers add immutable code under `plugins/releases/<plugin>/<digest>`, private child
+HOME under `agents/<agent>/model-providers/<plugin>`, and a 0600 key at
+`model-provider-secrets/master.key`. Account ciphertext, immutable revisions and grant hashes are
+Worker-owned SQLite records; these directories are never Runner mounts. Service stores masked
+account references only. See [Worker Model Providers](worker-model-providers.md).
+
 Service defaults to `~/.luna`; Worker defaults to `~/.luna-worker`. Local and
 remote Workers use the same configuration and binding model. Service does not
 scan Worker files, and Worker startup does not read Service-private directories.

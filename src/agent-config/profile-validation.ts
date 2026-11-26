@@ -1,4 +1,5 @@
 import { agentTypeDescriptor, isAgentType } from "./type-registry";
+import { ModelProviderReference } from "@luna/runner-protocol";
 import {
   isExecutionDriver,
   type AgentProfileInput,
@@ -33,6 +34,10 @@ export function validateAgentProfileInput(
   const descriptor = agentTypeDescriptor(input.agentType);
   const env = { ...(input.env ?? {}) };
   const secrets = { ...(input.secrets ?? {}) };
+  const modelProvider = input.modelProvider == null ? undefined : ModelProviderReference.parse(input.modelProvider);
+  if (modelProvider && (input.agentType !== "codex" || ["OPENAI_BASE_URL", "OPENAI_API_KEY", "CODEX_PROVIDER_MODE"].some(key => key in env || (key in secrets && !(key === "OPENAI_API_KEY" && "clear" in secrets[key]!))))) {
+    throw new Error("Worker plugin models require Codex and cannot override gateway URL or credentials");
+  }
   const customSensitive = new Set(input.customSensitiveKeys ?? []);
   const customNonSensitive = new Set(input.customNonSensitiveKeys ?? []);
   const knownFields = new Map(
@@ -81,6 +86,7 @@ export function validateAgentProfileInput(
   }
 
   return {
+    ...(modelProvider ? { modelProvider } : {}),
     agentType: input.agentType,
     model,
     executionDriver: rawDriver,

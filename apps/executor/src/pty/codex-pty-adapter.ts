@@ -652,6 +652,7 @@ export const codexPtyAdapter: PtyCliAdapter = {
       "-c", `shell_environment_policy.set.LUNA_TURN_ENV_FILE=${JSON.stringify(input.turnEnvFile)}`,
     ];
 
+    if(input.baseEnv.CODEX_WEB_SEARCH_MODE==="disabled")rootArgs.push("-c",'web_search="disabled"');
     if (input.baseEnv.CODEX_PROVIDER_MODE === "gateway") {
       const baseUrl = input.baseEnv.OPENAI_BASE_URL;
       if (!baseUrl || !input.baseEnv.OPENAI_API_KEY?.trim()) {

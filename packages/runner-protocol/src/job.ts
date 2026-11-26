@@ -1,8 +1,9 @@
 import { z } from "zod";
 import {ExecutionScope,ResourceSelection} from "./scope.js";
+import { ModelProviderReference } from "./model-provider.js";
 
-/** Opaque identifiers are never interpreted as filesystem paths. */
-export const Id = z.string().min(1).max(128).regex(/^[A-Za-z0-9_.-]+$/).refine((id) => id !== "." && id !== "..", "Invalid identifier");
+import { Id } from "./id.js";
+export { Id } from "./id.js";
 export const Sequence = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
 export const RunnerKind = z.enum(["main", "work", "task"]);
 export const ExecutionDriverKind = z.enum(["stdio", "pty"]);
@@ -29,6 +30,7 @@ export const JobRequest = z.object({
   retryPolicy: RetryPolicy.optional(),
   runnerKind: RunnerKind, sessionId: Id.optional(), taskId: Id.optional(), taskRunId: Id.optional(),
   input: z.object({
+    modelProvider: ModelProviderReference.optional(),
     runnerType: z.enum(["claude", "codex"]), executionDriver: ExecutionDriverKind.optional(),
     ptyIdleTimeoutMs: z.number().int().min(0).max(7 * 86400_000).optional(),
     prompt: z.string().max(8 * 1024 * 1024),
@@ -38,6 +40,7 @@ export const JobRequest = z.object({
   /** Shadow root switch at submission, and whether this Job's Runner may use sudo. */
   rootAccess: z.boolean().optional(), privileged: z.boolean().optional(),
 }).strict().superRefine((job, context) => {
+  if (job.input.modelProvider && (job.input.runnerType !== "codex" || !job.input.model)) context.addIssue({ code: "custom", message: "Worker models require a Codex model" });
   if (job.privileged && !job.rootAccess) context.addIssue({ code: "custom", message: "A privileged Job requires root access" });
   if(job.resourceRevision!==job.resources.digest)context.addIssue({code:"custom",message:"Resource revision mismatch"});
   if (job.runnerKind === "task" ? !job.taskId || !job.taskRunId : !job.sessionId) {
@@ -61,6 +64,7 @@ export type JobSubmission = z.infer<typeof JobSubmission>;
 export const Credentials = z.object({
   revision: Sequence.min(1), expiresAt: z.number().int().positive(),
   env: z.record(z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/), z.string()),
+  modelProvider: ModelProviderReference.optional(),
 }).strict();
 export type Credentials = z.infer<typeof Credentials>;
 

@@ -3,6 +3,8 @@ import { createPlatformSettingsRoutes } from "./routes/platform-settings";
 import {createPlatformAgentRoutes} from "./routes/platform-agents";
 import type {AgentLifecycleJob} from "@/agents/agent-lifecycle-store";
 import { getKernel } from "@/server/routes/kernel";
+import {ModelProviderService} from "@/model-providers/service";
+import {createModelProviderRoutes,createModelProviderCallbackRoutes} from "./routes/model-providers";
 import type { WorkerSocketData, WorkerStreamSocketData } from "@/runtime/worker-gateway";
 import type { ContainerConsoleSocketData } from "./container-console";
 import { CONTAINER_STREAM_PATH } from "@luna/runner-protocol";
@@ -94,6 +96,7 @@ function createApp(
   resumeChannels?: (job: AgentLifecycleJob) => Promise<void>,
   feishuFetch?: FeishuFetch,
 ) {
+  const modelProviders=db && pluginRegistry ? new ModelProviderService(db,pluginRegistry,()=>getKernel().executionRuntime) : undefined;
   return (
     new Hono()
       // CORS & gzip compression middleware
@@ -212,7 +215,9 @@ function createApp(
       .route("/api/agent", agentRoutes)
       .route("/api/accounts", db === undefined ? new Hono() : createAccountRoutes(db))
       .route("/api/platform-settings", db === undefined ? new Hono() : createPlatformSettingsRoutes(db))
-      .route("/api/agents",db === undefined ? new Hono() : createPlatformAgentRoutes(db,pluginRegistry,resumeChannels))
+      .route("/api/agents",db === undefined ? new Hono() : createPlatformAgentRoutes(db,pluginRegistry,resumeChannels,modelProviders))
+      .route("/",modelProviders ? createModelProviderCallbackRoutes(modelProviders) : new Hono())
+      .route("/api/model-providers",modelProviders ? createModelProviderRoutes(modelProviders) : new Hono())
       .route(
         "/api/agent-config",
         db === undefined
@@ -220,6 +225,7 @@ function createApp(
           : createAgentConfigRoutes({
             db,
             cipher: AgentSecretCipher.tryFromEnvironment(),
+            ...(modelProviders ? {modelProviders} : {}),
           }),
       )
   );

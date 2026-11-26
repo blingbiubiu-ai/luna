@@ -7448,7 +7448,8 @@ describe("luna dashboard build coverage", () => {
     expect(artifactJs).toContain("Artifact link expired");
     expect(artifactJs).toContain("Preview unavailable");
     for (const path of ["/sessions/", "/sessions/$sessionId", "/users/", "/tasks/", "/tasks/$taskId"]) {
-      expect(js).toContain(`createFileRoute("/$agentId${path}")`);
+      // Production minification can rename createFileRoute; the registered path is stable.
+      expect(js).toContain(JSON.stringify(`/$agentId${path}`));
     }
   });
 

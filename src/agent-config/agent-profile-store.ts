@@ -1,4 +1,5 @@
 import {runnerInvocations} from "@/data/schema";
+import { ModelProviderReference } from "@luna/runner-protocol";
 import {AgentError, AgentStore} from "@/agents/agent-store";
 import { createHash } from "node:crypto";
 import { and, desc, eq, isNull, ne } from "drizzle-orm";
@@ -30,6 +31,7 @@ export interface SecretSummary {
 }
 
 export interface AgentProfileRevisionView {
+  readonly modelProvider?: ModelProviderReference;
   readonly id: string;
   readonly revisionNumber: number;
   readonly model: string;
@@ -122,9 +124,10 @@ export class AgentProfileStore {
     const profile = this.db.select().from(agentProfiles)
       .where(and(eq(agentProfiles.id, profileId), eq(agentProfiles.agent_id, this.agentId), isNull(agentProfiles.deleted_at))).get();
     if (profile === undefined) throw new Error(`Agent profile not found: ${profileId}`);
-    const validated = validateAgentProfileInput({ ...input, agentType: profile.agent_type });
     const latest = this.latestRevisionRow(profileId);
     if (latest === undefined) throw new Error(`Agent profile has no revision: ${profileId}`);
+    const source = input.modelProvider === undefined && latest.model_provider_json ? ModelProviderReference.parse(JSON.parse(latest.model_provider_json)) : input.modelProvider;
+    const validated = validateAgentProfileInput({ ...input, ...(source === undefined ? {} : { modelProvider: source }), agentType: profile.agent_type });
     const revision = this.db.transaction((tx) => {
       const created = this.insertRevision(
         tx,
@@ -199,6 +202,7 @@ export class AgentProfileStore {
     const secrets = this.db.select().from(agentProfileSecrets)
       .where(eq(agentProfileSecrets.revision_id, revision.id)).all();
     return {
+      ...(revision.model_provider_json ? { modelProvider: ModelProviderReference.parse(JSON.parse(revision.model_provider_json)) } : {}),
       id: revision.id,
       revisionNumber: revision.revision_number,
       model: revision.model,
@@ -239,6 +243,7 @@ export class AgentProfileStore {
       : db.select().from(agentProfileSecrets)
         .where(eq(agentProfileSecrets.revision_id, previous.id)).all();
     const plaintextSecrets = this.resolveSecrets(profile.id, previous, previousSecrets, input.secrets);
+    if(input.modelProvider && plaintextSecrets.OPENAI_API_KEY)throw new Error("Worker plugin models cannot retain a gateway API key; clear it explicitly");
     if (
       input.agentType === "codex" && input.env.CODEX_PROVIDER_MODE === "gateway" &&
       !plaintextSecrets.OPENAI_API_KEY?.trim()
@@ -257,6 +262,7 @@ export class AgentProfileStore {
           this.secretCipher().credentialIdentity(key, value),
         ]),
       ),
+      input.modelProvider,
     );
     const revision = {
       id: revisionId,
@@ -266,6 +272,7 @@ export class AgentProfileStore {
       execution_driver: input.executionDriver,
       resume_on_model_change: input.resumeOnModelChange,
       env_json: JSON.stringify(sortRecord(input.env)),
+      model_provider_json: input.modelProvider ? JSON.stringify(input.modelProvider) : null,
       config_fingerprint: fingerprint,
       validation_state: "draft",
       validation_result_json: null,
@@ -348,6 +355,7 @@ function configFingerprint(
   resume: boolean,
   env: Record<string, string>,
   secretIdentities: Record<string, string>,
+  modelProvider?: ModelProviderReference,
 ): string {
   return createHash("sha256").update(JSON.stringify({
     agentType,
@@ -356,6 +364,7 @@ function configFingerprint(
     resume,
     env: sortRecord(env),
     secretIdentities: sortRecord(secretIdentities),
+    ...(modelProvider ? { modelProvider } : {}),
   })).digest("hex");
 }
 

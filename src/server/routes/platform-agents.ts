@@ -3,6 +3,7 @@ import {createAgentContainerRoutes} from "./agent-containers";
 import {createShadowRootAccessRoutes} from "./shadow-root-access";
 import {createAgentPluginRoutes} from "./agent-plugins";
 import type {PluginRegistry} from "@/plugins/registry";
+import type {ModelProviderService} from "@/model-providers/service";
 import { createAgentKnowledgeSourceRoutes } from "./agent-knowledge-source";
 import {createAgentMemoryRoutes} from "./agent-memories";
 import {createAccountLinkRoutes} from "./account-links";
@@ -40,7 +41,7 @@ const grantInput = z.object({subjectType: z.enum(["user", "group"]), subjectId: 
   effect: z.enum(["allow", "deny"]), expiresAt: z.number().int().positive().optional()}).strict();
 
 /** Agent self-service routes. Existing deployments must pass the offline-conversion startup gate. */
-export function createPlatformAgentRoutes(db: DrizzleDB, registry?:PluginRegistry, resumeChannels?: (job: AgentLifecycleJob) => Promise<void>) {
+export function createPlatformAgentRoutes(db: DrizzleDB, registry?:PluginRegistry, resumeChannels?: (job: AgentLifecycleJob) => Promise<void>, modelProviders?:ModelProviderService) {
   const store = new AgentStore(db);
   const actor = (c: Context) => {
     const auth = requireDashboardOnly(c);
@@ -56,7 +57,7 @@ export function createPlatformAgentRoutes(db: DrizzleDB, registry?:PluginRegistr
     .route("/",createAgentWorkerAccessRoutes(db))
     .route("/",createAgentContainerRoutes(db))
     .route("/",createShadowRootAccessRoutes(db))
-    .route("/",registry ? createAgentPluginRoutes(db,registry) : new Hono())
+    .route("/",registry ? createAgentPluginRoutes(db,registry,modelProviders) : new Hono())
     .use("*", async (c, next) => {
       const auth = requireDashboardOnly(c);
       if (isGuardResponse(auth)) return auth;

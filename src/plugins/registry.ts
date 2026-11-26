@@ -23,6 +23,7 @@ export interface RegisteredPlugin {
   readonly createRuntime: PluginRuntimeFactory;
   readonly parseCommandInput?: import("./manifest").PluginCommandInputParser;
   readonly config: unknown;
+  readonly installedRelease?: { readonly path: string; readonly sha256: string };
 }
 
 export class PluginRegistry {
@@ -37,6 +38,7 @@ export class PluginRegistry {
     createRuntime: PluginRuntimeFactory,
     config: unknown,
     parseCommandInput?: import("./manifest").PluginCommandInputParser,
+    installedRelease?: RegisteredPlugin["installedRelease"],
   ): RegisteredPlugin {
     validateManifestShape(manifest);
     this.assertNamespaces(manifest);
@@ -47,6 +49,7 @@ export class PluginRegistry {
       createRuntime,
       ...(parseCommandInput === undefined ? {} : { parseCommandInput }),
       config,
+      ...(installedRelease ? { installedRelease } : {}),
     } satisfies RegisteredPlugin;
     this.plugins.set(manifest.id, registered);
 
@@ -135,6 +138,11 @@ export class PluginRegistry {
   }
 
   private assertPluginCanRegister(manifest: PluginManifest): void {
+    for (const provider of manifest.workerModelProviders ?? []) {
+      if (this.listPlugins().some(plugin => plugin.manifest.workerModelProviders?.some(p => p.id === provider.id))) {
+        throw new PluginManifestValidationError(`Model provider already registered: ${provider.id}`);
+      }
+    }
     if (this.plugins.has(manifest.id)) {
       throw new PluginManifestValidationError(
         `Plugin id "${manifest.id}" is already registered.`,
@@ -252,6 +260,27 @@ function validateManifestShape(manifest: PluginManifest): void {
     throw new PluginManifestValidationError(
       `Plugin "${manifest.id}" must declare operations; legacy capabilities manifests are no longer supported.`,
     );
+  }
+
+  if (manifest.workerModelProviders !== undefined) {
+    if (!Array.isArray(manifest.workerModelProviders) || manifest.agentScopeVersion !== 2) {
+      throw new PluginManifestValidationError("Worker model providers require an Agent-scoped manifest.");
+    }
+    const ids = new Set<string>();
+    for (const provider of manifest.workerModelProviders) {
+      if (!provider || !/^[a-z][a-z0-9_-]*$/.test(provider.id) || ids.has(provider.id)
+        || typeof provider.displayName !== "string" || !provider.displayName.trim()
+        || typeof provider.entrypoint !== "string" || !/^[A-Za-z0-9_./-]+$/.test(provider.entrypoint)
+        || provider.entrypoint.startsWith("/") || provider.entrypoint.split("/").some((p: string) => p === ".." || !p)
+        || !Array.isArray(provider.protocols) || provider.protocols.length !== 1 || provider.protocols[0] !== "responses") {
+        throw new PluginManifestValidationError("Invalid Worker model provider contribution.");
+      }
+      ids.add(provider.id);
+      if(provider.login && (provider.login.type!=="oauth" || typeof provider.login.label!=="string" || !provider.login.label.trim() || provider.login.label.length>128))throw new PluginManifestValidationError("Invalid Worker model login contribution.");
+      if(provider.login?.callbackPath!==undefined && (typeof provider.login.callbackPath!=="string" || provider.login.callbackPath.length>256
+        || !/^\/[A-Za-z0-9_-]+(?:\/[A-Za-z0-9_-]+)*$/.test(provider.login.callbackPath)
+        || /^\/(?:api|agent|platform|assets|artifacts|auth|login|mcp)(?:\/|$)/.test(provider.login.callbackPath)))throw new PluginManifestValidationError("Invalid Worker model login callback path.");
+    }
   }
 
   if (manifest.defaultPermissionRules !== undefined) {

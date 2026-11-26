@@ -4,13 +4,53 @@ import { Id, ReleaseProof } from "@luna/runner-protocol";
 import { ExecutionError } from "@luna/execution-store";
 import type { EnvironmentManager } from "./environment-manager";
 import type { WorkerUpgradeManager } from "./upgrade";
+import type { WorkerModelProviderManager } from "./model-providers/manager";
+import { ModelProviderReference } from "@luna/runner-protocol";
+import {proxyExecutor} from "./model-providers/executor-proxy";
 
 /** Private local environment API; authenticated Executor callbacks are relayed to Service. */
-export function workerServer(authority: TokenAuthority, manager: EnvironmentManager, events?: (jobId: string, instanceId: string, body: unknown) => void, upgrade?: WorkerUpgradeManager) {
+export function workerServer(authority: TokenAuthority, manager: EnvironmentManager, events?: (jobId: string, instanceId: string, body: unknown) => void, upgrade?: WorkerUpgradeManager, models?: WorkerModelProviderManager) {
   return executionServer(authority, async ({ peer, request, response, url }) => {
     const ingest = /^\/v1\/ingest\/jobs\/([^/]+)\/events$/.exec(url.pathname);
     if (request.method === "POST" && ingest && events) { requirePeer(peer, "executor"); events(Id.parse(ingest[1]), peer.id, await readJson(request, 16 * 1024 * 1024)); json(response, 204); return; }
     requirePeer(peer, "runtime", manager.driver.config.runtimeId);
+    if(request.method==="POST" && url.pathname==="/v1/executor"){
+      json(response,200,await proxyExecutor(manager,authority,models,await readJson(request,16*1024*1024)));return;
+    }
+    if (request.method === "POST" && url.pathname.startsWith("/v1/model-providers/")) {
+      if (!models) throw new ExecutionError(409, "worker_model_provider_unsupported");
+      const body = await readJson(request, 24 * 1024 * 1024);
+      if (url.pathname === "/v1/model-providers/install") { json(response, 200, models.install(body)); return; }
+      if (url.pathname === "/v1/model-providers/import") { json(response, 200, await models.importAccount(body)); return; }
+      if(url.pathname==="/v1/model-providers/login/start"){json(response,200,await models.logins.start(body));return;}
+      if(url.pathname.startsWith("/v1/model-providers/login/")){
+        const input=z.object({agentId:Id,flowId:Id,params:z.record(z.string(),z.string()).optional()}).strict().parse(body);
+        if(url.pathname.endsWith("/poll")){json(response,200,await models.logins.poll(input.flowId,input.agentId));return;}
+        if(url.pathname.endsWith("/callback")){json(response,200,await models.logins.callback(input.flowId,input.agentId,input.params??{}));return;}
+        if(url.pathname.endsWith("/cancel")){await models.logins.cancel(input.flowId,input.agentId);json(response,200,{cancelled:true});return;}
+      }
+      if(url.pathname==="/v1/model-providers/info"){
+        const input=z.object({agentId:Id,reference:ModelProviderReference}).strict().parse(body);models.accounts.credential(input.agentId,input.reference);
+        json(response,200,{protocol:"OpenAI Responses",baseUrl:`http://host.docker.internal:${models.port}/v1`,workerLocalBaseUrl:`http://127.0.0.1:${models.port}/v1`,responsesPath:"/responses",modelsPath:"/models",authentication:"execution-scoped"});return;
+      }
+      if (url.pathname === "/v1/model-providers/account") {
+        const input = z.object({ agentId: Id, pluginId: Id, providerId: Id }).strict().parse(body);
+        json(response, 200, models.accounts.current(input.agentId, input.pluginId, input.providerId)); return;
+      }
+      if (url.pathname === "/v1/model-providers/disable") {
+        const input = z.object({ agentId: Id, pluginId: Id }).strict().parse(body);
+        models.disable(input.agentId, input.pluginId); json(response, 200, { disabled: true }); return;
+      }
+      if (url.pathname === "/v1/model-providers/refresh") {
+        const input = z.object({ agentId: Id, reference: ModelProviderReference }).strict().parse(body);
+        json(response, 200, await models.refresh(input.agentId, input.reference)); return;
+      }
+      const input = z.object({ agentId: Id, reference: ModelProviderReference, model: z.string().min(1),
+        env: z.record(z.string(), z.string()).default({}), executionDriver: z.enum(["stdio", "pty"]).default("stdio") }).strict().parse(body);
+      if (url.pathname === "/v1/model-providers/check") { models.check(input.agentId, input.reference, input.model); json(response, 200, { valid: true }); return; }
+      if (url.pathname === "/v1/model-providers/test") { json(response, 200, await models.test(input.agentId, input.reference, input.model, input.env, input.executionDriver)); return; }
+      throw new ExecutionError(404, "route_not_found");
+    }
     if (request.method === "POST" && url.pathname === "/v1/environments/retire") {
       for (const environment of manager.store.list()) await manager.destroy(environment.id);
       json(response, 204); return;
@@ -18,6 +58,7 @@ export function workerServer(authority: TokenAuthority, manager: EnvironmentMana
     if (request.method === "GET" && url.pathname === "/v1/health") {
       const environments = manager.store.list();
       json(response, 200, { workerId: manager.driver.config.workerId, imageDigest: manager.driver.config.imageDigest, capacity: manager.driver.config.capacity,
+        ...(models ? {ready:true,capabilities:["worker-model-provider-v1"]} : {}),
         occupied: environments.reduce((count, env) => count + manager.store.active(env.id).length, 0) }); return;
     }
     if (request.method === "GET" && url.pathname === "/v1/containers") {

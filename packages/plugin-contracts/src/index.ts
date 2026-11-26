@@ -93,6 +93,40 @@ export interface PluginManifest {
   readonly allowedExecutables?: readonly string[];
   readonly allowedEnvKeys?: readonly string[];
   readonly containerCommands?: readonly ContainerCommandContribution[];
+  /** Model adapters executed by the Worker, never by the Service operation runtime. */
+  readonly workerModelProviders?: readonly WorkerModelProviderContribution[];
+}
+
+export interface WorkerModelProviderContribution {
+  readonly login?:{readonly type:"oauth";readonly label:string;readonly callbackPath?:string};
+  readonly id: string;
+  readonly displayName: string;
+  readonly entrypoint: string;
+  readonly protocols: readonly "responses"[];
+}
+
+export interface WorkerModel {
+  readonly id: string;
+  readonly name: string;
+  readonly contextWindow?: number | undefined;
+  readonly capabilities?: Readonly<{ tools?: boolean | undefined; reasoning?: boolean | undefined }> | undefined;
+}
+
+/** An isolated Worker child receives credentials only for its selected Agent account. */
+export interface WorkerModelAdapter {
+  readonly login?: {
+    start(callbackUrl:string):Promise<{id:string;authorizationUrl:string}>;
+    callback(id:string,params:Record<string,string>):Promise<unknown>;
+    poll(id:string):unknown;
+    cancel(id:string):unknown;
+  };
+  validateCredential(credential: unknown, signal: AbortSignal): Promise<{
+    credential: unknown; name: string; expiresAt: number | null; models: readonly WorkerModel[];
+  }>;
+  models(credential: unknown, signal: AbortSignal): Promise<readonly WorkerModel[]>;
+  respond(credential: unknown, request: Request, context: {
+    sessionId: string; signal: AbortSignal;
+  }): Promise<Response>;
 }
 
 export interface PluginInvocationIdentity {

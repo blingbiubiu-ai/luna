@@ -15,6 +15,8 @@ const workerFields = z.object({
   workerId: Id, runtimeId: Id, dataRoot: z.string().min(1),
   callbackPort: z.number().int().min(1024).max(65535).optional(),
   callbackHost: z.string().default("0.0.0.0"),
+  modelPort: z.number().int().min(1024).max(65535).optional(),
+  modelHost: z.string().default("0.0.0.0"),
   runtimeEndpoint: z.url().refine((value) => new URL(value).protocol === "http:"),
   controlToken: z.string().regex(/^[A-Za-z0-9_-]{43}$/),
   listenHost: z.literal("127.0.0.1").default("127.0.0.1"), port: z.number().int().min(1).max(65535).default(8092),

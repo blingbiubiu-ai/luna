@@ -138,7 +138,7 @@ export class InvocationStore {
       if (!job || !["pending", "active"].includes(job.state)) throw new ExecutionError(409, "job_not_active");
       if (this.require(job.invocationId).state !== "active") throw new ExecutionError(409, "invocation_inactive");
       const body = Credentials.parse({ ...input, revision: 1 });
-      const hash = contentHash({ expiresAt: body.expiresAt, env: body.env });
+      const hash = contentHash({ expiresAt: body.expiresAt, env: body.env, ...(body.modelProvider ? { modelProvider: body.modelProvider } : {}) });
       const revision = job.credentialsHash === hash ? job.credentialsRevision : Math.max(job.credentialsRevision + 1, job.request.credentialsRevision);
       this.db.update(runnerJobs).set({ credentialsRevision: revision, credentialsHash: hash, updatedAt: Date.now() }).where(eq(runnerJobs.id, id)).run();
       return { ...body, revision };

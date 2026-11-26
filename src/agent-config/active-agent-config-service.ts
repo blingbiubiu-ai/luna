@@ -1,4 +1,5 @@
 import {executionReference, executionReferenceSchema, type AgentExecutionReference} from "./execution-reference";
+import { ModelProviderReference } from "@luna/runner-protocol";
 import {AgentError, AgentStore} from "@/agents/agent-store";
 import {ShadowModelSelectionStore} from "@/agents/shadow-model-selection-store";
 import {TaskScopeResolver} from "@/agents/task-scope";
@@ -27,6 +28,7 @@ export class AgentNotConfiguredError extends Error {
 }
 
 export interface AgentExecutionSnapshot {
+  readonly modelProvider?: ModelProviderReference;
   readonly agentId: string;
   readonly profileId: string;
   readonly revisionId: string;
@@ -171,7 +173,9 @@ export class ActiveAgentConfigService {
     const credentialIdentities = Object.fromEntries(
       secretRows.map((secret) => [secret.env_key, secret.credential_identity]),
     );
+    const modelProvider = revision.model_provider_json ? ModelProviderReference.parse(JSON.parse(revision.model_provider_json)) : undefined;
     return Object.freeze({
+      ...(modelProvider ? { modelProvider } : {}),
       agentId,
       profileId: profile.id,
       revisionId: revision.id,
@@ -181,7 +185,7 @@ export class ActiveAgentConfigService {
       executionDriver: isExecutionDriver(revision.execution_driver) ? revision.execution_driver : "stdio",
       resumeOnModelChange: revision.resume_on_model_change,
       env: Object.freeze({ ...env }),
-      providerFingerprint: hash({ agentType, providerEnv, credentialIdentities }),
+      providerFingerprint: hash({ agentType, providerEnv, credentialIdentities, ...(modelProvider ? { modelProvider } : {}) }),
       modelFingerprint: hash({ model: revision.model, modelEnv }),
       configFingerprint: revision.config_fingerprint,
     });
