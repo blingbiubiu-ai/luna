@@ -22,7 +22,11 @@ export async function runWorker(config: WorkerConfig): Promise<void> {
   if (config.serviceUrl) config = { ...config, runtimeEndpoint: `http://host.docker.internal:${callbackPort ?? config.port}` };
   // Containers run the Executor and `luna` CLI built with this Worker, not the image's copies.
   const files = await embeddedRunnerRuntime();
-  const runtime = files ? installRunnerRuntime(config.dataRoot, files) : undefined;
+  const preserveVersions = (() => {
+    try { return (db.prepare("SELECT DISTINCT version FROM worker_executor_versions").all() as { version: string }[]).map(row => row.version); }
+    catch { return []; }
+  })();
+  const runtime = files ? installRunnerRuntime(config.dataRoot, files, { preserveVersions }) : undefined;
   if (!runtime) console.error(JSON.stringify({ level: "warn", msg: "Worker built without its runner runtime; containers use the image's Executor" }));
   const driver = new DockerEnvironmentDriver(db, config, runtime); await driver.preflight();
   // Not fatal: Shadows without root run normally; root ones show "root 未生效" until fixed.

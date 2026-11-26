@@ -44,6 +44,19 @@ test("old versions beyond the three newest are removed, along with abandoned sta
  expect(readdirSync(join(home,"runner-runtime")).sort()).toEqual(["current",...versions.slice(1)].sort());
 });
 
+test("versions referenced by live containers are preserved during pruning",()=>{
+ const versions:string[]=[];
+ for(const [index,tag] of ["a","b","c","d","e"].entries()){
+  const installed=installRunnerRuntime(home,files(tag),{preserveVersions:versions.length?[versions[0]!]:[]});
+  versions.push(installed.version);
+  utimesSync(join(installed.root,installed.version),new Date(1000*(index+1)),new Date(1000*(index+1)));
+ }
+ installRunnerRuntime(home,files("f"),{preserveVersions:[versions[0]!]});
+ const kept=readdirSync(join(home,"runner-runtime"));
+ expect(kept).toContain(versions[0]!);
+ expect(kept).not.toContain(versions[1]!);
+});
+
 /** A Docker that keeps containers in memory: created by run, then started and stopped. */
 function fakeDocker(driver:DockerEnvironmentDriver){
  const containers=new Map<string,{id:string;running:boolean;labels:Record<string,string>;mounts:{Type:string;Source:string;Destination:string;RW:boolean}[];command:string[]}>();

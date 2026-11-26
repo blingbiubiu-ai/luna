@@ -19,7 +19,11 @@ export interface RunnerRuntime { root: string; version: string; }
  * `bin/luna` so `PATH` resolves the Worker's current CLI even on older base images whose baked
  * `/usr/local/bin/luna` did not delegate to `/opt/luna-runtime/current/luna-client.js`.
  */
-export function installRunnerRuntime(dataRoot: string, files: Record<string, string>): RunnerRuntime {
+export function installRunnerRuntime(
+  dataRoot: string,
+  files: Record<string, string>,
+  options: { readonly preserveVersions?: Iterable<string> } = {},
+): RunnerRuntime {
   const root = join(dataRoot, "runner-runtime");
   const version = contentHash({ ...files, "bin/luna": LUNA_RUNTIME_BIN_SHIM }).slice(0, 16);
   mkdirSync(root, { recursive: true, mode: 0o755 });
@@ -37,7 +41,7 @@ export function installRunnerRuntime(dataRoot: string, files: Record<string, str
   const link = join(root, `.current-${randomBytes(6).toString("hex")}`);
   symlinkSync(version, link);
   renameSync(link, join(root, "current"));
-  prune(root, version);
+  prune(root, version, new Set(options.preserveVersions ?? []));
   return { root, version };
 }
 
@@ -46,11 +50,11 @@ export function currentRunnerRuntime(root: string): string | undefined {
   try { return readlinkSync(join(root, "current")); } catch { return undefined; }
 }
 
-function prune(root: string, current: string): void {
-  const versions = readdirSync(root).filter(name => name !== "current" && name !== current)
+function prune(root: string, current: string, preserve: ReadonlySet<string>): void {
+  const entries = readdirSync(root).filter(name => name !== "current" && name !== current && !preserve.has(name))
     .map(name => ({ name, path: join(root, name), at: statSync(join(root, name)).mtimeMs }))
     .sort((a, b) => b.at - a.at);
-  for (const old of versions.filter(item => item.name.startsWith(".")).concat(versions.filter(item => !item.name.startsWith(".")).slice(KEPT_VERSIONS)))
+  for (const old of entries.filter(item => item.name.startsWith(".")).concat(entries.filter(item => !item.name.startsWith(".")).slice(KEPT_VERSIONS)))
     rmSync(old.path, { recursive: true, force: true });
 }
 
