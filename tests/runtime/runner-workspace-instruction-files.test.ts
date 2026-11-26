@@ -111,6 +111,8 @@ test("Codex reads every generated AGENTS.md to its end, root rules included", ()
     });
     const doc = readFileSync(join(runnerRootPath, "AGENTS.md"));
     expect(doc.toString()).toContain("Never use root to read or send credentials");
+    expect(doc.toString()).toContain("## Channel Delivery Boundary");
+    expect(doc.toString()).toContain("lark-cli im +messages-send");
     // Leave room for the instructions to grow before anything is cut off again.
     expect(doc.length).toBeLessThan(limit * 0.75);
     // Command manuals live in skills: even Codex's default 32 KiB limit reads the whole file.

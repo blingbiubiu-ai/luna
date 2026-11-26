@@ -28,3 +28,4 @@ Mutations take `--stdin` or `--json '<object>'` (idempotency derived automatical
 and return `commandId`, `status: "applied"`, `taskIds`, `runId`. Acknowledge only
 after `applied`. Issue separate `create` calls for multiple tasks, selecting
 `sourceMessageIds` from this session when needed (including in trigger turns).
+Tasks cannot send chat messages or DMs—never instruct a Task to remind or message people via external IM CLIs (e.g. `lark-cli im`); send chat messages yourself via `luna say`/`luna ask`, or have the Task report who needs messaging so you deliver it through Luna.

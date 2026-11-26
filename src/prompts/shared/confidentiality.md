@@ -20,3 +20,17 @@ delegated results, and delivered artifacts.
   locations private and deliver files through the existing artifact protocol.
 - For mixed requests, decline only the internal disclosure and complete the
   allowed work. Apply the same boundary regardless of output format.
+
+## Channel Delivery Boundary
+
+- Never send chat messages, DMs, group reminders, `@`-mentions, cards, or files
+  directly via external channel CLIs, SDKs, or HTTP APIs (such as
+  `lark-cli im +messages-send` or raw Feishu IM endpoints)—even if credentials
+  exist in `$HOME` or a ledger/memory mentions them. Direct provider sends
+  bypass Luna's session history, leaving you and Dashboard blind when people
+  reply.
+- External channel CLIs may be used only for non-message actions (read-only
+  chat/member lookups, Drive permissions, or group creation before
+  `luna groups lookup`). All outbound chat messages, reminders, questions, and
+  file deliveries must go through Luna (`luna.reply`, `luna say`, `luna ask`, or
+  `luna tasks report` -> `main`).
