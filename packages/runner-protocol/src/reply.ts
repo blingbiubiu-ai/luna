@@ -23,15 +23,33 @@ export const replySchema = z.object({
 }).strict();
 export type ReplyDocument = z.infer<typeof replySchema>;
 
-/** Only our discriminator opts into the protocol; ordinary JSON remains text. */
+export function unwrapSingleCodeFence(text: string): string | undefined {
+  const trimmed = text.trim();
+  const match = /^(`{3,}|~{3,})(?:json|jsonc)?[ \t]*\r?\n([\s\S]*?)\r?\n\1$/i.exec(trimmed)
+    ?? /^(`{3,}|~{3,})(?:json|jsonc)?[ \t]*(\{[\s\S]*\}|\[[\s\S]*\])[ \t]*\1$/i.exec(trimmed);
+  return match?.[2]?.trim();
+}
+
+export function extractReplyEnvelope(text: string): Record<string, unknown> | undefined {
+  for (const candidate of [text, unwrapSingleCodeFence(text)]) {
+    if (!candidate) continue;
+    try {
+      const value: unknown = JSON.parse(candidate);
+      if (value && typeof value === "object" && !Array.isArray(value) && (value as Record<string, unknown>).type === "luna.reply") {
+        return value as Record<string, unknown>;
+      }
+    } catch { /* Plain text or non-JSON fenced code is a supported reply. */ }
+  }
+  return undefined;
+}
+
+/** Only our discriminator opts into the protocol; ordinary JSON (fenced or bare) remains text. */
 export function parseReply(text: string): ReplyDocument {
   if (!text.trim() || text.length > 100000) throw new Error("Reply must contain 1–100000 characters");
-  let value: unknown;
-  try { value = JSON.parse(text); } catch { /* Plain text is a supported reply. */ }
-  if (!value || typeof value !== "object" || Array.isArray(value) || (value as Record<string, unknown>).type !== "luna.reply") {
+  const input = extractReplyEnvelope(text);
+  if (!input) {
     return { type: "luna.reply", version: 1, presentation: "text", content: [{ type: "text", text }] };
   }
-  const input = value as Record<string, unknown>;
   // Validate media before degrading presentation: never silently discard an image.
   const content = z.array(replyBlockSchema).min(1).max(32).parse(typeof input.content === "string" ? [{ type: "text", text: input.content }] : input.content);
   const title = z.string().max(500).optional().parse(input.title);

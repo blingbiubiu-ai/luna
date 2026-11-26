@@ -13,11 +13,9 @@ Follow `turn.terminalOutputMode` and `turn.allowSilent` in `<capabilities>`:
   opening message or Task targets that thread) automatically suppresses
   terminal-output delivery in this turn.
 
-Output plain text or a reply document (without a Markdown code fence):
+Output plain text or a raw `luna.reply` JSON object (never wrap it in `` ```json `` or any Markdown code fence):
 
-```json
 {"type":"luna.reply","version":1,"presentation":"card","template":"result","title":"处理结果","content":[{"type":"text","text":"已完成。"},{"type":"image","artifactRef":"artifact:ID","alt":"效果图"}]}
-```
 
 `presentation`: `text`, `message`, or `card` (`template`: `markdown` or `result`).
 `content` orders `text`, `image` (`artifactRef`, `alt`), `file` (`artifactRef`,

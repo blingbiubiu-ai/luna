@@ -32,11 +32,20 @@ afterEach(() => {
 
 test("only reply documents opt into presentation and downgrade preserves ordered images", () => {
   expect(replyMarkdown(parseReply('{"answer":42}'))).toBe('{"answer":42}');
+  expect(replyMarkdown(parseReply('```json\n{"answer":42}\n```'))).toBe('```json\n{"answer":42}\n```');
+  const fencedReply = parseReply('```json\n{"type":"luna.reply","version":1,"presentation":"message","replyTo":"msg-1","content":[{"type":"mention","userId":"u1","label":"王华杰"},{"type":"text","text":"#7401353950 进展已更新"}]}\n```');
+  expect(fencedReply.presentation).toBe("message");
+  expect(fencedReply.replyTo).toBe("msg-1");
+  expect(replyMarkdown(fencedReply)).toBe("@王华杰 #7401353950 进展已更新");
+  const bareFencedCard = parseReply('```\n{"type":"luna.reply","version":1,"presentation":"card","title":"处理结果","content":[{"type":"text","text":"已完成。"}]}\n```');
+  expect(bareFencedCard.presentation).toBe("card");
+  expect(bareFencedCard.title).toBe("处理结果");
   const reply = parseReply(JSON.stringify({ type: "luna.reply", version: 1, presentation: "card", template: "unsupported",
     content: [{ type: "text", text: "before" }, { type: "image", artifactRef: "artifact:img", alt: "preview" }, { type: "text", text: "after" }] }));
   expect(reply.presentation).toBe("message");
   expect(replyMarkdown(reply)).toBe("before\n\n![preview](artifact:img)\n\nafter");
   expect(() => parseReply('{"type":"luna.reply","content":[{"type":"image","artifactRef":"/etc/passwd"}]}')).toThrow();
+  expect(() => parseReply('```json\n{"type":"luna.reply","content":[{"type":"image","artifactRef":"/etc/passwd"}]}\n```')).toThrow();
 });
 
 test("final answer persists once before delivery and recovery does not call the provider again", async () => {

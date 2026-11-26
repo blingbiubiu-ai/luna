@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { eq } from "drizzle-orm";
-import { parseReply, replyMarkdown, type ReplyDocument } from "@luna/runner-protocol/reply";
+import { extractReplyEnvelope, parseReply, replyMarkdown, type ReplyDocument } from "@luna/runner-protocol/reply";
 import type { ReplyChannel } from "@/channels/outbound";
 import type { DrizzleDB } from "@/data";
 import { tasks, taskSubscriptions } from "@/data/schema";
@@ -148,7 +148,10 @@ export class RunnerMessageService {
       throw new GatewayError("reserved_request_id", "Reserved request ID", 400);
     }
     const actor = this.actor(claims);
-    if (reply) {
+    if (!reply && !mentionBotUserId && extractReplyEnvelope(content)) {
+      reply = parseReply(content);
+      content = replyMarkdown(reply);
+    } else if (reply) {
       reply = parseReply(JSON.stringify(reply));
       content = replyMarkdown(reply);
     }
