@@ -43,15 +43,41 @@ export function parseReply(text: string): ReplyDocument {
 }
 
 const label = (text: string) => text.replace(/[\\\[\]\r\n]/g, " ");
+const needsSpaceAfterMention = (nextText: string) =>
+  nextText.length > 0 && !/^[\s,.:;!?，。：；！？、)\]）】》]/.test(nextText);
+const needsSpaceBeforeMention = (prevText: string) =>
+  prevText.length > 0 && !/[\s([（【《]$/.test(prevText);
 export function replyMarkdown(reply: ReplyDocument): string {
   const title = reply.title ? `**${reply.title.replace(/[\r\n]/g, " ").replace(/\*/g, "\\*")}**` : "";
-  const blocks = reply.content.map(block => {
-    if (block.type === "mention") return `@${label(block.label ?? block.userId)}`;
-    if (block.type === "actions") return `选项：${block.options.map(label).join(" / ")}`;
-    return block.type === "text" ? block.text : block.type === "image"
+  const rendered = reply.content.map(block => {
+    if (block.type === "mention") {
+      return { type: block.type, text: `@${label((block.label ?? block.userId).replace(/^@+/, ""))}` };
+    }
+    if (block.type === "actions") {
+      return { type: block.type, text: `选项：${block.options.map(label).join(" / ")}` };
+    }
+    const text = block.type === "text" ? block.text : block.type === "image"
       ? `![${label(block.alt ?? "图片")}](${block.artifactRef})`
       : `[${label(block.name ?? "文件")}](${block.artifactRef})`;
-  });
-  const separator = reply.content.some(block => block.type === "mention") ? "" : "\n\n";
-  return [title, blocks.filter(Boolean).join(separator)].filter(Boolean).join("\n\n");
+    return { type: block.type, text };
+  }).filter(item => Boolean(item.text));
+  let body = "";
+  if (reply.content.some(block => block.type === "mention")) {
+    for (let i = 0; i < rendered.length; i++) {
+      const current = rendered[i]!;
+      if (i > 0) {
+        const prev = rendered[i - 1]!;
+        if (
+          (prev.type === "mention" && needsSpaceAfterMention(current.text)) ||
+          (current.type === "mention" && needsSpaceBeforeMention(prev.text))
+        ) {
+          body += " ";
+        }
+      }
+      body += current.text;
+    }
+  } else {
+    body = rendered.map(item => item.text).join("\n\n");
+  }
+  return [title, body].filter(Boolean).join("\n\n");
 }

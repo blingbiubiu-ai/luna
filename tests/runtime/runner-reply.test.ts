@@ -300,3 +300,118 @@ test("p2p chats never @-mention or quote even after profile-less synthetic surfa
     .get();
   expect(repaired?.surfaceKind).toBe("p2p");
 });
+
+test("outbound inline mentions resolve display labels, persist message_mentions, and render legacy UUID mentions in Dashboard DTO", async () => {
+  const { toDashboardSessionMessage } = await import("../../src/dashboard-api/sessions");
+  const { FeishuMessageChannel } = await import("../../extensions/channels/feishu");
+  const asker = groupAsker();
+  const { sent, service } = capture();
+  const rawReply = JSON.stringify({
+    type: "luna.reply",
+    version: 1,
+    presentation: "message",
+    content: [
+      { type: "mention", userId: asker },
+      { type: "text", text: "snackbar 这条线核实完了。" },
+    ],
+  });
+  expect(answer(rawReply).kind).toBe("queued");
+  // Retrying with the same unlabelled mention payload remains idempotent.
+  expect(answer(rawReply).kind).toBe("existing");
+  await service.waitForIdle();
+
+  expect(sent[0]?.content).toBe("@Asker snackbar 这条线核实完了。");
+  expect(sent[0]?.inlineMentions).toEqual(["ou_asker"]);
+
+  const assistantMsg = db.db
+    .select()
+    .from(schema.messages)
+    .where(eq(schema.messages.role, "assistant"))
+    .get()!;
+  expect(assistantMsg.contentJson).toEqual([
+    { type: "text", text: "@Asker snackbar 这条线核实完了。" },
+  ]);
+
+  const mentionRows = db.db
+    .select()
+    .from(schema.messageMentions)
+    .where(eq(schema.messageMentions.messageId, assistantMsg.id))
+    .all();
+  expect(mentionRows).toHaveLength(1);
+  expect(mentionRows[0]?.mentionLabel).toBe("@Asker");
+  expect(mentionRows[0]?.targetExternalId).toBe("ou_asker");
+  expect(mentionRows[0]?.targetIdentityId).not.toBeNull();
+
+  // Verify Feishu also inserts a separating space when text immediately follows <at>.
+  const channel = new FeishuMessageChannel("test", {
+    chatId: "room",
+    appId: "test",
+    appSecret: "test",
+  });
+  let feishuSent: { msg_type: string; content: string } | undefined;
+  (channel as unknown as { _client: unknown })._client = {
+    im: {
+      message: {
+        create: async ({ data }: { data: typeof feishuSent }) => {
+          feishuSent = data;
+          return { code: 0, data: { message_id: "out", chat_id: "room" } };
+        },
+      },
+    },
+  };
+  await channel.sendTo(
+    { channelId: "test", surfaceId: "room" },
+    {
+      replyMode: "channel_message",
+      content: sent[0]!.content,
+      ...(sent[0]!.reply ? { reply: sent[0]!.reply } : {}),
+      inlineMentions: ["ou_asker"],
+    },
+  );
+  expect(JSON.parse(feishuSent!.content).zh_cn.content).toEqual([
+    [{ tag: "md", text: '<at user_id="ou_asker"></at> snackbar 这条线核实完了。' }],
+  ]);
+
+  // Verify Dashboard DTO resolves both the new persisted mention and legacy @UUID assistant messages.
+  const entry = db.db
+    .select()
+    .from(schema.sessionTimelineEntries)
+    .where(eq(schema.sessionTimelineEntries.messageId, assistantMsg.id))
+    .get()!;
+  const dtoInput = {
+    identityRows: db.db.select().from(schema.channelIdentities).all(),
+    userRows: db.db.select().from(schema.users).all(),
+    channelUserBindingRows: db.db.select().from(schema.channelUserBindings).all(),
+    mentionRows,
+    sessionRows: db.db.select().from(schema.sessions).all(),
+    taskRows: [],
+    sourceContextItems: [],
+    turnEntryRows: [],
+    replyTargetExternalIds: new Set<string>(),
+    owningSessionIdForMessage: () => sessionId,
+    artifactSigner: { previewUrl: () => undefined, contentUrl: () => undefined },
+  };
+  const persistedDto = toDashboardSessionMessage(
+    { entry, row: assistantMsg },
+    dtoInput,
+  );
+  expect(persistedDto.mentions).toHaveLength(1);
+  expect(persistedDto.mentions[0]?.label).toBe("@Asker");
+  expect(persistedDto.mentions[0]?.targetUser?.displayName).toBe("Asker");
+
+  const legacyRow = {
+    ...assistantMsg,
+    id: "legacy-msg-id",
+    contentJson: [{ type: "text", text: `@${asker}snackbar 这条线核实完了。` }],
+  };
+  const legacyDto = toDashboardSessionMessage(
+    { entry: { ...entry, messageId: legacyRow.id }, row: legacyRow },
+    { ...dtoInput, mentionRows: [] },
+  );
+  expect(legacyDto.content).toEqual([
+    { type: "text", text: "@Asker snackbar 这条线核实完了。" },
+  ]);
+  expect(legacyDto.mentions).toHaveLength(1);
+  expect(legacyDto.mentions[0]?.label).toBe("@Asker");
+  expect(legacyDto.mentions[0]?.targetUser?.displayName).toBe("Asker");
+});

@@ -459,10 +459,15 @@ export function toDashboardSession(
     ? null
     : previewMessageContent(
         latestMessage.row.contentJson,
-        { artifactSigner: input.artifactSigner },
+        {
+          artifactSigner: input.artifactSigner,
+          row: latestMessage.row,
+          userRows: input.userRows,
+        },
       );
   const threadAnchorPreview = threadAnchorPreviewForSession(row, {
     timelineRows: input.timelineRows,
+    userRows: input.userRows,
     artifactSigner: input.artifactSigner,
   });
   const latestSender = latestMessage === undefined
@@ -742,6 +747,7 @@ function threadAnchorPreviewForSession(
   row: SessionRow,
   input: {
     readonly timelineRows: readonly DashboardMessageProjection[];
+    readonly userRows: readonly UserRow[];
     readonly artifactSigner: DashboardArtifactSigner;
   },
 ): string | null {
@@ -761,6 +767,8 @@ function threadAnchorPreviewForSession(
   if (rootMessage !== undefined) {
     const preview = previewMessageContent(rootMessage.row.contentJson, {
       artifactSigner: input.artifactSigner,
+      row: rootMessage.row,
+      userRows: input.userRows,
     });
     return preview.length === 0 ? null : preview;
   }
@@ -783,20 +791,36 @@ function threadAnchorPreviewForSession(
     }
     const fallbackPreview = previewMessageContent(firstThreadMessage.row.contentJson, {
       artifactSigner: input.artifactSigner,
+      row: firstThreadMessage.row,
+      userRows: input.userRows,
     });
     return fallbackPreview.length === 0 ? null : fallbackPreview;
   }
   const preview = previewMessageContent(anchorRef.row.contentJson, {
     artifactSigner: input.artifactSigner,
+    row: anchorRef.row,
+    userRows: input.userRows,
   });
   return preview.length === 0 ? null : preview;
 }
 
 function previewMessageContent(
   content: unknown,
-  options: { readonly artifactSigner: DashboardArtifactSigner },
+  options: {
+    readonly artifactSigner: DashboardArtifactSigner;
+    readonly row?: MessageRow;
+    readonly userRows?: readonly UserRow[];
+  },
 ): string {
-  const safeContent = signDashboardArtifactReferencesInValue(content, {
+  const normalizedContent =
+    options.row && options.userRows
+      ? normalizeLegacyAssistantUuidMentionsInContent(
+          options.row,
+          content,
+          options.userRows,
+        )
+      : content;
+  const safeContent = signDashboardArtifactReferencesInValue(normalizedContent, {
     artifactSigner: options.artifactSigner,
   });
   const parsed = typeof safeContent === "string"
@@ -858,7 +882,7 @@ export function toDashboardSessionMessage(
   const row = projection.row;
   const linkedTasks = taskBadgesForMessage(row, input);
   const sender = messageSenderForRow(row, input);
-  const mentions = mentionsForMessage(row.id, input);
+  const { content, mentions } = contentAndMentionsForMessage(row, input);
   let presentation = presentationForMessage(row, input.taskRows);
   const deletedTask = linkedTasks.find(task => task.status === "deleted" && task.id === sourceTaskIdForMessage(row));
   if (deletedTask && presentation && "task" in presentation) presentation = { ...presentation, task: deletedTask };
@@ -884,7 +908,7 @@ export function toDashboardSessionMessage(
     contentKind: row.contentKind,
     presentationKind: row.presentationKind,
     providerMessageType: row.providerMessageType,
-    content: row.contentJson,
+    content,
     mentions,
     ...(ingest === undefined ? {} : { ingest }),
     ...(thread === undefined ? {} : { thread }),
@@ -1022,6 +1046,8 @@ function replyQuoteForMessage(
   }
   const preview = previewMessageContent(target.row.contentJson, {
     artifactSigner: input.artifactSigner,
+    row: target.row,
+    userRows: input.userRows,
   });
   if (preview.length === 0) {
     return undefined;
@@ -1119,17 +1145,70 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 
-function mentionsForMessage(
-  messageId: string,
+const LEGACY_UUID_MENTION_PATTERN =
+  /@([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/gi;
+
+function legacyMentionDisplayLabel(userRow: UserRow): string {
+  const cleaned = userRow.displayName.trim().replace(/^@+/, "").trim();
+  if (
+    !cleaned ||
+    cleaned === userRow.id ||
+    /^(?:ou_|on_|cli_|unknown)/i.test(cleaned)
+  ) {
+    return `@${userRow.id}`;
+  }
+  return `@${cleaned}`;
+}
+
+function normalizeLegacyAssistantUuidMentionsInContent(
+  row: MessageRow,
+  content: unknown,
+  userRows: readonly UserRow[],
+): unknown {
+  if (row.role !== "assistant" || !Array.isArray(content)) {
+    return content;
+  }
+  let changed = false;
+  const mapped = content.map((part) => {
+    if (!isRecord(part) || part.type !== "text" || typeof part.text !== "string" || !part.text.includes("@")) {
+      return part;
+    }
+    const replaced = part.text.replace(
+      LEGACY_UUID_MENTION_PATTERN,
+      (fullMatch, userId: string, offset: number, source: string) => {
+        const userRow = userRows.find(
+          (candidate) => candidate.id === userId && candidate.agentId === row.agentId,
+        );
+        if (!userRow) return fullMatch;
+        changed = true;
+        const label = legacyMentionDisplayLabel(userRow);
+        const nextChar = source.slice(offset + fullMatch.length, offset + fullMatch.length + 1);
+        const spacer =
+          nextChar.length > 0 && !/^[\s,.:;!?，。：；！？、)\]）】》]/.test(nextChar)
+            ? " "
+            : "";
+        return `${label}${spacer}`;
+      },
+    );
+    return replaced === part.text ? part : { ...part, text: replaced };
+  });
+  return changed ? mapped : content;
+}
+
+function contentAndMentionsForMessage(
+  row: MessageRow,
   input: {
     readonly identityRows: readonly ChannelIdentityRow[];
     readonly mentionRows: readonly MessageMentionRow[];
     readonly userRows: readonly UserRow[];
     readonly channelUserBindingRows: readonly ChannelUserBindingRow[];
   },
-): DashboardSessionMessageMention[] {
-  return input.mentionRows
-    .filter((mention) => mention.messageId === messageId)
+): {
+  readonly content: unknown;
+  readonly mentions: DashboardSessionMessageMention[];
+} {
+  const persisted = input.mentionRows
+    .filter((mention) => mention.messageId === row.id)
     .map((mention) => {
       const targetUser = mentionCanonicalUser(mention, {
         userRows: input.userRows,
@@ -1146,6 +1225,84 @@ function mentionsForMessage(
         targetKind: mention.targetKind,
       };
     });
+  if (persisted.length > 0 || row.role !== "assistant") {
+    return { content: row.contentJson, mentions: persisted };
+  }
+  const mentions = legacyAssistantUuidMentionsForMessage(row, input);
+  if (mentions.length === 0) {
+    return { content: row.contentJson, mentions };
+  }
+  return {
+    content: normalizeLegacyAssistantUuidMentionsInContent(
+      row,
+      row.contentJson,
+      input.userRows,
+    ),
+    mentions,
+  };
+}
+
+function legacyAssistantUuidMentionsForMessage(
+  row: MessageRow,
+  input: {
+    readonly identityRows: readonly ChannelIdentityRow[];
+    readonly userRows: readonly UserRow[];
+    readonly channelUserBindingRows: readonly ChannelUserBindingRow[];
+  },
+): DashboardSessionMessageMention[] {
+  const text = Array.isArray(row.contentJson)
+    ? row.contentJson
+        .map((part) =>
+          isRecord(part) && part.type === "text" && typeof part.text === "string"
+            ? part.text
+            : "",
+        )
+        .join("\n")
+    : "";
+  if (!text.includes("@")) {
+    return [];
+  }
+  const matches = [...text.matchAll(LEGACY_UUID_MENTION_PATTERN)];
+  if (matches.length === 0) {
+    return [];
+  }
+  const synthesized: DashboardSessionMessageMention[] = [];
+  for (const match of matches) {
+    const userId = match[1];
+    if (!userId) continue;
+    const userRow = input.userRows.find(
+      (candidate) => candidate.id === userId && candidate.agentId === row.agentId,
+    );
+    if (!userRow) continue;
+    const targetUser = toDashboardCanonicalUser(userRow);
+    const boundIdentityIds = new Set(
+      input.channelUserBindingRows
+        .filter((binding) => binding.userId === userRow.id)
+        .map((binding) => binding.channelIdentityId),
+    );
+    const identityRow = input.identityRows.find(
+      (candidate) =>
+        boundIdentityIds.has(candidate.id) &&
+        candidate.channelType === row.channelType &&
+        candidate.channelId === row.channelId,
+    );
+    synthesized.push({
+      key: `@_legacy_${synthesized.length + 1}`,
+      label: legacyMentionDisplayLabel(userRow),
+      targetIdentityId: identityRow?.id ?? null,
+      targetIdentity: identityRow ? toAgentIdentity(identityRow) : null,
+      targetUserId: targetUser.id,
+      targetUser,
+      targetExternalId: identityRow?.externalId ?? userRow.id,
+      targetKind:
+        identityRow?.identityKind === "bot" ||
+        userRow.kind === "bot" ||
+        userRow.kind === "shadow"
+          ? "bot"
+          : "user",
+    });
+  }
+  return synthesized;
 }
 
 function mentionIdentity(

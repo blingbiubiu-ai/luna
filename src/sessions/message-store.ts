@@ -566,7 +566,9 @@ export class MessageStore {
         channelId: input.channel.id,
         targetExternalId: mention.target.externalId,
       });
-      if (targetIdentityId !== null) new IdentityDirectory(this._db).applyMentionDisplayName(targetIdentityId, mention.label);
+      if (targetIdentityId !== null && input.role !== "assistant") {
+        new IdentityDirectory(this._db).applyMentionDisplayName(targetIdentityId, mention.label);
+      }
       const existingMention = this._db
         .select()
         .from(messageMentions)
@@ -613,6 +615,7 @@ export class MessageStore {
 
   private _upsertMentionTargets(input: AppendMessageInput, agentId: string): void {
     if (
+      input.role === "assistant" ||
       input.mentions === undefined ||
       input.mentions.length === 0 ||
       input.channel === undefined

@@ -3348,12 +3348,18 @@ export class FeishuMessageChannel
           markdown += this._signOutboundArtifactLinks(text.replace(/<(?=\/?at\b)/gi, "&lt;"));
           text = "";
         };
-        for (const block of reply.content) {
+        for (let blockIndex = 0; blockIndex < reply.content.length; blockIndex++) {
+          const block = reply.content[blockIndex]!;
           if (block.type === "mention") {
             const user_id = addresses[index++];
             if (!user_id) throw new ProviderDeliveryRejected("Inline mention address is missing");
             flushText();
             markdown += formatFeishuAtTag(user_id);
+            const nextBlock = reply.content[blockIndex + 1];
+            const nextPreview = nextBlock?.type === "text" ? nextBlock.text : nextBlock ? " " : "";
+            if (nextPreview.length > 0 && !/^[\s,.:;!?，。：；！？、)\]）】》]/.test(nextPreview)) {
+              markdown += " ";
+            }
           } else if (block.type === "image") {
             const path = this._resolveArtifactImagePath(block.artifactRef);
             if (!path) throw new ProviderDeliveryRejected(`Image artifact is unavailable: ${block.artifactRef}`);
