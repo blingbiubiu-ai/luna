@@ -62,7 +62,7 @@ test(`Service login uses ${callbackPath??"the default callback"}, binds account 
  const logins=new WorkerModelLogins(async(_input,path)=>Response.json(path==="/login/start"?{id:"plugin-flow",authorizationUrl:"https://sso.example/authorize"}:path==="/login/poll"?accepted?{state:"ready",credential:{access:"private-secret"}}:{state:"pending"}:{accepted:accepted=true}),async()=>summary);
  const client={call:async(_method:string,path:string,body:any)=>{
   if(path.endsWith("/install"))return {};
-  if(path.endsWith("/start")){expect(body.workerId).toBeUndefined();const callback=new URL(body.callbackUrl);expect(callback.hostname).toBe("127.0.0.1");expect(callback.pathname).toBe(callbackPath??"/api/model-providers/login/callback");expect(callback.searchParams.get("flowId")).toBe(body.flowId);return logins.start(body);}
+  if(path.endsWith("/start")){expect(body.workerId).toBeUndefined();const callback=new URL(body.callbackUrl);expect(callback.hostname).toBe("127.0.0.1");expect(callback.pathname).toBe(callbackPath??"/api/model-providers/login/callback");expect(callback.search).toBe("");return logins.start(body);}
   if(path.endsWith("/callback"))return logins.callback(body.flowId,body.agentId,body.params);
   if(path.endsWith("/poll"))return logins.poll(body.flowId,body.agentId);
   return {};
@@ -78,7 +78,7 @@ test(`Service login uses ${callbackPath??"the default callback"}, binds account 
  const expectedPath=callbackPath??"/api/model-providers/login/callback";
  await expect(service.submitCallbackUrl("owner",agentId,started.flowId,`http://127.0.0.1:51121/wrong?flowId=${started.flowId}&code=ok`)).rejects.toThrow("model_login_callback_mismatch");
  await expect(service.submitCallbackUrl("owner",agentId,started.flowId,`http://127.0.0.1:51121${expectedPath}?flowId=other&code=ok`)).rejects.toThrow("model_login_callback_mismatch");
- expect(await service.submitCallbackUrl("owner",agentId,started.flowId,`http://127.0.0.1:51121${expectedPath}?flowId=${started.flowId}&code=ok`)).toEqual({accepted:true});
+ expect(await service.submitCallbackUrl("owner",agentId,started.flowId,`http://127.0.0.1:51121${expectedPath}?code=ok&client_state=abc`)).toEqual({accepted:true});
  const ready=await service.pollLogin("owner",agentId,started.flowId);
  expect(ready.state).toBe("ready");expect(JSON.stringify(ready)).not.toContain("private-secret");
  expect(JSON.stringify(connection.db.$client.query("SELECT summary_json FROM agent_model_provider_accounts").all())).not.toContain("private-secret");

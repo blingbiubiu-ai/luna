@@ -127,7 +127,8 @@ export class ModelProviderService {
     const parsedOrigin=new URL(origin);
     const isLoopback=["127.0.0.1","localhost"].includes(parsedOrigin.hostname);
     const callbackOrigin=isLoopback?parsedOrigin.origin:"http://127.0.0.1:51121";
-    const flowId=randomUUID();const callback=new URL(callbackPath,callbackOrigin);callback.searchParams.set("flowId",flowId);
+    const flowId=randomUUID();const callback=new URL(callbackPath,callbackOrigin);
+    if(isLoopback)callback.searchParams.set("flowId",flowId);
     this.logins.set(flowId,{actor,agentId,...input,configRevision:context.configRevision,callbackPath,expiresAt:Date.now()+600000});
     try{
       const started=await context.client.call<Record<string,unknown>>("POST","/v1/model-providers/login/start",{agentId,pluginId:input.pluginId,providerId:input.providerId,expectedRevision:input.expectedRevision,flowId,callbackUrl:callback.href,releaseSha256:context.plugin.installedRelease!.sha256},AbortSignal.timeout(30000));
