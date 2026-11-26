@@ -429,7 +429,9 @@ to 80 characters. Codex MCP argument JSON is decoded before extraction. Missing
 subjects retain the category label; no extra model generation is requested.
 
 The Feishu renderer attaches tools to the most recent text node, selects a
-category icon/title, and sends `TOOL_CALL_RESULT` for completion. Open tools and
+category icon/title, and sends `TOOL_CALL_RESULT` for completion. Each tool group
+between text nodes displays at most 10 tool calls followed by a single `...`
+node, resetting when the next public text node arrives. Open tools and
 the latest parent node are checkpointed across restarts. Terminal transitions
 close unresolved tool nodes without claiming success. Successful runs send
 `REASONING_END` then `RUN_FINISHED`; failed/cancelled runs use explicit error

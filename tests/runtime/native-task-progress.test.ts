@@ -65,15 +65,47 @@ test("short Native progress retains 300 ordinary entries and one budget notice",
   expect(checkpoint.state.progressBudget).toMatchObject({entries:300,exhausted:true});
 });
 test("results update existing tools without consuming another display slot, even after the node limit", async () => {
-  const starts = Array.from({length:301},(_,i)=>({id:`call-${i}:start`,toolCallId:`call-${i}`,toolName:"Bash",toolPhase:"start" as const,text:"执行命令"}));
-  await adapter().send(inbound,{...operation,nativeProgress:starts});
+  const entries: Array<NonNullable<OutboundChannelOperation["nativeProgress"]>[number]> = [];
+  const toolStarts: Array<NonNullable<OutboundChannelOperation["nativeProgress"]>[number]> = [];
+  for (let g = 0; g < 35; g++) {
+    entries.push({id: `step-${g}`, text: `阶段 ${g}`});
+    for (let j = 0; j < 9; j++) {
+      const idx = g * 9 + j;
+      const start = {id:`call-${idx}:start`,toolCallId:`call-${idx}`,toolName:"Bash",toolPhase:"start" as const,text:"执行命令"};
+      entries.push(start);
+      toolStarts.push(start);
+    }
+  }
+  await adapter().send(inbound,{...operation,nativeProgress:entries});
+  const startedCount = events().filter(e=>e.event_type === "TOOL_CALL_START").length;
+  expect(startedCount).toBeGreaterThan(250);
   const update = {...operation,replyMode:"update_status_card" as const,targetMessageId:"om_progress",nativeProgress:
-    starts.slice(0,300).map(e=>({...e,id:e.id.replace(":start",":result"),toolPhase:"result" as const,text:"工具调用已结束"}))};
+    toolStarts.slice(0, startedCount).map(e=>({...e,id:e.id.replace(":start",":result"),toolPhase:"result" as const,text:"工具调用已结束"}))};
   await adapter().send(inbound,update);
-  expect(events().filter(e=>e.event_type === "TOOL_CALL_START")).toHaveLength(300);
-  expect(events().filter(e=>e.event_type === "TOOL_CALL_RESULT")).toHaveLength(300);
+  expect(events().filter(e=>e.event_type === "TOOL_CALL_START")).toHaveLength(startedCount);
+  expect(events().filter(e=>e.event_type === "TOOL_CALL_RESULT")).toHaveLength(startedCount);
   expect(events().filter(e=>e.content.includes("进度已达到展示上限"))).toHaveLength(1);
   expect(connection.db.select().from(schema.nativeProgressDeliveries).get()!.state.progressBudget?.entries).toBe(300);
+});
+test("caps displayed tools at 10 per reasoning group with an ellipsis and resets after the next message", async () => {
+  const group1 = Array.from({length: 15}, (_, i) => ({id: `g1-${i}:start`, toolCallId: `g1-${i}`, toolName: "Bash", toolTitle: `命令 ${i}`, toolPhase: "start" as const, text: `命令 ${i}`}));
+  const group1Results = Array.from({length: 15}, (_, i) => ({id: `g1-${i}:result`, toolCallId: `g1-${i}`, toolPhase: "result" as const, text: "工具调用已结束"}));
+  const group2 = Array.from({length: 12}, (_, i) => ({id: `g2-${i}:start`, toolCallId: `g2-${i}`, toolName: "Read", toolTitle: `读取 ${i}`, toolPhase: "start" as const, text: `读取 ${i}`}));
+  await adapter().send(inbound, {...operation, nativeProgress: [
+    ...group1,
+    ...group1Results,
+    {id: "msg-next", text: "第一阶段查完了，进入下一步。"},
+    ...group2,
+  ]});
+  const starts = events().filter(e => e.event_type === "TOOL_CALL_START").map(e => JSON.parse(e.content) as {title: string; parentMessageId: string});
+  // Group 1: 10 real tools + 1 "..." = 11; Group 2: 10 real tools + 1 "..." = 11 -> 22 total.
+  expect(starts).toHaveLength(22);
+  expect(starts[10]!.title).toBe("...");
+  expect(starts[21]!.title).toBe("...");
+  expect(starts[11]!.title).toBe("读取 0");
+  expect(starts[11]!.parentMessageId).toContain("msg-next");
+  // Group 1 results close only the 10 displayed tools (+ 2 ellipsis tool results).
+  expect(events().filter(e => e.event_type === "TOOL_CALL_RESULT")).toHaveLength(12);
 });
 test("native thread snapshots append only new public entries across adapter restart and complete once",async()=>{
   const first = await adapter().send(inbound,operation);

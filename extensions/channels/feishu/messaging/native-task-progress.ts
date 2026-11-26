@@ -17,6 +17,7 @@ type Request = (request: CotRequest) => Promise<CotResponse>;
 type State = typeof nativeProgressDeliveries.$inferSelect.state;
 const event = (event_type: string, content: object) => ({event_type, content: JSON.stringify(content), timestamp: Date.now()});
 const MAX_ENTRIES = 306;
+const MAX_TOOLS_PER_GROUP = 10;
 const MAX_BYTES = 256 * 1024;
 const TERMINAL_RESERVE_BYTES = 4 * 1024;
 const eventBytes = (events: ReturnType<typeof event>[]) => Buffer.byteLength(JSON.stringify(events));
@@ -121,22 +122,38 @@ export class NativeTaskProgress {
             const toolNodeId = `${messageId}-tool-${callId}`;
             const tools = {...draft.openTools};
             const parent = draft.lastReasoningId ?? `reason-${messageId}`;
-            if (entry.toolPhase !== "result" || !tools[callId]) {
-              events.push(event("TOOL_CALL_START", {toolCallId:toolNodeId, toolCallName:entry.toolName ?? "tool",
-                title:entry.toolTitle ?? toolLabel(entry.toolName ?? "tool"), icon:toolIcon(entry.toolName ?? "tool"), parentMessageId:parent}),
-                event("TOOL_CALL_END", {toolCallId:toolNodeId}));
-              tools[callId] = toolNodeId;
+            const groupCount = draft.toolGroupCount ?? 0;
+            if (!closesTool && groupCount >= MAX_TOOLS_PER_GROUP) {
+              if (draft.toolGroupEllipsisSent) {
+                seen.add(entry.id);
+                continue;
+              }
+              const ellipsisId = `${parent}-tool-ellipsis`;
+              events.push(
+                event("TOOL_CALL_START", {toolCallId: ellipsisId, toolCallName: "more", title: "...", icon: "default", parentMessageId: parent}),
+                event("TOOL_CALL_END", {toolCallId: ellipsisId}),
+                toolResult(ellipsisId, "更多工具调用已省略"),
+              );
+              next = {...next, toolGroupEllipsisSent: true};
+            } else {
+              if (entry.toolPhase !== "result" || !tools[callId]) {
+                events.push(event("TOOL_CALL_START", {toolCallId:toolNodeId, toolCallName:entry.toolName ?? "tool",
+                  title:entry.toolTitle ?? toolLabel(entry.toolName ?? "tool"), icon:toolIcon(entry.toolName ?? "tool"), parentMessageId:parent}),
+                  event("TOOL_CALL_END", {toolCallId:toolNodeId}));
+                tools[callId] = toolNodeId;
+                next = {...next, toolGroupCount: groupCount + 1};
+              }
+              if (entry.toolPhase === "result") {
+                events.push(toolResult(toolNodeId, entry.toolOutcome === "interrupted" ? "本轮已结束，未确认工具结果" : entry.text === "工具执行失败" ? "工具执行失败" : "工具调用已结束"));
+                delete tools[callId];
+              }
+              next = {...next, openTools:tools};
             }
-            if (entry.toolPhase === "result") {
-              events.push(toolResult(toolNodeId, entry.toolOutcome === "interrupted" ? "本轮已结束，未确认工具结果" : entry.text === "工具执行失败" ? "工具执行失败" : "工具调用已结束"));
-              delete tools[callId];
-            }
-            next = {...next, openTools:tools};
           } else {
             events.push(event("REASONING_MESSAGE_START",{messageId:nodeId,role:"reasoning"}),
               event("REASONING_MESSAGE_CONTENT",{messageId:nodeId,delta:entry.text.slice(0,800)}),
               event("REASONING_MESSAGE_END",{messageId:nodeId}));
-            next = {...next, lastReasoningId:nodeId};
+            next = {...next, lastReasoningId:nodeId, toolGroupCount: 0, toolGroupEllipsisSent: false};
           }
           if (entry.id !== "terminal-note" && ((addedNodes > 0 && budget.entries >= MAX_ENTRIES - 6) || budget.bytes + eventBytes(events) > MAX_BYTES - TERMINAL_RESERVE_BYTES)) {
             if (budget.exhausted) continue;

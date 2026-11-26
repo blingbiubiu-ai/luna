@@ -228,7 +228,8 @@ function lineIndicatesTurnActivity(rawLine: string): boolean {
         payload.type === "task_started" ||
         payload.type === "task_complete" ||
         payload.type === "turn_aborted" ||
-        payload.type === "agent_message"
+        payload.type === "agent_message" ||
+        payload.type === "item_completed"
       );
     }
     if (obj.type === "response_item") {
@@ -348,6 +349,24 @@ function isSameRegularFile(a: string, b: string): boolean {
   }
 }
 
+function extractAgentMessageText(content: unknown): string {
+  if (typeof content === "string") return content.trim();
+  if (!Array.isArray(content)) return "";
+  const parts: string[] = [];
+  for (const block of content) {
+    if (!block || typeof block !== "object") continue;
+    const record = block as Record<string, unknown>;
+    if (
+      (record.type === "Text" || record.type === "text" || record.type === "output_text") &&
+      typeof record.text === "string" &&
+      record.text.trim()
+    ) {
+      parts.push(record.text.trim());
+    }
+  }
+  return parts.join("\n");
+}
+
 export class CodexRolloutTurnBridge implements PtyTurnBridge {
   private readonly historyPath: string;
   private historyOffset: number;
@@ -358,6 +377,8 @@ export class CodexRolloutTurnBridge implements PtyTurnBridge {
   private initEmitted = false;
   private pendingOutputs: ProviderOutput[] = [];
   private terminalResult?: PtyTurnDrainResult["terminal"];
+  private readonly seenAgentMessageIds = new Set<string>();
+  private lastAgentMessageText: string | undefined;
   private readonly expectedPromptTrimmed: string;
   private readonly excludedColdSessionIds: Set<string>;
 
@@ -457,6 +478,16 @@ export class CodexRolloutTurnBridge implements PtyTurnBridge {
     }
   }
 
+  private emitAgentMessage(text: string, id?: string): void {
+    const trimmed = text.trim();
+    if (!trimmed) return;
+    if (id && this.seenAgentMessageIds.has(id)) return;
+    if (trimmed === this.lastAgentMessageText) return;
+    if (id) this.seenAgentMessageIds.add(id);
+    this.lastAgentMessageText = trimmed;
+    this.pendingOutputs.push({ status: "stream", text: trimmed });
+  }
+
   ingest(): void {
     this.checkHistorySubmission();
     this.resolveRolloutPath();
@@ -498,7 +529,19 @@ export class CodexRolloutTurnBridge implements PtyTurnBridge {
         }
         if (payload.type === "agent_message" && typeof payload.message === "string" && payload.message.length > 0) {
           this.submitConfirmed = true;
-          this.pendingOutputs.push({ status: "stream", text: payload.message });
+          this.emitAgentMessage(payload.message);
+          continue;
+        }
+        if (payload.type === "item_completed" && payload.item && typeof payload.item === "object") {
+          const item = payload.item as Record<string, unknown>;
+          if (item.type === "AgentMessage") {
+            const text = extractAgentMessageText(item.content);
+            const id = typeof item.id === "string" && item.id ? item.id : undefined;
+            if (text) {
+              this.submitConfirmed = true;
+              this.emitAgentMessage(text, id);
+            }
+          }
           continue;
         }
         if (payload.type === "error") {
@@ -562,6 +605,7 @@ export class CodexRolloutTurnBridge implements PtyTurnBridge {
           const rawName = payload.name;
           const name = ["shell", "exec_command", "shell_command", "exec"].includes(rawName) ? "Bash" : rawName;
           const args = parseArgsObject(payload.type === "function_call" ? payload.arguments : payload.input);
+          this.lastAgentMessageText = undefined;
           this.pendingOutputs.push({ status: "tool_start", id, name, title: toolTitle(name, args) });
           continue;
         }
@@ -573,11 +617,13 @@ export class CodexRolloutTurnBridge implements PtyTurnBridge {
               : "";
           if (!id) continue;
           const action = parseArgsObject(payload.action);
+          this.lastAgentMessageText = undefined;
           this.pendingOutputs.push({ status: "tool_start", id, name: "Bash", title: toolTitle("Bash", action) });
           continue;
         }
         if (payload.type === "web_search_call" && typeof payload.id === "string" && payload.id) {
           const action = parseArgsObject(payload.action);
+          this.lastAgentMessageText = undefined;
           this.pendingOutputs.push({ status: "tool_start", id: payload.id, name: "web_search", title: toolTitle("web_search", action) });
           if (payload.status === "completed" || payload.status === "failed") {
             this.pendingOutputs.push({ status: "tool_result", id: payload.id, text: toolResultText(payload.status === "failed") });

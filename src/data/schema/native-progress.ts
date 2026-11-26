@@ -10,6 +10,8 @@ export const nativeProgressDeliveries = sqliteTable("native_progress_deliveries"
     started?: boolean;
     lastReasoningId?: string;
     openTools?: Record<string, string>;
+    toolGroupCount?: number;
+    toolGroupEllipsisSent?: boolean;
     ended?: boolean;
     sentEntries: string[];
     terminal?: boolean;

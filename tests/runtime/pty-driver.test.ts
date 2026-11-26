@@ -310,6 +310,86 @@ describe("ClaudeTranscriptTurnBridge & CodexRolloutTurnBridge", () => {
     expect(drained.terminal).toEqual({ kind: "completed", finalText: "Repo has 3 packages." });
   });
 
+  test("drains Codex item_completed AgentMessage commentary between tool calls without duplicating legacy agent_message", () => {
+    const root = makeTempDir("luna-codex-item-completed-");
+    const codexHome = join(root, ".codex");
+    const rolloutDir = join(codexHome, "sessions", "2026", "11", "26");
+    mkdirSync(rolloutDir, { recursive: true });
+
+    const sid = "11111111-2222-4333-8444-555555555555";
+    const historyPath = join(codexHome, "history.jsonl");
+    const rolloutPath = join(rolloutDir, `rollout-2026-11-26T23-00-00-${sid}.jsonl`);
+
+    const bridge = new CodexRolloutTurnBridge({
+      prompt: "Check MR",
+      codexHome,
+      cliPid: 0,
+    });
+
+    appendFileSync(historyPath, `${JSON.stringify({ session_id: sid, text: "Check MR" })}\n`);
+    appendFileSync(
+      rolloutPath,
+      [
+        JSON.stringify({ type: "session_meta", payload: { id: sid } }),
+        JSON.stringify({ type: "event_msg", payload: { type: "task_started", turn_id: "t1" } }),
+        JSON.stringify({
+          type: "event_msg",
+          payload: {
+            type: "item_completed",
+            item: {
+              type: "AgentMessage",
+              id: "msg_1",
+              phase: "commentary",
+              content: [{ type: "Text", text: "先查一下 MR 评审状态。" }],
+            },
+          },
+        }),
+        // Duplicate legacy event_msg for the same message should be ignored.
+        JSON.stringify({ type: "event_msg", payload: { type: "agent_message", message: "先查一下 MR 评审状态。" } }),
+        // Compaction handoff summary in response_item should not be emitted as commentary.
+        JSON.stringify({
+          type: "response_item",
+          payload: {
+            type: "message",
+            role: "assistant",
+            content: [{ type: "output_text", text: "# Handoff Summary" }],
+          },
+        }),
+        JSON.stringify({
+          type: "response_item",
+          payload: { type: "function_call", call_id: "call_1", name: "shell_command", arguments: JSON.stringify({ command: "git status" }) },
+        }),
+        JSON.stringify({
+          type: "response_item",
+          payload: { type: "function_call_output", call_id: "call_1", output: JSON.stringify({ exit_code: 0, output: "clean" }) },
+        }),
+        JSON.stringify({
+          type: "event_msg",
+          payload: {
+            type: "item_completed",
+            item: {
+              type: "AgentMessage",
+              id: "msg_2",
+              phase: "commentary",
+              content: [{ type: "Text", text: "仓库干净，准备提交。" }],
+            },
+          },
+        }),
+      ].join("\n") + "\n",
+    );
+
+    const drained = bridge.drain();
+    expect(drained.submitConfirmed).toBe(true);
+    expect(drained.outputs).toEqual([
+      { status: "init", sessionId: sid },
+      { status: "stream", text: "先查一下 MR 评审状态。" },
+      { status: "tool_start", id: "call_1", name: "Bash", title: "执行 git status" },
+      { status: "tool_result", id: "call_1", text: "工具调用已结束" },
+      { status: "checkpoint" },
+      { status: "stream", text: "仓库干净，准备提交。" },
+    ]);
+  });
+
   test("ignores pre-existing completed or wrong-cwd Codex rollouts in shared CODEX_HOME on cold start", () => {
     const root = makeTempDir("luna-codex-shared-home-");
     const codexHome = join(root, ".codex");
