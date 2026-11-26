@@ -170,3 +170,34 @@ test("active console streams defer background replacement during reap, and syste
  await f.manager.reset(id,"agent");
  expect(closed).toEqual([`${id}:system_disk_reset`]);
 });
+
+test("reconciles stale ready reservations when the backing container vanished so image replacement succeeds",async()=>{
+ const f=fixture(),id=f.held.environment.id;
+ f.store.ready("old-request",{containerId:"vanished-container",endpoint:"http://127.0.0.1:41000",bootId:"boot-1"});
+ expect(f.store.active(id)).toHaveLength(1);
+ // Backing container is gone (inspect returns null): prepare with a new image auto-releases the stale reservation and replaces.
+ await expect(f.manager.prepare(f.imageRequest)).rejects.toThrow("reached-context-preparation");
+ expect(f.removed()).toBe(1);
+ expect(f.store.reservation("old-request")?.state).toBe("released");
+ expect(f.store.require(id).spec.imageDigest).toBe(f.imageRequest.spec.imageDigest);
+});
+
+test("reap reconciles stale ready reservations when the backing container is stopped",async()=>{
+ const f=fixture(),id=f.held.environment.id;
+ f.store.ready("old-request",{containerId:"stopped-container",endpoint:"http://127.0.0.1:41000",bootId:"boot-1"});
+ const stoppedDriver={...(f.manager.driver as object),inspect:async()=>({Id:"stopped-container",State:{Running:false}})} as unknown as DockerEnvironmentDriver;
+ const manager=new EnvironmentManager(f.store,stoppedDriver);
+ await manager.reap();
+ expect(f.store.reservation("old-request")?.state).toBe("released");
+ expect(f.store.active(id)).toHaveLength(0);
+});
+
+test("preserves ready reservations while the backing container is still running",async()=>{
+ const f=fixture(),id=f.held.environment.id;
+ f.store.ready("old-request",{containerId:"live-container",endpoint:"http://127.0.0.1:41000",bootId:"boot-1"});
+ const liveDriver={...(f.manager.driver as object),inspect:async()=>({Id:"live-container",State:{Running:true}})} as unknown as DockerEnvironmentDriver;
+ const manager=new EnvironmentManager(f.store,liveDriver);
+ await expect(manager.prepare(f.imageRequest)).rejects.toMatchObject({code:"environment_mount_pending"});
+ expect(f.store.reservation("old-request")?.state).toBe("ready");
+ expect(f.removed()).toBe(0);
+});

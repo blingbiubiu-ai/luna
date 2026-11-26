@@ -69,6 +69,7 @@ export class EnvironmentManager {
   private async prepareLocked(input: PrepareRequest): Promise<PreparedEnvironment> {
       new ShadowPreparationStore(this.store.db).requireJob(input);
       const id = environmentKey(input.spec);
+      await this.reconcileVanishedContainer(id);
       await this.resumeReplacement(id);
       const previous = this.store.find(id);
       // Only a Job carries the Shadow's root switch; file maintenance keeps the current container's.
@@ -267,9 +268,36 @@ export class EnvironmentManager {
     this.store.saveEnvironment(environment);
   }
 
+  /**
+   * Release stale `ready` reservations when the container that hosted them no longer runs
+   * (e.g. after manual `docker rm -f`, host reboot, or image migration). A running container
+   * or an in-flight `preparing` reservation is never touched.
+   */
+  private async reconcileVanishedContainer(id: string): Promise<number> {
+    const environment = this.store.find(id);
+    if (!environment?.containerId || this.activeStreams(id) > 0) return 0;
+    const stale = this.store.active(id).filter(item => item.state === "ready");
+    if (!stale.length) return 0;
+    const actual = await this.driver.inspect(environment);
+    if (actual?.State.Running) return 0;
+    for (const reservation of stale) {
+      this.store.release(reservation.requestId, reservation.reservationId);
+    }
+    console.error(JSON.stringify({
+      level: "warn",
+      msg: "Released stale reservations for non-running container",
+      environmentId: id,
+      containerId: environment.containerId,
+      releasedCount: stale.length,
+      requestIds: stale.map(item => item.requestId),
+    }));
+    return stale.length;
+  }
+
   async reap(): Promise<void> {
     for (const environment of this.store.list()) {
       await this.lock(environment.id, async () => {
+        await this.reconcileVanishedContainer(environment.id);
         await this.resumeReplacement(environment.id);
         for (const reservation of this.store.active(environment.id)) {
           if (reservation.occupant.kind === "maintenance") await this.releaseFile(reservation);
@@ -432,6 +460,7 @@ export class EnvironmentManager {
       // replace it (a new system disk) instead of refusing the console.
       const { imageDigest, runtimeId } = this.driver.config;
       if (environment.spec.imageDigest !== imageDigest || environment.spec.callbackRuntimeId !== runtimeId) {
+        await this.reconcileVanishedContainer(id);
         if (this.store.active(id).length) throw new ExecutionError(503, "environment_mount_pending");
         this.store.beginReplacement(id, { ...environment.spec, imageDigest, callbackRuntimeId: runtimeId });
         await this.resumeReplacement(id);
