@@ -102,8 +102,11 @@ export class NativeTaskProgress {
           if (batch.length && requestBytes([...batch,...events]) > 8 * 1024) await flush();
           batch.push(...events); draft = next;
         };
-        const entries: NativeProgressEntry[] = [{id: "task-title", text: operation.statusCard?.title ?? "任务进度"}, ...(operation.nativeProgress ?? []),
-          ...(terminal ? [{id: "terminal-note", text: operation.content || (operation.statusCard?.status === "completed" ? "任务已完成，结果由主会话汇报。" : "本轮执行已结束。")}] : [])];
+        const showTerminalNote = terminal && operation.statusCard?.status !== "completed";
+        const entries: NativeProgressEntry[] = [
+          ...(operation.nativeProgress ?? []),
+          ...(showTerminalNote ? [{id: "terminal-note", text: operation.content || "本轮执行已结束。"}] : []),
+        ];
         for (const entry of entries) {
           if (seen.has(entry.id)) continue;
           const nodeId = `${messageId}-${entry.id}`;
@@ -161,14 +164,14 @@ export class NativeTaskProgress {
             if ((state.progressBudget?.bytes ?? 0) + eventBytes(events) > MAX_BYTES - 512) break;
             await append(events, {...state, openTools:remaining});
           }
-          const successful = operation.statusCard?.status === "completed";
+          const done = operation.statusCard?.status === "completed" || operation.statusCard?.status === "waiting";
           await append([
             event("REASONING_END", {messageId:state.lastReasoningId ?? `reason-${messageId}`}),
-            ...(successful ? [event("RUN_FINISHED", {threadId:operation.sessionId ?? inbound.surface.externalId,runId:id,status:"done"})] : []),
-          ], {...state, openTools:{}, ended:true, ...(successful ? {terminal:true} : {})});
+            ...(done ? [event("RUN_FINISHED", {threadId:operation.sessionId ?? inbound.surface.externalId,runId:id,status:"done"})] : []),
+          ], {...state, openTools:{}, ended:true, ...(done ? {terminal:true} : {})});
         }
         if (!state.terminal) await call({method:"POST",url:`/open-apis/im/v1/message_cot/complete/${encodeURIComponent(state.cotId!)}`,
-          params:{message_id:messageId,reason:operation.statusCard?.status === "completed" ? "done" : "error"}},true);
+          params:{message_id:messageId,reason:operation.statusCard?.status === "completed" || operation.statusCard?.status === "waiting" ? "done" : "error"}},true);
         save({...state,terminal:true,pending:undefined});
       }
     }

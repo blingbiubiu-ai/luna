@@ -402,9 +402,11 @@ change Task execution outcomes. There is no silent style fallback.
 Native entries contain only public assistant text and tool names with stable
 call IDs. Thinking blocks, full tool argument objects and raw tool results are excluded.
 Historical unmarked timeline entries are not exported to native bubbles. The
-Feishu heading is provider-controlled; the task name is the first entry and the
-closing explanation is a final entry before completion. Failed/cancelled runs
-complete with `error`, successful runs with `done`. The dashboard retains its
+Feishu heading is provider-controlled; only real tool calls and public
+assistant commentary are emitted during execution, and a closing explanation is
+appended only for non-completed terminal states (failed, cancelled, waiting, or
+blocked). Failed/cancelled runs complete with `error`, while completed and
+waiting runs complete with `done`. The dashboard retains its
 common status-card projection and records the provider presentation style.
 
 Tool progress is preserved structurally from the CLI provider through the
@@ -435,9 +437,11 @@ prompt does not require additional narration for progress display. Concrete tool
 progress should be derived from structured tool events by the runtime.
 
 Tool classification and Chinese labels are shared by the provider adapters and
-Feishu renderer in `tool-display.ts`. Subject extraction uses an explicit field
-priority, including full paths,
-`Url`, `toolAction`, `toolSummary`, and `prompt`; display is capped at 80 characters.
+Feishu renderer in `tool-display.ts`. Commands prefer human-readable
+`description`/`toolSummary`/`toolAction`/`subject` over raw command text; file
+tools display the file basename (`读取 <name>` / `写入 <name>` / `编辑 <name>`);
+search/fetch tools format `搜索 <query>` / `访问 <url>`; display is capped at 80
+characters.
 Luna retains credential redaction before display and its existing result-status
 protocol. Tool classification does not use assistant prose or generated labels.
 

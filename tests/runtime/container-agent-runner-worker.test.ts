@@ -94,7 +94,7 @@ describe("container agent-runner worker", () => {
         }),
         "claude",
       ),
-    ).toEqual({kind: "events", events: [{kind:"tool_start", id:"tool-1", name:"Bash", title:"执行命令 · pwd"}]});
+    ).toEqual({kind: "events", events: [{kind:"tool_start", id:"tool-1", name:"Bash", title:"执行 pwd"}]});
   });
 
   test("does not treat tool descriptions as assistant narration", () => {
@@ -113,7 +113,7 @@ describe("container agent-runner worker", () => {
         }),
         "claude",
       ),
-    ).toEqual({kind: "events", events: [{kind:"tool_start", id:"tool-1", name:"Bash", title:"执行命令 · pwd"}]});
+    ).toEqual({kind: "events", events: [{kind:"tool_start", id:"tool-1", name:"Bash", title:"检查当前目录"}]});
   });
 
   test("preserves Codex command execution as a tool event", () => {
@@ -129,7 +129,7 @@ describe("container agent-runner worker", () => {
         }),
         "codex",
       ),
-    ).toEqual({kind: "events", events: [{kind:"tool_start", id:"cmd-1", name:"Bash", title:"执行命令 · ls"}]});
+    ).toEqual({kind: "events", events: [{kind:"tool_start", id:"cmd-1", name:"Bash", title:"执行 ls"}]});
   });
 
   test("emits stream output for a final unterminated runner line", async () => {
@@ -424,8 +424,8 @@ test("mixed text/tools and an unterminated result survive the worker protocol wi
     const script=`cat <<'LUNA_TEST_JSON'\n${JSON.stringify(assistant)}\n${JSON.stringify(result)}\nLUNA_TEST_JSON\nprintf '%s' '${JSON.stringify({type:"result",is_error:false,result:"检查完成"})}'`;
     const events=await captureWorkerOutput(()=>runQuery({runnerType:"/bin/sh",prompt:script}));
     expect(events.filter(e=>e.status==="tool_start")).toEqual([
-      {status:"tool_start",id:"call-read",name:"Read",title:"读取文件 · /private/work/README.md"},
-      {status:"tool_start",id:"call-shell",name:"Bash",title:"执行命令 · echo hello"},
+      {status:"tool_start",id:"call-read",name:"Read",title:"读取 README.md"},
+      {status:"tool_start",id:"call-shell",name:"Bash",title:"执行 echo hello"},
     ]);
     expect(events).toContainEqual({status:"tool_result",id:"call-read",text:"工具调用已结束"});
     expect(events).toContainEqual({status:"checkpoint"});

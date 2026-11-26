@@ -51,9 +51,9 @@ test("large Native histories are batched and bounded while terminal delivery ret
   await adapter().send(inbound,{...operation,replyMode:"update_status_card",targetMessageId:"om_progress",nativeProgress:entries});
   expect(calls.length).toBe(before);
   await adapter().send(inbound,{...operation,replyMode:"update_status_card",targetMessageId:"om_progress",nativeProgress:entries,
-    statusCardState:"terminal",statusCard:{taskId:"task",status:"completed"},content:"最终结果正常完成"});
-  expect(events().some(e => e.content.includes("最终结果正常完成"))).toBe(true);
-  expect(events().filter(e => e.event_type === "RUN_FINISHED")).toHaveLength(1);
+    statusCardState:"terminal",statusCard:{taskId:"task",status:"failed"},content:"执行失败原因"});
+  expect(events().some(e => e.content.includes("执行失败原因"))).toBe(true);
+  expect(calls.at(-1)?.params?.reason).toBe("error");
   const total = calls.filter(c => c.method === "PUT").reduce((n,c) => n + Buffer.byteLength(JSON.stringify(c.data!.events)),0);
   expect(total).toBeLessThanOrEqual(256 * 1024);
 });
@@ -65,13 +65,13 @@ test("short Native progress retains 300 ordinary entries and one budget notice",
   expect(checkpoint.state.progressBudget).toMatchObject({entries:300,exhausted:true});
 });
 test("results update existing tools without consuming another display slot, even after the node limit", async () => {
-  const starts = Array.from({length:300},(_,i)=>({id:`call-${i}:start`,toolCallId:`call-${i}`,toolName:"Bash",toolPhase:"start" as const,text:"执行命令"}));
+  const starts = Array.from({length:301},(_,i)=>({id:`call-${i}:start`,toolCallId:`call-${i}`,toolName:"Bash",toolPhase:"start" as const,text:"执行命令"}));
   await adapter().send(inbound,{...operation,nativeProgress:starts});
   const update = {...operation,replyMode:"update_status_card" as const,targetMessageId:"om_progress",nativeProgress:
-    starts.slice(0,299).map(e=>({...e,id:e.id.replace(":start",":result"),toolPhase:"result" as const,text:"工具调用已结束"}))};
+    starts.slice(0,300).map(e=>({...e,id:e.id.replace(":start",":result"),toolPhase:"result" as const,text:"工具调用已结束"}))};
   await adapter().send(inbound,update);
-  expect(events().filter(e=>e.event_type === "TOOL_CALL_START")).toHaveLength(299);
-  expect(events().filter(e=>e.event_type === "TOOL_CALL_RESULT")).toHaveLength(299);
+  expect(events().filter(e=>e.event_type === "TOOL_CALL_START")).toHaveLength(300);
+  expect(events().filter(e=>e.event_type === "TOOL_CALL_RESULT")).toHaveLength(300);
   expect(events().filter(e=>e.content.includes("进度已达到展示上限"))).toHaveLength(1);
   expect(connection.db.select().from(schema.nativeProgressDeliveries).get()!.state.progressBudget?.entries).toBe(300);
 });
@@ -85,14 +85,14 @@ test("native thread snapshots append only new public entries across adapter rest
   await adapter().send(inbound,update);
   expect(events().filter(e=>e.event_type==="TOOL_CALL_START")).toHaveLength(1);
   expect(events().filter(e=>e.content.includes("找到原因"))).toHaveLength(1);
-  expect(events().filter(e=>e.content.includes("调查问题"))).toHaveLength(1);
-  const terminal={...update,statusCardState:"terminal" as const,statusCard:{...operation.statusCard!,status:"completed"},content:"修复完成"};
+  expect(events().some(e=>e.content.includes("调查问题"))).toBe(false);
+  const terminal={...update,statusCardState:"terminal" as const,statusCard:{...operation.statusCard!,status:"completed"},content:"处理完成。"};
   await adapter().send(inbound,terminal);
   await adapter().send(inbound,terminal);
   expect(events().filter(e=>e.event_type==="RUN_FINISHED")).toHaveLength(1);
   expect(events().filter(e=>e.event_type==="REASONING_END")).toHaveLength(1);
   expect(calls.filter(c=>c.url.includes("/complete/"))).toHaveLength(0);
-  expect(events().some(e=>e.content.includes("修复完成"))).toBe(true);
+  expect(events().some(e=>e.content.includes("处理完成"))).toBe(false);
 });
 test("ambiguous create is quarantined across restart instead of duplicating messages",async()=>{
   let count=0;
@@ -142,4 +142,14 @@ test("tool results retain their parent across restart, are not counted twice, an
   await adapter().send(inbound,{...update,statusCardState:"terminal",statusCard:{taskId:"task",status:"failed"}});
   expect(events().some(e=>e.event_type==="RUN_FINISHED")).toBe(false);
   expect(calls.at(-1)?.params?.reason).toBe("error");
+});
+
+test("waiting status finishes cleanly with RUN_FINISHED and keeps the pause reason instead of showing failure",async()=>{
+  await adapter().send(inbound,operation);
+  const waiting={...operation,replyMode:"update_status_card" as const,targetMessageId:"om_progress",idempotencyKey:"wait",
+    statusCardState:"terminal" as const,statusCard:{taskId:"task",status:"waiting"},content:"暂停等待中：等待人工确认"};
+  await adapter().send(inbound,waiting);
+  expect(events().filter(e=>e.event_type==="RUN_FINISHED")).toHaveLength(1);
+  expect(calls.filter(c=>c.url.includes("/complete/"))).toHaveLength(0);
+  expect(events().some(e=>e.content.includes("暂停等待中：等待人工确认"))).toBe(true);
 });
