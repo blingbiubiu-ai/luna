@@ -1,5 +1,5 @@
 VARIANT ?= general
-IMAGE_NAME ?= $(if $(filter android,$(VARIANT)),luna-runner-android,luna-runner)
+IMAGE_NAME ?= $(if $(filter developer,$(VARIANT)),luna-runner-developer,luna-runner)
 TAG ?= latest
 PLATFORM ?= linux/amd64
 RUNNER_BASE_IMAGE ?= luna-runner-base:$(TAG)
@@ -14,17 +14,17 @@ help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | \
 		awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-20s\033[0m %s\n", $$1, $$2}'
 
-android-base: check-android-local ## Build the stable Android base only when it is missing
+android-base: check-developer-local ## Build the stable Android base only when it is missing
 	@if docker image inspect $(FULL_ANDROID_BASE_IMAGE) >/dev/null 2>&1; then \
 		echo "Reusing $(FULL_ANDROID_BASE_IMAGE)"; \
 	else \
-		docker build --platform $(PLATFORM) -f local/android/Dockerfile.android-base -t $(FULL_ANDROID_BASE_IMAGE) .; \
+		docker build --platform $(PLATFORM) -f local/developer/Dockerfile.android-base -t $(FULL_ANDROID_BASE_IMAGE) .; \
 	fi
 
-android-base-refresh: check-android-local ## Explicitly rebuild the stable Android base
-	docker build --platform $(PLATFORM) -f local/android/Dockerfile.android-base -t $(FULL_ANDROID_BASE_IMAGE) .
+android-base-refresh: check-developer-local ## Explicitly rebuild the stable Android base
+	docker build --platform $(PLATFORM) -f local/developer/Dockerfile.android-base -t $(FULL_ANDROID_BASE_IMAGE) .
 
-build: ## Build selected variant (VARIANT=general|android)
+build: ## Build selected variant (VARIANT=general|developer)
 	LUNA_RUNNER_BASE_IMAGE=$(RUNNER_BASE_IMAGE) LUNA_RUNNER_IMAGE_NAME=$(IMAGE_NAME) LUNA_RUNNER_PLATFORM=$(PLATFORM) LUNA_ANDROID_BASE_IMAGE=$(FULL_ANDROID_BASE_IMAGE) bash build.sh $(TAG) --variant $(VARIANT)
 
 build-no-cache: ## Rebuild selected runtime without cache
@@ -50,6 +50,6 @@ shell: build ## Drop into an interactive shell inside the container
 clean: ## Remove the built image
 	docker rmi $(FULL_IMAGE) 2>/dev/null || true
 
-.PHONY: check-android-local
-check-android-local:
-	@test -f local/android/Dockerfile.android-base || { echo "Android variant requires local configuration (see container/README.md)" >&2; exit 1; }
+.PHONY: check-developer-local
+check-developer-local:
+	@test -f local/developer/Dockerfile.android-base || { echo "Developer variant requires local configuration (see container/README.md)" >&2; exit 1; }

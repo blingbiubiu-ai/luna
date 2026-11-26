@@ -11,7 +11,7 @@ test("Worker init selects its own image; Runtime init needs no Docker", () => {
     writeFileSync(join(bin, "docker"), '#!/bin/sh\nprintf "%s\\n" "$3" > "$IMAGE_RECORD"\nprintf "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\\n"\n', { mode: 0o755 });
     for (const [name, args, image] of [
       ["default", [], "luna-runner:latest"],
-      ["android", ["--image", "luna-runner-android:latest"], "luna-runner-android:latest"],
+      ["developer", ["--image", "luna-runner-developer:latest"], "luna-runner-developer:latest"],
       ["custom", ["--image", "custom:dev"], "custom:dev"],
     ] as const) {
       const record = join(root, `${name}.image`);

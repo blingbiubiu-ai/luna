@@ -219,14 +219,14 @@ Worker renders instructions from the selected resource snapshot. Remote Service 
 ## Runner image variants
 
 Both `container/Dockerfile` (general-purpose `luna-runner:latest`) and
-`container/Dockerfile.android` (`luna-runner-android:latest`) inherit
+`container/local/developer/Dockerfile.developer` (`luna-runner-developer:latest`) inherit
 `container/Dockerfile.base`. It owns Node, Bun, Chrome, provider CLIs, the Luna
-client, Executor, runner user and entrypoint. Android adds JDK/native build
-packages and copies SDK/NDK/CMake and Gradle archives from the cached
+client, Executor, runner user and entrypoint. Developer adds JDK/native build
+packages, remote device CLI tools, and copies SDK/NDK/CMake and Gradle archives from the cached
 `Dockerfile.android-base` asset source. The shared runtime is maintained once;
 large Android downloads remain cached separately.
-Build with `container/build.sh [TAG] --variant general|android` or
-`make -C container build VARIANT=android`. General is the default; Android requires
+Build with `container/build.sh [TAG] --variant general|developer` or
+`make -C container build VARIANT=developer`. General is the default; Developer requires
 linux/amd64. Image names are distinct so building one does not replace the other.
 
 Each Worker chooses its image with `luna worker init --image IMAGE` and

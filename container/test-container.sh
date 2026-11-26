@@ -3,11 +3,11 @@ set -euo pipefail
 
 IMAGE="${1:?Usage: test-container.sh IMAGE}"
 VARIANT="${2:-general}"
-case "$VARIANT" in general|android) ;; *) echo "Invalid variant" >&2; exit 1 ;; esac
-if [ "$VARIANT" = android ]; then
-  PRIVATE_TEST="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/local/android/test-container.sh"
-  [ -f "$PRIVATE_TEST" ] || { echo "Android verification requires local configuration (see container/README.md)" >&2; exit 1; }
-  exec bash "$PRIVATE_TEST" "$IMAGE" android
+case "$VARIANT" in general|developer) ;; *) echo "Invalid variant" >&2; exit 1 ;; esac
+if [ "$VARIANT" = developer ]; then
+  PRIVATE_TEST="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/local/developer/test-container.sh"
+  [ -f "$PRIVATE_TEST" ] || { echo "Developer verification requires local configuration (see container/README.md)" >&2; exit 1; }
+  exec bash "$PRIVATE_TEST" "$IMAGE" developer
 fi
 PASS=0
 FAIL=0

@@ -90,7 +90,7 @@ test("explicit local binding writes only Worker home and stores registration for
     writeFileSync(join(bin, "docker"), `#!/bin/sh\necho sha256:${"a".repeat(64)}\n`, { mode: 0o755 });
     writeFileSync(join(service, "runtime/runtime.json"), JSON.stringify({ runtimeId: "runtime", homeWorkerId: "local", port: server.port, adminToken: "a".repeat(43), sharedProject: { projectId: "project" } }), { mode: 0o600 });
     writeFileSync(join(service, ".env"), "LUNA_WORKER_HOME=/incorrect\nLUNA_WORKER_PROJECTS_DIR=/incorrect/projects\n");
-    const init = await runWorkerCli(["init", "--home", worker, "--image", "luna-runner-android:latest", "--port", "8192"], { HOME: root, PATH: bin });
+    const init = await runWorkerCli(["init", "--home", worker, "--image", "luna-runner-developer:latest", "--port", "8192"], { HOME: root, PATH: bin });
     expect(init.status).toBe("ok");
     const before = readFileSync(join(worker, "worker.json"), "utf8");
     writeFileSync(join(bin, "docker"), "#!/bin/sh\nexit 99\n", { mode: 0o755 });
