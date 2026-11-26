@@ -1,7 +1,7 @@
 import { memoryInjection } from "@/agents/agent-memory-injection";
 import { selfRoutineKindOfTrigger } from "@/agents/self-routines";
 import { PlatformSettingsStore } from "@/platform/platform-settings-store";
-import { buildWorkCapabilities } from "@/runners/capabilities";
+import { buildWorkCapabilities, compactTurnCapabilities } from "@/runners/capabilities";
 import { addressingFacts, compact, dataBlock, joinBlocks, messageItem, turnClock, turnEvent, zonedIso, type PeopleResolver } from "@/runners/turn-envelope";
 import { shadowPeople } from "@/runners/shadow-people";
 import type {AgentExecutionSnapshot} from "@/agent-config";
@@ -421,7 +421,7 @@ export class WorkRunner {
         allowSilent: true,
       });
       const prompt = joinBlocks([
-        dataBlock("capabilities", { json: capabilities }),
+        dataBlock("capabilities", { json: compactTurnCapabilities(capabilities) }),
         dataBlock("memory", { text: memory.text ?? "" }),
         dataBlock("now", { json: clock }),
         dataBlock("events", {
@@ -743,7 +743,7 @@ function buildWorkTurnPrompt(input: {
     }),
   );
   return joinBlocks([
-    dataBlock("capabilities", { json: input.capabilities }),
+    dataBlock("capabilities", { json: compactTurnCapabilities(input.capabilities) }),
     history.length ? dataBlock("history", { json: { launchContext: history } }) : "",
     dataBlock("now", { json: clock }),
     dataBlock("events", { json: events }),

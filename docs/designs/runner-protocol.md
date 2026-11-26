@@ -16,9 +16,14 @@ removed without compatibility aliases; `/api/runner/*` rejects requests carrying
 Every Main and Work turn presents structured JSON/text blocks in deterministic
 order:
 
-1. **`<capabilities>`**: `RunnerCapabilitiesManifest` (`protocolVersion: 2`,
-   `identity`, `turn`, `commands`, `addressScope`, `outboundGovernance`). Also
-   queryable live via `GET /api/runner/whoami` (`luna whoami`).
+1. **`<capabilities>`**: compact per-turn `TurnCapabilitiesSummary`
+   (`turn`: `originKind`, `allowSilent`, `terminalOutputMode`, optional
+   `routineKind`; plus `commands` on restricted `reflection`/`consolidation`/
+   `heartbeat` turns and `outboundGovernance` on heartbeat turns or when quiet
+   hours / hourly quota pressure is active). The full `RunnerCapabilitiesManifest`
+   (`protocolVersion: 2`, `identity`, `turn`, `commands`, `addressScope`,
+   `outboundGovernance`) remains queryable live via `GET /api/runner/whoami`
+   (`luna whoami`).
 2. **`<memory>`**: injected Agent memory entries for this turn.
 3. **`<history>`**: background context (`launchSeed`, `deltaContext`,
    `activationContext`), omitted when empty. `deltaContext` carries both

@@ -1,5 +1,5 @@
 import { memoryInjection } from "@/agents/agent-memory-injection";
-import { buildTaskCapabilities } from "@/runners/capabilities";
+import { buildTaskCapabilities, compactTurnCapabilities } from "@/runners/capabilities";
 import { compact, dataBlock, joinBlocks, turnClock, zonedIso } from "@/runners/turn-envelope";
 import { promptBlock } from "@luna/host-runtime/prompt-blocks";
 import type {AgentExecutionSnapshot} from "@/agent-config";
@@ -559,7 +559,7 @@ async function _runAgentTask(input: {
     actorUserId: actor,
   });
   const turnMessage: UserMessage = {...userMessage, content: [{type: "text", text: joinBlocks([
-    dataBlock("capabilities", {json: capabilities}),
+    dataBlock("capabilities", {json: compactTurnCapabilities(capabilities)}),
     input.materializedPrompt,
     dataBlock("memory", {text: memory.text ?? ""}),
     dataBlock("now", {json: turnClock(new Date(), timezone)}),

@@ -17,6 +17,7 @@ import { SessionStore } from "@/sessions/session-store";
 import { renderMainRunnerPrompt } from "@/main-runner/main-runner";
 import {
   buildMainCapabilities,
+  compactTurnCapabilities,
   isMainSelfRoutineInput,
   RUNNER_PROTOCOL_VERSION,
 } from "@/runners/capabilities";
@@ -234,6 +235,35 @@ test("Protocol v2 renders <capabilities> and <events> envelopes and suppresses l
   expect(prompt).not.toContain("<trigger>");
   expect(prompt).not.toContain("<task_result>");
 
+  // Normal turn `<capabilities>` omits static identity/commands/addressScope and idle governance.
+  const capMatch = prompt.match(/<capabilities>\n([\s\S]*?)\n<\/capabilities>/);
+  expect(capMatch).toBeTruthy();
+  const renderedCap = JSON.parse(capMatch![1]!);
+  expect(renderedCap).toEqual({
+    turn: {
+      originKind: "user_messages",
+      allowSilent: true,
+      terminalOutputMode: "reply_current_session",
+    },
+  });
+
+  // Active quiet hours or quota consumption surfaces outboundGovernance on normal turns.
+  const quietSummary = compactTurnCapabilities({
+    ...capabilities,
+    outboundGovernance: {
+      heartbeatApprovalRequired: true,
+      sessionHourlyLimit: 3,
+      sessionHourlyUsed: 1,
+      sessionHourlyRemaining: 2,
+      recipientDailyLimit: 10,
+      quietHours: null,
+      inQuietHours: false,
+      quietHoursEndsAt: null,
+    },
+  });
+  expect(quietSummary.outboundGovernance?.sessionHourlyUsed).toBe(1);
+  expect(quietSummary.commands).toBeUndefined();
+
   // Self-routine turns switch terminalOutputMode to "ignored" and isMainSelfRoutineInput returns true.
   const heartbeatTriggerId = "hb-cmd-1";
   f.db
@@ -274,6 +304,23 @@ test("Protocol v2 renders <capabilities> and <events> envelopes and suppresses l
   expect(hbCaps.identity.routineKind).toBe("heartbeat");
   expect(hbCaps.turn.terminalOutputMode).toBe("ignored");
   expect(hbCaps.addressScope.allowCurrent).toBe(false);
+
+  const hbPrompt = renderMainRunnerPrompt(hbInput, {
+    db: f.db,
+    capabilities: hbCaps,
+    timezone: "Asia/Shanghai",
+  });
+  const hbCapMatch = hbPrompt.match(/<capabilities>\n([\s\S]*?)\n<\/capabilities>/);
+  expect(hbCapMatch).toBeTruthy();
+  const renderedHbCap = JSON.parse(hbCapMatch![1]!);
+  expect(renderedHbCap.turn).toEqual({
+    originKind: "self_routine",
+    allowSilent: true,
+    terminalOutputMode: "ignored",
+    routineKind: "heartbeat",
+  });
+  expect(renderedHbCap.commands).toContain("say --via-main");
+  expect(renderedHbCap.outboundGovernance).toBeDefined();
 });
 
 test("Protocol v2 rejects x-luna-protocol-version < 2 with HTTP 426 and serves /api/runner/whoami", async () => {

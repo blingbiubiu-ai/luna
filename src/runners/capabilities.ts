@@ -412,3 +412,50 @@ export function buildTaskCapabilities(options: {
     outboundGovernance: null,
   };
 }
+
+/**
+ * Compact per-turn view of `RunnerCapabilitiesManifest` embedded in `<capabilities>`.
+ * Static identity, full command list, and addressScope live in Runner instructions,
+ * `.luna/runner-context.json`, and `GET /api/runner/whoami` (`luna whoami`).
+ */
+export interface TurnCapabilitiesSummary {
+  readonly turn: {
+    readonly originKind: TurnOriginKind;
+    readonly allowSilent: boolean;
+    readonly terminalOutputMode: TerminalOutputMode;
+    readonly routineKind?: SelfRoutineKind | undefined;
+  };
+  readonly commands?: readonly string[] | undefined;
+  readonly outboundGovernance?: OutboundQuotaSnapshot | undefined;
+}
+
+export function compactTurnCapabilities(
+  manifest: RunnerCapabilitiesManifest,
+): TurnCapabilitiesSummary {
+  const routineKind = manifest.identity.routineKind;
+  const isMemoryRoutine =
+    routineKind === "reflection" || routineKind === "consolidation";
+  const isHeartbeat =
+    routineKind === "heartbeat" ||
+    (manifest.identity.runnerKind === "main" &&
+      manifest.turn.terminalOutputMode === "ignored" &&
+      !isMemoryRoutine);
+  const gov = manifest.outboundGovernance;
+  const includeOutboundGovernance =
+    gov != null &&
+    (isHeartbeat ||
+      gov.inQuietHours ||
+      gov.sessionHourlyUsed > 0 ||
+      (gov.sessionHourlyRemaining !== null && gov.sessionHourlyRemaining <= 0));
+
+  return {
+    turn: {
+      originKind: manifest.turn.originKind,
+      allowSilent: manifest.turn.allowSilent,
+      terminalOutputMode: manifest.turn.terminalOutputMode,
+      ...(routineKind ? { routineKind } : {}),
+    },
+    ...(isMemoryRoutine || isHeartbeat ? { commands: manifest.commands } : {}),
+    ...(includeOutboundGovernance ? { outboundGovernance: gov } : {}),
+  };
+}

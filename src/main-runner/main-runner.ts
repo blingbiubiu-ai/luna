@@ -18,6 +18,7 @@ import { channelSurfaces, correlatedRequests, runnerOperations, sessions, tasks 
 import { CorrelatedRequestService, isHeartbeatSession, type CorrelatedRequestRow } from "@/messaging/correlated-request-service";
 import {
   buildMainCapabilities,
+  compactTurnCapabilities,
   isMainSelfRoutineInput,
   resolveMainAllowSilent,
   resolveMainTriggerClassification,
@@ -523,7 +524,7 @@ export function renderMainRunnerPrompt(input: MainRunnerInput, options: MainRunn
   events.push(...primaryEvents);
 
   return joinBlocks([
-    dataBlock("capabilities", { json: capabilities }),
+    dataBlock("capabilities", { json: compactTurnCapabilities(capabilities) }),
     dataBlock("memory", { text: options.memory ?? "" }),
     Object.keys(history).length ? dataBlock("history", { json: history }) : "",
     dataBlock("now", { json: clock }),
