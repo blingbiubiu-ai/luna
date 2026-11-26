@@ -39,3 +39,4 @@ CLI derives idempotency keys automatically (never pass `--request-id`; pass
 `--repeat` only to intentionally run an identical command again) and waits for
 settlement; inspect or wait on pending commands via `luna commands status|wait <id>`.
 Task and session mutations always use CLI; final JSON never executes actions.
+Never bypass Luna (`luna.reply`, `luna say`, `luna ask`) with external channel CLIs/APIs (e.g. `lark-cli im`) to send chat messages, `@`-mentions, or files—direct provider sends miss Luna history and duplicate suppression.

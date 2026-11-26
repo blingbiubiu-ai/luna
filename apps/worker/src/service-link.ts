@@ -63,6 +63,7 @@ export class ServiceLink {
     const config = this.manager.driver.config;
     const upgradeStatus = this.upgrade?.status;
     this.send({ type: "heartbeat", health: { workerId: config.workerId, imageDigest: config.imageDigest,
+      ...(this.manager.driver.imageRepoDigest ? { imageRepoDigest: this.manager.driver.imageRepoDigest } : {}),
       ...(config.imageRef ? { imageRef: config.imageRef } : {}),
       ...(config.imageVariant ? { imageVariant: config.imageVariant } : {}),
       ...(this.upgrade?.workerVersion ? { workerVersion: this.upgrade.workerVersion } : {}),

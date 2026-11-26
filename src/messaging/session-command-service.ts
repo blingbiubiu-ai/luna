@@ -30,7 +30,7 @@ import { normalizedInboundFromMessageRow } from "@/runners/message-envelope";
 import { sessionDispatcherFor, SessionDispatcher } from "@/sessions/session-dispatcher";
 import { GatewayError } from "@/server/gateway-error";
 import type { ReplyChannel } from "@/channels/outbound";
-import type { NormalizedInboundMessage } from "@/channels";
+import type { ChannelMention, NormalizedInboundMessage } from "@/channels";
 import { scanArtifactRefs } from "@luna/service-client/artifact-ref";
 /** Memory is maintained at most this often; the worker itself ticks every 250 ms. */
 const MEMORY_SCAN_INTERVAL_MS = 60_000;
@@ -78,7 +78,16 @@ export class SessionCommandService {
     private memoryScannedAt = 0;
     private readonly deliveryDispatcher = new SessionDispatcher();
     constructor(readonly options: CommandRuntimeOptions) { }
-    private mentionAddress(target: typeof sessions.$inferSelect, userId: string, botOnly = false): string {
+    private resolveMentionTarget(
+        target: typeof sessions.$inferSelect,
+        userId: string,
+        botOnly = false,
+    ): {
+        readonly address: string;
+        readonly externalId: string;
+        readonly kind: "user" | "bot";
+        readonly displayName: string;
+    } {
         const db = this.options.db;
         if (!target.binding_id || !target.group_id || target.channel_type !== "feishu" ||
             (botOnly && !isGroupChannelSurface(db, target.channel_id, target.group_id, target.channel_type))) {
@@ -90,17 +99,44 @@ export class SessionCommandService {
         }
         if (userId === new SessionStore(db).requireReplyUserId(target.id))
             throw new GatewayError("bot_mention_self", "A bot cannot mention itself", 400);
-        const identities = db.select({ providerIds: channelIdentities.providerIdsJson }).from(channelUserBindings)
+        const identities = db.select({
+            externalId: channelIdentities.externalId,
+            identityKind: channelIdentities.identityKind,
+            identityDisplayName: channelIdentities.displayName,
+            providerIds: channelIdentities.providerIdsJson,
+            userDisplayName: users.displayName,
+        }).from(channelUserBindings)
             .innerJoin(channelIdentities, eq(channelIdentities.id, channelUserBindings.channelIdentityId))
             .innerJoin(users, eq(users.id, channelUserBindings.userId))
             .where(and(eq(users.id, userId), eq(users.status, "active"),
                 eq(channelIdentities.channelId, target.channel_id), eq(channelIdentities.channelType, target.channel_type),
                 botOnly ? eq(channelIdentities.identityKind, "bot") : sql`${channelIdentities.identityKind} IN ('user', 'bot')`)).all();
-        const addresses = [...new Set(identities.map(row => JSON.parse(row.providerIds ?? "{}").open_id)
-            .filter((id): id is string => typeof id === "string" && /^ou_[\w-]+$/.test(id)))];
+        const resolvedRows = identities.flatMap(row => {
+            const openId = JSON.parse(row.providerIds ?? "{}").open_id;
+            return typeof openId === "string" && /^ou_[\w-]+$/.test(openId)
+                ? [{ ...row, openId }]
+                : [];
+        });
+        const addresses = [...new Set(resolvedRows.map(row => row.openId))];
         if (addresses.length !== 1 || !addresses[0])
             throw new GatewayError(botOnly ? "bot_mention_unresolved" : "mention_unresolved", "Mention target has no unique address in this channel", 409);
-        return addresses[0];
+        const matched = resolvedRows[0]!;
+        const usableLabel = (candidate: string | null | undefined): string | undefined => {
+            const cleaned = candidate?.trim().replace(/^@+/, "").trim();
+            if (!cleaned || cleaned === userId || cleaned === matched.externalId || cleaned === matched.openId || /^(?:ou_|on_|cli_|unknown)/i.test(cleaned)) {
+                return undefined;
+            }
+            return cleaned;
+        };
+        return {
+            address: matched.openId,
+            externalId: matched.externalId,
+            kind: matched.identityKind === "bot" ? "bot" : "user",
+            displayName: usableLabel(matched.userDisplayName) ?? usableLabel(matched.identityDisplayName) ?? userId,
+        };
+    }
+    private mentionAddress(target: typeof sessions.$inferSelect, userId: string, botOnly = false): string {
+        return this.resolveMentionTarget(target, userId, botOnly).address;
     }
     authorize(actor: CommandActor, targetId: string, capability: string, refs: readonly string[] = [], _now = Date.now(), taskId?: string) {
         const db = this.options.db;
@@ -144,7 +180,7 @@ export class SessionCommandService {
         const taskId = kind === "task.run" ? payload.taskId?.trim() : undefined;
         if (kind === "task.run" && !taskId)
             throw new GatewayError("invalid_task_schedule", "task.run requires taskId", 400);
-        const reply = payload.reply ? parseReply(JSON.stringify(payload.reply)) : undefined;
+        let reply = payload.reply ? parseReply(JSON.stringify(payload.reply)) : undefined;
         if (reply) {
             payload = { ...payload, reply, content: replyMarkdown(reply) };
             for (const block of reply.content) {
@@ -168,11 +204,30 @@ export class SessionCommandService {
                 throw new GatewayError("invalid_bot_mention", "Use a text message in the current session to mention a bot", 400);
             this.mentionAddress(target, mentionBotUserId, true);
         }
-        for (const block of reply?.content ?? []) {
-            if (block.type !== "mention") continue;
-            if (kind !== "message.send" || targetId !== actor.sourceSessionId || reply?.presentation !== "message")
+        const outboundMentions: ChannelMention[] = [];
+        if (reply?.content.some(block => block.type === "mention")) {
+            if (kind !== "message.send" || targetId !== actor.sourceSessionId || reply.presentation !== "message")
                 throw new GatewayError("invalid_mention", "Inline mentions require message presentation in the current group", 400);
-            this.mentionAddress(target, block.userId);
+            const enrichedContent = reply.content.map(block => {
+                if (block.type !== "mention") return block;
+                const resolved = this.resolveMentionTarget(target, block.userId);
+                const explicitLabel = block.label?.trim().replace(/^@+/, "").trim();
+                const effectiveLabel = explicitLabel || resolved.displayName;
+                const sanitizedLabel = effectiveLabel.replace(/[\\\[\]\r\n]/g, " ");
+                outboundMentions.push({
+                    key: `@_outbound_${outboundMentions.length + 1}`,
+                    label: `@${sanitizedLabel}`,
+                    target: {
+                        externalId: resolved.externalId,
+                        kind: resolved.kind,
+                    },
+                });
+                return { ...block, label: effectiveLabel };
+            });
+            reply = { ...reply, content: enrichedContent };
+            payload = { ...payload, reply, content: replyMarkdown(reply) };
+            if (!payload.content.trim() || payload.content.length > 100000)
+                throw new GatewayError("invalid_command", "Reply is too large or empty", 400);
         }
         const canonical = { ...(contextMessageIds.length ? {contextMessageIds} : {}), ...(taskId ? { taskId } : {}), content: payload.content, ...(reply ? { reply } : {}), purpose: payload.purpose ?? "notification", contextRefs: refs, ...(group ? { group } : {}), ...(invitation ? { invitation } : {}), ...(mentionBotUserId ? { mentionBotUserId } : {}) };
         if (group && (target.channel_type !== "feishu" || target.channel_id !== group.channelId))
@@ -219,7 +274,7 @@ export class SessionCommandService {
                 } else if (!recipient && target.channel_type === "feishu" && target.group_id?.startsWith("recipient:")) {
                     throw new GatewayError("recipient_unresolved", "Resolve this recipient before sending", 409);
                 }
-                messageId = new MessageStore(tx as unknown as DrizzleDB).appendOnce({ sessionId: targetId, channelMessageKey: `command:${id}`, role: "assistant", content: [{ type: "text", text: payload.content }], ...(reply?.presentation === "card" ? { presentationKind: "rich_markdown" as const } : {}),
+                messageId = new MessageStore(tx as unknown as DrizzleDB).appendOnce({ sessionId: targetId, channelMessageKey: `command:${id}`, role: "assistant", content: [{ type: "text", text: payload.content }], ...(outboundMentions.length ? { mentions: outboundMentions } : {}), ...(reply?.presentation === "card" ? { presentationKind: "rich_markdown" as const } : {}),
                     channel: { type: target.channel_type, id: target.channel_id }, senderUserId: new SessionStore(tx as unknown as DrizzleDB).requireReplyUserId(targetId), rawPayload: { commandId: id, sourceSessionId: actor.sourceSessionId, deliveryStatus: governance.status, ...(reply?.replyTo ? { replyTo: reply.replyTo } : {}) } }).row.id;
             }
             let contextPackId: string | undefined;

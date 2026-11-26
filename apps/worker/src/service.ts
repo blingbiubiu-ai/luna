@@ -48,6 +48,7 @@ export async function runWorker(config: WorkerConfig): Promise<void> {
   const upgrade = new WorkerUpgradeManager(config, {
     onStatusChange: () => link?.heartbeat(),
     onRestart: () => { void stopFn?.(); },
+    onImageRepoDigest: repoDigest => { driver.imageRepoDigest = repoDigest; },
   });
   link = config.serviceUrl ? new ServiceLink(manager, grants, config.serviceUrl, config.controlToken, upgrade, models) : undefined;
   const server = workerServer(grants, manager, link ? (job, instance, body) => link!.events(job, instance, body) : undefined, upgrade, models);

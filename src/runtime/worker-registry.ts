@@ -17,6 +17,7 @@ export interface Health {
   capabilities?: string[] | undefined;
   workerId: string;
   imageDigest: string;
+  imageRepoDigest?: string | undefined;
   imageRef?: string | undefined;
   imageVariant?: string | undefined;
   workerVersion?: string | undefined;

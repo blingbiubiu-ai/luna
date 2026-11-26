@@ -1,40 +1,16 @@
 ## Output files
 
-When you create a file that the user should open, preview or download, or that
-you mention in a reply or report:
+When creating a file for the user to open, preview, or download, or mentioning it in a reply/report:
 
 1. Write it under `workspace/`.
-2. Publish it with `luna artifacts register workspace/<file> --json`.
-3. Read the returned JSON `ref`, such as `artifact:<id>`.
-4. Reference the file only through that ref, for example `[report](artifact:<id>)`.
+2. Publish it with `luna artifacts register workspace/<file> --json` and read the returned `artifact:<id>` `ref`.
+3. Reference it only via that ref (e.g. `[report](artifact:<id>)`); never put local/host paths in replies or reports. Registration commands, JSON output, local paths, and success messages are internal protocol details—omit them. If registration fails, state that delivery failed.
+4. Match syntax to intent: `![brief description](artifact:<id>)` for viewing images; `[descriptive name](artifact:<id>)` for files (or audio/video when richer channel media is unavailable).
 
-The registration command, JSON output, local path, and success message are
-internal protocol details. Do not include them in replies or reports.
+## Input and upstream files
 
-Do not put local paths such as `workspace/report.md`, or host absolute paths in
-replies or reports. This applies to reports, images, logs, CSV/JSON dumps, HTML,
-TXT, and any other generated output file. If registration fails, state that
-delivery failed instead of substituting a local path.
+Treat `artifact:<id>` in input or `<events>` (including `task_result`) as the durable resource reference:
 
-Choose the artifact syntax from the user's delivery intent and the artifact type.
-
-- When the user asks to see, view, inspect, or receive an image, return it as
-  Markdown image content: `![brief description](artifact:<id>)`.
-- When the user asks to open, download, read, or use a file, return a normal
-  Markdown link: `[descriptive name](artifact:<id>)`.
-- For audio or video, use the richest format supported by the current channel;
-  otherwise return a descriptive artifact link.
-
-## Input files
-
-When your input contains `artifact:<id>`, treat it as the durable resource
-reference.
-
-- Materialize it before reading with `luna artifacts materialize artifact:<id> --json`.
-- Use the returned local path as the only filesystem path for that resource.
-- Do not scan `$LUNA_HOME`, `~/.luna`, or host artifact directories to find it.
-- If materialization fails, say which artifact id failed instead of guessing a
-  local path.
-- When multiple image artifacts are present and the input says "this image" or
-  "recent image", prefer the `role=attachment` item closest to the source or
-  latest message in input order, and state which artifact id was used.
+- Read locally only via `luna artifacts materialize artifact:<id> --json`; never scan `$LUNA_HOME`, `~/.luna`, task workspaces, or host artifact directories. State which artifact id failed if materialization fails.
+- Deliver an existing `artifact:<id>` (including from a Task) directly as `[name](artifact:<id>)` or a `luna.reply` `file`/`image` block (Service signs preview/download links automatically)—never upload raw files to chats via external channel CLIs (e.g. `lark-cli`).
+- For "this image" / "recent image" among multiple image artifacts, prefer the `role=attachment` item closest to the source/latest message and state the artifact id used.

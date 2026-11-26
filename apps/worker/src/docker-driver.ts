@@ -24,6 +24,7 @@ export class DockerEnvironmentDriver {
   readonly contexts: WorkerContextStore;
   private readonly layouts: WorkerShadowLayouts;
   private hostCpus?: number;
+  imageRepoDigest?: string | undefined;
   /**
    * The Executor and `luna` CLI shipped with this Worker. Without it (a Worker run from source,
    * or tests) containers run the copies baked into the image.
@@ -69,6 +70,11 @@ export class DockerEnvironmentDriver {
       const detected = extractImageRefFromInspect(inspected);
       if (detected) this.config.imageRef = detected;
     }
+    if (!this.config.imageVariant && this.config.imageRef) {
+      if (this.config.imageRef.includes("luna-runner-developer")) this.config.imageVariant = "developer";
+      else if (this.config.imageRef.includes("luna-runner")) this.config.imageVariant = "general";
+    }
+    this.imageRepoDigest = extractImageRepoDigestFromInspect(inspected);
     try { await this.docker(["network", "inspect", this.config.network]); }
     catch { await this.docker(["network", "create", this.config.network]); }
   }
@@ -339,6 +345,25 @@ export function extractImageRefFromInspect(raw: string): string | undefined {
       ? record.RepoDigests.filter((d): d is string => typeof d === "string" && d.length > 0)
       : [];
     return digests[0];
+  } catch {
+    return undefined;
+  }
+}
+
+/** Extract the `sha256:...` registry manifest digest from `docker image inspect` JSON. */
+export function extractImageRepoDigestFromInspect(raw: string): string | undefined {
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    const item = Array.isArray(parsed) ? parsed[0] : parsed;
+    if (!item || typeof item !== "object") return undefined;
+    const record = item as { RepoDigests?: unknown };
+    const digests = Array.isArray(record.RepoDigests)
+      ? record.RepoDigests.filter((d): d is string => typeof d === "string" && d.includes("@sha256:"))
+      : [];
+    const first = digests[0];
+    if (!first) return undefined;
+    const sha = first.slice(first.lastIndexOf("@") + 1).toLowerCase();
+    return /^sha256:[a-f0-9]{64}$/.test(sha) ? sha : undefined;
   } catch {
     return undefined;
   }
