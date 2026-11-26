@@ -59,6 +59,10 @@ export function createModelProviderRoutes(service: ModelProviderService) {
   }).post("/login/poll",async c=>{
     const auth=requireDashboardOnly(c);if(isGuardResponse(auth))return auth;const {flowId}=z.object({flowId:Id}).strict().parse(await c.req.json());
     return c.json(await service.pollLogin(auth.account.id,c.req.query("agentId")!,flowId));
+  }).post("/login/callback",async c=>{
+    const auth=requireDashboardOnly(c);if(isGuardResponse(auth))return auth;
+    const {flowId,callbackUrl}=z.object({flowId:Id,callbackUrl:z.string().min(1).max(65536)}).strict().parse(await c.req.json());
+    return c.json(await service.submitCallbackUrl(auth.account.id,c.req.query("agentId")!,flowId,callbackUrl));
   }).post("/login/cancel",async c=>{
     const auth=requireDashboardOnly(c);if(isGuardResponse(auth))return auth;const {flowId}=z.object({flowId:Id}).strict().parse(await c.req.json());
     return c.json(await service.cancelLogin(auth.account.id,c.req.query("agentId")!,flowId));

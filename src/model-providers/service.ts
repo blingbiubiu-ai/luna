@@ -124,10 +124,14 @@ export class ModelProviderService {
     for(const [id,record] of this.logins){if(record.expiresAt<Date.now())this.logins.delete(id);}
     if(this.logins.size>=128)throw new ExecutionError(429,"model_login_busy");
     const callbackPath=provider.login.callbackPath??"/api/model-providers/login/callback";
-    const flowId=randomUUID();const callback=new URL(callbackPath,origin);callback.searchParams.set("flowId",flowId);
+    const parsedOrigin=new URL(origin);
+    const isLoopback=["127.0.0.1","localhost"].includes(parsedOrigin.hostname);
+    const callbackOrigin=isLoopback?parsedOrigin.origin:"http://127.0.0.1:51121";
+    const flowId=randomUUID();const callback=new URL(callbackPath,callbackOrigin);callback.searchParams.set("flowId",flowId);
     this.logins.set(flowId,{actor,agentId,...input,configRevision:context.configRevision,callbackPath,expiresAt:Date.now()+600000});
     try{
-      return await context.client.call("POST","/v1/model-providers/login/start",{agentId,pluginId:input.pluginId,providerId:input.providerId,expectedRevision:input.expectedRevision,flowId,callbackUrl:callback.href,releaseSha256:context.plugin.installedRelease!.sha256},AbortSignal.timeout(30000));
+      const started=await context.client.call<Record<string,unknown>>("POST","/v1/model-providers/login/start",{agentId,pluginId:input.pluginId,providerId:input.providerId,expectedRevision:input.expectedRevision,flowId,callbackUrl:callback.href,releaseSha256:context.plugin.installedRelease!.sha256},AbortSignal.timeout(30000));
+      return {...started,manualCallbackRecommended:!isLoopback};
     }catch(error){this.logins.delete(flowId);throw error;}
   }
   private loginContext(actor:string,agentId:string,flowId:string){
@@ -142,6 +146,23 @@ export class ModelProviderService {
     const {context}=this.loginContext(actor,flow.agentId,flowId);
     await context.client.call("POST","/v1/model-providers/login/callback",{agentId:flow.agentId,flowId,params},AbortSignal.timeout(10000));
     this.loginContext(actor,flow.agentId,flowId);return {agentId:flow.agentId,workerId:flow.workerId,pluginId:flow.pluginId,providerId:flow.providerId};
+  }
+  async submitCallbackUrl(actor:string,agentId:string,flowId:string,rawCallbackUrl:string){
+    const {flow}=this.loginContext(actor,agentId,flowId);
+    let url:URL;
+    try{url=new URL(rawCallbackUrl.trim());}catch{throw new AgentError("model_callback_invalid",400);}
+    if(!["http:","https:"].includes(url.protocol) || url.search.length>65536)throw new AgentError("model_callback_invalid",400);
+    if(url.pathname!==flow.callbackPath)throw new AgentError("model_login_callback_mismatch",409);
+    const flowIds=url.searchParams.getAll("flowId");
+    if(flowIds.length>1 || (flowIds.length===1 && flowIds[0]!==flowId))throw new AgentError("model_login_callback_mismatch",409);
+    const params:Record<string,string>={};
+    for(const [key,value] of url.searchParams){
+      if(key==="flowId")continue;
+      if(Object.hasOwn(params,key))throw new AgentError("model_callback_invalid",400);
+      params[key]=value;
+    }
+    await this.loginCallback(actor,flowId,params,url.pathname);
+    return {accepted:true};
   }
   async pollLogin(actor:string,agentId:string,flowId:string){
     const {flow,context}=this.loginContext(actor,agentId,flowId);
