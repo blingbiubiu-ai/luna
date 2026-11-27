@@ -27,7 +27,7 @@ test("an Agent without settings gets today's behaviour as defaults", () => {
   expect(DEFAULT_AGENT_SETTINGS).toEqual({
     inbound: { processingReaction: true },
     work: { progressCard: { show: true, style: "card" } },
-    main: { taskProgressCard: { send: true, style: "native" } },
+    main: { taskProgressCard: { send: true, sendOnQuietRuns: true, style: "native" } },
     pty: { idleTimeoutMinutes: 10 },
     messages: {},
     listening: { defaultEnabled: false, quietMs: 30000, batchSize: 10, maxWaitMs: 180000, backoffMaxMs: 600000, maxTurnsPerHour: 12 },
@@ -40,7 +40,7 @@ test("the owner saves settings; omitted groups keep their defaults and bad value
   expect(store.save("owner", agentId, { work: { progressCard: { show: false } } })).toEqual({
     inbound: { processingReaction: true },
     work: { progressCard: { show: false, style: "card" } },
-    main: { taskProgressCard: { send: true, style: "native" } },
+    main: { taskProgressCard: { send: true, sendOnQuietRuns: true, style: "native" } },
     pty: { idleTimeoutMinutes: 10 },
     messages: {},
     listening: { defaultEnabled: false, quietMs: 30000, batchSize: 10, maxWaitMs: 180000, backoffMaxMs: 600000, maxTurnsPerHour: 12 },
@@ -72,7 +72,7 @@ test("the settings API is the owner's: read, save, reject others and invalid inp
   });
   const saved = await call("owner", "PUT", { main: { taskProgressCard: { send: false, style: "card" } } });
   expect(saved.status).toBe(200);
-  expect(((await saved.json()) as { settings: typeof DEFAULT_AGENT_SETTINGS }).settings.main.taskProgressCard).toEqual({ send: false, style: "card" });
+  expect(((await saved.json()) as { settings: typeof DEFAULT_AGENT_SETTINGS }).settings.main.taskProgressCard).toEqual({ send: false, sendOnQuietRuns: true, style: "card" });
   expect((await call("owner", "PUT", { main: { taskProgressCard: { style: 1 } } })).status).toBe(400);
   expect((await call("other")).status).not.toBe(200);
   expect((await call("other", "PUT", {})).status).not.toBe(200);

@@ -22,6 +22,7 @@ describe("AgentSettingsForm", () => {
     expect(html).toContain("TUI 伪终端");
     expect(html).toContain("空闲保活时长");
     expect(html).toContain("30 分钟");
+    expect(html).toContain("巡检 / 自动唤醒时发送进度卡");
     expect(html).not.toContain("任务运行时长");
     expect(html).not.toContain(">保存<");
   });

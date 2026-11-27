@@ -39,7 +39,7 @@ export interface ProactivityDefaults {
 export interface AgentSettings {
   inbound: { processingReaction: boolean };
   work: { progressCard: { show: boolean; style: ProgressCardStyle } };
-  main: { taskProgressCard: { send: boolean; style: ProgressCardStyle } };
+  main: { taskProgressCard: { send: boolean; sendOnQuietRuns?: boolean; style: ProgressCardStyle } };
   pty?: { idleTimeoutMinutes: number };
   messages?: MessageSettings;
   listening?: ListeningSettings;
@@ -528,6 +528,17 @@ export function AgentSettingsForm({
             aria-label="Main 启动任务时发送进度卡"
             checked={main.send}
             onCheckedChange={send => update({ ...value, main: { taskProgressCard: { ...main, send } } })}
+          />
+        </Row>
+        <Row
+          label="巡检 / 自动唤醒时发送进度卡"
+          hint="关闭后，定时巡检（task.run）与等待态自动唤醒（wake）不再发送进度卡。"
+        >
+          <Switch
+            aria-label="巡检或自动唤醒时发送进度卡"
+            checked={main.sendOnQuietRuns ?? true}
+            disabled={!main.send}
+            onCheckedChange={sendOnQuietRuns => update({ ...value, main: { taskProgressCard: { ...main, sendOnQuietRuns } } })}
           />
         </Row>
         <Row label="默认样式">

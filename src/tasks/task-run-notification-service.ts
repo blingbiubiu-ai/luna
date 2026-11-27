@@ -1,6 +1,7 @@
 import type { NativeProgressEntry } from "@/channels/outbound";
 
 import { createHash } from "node:crypto";
+import { AgentSettingsStore } from "@/agents/agent-settings-store";
 import { SessionDispatcher } from "@/sessions/session-dispatcher";
 import { GatewayError } from "@/server/gateway-error";
 import type { OperationResult } from "@/runners/operation-contract";
@@ -103,7 +104,11 @@ export class TaskRunNotificationService {
   private async _onRunCreated(input: OnTaskRunCreatedInput): Promise<void> {
     const task = this._requireTask(input.taskId);
     const run = this._requireRun(input.taskRunId);
-    if ((run.input_snapshot as { quiet?: unknown } | null | undefined)?.quiet === true) {
+    if (
+      (run.input_snapshot as { quiet?: unknown } | null | undefined)?.quiet === true &&
+      task.agent_id &&
+      !new AgentSettingsStore(this._options.db).get(task.agent_id).main.taskProgressCard.sendOnQuietRuns
+    ) {
       return;
     }
     const subscriptions = this._subscriptionsForTask(input.taskId);

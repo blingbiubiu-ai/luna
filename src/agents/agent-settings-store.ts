@@ -106,9 +106,10 @@ export const AgentSettings = z.object({
   main: z.object({
     taskProgressCard: z.object({
       send: z.boolean().default(true),
+      sendOnQuietRuns: z.boolean().default(true),
       style: ProgressCardStyle.default("native"),
-    }).strict().default({ send: true, style: "native" }),
-  }).strict().default({ taskProgressCard: { send: true, style: "native" } }),
+    }).strict().default({ send: true, sendOnQuietRuns: true, style: "native" }),
+  }).strict().default({ taskProgressCard: { send: true, sendOnQuietRuns: true, style: "native" } }),
   /** Interactive PTY execution: minutes an idle CLI TUI stays resident before sleeping (0 = never sleep). */
   pty: z.object({
     idleTimeoutMinutes: z.number().int().min(0).max(10080).default(10),

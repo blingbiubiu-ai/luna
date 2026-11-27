@@ -298,17 +298,44 @@ test("report CLI rejects removed --waiting flag, and tasks pause --wake-in suspe
     expect((resumedRun.input_snapshot as { quiet?: unknown } | null)?.quiet).toBe(true);
     let sentCards = 0;
     const { TaskRunNotificationService } = await import("@/tasks/task-run-notification-service");
+    const { AgentSettingsStore, DEFAULT_AGENT_SETTINGS } = await import("@/agents/agent-settings-store");
+    const { TaskSubscriptionStore } = await import("@/tasks/task-subscription-store");
+    const taskForSettings = f.db.select().from(schema.tasks).where(eq(schema.tasks.id, "task")).get()!;
+    const ownerAccount = f.db.select().from(schema.accounts).get()!;
+    const activeSession = f.db.select().from(schema.sessions).get()!;
+    new TaskSubscriptionStore(f.db).resolve({
+      taskId: "task",
+      sessionId: activeSession.id,
+      channelType: activeSession.channel_type,
+      channelId: activeSession.channel_id,
+      ...(activeSession.group_id ? { groupId: activeSession.group_id } : {}),
+      notificationLevel: "major_updates",
+      visibility: "full",
+    });
     const notifService = new TaskRunNotificationService({
       db: f.db,
       channelForNotification: () => ({
         send: async (_inbound, op) => {
           sentCards += 1;
-          return { ...op, id: "card-msg", channelId: "test" };
+          return { ...op, id: `card-msg-${sentCards}`, channelId: "test" };
         },
       }),
     });
+    // When agent disables sendOnQuietRuns, quiet wake runs skip progress cards.
+    const settingsStore = new AgentSettingsStore(f.db);
+    settingsStore.save(ownerAccount.id, taskForSettings.agent_id!, {
+      ...DEFAULT_AGENT_SETTINGS,
+      main: { taskProgressCard: { ...DEFAULT_AGENT_SETTINGS.main.taskProgressCard, sendOnQuietRuns: false } },
+    });
     await notifService.onRunCreated({ taskId: "task", taskRunId: resumedRun.id, reason: "restart" });
     expect(sentCards).toBe(0);
+    // With default sendOnQuietRuns=true, quiet wake runs send progress cards as before.
+    settingsStore.save(ownerAccount.id, taskForSettings.agent_id!, {
+      ...DEFAULT_AGENT_SETTINGS,
+      main: { taskProgressCard: { ...DEFAULT_AGENT_SETTINGS.main.taskProgressCard, sendOnQuietRuns: true } },
+    });
+    await notifService.onRunCreated({ taskId: "task", taskRunId: resumedRun.id, reason: "restart" });
+    expect(sentCards).toBe(1);
     const finalTask = f.db.select().from(schema.tasks).where(eq(schema.tasks.id, "task")).get()!;
     expect(finalTask.status).toBe("completed");
     expect(finalTask.block_reason).toBeNull();
