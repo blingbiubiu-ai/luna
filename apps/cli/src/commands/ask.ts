@@ -11,7 +11,7 @@ import {
 
 const ASK_USAGE = [
   "Usage:",
-  "  luna ask --to <address|main> (--text <text> | --stdin) [--context <text>] [--options '<json-array>'] [--expires-in <duration>] [--wait [<duration>]] [--repeat]",
+  "  luna ask --to <address|main> (--text <text> | --stdin) [--context <text>] [--options '<json-array>'] [--actor owner|user:<id>] [--expires-in <duration>] [--wait [<duration>]] [--repeat]",
   "  luna ask reply <request-id> (--text <text> | --stdin) (--done | --progress | --declined) [--option <selected-option>]",
   "  luna ask message <request-id> (--text <text> | --stdin) [--repeat]",
   "  luna ask wait <request-id> [--timeout <duration>]",
@@ -83,6 +83,7 @@ export async function runAskCli(
           message: ASK_USAGE,
         };
       }
+      const actor = readOption(argv, "--actor")?.trim();
       const context = readOption(argv, "--context");
       const optionsRaw = readOption(argv, "--options");
       let options: string[] | undefined;
@@ -106,6 +107,7 @@ export async function runAskCli(
 
       const idempotencyBody = {
         to,
+        ...(actor ? { actor } : {}),
         goal,
         ...(context !== undefined ? { context } : {}),
         ...(options !== undefined ? { options } : {}),

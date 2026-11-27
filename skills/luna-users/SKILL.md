@@ -23,6 +23,10 @@ luna say --to user:USER_ID --via-main --text '结合你们之前的沟通跟进�
 # Ask someone a tracked request (omit --options for multi-turn conversation; pass --options for quick card buttons):
 luna ask --to user:USER_ID --text '请确认今晚发布窗口与回滚负责人'
 luna ask --to user:USER_ID --text '请确认是否继续？' --options '["继续","暂缓"]'
+
+# Owner permissions/approvals ALWAYS go privately via --to owner (never in a group); if a group card must lock one signer, pass --actor:
+luna ask --to owner --text '是否批准该方案？' --options '["同意","拒绝"]'
+luna ask --to current --actor user:USER_ID --text '请确认接口口径' --options '["确认","待调整"]'
 ```
 
 - Name search queries Luna's visible directory (and in a group, refreshes missing bot/member entries from the current channel adapter). If a person has only a raw Feishu `open_id`/`user_id`/`union_id` and is not yet in the directory, import them once with `luna users lookup`, then use the returned Luna `user.id` (`--to user:<id>`) everywhere.

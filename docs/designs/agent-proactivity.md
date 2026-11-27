@@ -120,9 +120,13 @@ All Runner commands address conversations and Tasks uniformly via
 `correlated_requests` and `correlated_request_events` track `luna ask`
 lifecycles (`mode: "card" | "delegate"`, `status: "open" | "in_progress" | "done" | "declined" | "expired" | "failed" | "cancelled"`):
 
-- **Card mode (`luna ask --to <addr> --text '...' --options '[...]'`)**: delivers an
-  interactive card (`message.send`) to `targetAddress` and records an `open`
-  request. Settlement happens either via Feishu `card.action.trigger` button
+- **Card mode (`luna ask --to <addr> [--actor owner|user:<id>] --text '...' --options '[...]'`)**:
+  delivers an interactive card (`message.send`) to `targetAddress` and records an `open`
+  request. Direct user targets (`owner`, `user:<id>`) and group/session cards with `--actor`
+  persist `target_user_id` so only the designated human user may click the card or settle it
+  via `luna ask reply` / Dashboard (`card.action.trigger` returns a warning toast to other
+  group members). Owner permission and approval cards always prefer private `--to owner`
+  delivery. Settlement happens either via Feishu `card.action.trigger` button
   click (updating the card and returning a toast without an extra LLM turn) or
   via `luna ask reply <id> --done|--declined --text '...'` when answered in chat
   (surfaced via `open_request` in `<events>`). The target session's next Main

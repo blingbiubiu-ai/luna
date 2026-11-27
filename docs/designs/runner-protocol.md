@@ -83,9 +83,13 @@ All cross-session and Main⇄Task communication separates **one-way speech** fro
   - `--to task:<id>` (Main/Work Runner): appends a non-disruptive note to
     `task_inbox_events` without aborting an active Task Run.
 - **`luna ask` (tracked response in `correlated_requests` + `correlated_request_events`)**:
-  - **Card mode (`luna ask --to <addr> --text '...' --options '[...]'`)**: sends an
-    interactive card (`message.send`) settled deterministically by Feishu button
-    click or `luna ask reply <id> --done|--declined --text '...'`.
+  - **Card mode (`luna ask --to <addr> [--actor owner|user:<id>] --text '...' --options '[...]'`)**:
+    sends an interactive card (`message.send`) settled deterministically by Feishu button
+    click or `luna ask reply <id> --done|--declined --text '...'`. Direct user targets
+    (`--to owner` / `--to user:<id>`) automatically set `target_user_id`; group or session
+    cards may pass `--actor owner|user:<id>` to lock button and reply settlement to that
+    single human user (`target_user_id`), rejecting clicks or replies from other group members.
+    Owner permission/approval cards default to private `--to owner` delivery.
   - **Delegate mode (default, omits `--options`)**: wakes target Main (`request_opened`)
     and stays `open` / `in_progress` across as many turns as needed until settled
     explicitly via `luna ask reply <id> --done|--declined --text '...'`.

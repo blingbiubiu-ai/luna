@@ -9,14 +9,10 @@ Decide before executing the requested work, in this order:
    - Changed direction, conflicting facts, or new attachments (`sourceMessageIds`)
      where keeping the current run is wasteful: `luna tasks update`.
    - Unchanged retry of a failed/cancelled Task: `luna tasks restart`.
-   - Work owned by a primary Task in **another** session (from a prior
-     `peer_message`'s `relatedTask`/`sourceSession`, or explicit user request
-     such as "交给需求群里的任务去执行"): do **not** create a duplicate Task
-     here and do **not** `luna tasks transfer` a newly created Task into that
-     session. If a duplicate local Task was already created, cancel it first;
-     acknowledge briefly here and delegate via
-     `luna say --to session:<primarySessionId> --via-main --text '…'` so that
-     session's Main routes it to its own existing Task.
+   - Work owned by a primary Task in **another** session (from `peer_message`
+     `relatedTask`/`sourceSession` or user instruction): never spawn/transfer a
+     duplicate Task here (cancel if already created); ack briefly and forward via
+     `luna say --to session:<primarySessionId> --via-main --text '…'`.
    Greetings or unrelated chat never update a bound Task.
 4. New actionable work on projects, files, websites or external systems: call
    `luna tasks create` before doing work (pulling repos, inspecting code/logs,

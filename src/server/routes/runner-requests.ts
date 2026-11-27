@@ -16,6 +16,7 @@ import { getKernel } from "./kernel";
 const createRequestSchema = z
   .object({
     to: z.string().min(1).max(512),
+    actor: z.string().trim().min(1).max(256).optional(),
     goal: z.string().trim().min(1).max(20_000),
     context: z.string().trim().max(10_000).optional(),
     options: z
@@ -101,6 +102,7 @@ export function createRunnerRequestRoutes(
         actor,
         key,
         toAddress: body.to,
+        targetActor: body.actor,
         goal: body.goal,
         contextSummary: body.context,
         options: body.options,
@@ -135,6 +137,7 @@ export function createRunnerRequestRoutes(
             status: req.status,
             settled: waited.settled,
             targetSessionId: req.targetSessionId,
+            targetUserId: req.targetUserId,
             expiresAt: req.expiresAt,
             result: {
               requestId: req.id,
@@ -143,6 +146,7 @@ export function createRunnerRequestRoutes(
               settled: waited.settled,
               outboundCommandId: req.outboundCommandId,
               targetSessionId: req.targetSessionId,
+              targetUserId: req.targetUserId,
               expiresAt: req.expiresAt,
               outcome: req.resultJson,
             },
@@ -162,6 +166,7 @@ export function createRunnerRequestRoutes(
           mode: created.mode,
           status: created.status,
           targetSessionId: created.targetSessionId,
+          targetUserId: created.targetUserId,
           expiresAt: created.expiresAt,
           result: {
             requestId: created.id,
@@ -169,6 +174,7 @@ export function createRunnerRequestRoutes(
             status: created.status,
             outboundCommandId: created.outboundCommandId,
             targetSessionId: created.targetSessionId,
+            targetUserId: created.targetUserId,
             expiresAt: created.expiresAt,
           },
           error: null,

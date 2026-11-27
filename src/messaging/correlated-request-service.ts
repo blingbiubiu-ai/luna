@@ -459,10 +459,79 @@ export class CorrelatedRequestService {
     return sessionCommandsFor(this.db, this.channelFor);
   }
 
+  private resolveCardActorUserId(
+    agentId: string,
+    rawActor: string,
+    ownerUserId: string,
+  ): string {
+    const trimmed = rawActor.trim();
+    if (trimmed === "owner") return ownerUserId;
+    if (
+      trimmed === "current" ||
+      trimmed === "self" ||
+      trimmed === "main" ||
+      trimmed.startsWith("session:") ||
+      trimmed.startsWith("group:") ||
+      trimmed.startsWith("task:")
+    ) {
+      throw new GatewayError(
+        "invalid_actor",
+        "--actor must be 'owner' or 'user:<luna-user-id>'",
+        400,
+      );
+    }
+    let userId = trimmed.startsWith("user:")
+      ? trimmed.slice("user:".length).trim()
+      : trimmed;
+    if (!userId) {
+      throw new GatewayError(
+        "invalid_actor",
+        "--actor must be 'owner' or 'user:<luna-user-id>'",
+        400,
+      );
+    }
+    for (let hop = 0; hop < 4; hop++) {
+      const row = this.db
+        .select({
+          id: users.id,
+          kind: users.kind,
+          status: users.status,
+          mergedIntoUserId: users.mergedIntoUserId,
+        })
+        .from(users)
+        .where(and(eq(users.id, userId), eq(users.agentId, agentId)))
+        .get();
+      if (!row) {
+        throw new GatewayError(
+          "user_not_found",
+          "Actor user not found; pass 'owner' or 'user:<luna-user-id>'",
+          404,
+        );
+      }
+      if (row.mergedIntoUserId) {
+        userId = row.mergedIntoUserId;
+        continue;
+      }
+      if (row.status !== "active") {
+        throw new GatewayError("user_not_found", "Actor user is inactive", 404);
+      }
+      if (row.kind === "bot") {
+        throw new GatewayError(
+          "invalid_actor",
+          "Card --actor must be a human user, not a bot",
+          400,
+        );
+      }
+      return row.id;
+    }
+    throw new GatewayError("user_not_found", "Actor user resolution cycle", 404);
+  }
+
   createRequest(input: {
     readonly actor: RequestActor;
     readonly key: string;
     readonly toAddress: string;
+    readonly targetActor?: string | undefined;
     readonly goal: string;
     readonly contextSummary?: string | undefined;
     readonly options?: readonly string[] | undefined;
@@ -475,12 +544,20 @@ export class CorrelatedRequestService {
       throw new GatewayError("invalid_goal", "Request goal cannot be empty", 400);
     }
     const trimmedTo = input.toAddress.trim();
+    const trimmedActor = input.targetActor?.trim() || undefined;
     const isTaskActor = Boolean(input.actor.taskId || input.actor.runnerKind === "task");
     if (isTaskActor && trimmedTo !== "main") {
       throw new GatewayError(
         "address_forbidden",
         "Task Runner may only send requests to 'main'",
         403,
+      );
+    }
+    if (isTaskActor && trimmedActor) {
+      throw new GatewayError(
+        "invalid_actor",
+        "Task Runner requests to 'main' cannot set --actor; Main chooses --to owner or --actor when sending a user card",
+        400,
       );
     }
     const cleanOptions = input.options?.map(o => o.trim()).filter(Boolean);
@@ -493,6 +570,9 @@ export class CorrelatedRequestService {
     }
 
     const ownerUserId = new AgentStore(this.db).ownerUserId(input.actor.agentId);
+    const explicitTargetUserId = trimmedActor
+      ? this.resolveCardActorUserId(input.actor.agentId, trimmedActor, ownerUserId)
+      : undefined;
     const allowLocalFallback =
       trimmedTo === "owner" || trimmedTo === `user:${ownerUserId}`;
     const resolved = resolveLunaAddress(
@@ -516,6 +596,27 @@ export class CorrelatedRequestService {
 
     const mode: CorrelatedRequestMode =
       cleanOptions && cleanOptions.length > 0 ? "card" : "delegate";
+
+    if (
+      explicitTargetUserId &&
+      resolved.targetUserId &&
+      explicitTargetUserId !== resolved.targetUserId
+    ) {
+      throw new GatewayError(
+        "actor_target_mismatch",
+        "--actor conflicts with direct user target --to",
+        400,
+      );
+    }
+    if (explicitTargetUserId && !resolved.targetUserId && mode !== "card") {
+      throw new GatewayError(
+        "invalid_request_mode",
+        "--actor on a group or session request requires --options (card mode); use --to owner or --to user:<id> for a private multi-turn request",
+        400,
+      );
+    }
+    const effectiveTargetUserId =
+      explicitTargetUserId ?? resolved.targetUserId ?? null;
 
     if (
       mode === "delegate" &&
@@ -552,7 +653,8 @@ export class CorrelatedRequestService {
       if (
         existing.instruction !== goal ||
         existing.targetSessionId !== resolved.sessionId ||
-        existing.mode !== mode
+        existing.mode !== mode ||
+        (existing.targetUserId ?? null) !== effectiveTargetUserId
       ) {
         throw new GatewayError(
           "idempotency_conflict",
@@ -647,7 +749,7 @@ export class CorrelatedRequestService {
         originTaskRunId: input.actor.taskRunId ?? null,
         targetAddress: resolved.address,
         targetSessionId: resolved.sessionId,
-        targetUserId: resolved.targetUserId ?? null,
+        targetUserId: effectiveTargetUserId,
         outboundCommandId: cmd.id,
         outboundMessageId: cmd.messageId,
         instruction: goal,
@@ -1165,8 +1267,18 @@ export class CorrelatedRequestService {
       action,
     );
     if (req.targetUserId && userId !== req.targetUserId) {
+      const assigneeName = this.db
+        .select({ displayName: users.displayName })
+        .from(users)
+        .where(eq(users.id, req.targetUserId))
+        .get()?.displayName;
       return {
-        toast: { type: "warning", content: "该确认仅限指定负责人操作。" },
+        toast: {
+          type: "warning",
+          content: assigneeName
+            ? `该确认仅限指定负责人（${assigneeName}）操作。`
+            : "该确认仅限指定负责人操作。",
+        },
       };
     }
 

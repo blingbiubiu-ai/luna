@@ -1041,3 +1041,157 @@ test("Task Runner -> Main request supports fast-path (--wait) and slow-path (Tas
   ).toBe("completed");
   expect(new TaskRunStore(db.db).listRunsForTask("task-q-1").at(-1)?.status).toBe("completed");
 });
+
+test("group confirmation cards with `--actor` lock card clicks and replies to the designated human user", async () => {
+  const commands = new SessionCommandService({ db: db.db, channelFor: () => undefined });
+  registerSessionCommands(db.db, commands);
+  const reqSvc = new CorrelatedRequestService(db.db, () => undefined);
+
+  const actor = {
+    userId: "user:alice",
+    agentId: scope.agentId,
+    shadowId: scope.shadowId,
+    sourceSessionId: "group-session",
+    currentSessionId: "group-session",
+    originId: "turn-group-card-lock",
+  };
+
+  // `--actor` on a group/session request without `--options` is rejected.
+  expect(() =>
+    reqSvc.createRequest({
+      actor,
+      key: "group-delegate-actor",
+      toAddress: "current",
+      targetActor: "user:colleague",
+      goal: "请确认接口",
+      now: NOW,
+    }),
+  ).toThrow("requires --options");
+
+  // `--actor` conflicting with direct `--to user:<id>` is rejected.
+  expect(() =>
+    reqSvc.createRequest({
+      actor,
+      key: "mismatch-actor",
+      toAddress: "owner",
+      targetActor: "user:colleague",
+      goal: "是否批准？",
+      options: ["同意", "拒绝"],
+      now: NOW,
+    }),
+  ).toThrow("conflicts with direct user target");
+
+  // Invalid actor kinds (session/group or unknown user) are rejected.
+  expect(() =>
+    reqSvc.createRequest({
+      actor,
+      key: "invalid-session-actor",
+      toAddress: "current",
+      targetActor: "session:group-session",
+      goal: "请确认",
+      options: ["确认", "取消"],
+      now: NOW,
+    }),
+  ).toThrow("--actor must be 'owner' or 'user:<luna-user-id>'");
+  expect(() =>
+    reqSvc.createRequest({
+      actor,
+      key: "missing-user-actor",
+      toAddress: "current",
+      targetActor: "user:ou_nonexistent",
+      goal: "请确认",
+      options: ["确认", "取消"],
+      now: NOW,
+    }),
+  ).toThrow("Actor user not found");
+
+  // Group card locked to `user:colleague` via `--actor`.
+  const lockedCard = reqSvc.createRequest({
+    actor,
+    key: "group-locked-colleague",
+    toAddress: "current",
+    targetActor: "user:colleague",
+    goal: "请确认新接口字段是否符合预期？",
+    options: ["符合预期", "需调整"],
+    now: NOW,
+  });
+  expect(lockedCard.targetSessionId).toBe("group-session");
+  expect(lockedCard.targetUserId).toBe("colleague");
+
+  // Also verify `--actor owner` resolves to canonical owner user ID on a group card.
+  const ownerLockedCard = reqSvc.createRequest({
+    actor,
+    key: "group-locked-owner",
+    toAddress: "current",
+    targetActor: "owner",
+    goal: "请确认方案切换",
+    options: ["同意", "暂缓"],
+    now: NOW,
+  });
+  expect(ownerLockedCard.targetUserId).toBe("user:alice");
+
+  db.db.insert(schema.userIdentityLinks)
+    .values([
+      {
+        id: "link_colleague_lock",
+        agentId: scope.agentId,
+        userId: "colleague",
+        identityNamespace: "feishu",
+        identityKind: "open_id",
+        identityValue: "ou_colleague_lock",
+        identityScope: "app:test",
+        confidence: "verified",
+        createdAt: "1",
+        updatedAt: "1",
+      },
+      {
+        id: "link_alice_lock",
+        agentId: scope.agentId,
+        userId: "user:alice",
+        identityNamespace: "feishu",
+        identityKind: "open_id",
+        identityValue: "ou_alice_lock",
+        identityScope: "app:test",
+        confidence: "verified",
+        createdAt: "1",
+        updatedAt: "1",
+      },
+    ])
+    .run();
+
+  // Owner (`user:alice`) cannot click or settle a group card locked to `colleague`!
+  const wrongClick = await reqSvc.handleCardAction({
+    channel: { id: "ch-1", type: "feishu" },
+    actionValue: { requestId: lockedCard.id, option: "符合预期" },
+    operatorIdentity: { externalId: "ou_alice_lock", kind: "user", displayName: "Alice" },
+  });
+  expect(wrongClick?.toast?.type).toBe("warning");
+  expect(wrongClick?.toast?.content).toContain("该确认仅限指定负责人");
+  expect(
+    db.db.select().from(schema.correlatedRequests).where(eq(schema.correlatedRequests.id, lockedCard.id)).get()?.status,
+  ).toBe("open");
+
+  expect(() =>
+    reqSvc.updateRequest({
+      requestId: lockedCard.id,
+      action: "done",
+      summary: "符合预期",
+      selectedOption: "符合预期",
+      resolvedByUserId: "user:alice",
+      source: "runner",
+      expectedShadowId: scope.shadowId,
+      expectedTargetSessionId: "group-session",
+    }),
+  ).toThrow("targets another user");
+
+  // Designated `colleague` clicking the group card settles it cleanly!
+  const validClick = await reqSvc.handleCardAction({
+    channel: { id: "ch-1", type: "feishu" },
+    actionValue: { requestId: lockedCard.id, option: "符合预期" },
+    operatorIdentity: { externalId: "ou_colleague_lock", kind: "user", displayName: "Colleague" },
+  });
+  expect(validClick?.toast?.type).toBe("success");
+  expect(
+    db.db.select().from(schema.correlatedRequests).where(eq(schema.correlatedRequests.id, lockedCard.id)).get()?.status,
+  ).toBe("done");
+});

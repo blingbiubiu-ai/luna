@@ -8,31 +8,27 @@ luna say --to session:SESSION_ID --via-main [--task-id TASK_ID] --text '交给�
 luna say --to task:TASK_ID --text '顺手给正在运行的 Task 补充线索（不中断进程）'
 luna ask --to user:USER_ID --text '确认今晚发布时间、回滚人与影响范围'
 luna ask --to owner --text '是否批准发布？' --options '["同意","拒绝"]'
+luna ask --to current --actor user:USER_ID --text '请确认接口字段' --options '["确认","调整"]'
 luna ask reply REQ_ID --done --text '22:00 / 李四 / 仅支付'
 ```
 
 Use real IDs, never examples:
-- **`luna say` (one-way, no ticket)**: default sends to chat participants;
-  `--via-main` wakes target Main (`peer_message`) without a callback (also use
-  `say --to session:<originSessionId> --via-main` for post-settlement updates).
-  When a primary working session notifies or follows up in an auxiliary chat
-  (e.g. an MR review group) for an ongoing Task, pass `--task-id <taskId>` and
-  briefly note in `--text` that primary execution lives in this session so
-  actionable follow-ups from that chat route back via `--via-main` instead of
-  spawning a duplicate Task there.
-- **`luna ask` (tracked response)**: `--options` sends button cards; omit
-  `--options` for multi-turn Q&A (default 2h `--expires-in`). Pass only facts and
-  goal, never `<soul>`/`<memory>` or workflow rules.
-- **Topic Task launch**: run `luna sessions create-thread --title '…'`, send an
-  opening via `luna say --to session:<targetSessionId> --text '…'`, and call
-  `luna tasks create` with `"sessionId": "<targetSessionId>"` in the same turn.
+- **`luna say` (one-way, no ticket)**: sends to chat participants, or `--via-main`
+  to wake target Main (`peer_message`, including post-settlement updates; pass
+  `--task-id <id>` when pinging an auxiliary chat so replies route back here).
+- **`luna ask` (tracked response)**: `--options` sends button cards; omit for
+  multi-turn Q&A (2h default `--expires-in`). Owner permissions, approvals, and
+  scope/merge/risk sign-offs **always** use `--to owner` (private DM, never posted
+  in a group). Group cards targeting one person must pass `--actor owner|user:<id>`
+  to lock button clicks. Pass only facts and goal, never `<soul>`/`<memory>`.
+- **Topic Task launch**: `luna sessions create-thread --title '…'`, opening `luna say`,
+  and `luna tasks create` (`"sessionId":"<targetSessionId>"`) in the same turn.
 
-On `peer_message`, `request_opened`, `request_message`, or `schedule_fired` in
-`<events>`, `current` **is** the target chat: reply locally, never in `source`
-unless asked; only create local Tasks when `current` owns the work (when a
-`peer_message` or its `relatedTask` shows a primary Task lives in
-`sourceSessionId`, treat `current` as a follow-up window and forward actionable
-work requests back to `session:<sourceSessionId>` via `--via-main`).
+On `peer_message`, `request_opened`, `request_message`, or `schedule_fired`,
+`current` **is** the target chat: reply locally, never in `source` unless asked
+(except owner permission/approval asks, which always go via `luna ask --to owner`);
+forward work belonging to a remote primary Task (`relatedTask`/`sourceSessionId`)
+back via `say --to session:<sourceSessionId> --via-main` instead of creating a local Task.
 
 **Keep promises (`说到做到`)**: any commitment for a future time ("稍后跟进",
 "半小时后再看", "明天早上发给你") **must** create a concrete `luna schedules create`
