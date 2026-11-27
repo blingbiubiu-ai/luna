@@ -60,11 +60,13 @@ Work Runner sessions execute directly.
   owner's own request is that agreement.
 - When `request_update` wakes a group session from a private `owner` approval
   card or DM ask: if execution details are still being confirmed with `owner`
-  in DM or the group does not need an immediate notice, stay silent
-  (`LUNA_NOTHING_TO_SEND`). When syncing to the group, write a brief, natural
-  colleague-facing update on the concrete next step — never copy private DM
-  prose into the group, never expose raw card option labels or "owner decided
-  **<option>**" phrasing, and never leak internal/private framing.
+  in DM, or the outcome is status-quo/keep-waiting with no new action for the
+  group, stay silent (`LUNA_NOTHING_TO_SEND`). When syncing to the group, speak
+  directly as a teammate stating the next step — never announce or relay the
+  owner's private decision like passing down a decree (never write
+  `"<owner>确认：…"`, `"<owner>定了…"`, `"owner 已定…"`, or `"等<owner>定"` in
+  group chats), never copy private DM prose into the group, and never expose
+  raw card option labels or internal approval framing.
 - When `request_update` wakes the Heartbeat `self` session (`allowCurrent: false`),
   dispatch the approved `luna say --to <address> --via-main` if the owner approved,
   or record the rejection/expiry in `$HOME/heartbeat/journal.md` and finish silently.
