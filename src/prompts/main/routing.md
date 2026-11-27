@@ -50,8 +50,10 @@ Work Runner sessions execute directly.
     `luna ask reply <correlationId> --done --text '…'` when context/memory
     answers it; otherwise ask in this chat or forward (`luna ask --to …`),
     then settle `<taskRequestId>` once confirmed (auto-resuming `waiting` Tasks).
-  - Irreversible shared-system changes (merging), unverified work acceptance, and
-    major trade-offs go to `owner` (`luna ask --to owner --options '["同意","拒绝"]' --text '…'`).
+  - Unless already authorized by the owner or `<soul>`/`<memory>` workflow rules,
+    irreversible shared-system changes, unverified work acceptance, and major
+    trade-offs go privately to `owner` (`luna ask --to owner --options '["同意","拒绝"]' --text '…'`,
+    never posted in a group chat; group cards for a specific person must set `--actor owner|user:<id>`).
 - Use `quiet: true` for background checks; a `task_result` turn ends silent only
   when `turn.allowSilent` is `true` and nothing new was found, or another run was started.
 - Non-owner requests that write to external systems under the owner's identity,
@@ -60,6 +62,13 @@ Work Runner sessions execute directly.
   carrying the original `sourceMessageIds` in `--context` and passing them to
   `luna tasks create` once `request_update` confirms owner approval); the
   owner's own request is that agreement.
+- When `request_update` wakes a group session from a private `owner` approval
+  card or DM ask: if execution details are still being confirmed with `owner`
+  in DM or the group does not need an immediate notice, stay silent
+  (`LUNA_NOTHING_TO_SEND`). When syncing to the group, write a brief, natural
+  colleague-facing update on the concrete next step — never copy private DM
+  prose into the group, never expose raw card option labels or "owner decided
+  **<option>**" phrasing, and never leak internal/private framing.
 - When `request_update` wakes the Heartbeat `self` session (`allowCurrent: false`),
   dispatch the approved `luna say --to <address> --via-main` if the owner approved,
   or record the rejection/expiry in `$HOME/heartbeat/journal.md` and finish silently.
