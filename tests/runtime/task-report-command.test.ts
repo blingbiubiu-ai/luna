@@ -289,6 +289,26 @@ test("report CLI rejects removed --waiting flag, and tasks pause --wake-in suspe
     await supervisor.waitForIdle();
 
     expect(resumedReason).toBe("restart");
+    const resumedRun = f.db
+      .select()
+      .from(schema.taskRuns)
+      .where(eq(schema.taskRuns.task_id, "task"))
+      .all()
+      .find(r => r.id !== f.run.id)!;
+    expect((resumedRun.input_snapshot as { quiet?: unknown } | null)?.quiet).toBe(true);
+    let sentCards = 0;
+    const { TaskRunNotificationService } = await import("@/tasks/task-run-notification-service");
+    const notifService = new TaskRunNotificationService({
+      db: f.db,
+      channelForNotification: () => ({
+        send: async (_inbound, op) => {
+          sentCards += 1;
+          return { ...op, id: "card-msg", channelId: "test" };
+        },
+      }),
+    });
+    await notifService.onRunCreated({ taskId: "task", taskRunId: resumedRun.id, reason: "restart" });
+    expect(sentCards).toBe(0);
     const finalTask = f.db.select().from(schema.tasks).where(eq(schema.tasks.id, "task")).get()!;
     expect(finalTask.status).toBe("completed");
     expect(finalTask.block_reason).toBeNull();

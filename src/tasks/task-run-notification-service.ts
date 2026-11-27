@@ -103,6 +103,9 @@ export class TaskRunNotificationService {
   private async _onRunCreated(input: OnTaskRunCreatedInput): Promise<void> {
     const task = this._requireTask(input.taskId);
     const run = this._requireRun(input.taskRunId);
+    if ((run.input_snapshot as { quiet?: unknown } | null | undefined)?.quiet === true) {
+      return;
+    }
     const subscriptions = this._subscriptionsForTask(input.taskId);
     for (const subscription of subscriptions) {
       const notification = this._notifications.resolveForRunSubscription({

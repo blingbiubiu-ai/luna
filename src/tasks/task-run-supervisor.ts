@@ -204,6 +204,7 @@ export class TaskRunSupervisor {
         taskId: row.id,
         operationId: `wake:${row.id}:${wakeAt}`,
         summary: `Scheduled wake-up reached: ${reason}`,
+        quiet: true,
       });
       resumed++;
     }
