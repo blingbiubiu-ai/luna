@@ -86,10 +86,14 @@ export class NativeTaskProgress {
       };
       // A terminal transition can still close a bubble whose last append was ambiguous.
       if (!state.pending) {
-        if (!state.started) await append([
-          event("RUN_STARTED",{threadId:operation.sessionId ?? inbound.surface.externalId,runId:id}),
-          event("REASONING_START",{messageId:`reason-${messageId}`}),
-        ], {...state,started:true});
+        if (!state.started) {
+          const stepName = resolveStepName(operation.statusCard?.title);
+          await append([
+            event("RUN_STARTED",{threadId:operation.sessionId ?? inbound.surface.externalId,runId:id}),
+            event("STEP_STARTED",{stepName}),
+            event("REASONING_START",{messageId:`reason-${messageId}`}),
+          ], {...state,started:true,stepName});
+        }
         const seen = new Set(state.sentEntries);
         let draft = state;
         let batch: ReturnType<typeof event>[] = [];
@@ -184,6 +188,7 @@ export class NativeTaskProgress {
           const done = operation.statusCard?.status === "completed" || operation.statusCard?.status === "waiting";
           await append([
             event("REASONING_END", {messageId:state.lastReasoningId ?? `reason-${messageId}`}),
+            ...(state.stepName ? [event("STEP_FINISHED", {stepName: state.stepName})] : []),
             ...(done ? [event("RUN_FINISHED", {threadId:operation.sessionId ?? inbound.surface.externalId,runId:id,status:"done"})] : []),
           ], {...state, openTools:{}, ended:true, ...(done ? {terminal:true} : {})});
         }
@@ -198,6 +203,11 @@ export class NativeTaskProgress {
   }
 }
 
+function resolveStepName(title?: string): string {
+  const trimmed = title?.trim();
+  if (!trimmed || trimmed === "工作会话") return "Working";
+  return trimmed.slice(0, 80);
+}
 function toolIcon(name: string): string { return toolDisplay(name).icon; }
 function toolLabel(name: string): string { return toolDisplay(name).label; }
 function toolResult(id: string, text: string) {

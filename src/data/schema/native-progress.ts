@@ -8,6 +8,7 @@ export const nativeProgressDeliveries = sqliteTable("native_progress_deliveries"
   state: text("state", {mode: "json"}).$type<{
     cotId?: string;
     started?: boolean;
+    stepName?: string;
     lastReasoningId?: string;
     openTools?: Record<string, string>;
     toolGroupCount?: number;
