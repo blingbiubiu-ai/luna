@@ -383,7 +383,7 @@ describe("ClaudeTranscriptTurnBridge & CodexRolloutTurnBridge", () => {
     expect(drained.outputs).toEqual([
       { status: "init", sessionId: sid },
       { status: "stream", text: "先查一下 MR 评审状态。" },
-      { status: "tool_start", id: "call_1", name: "Bash", title: "执行 git status" },
+      { status: "tool_start", id: "call_1", name: "Bash", title: "查看 git 状态" },
       { status: "tool_result", id: "call_1", text: "工具调用已结束" },
       { status: "checkpoint" },
       { status: "stream", text: "仓库干净，准备提交。" },

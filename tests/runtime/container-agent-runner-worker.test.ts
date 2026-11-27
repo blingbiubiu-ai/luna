@@ -94,7 +94,7 @@ describe("container agent-runner worker", () => {
         }),
         "claude",
       ),
-    ).toEqual({kind: "events", events: [{kind:"tool_start", id:"tool-1", name:"Bash", title:"执行 pwd"}]});
+    ).toEqual({kind: "events", events: [{kind:"tool_start", id:"tool-1", name:"Bash", title:"查看目录"}]});
   });
 
   test("does not treat tool descriptions as assistant narration", () => {
@@ -129,7 +129,7 @@ describe("container agent-runner worker", () => {
         }),
         "codex",
       ),
-    ).toEqual({kind: "events", events: [{kind:"tool_start", id:"cmd-1", name:"Bash", title:"执行 ls"}]});
+    ).toEqual({kind: "events", events: [{kind:"tool_start", id:"cmd-1", name:"Bash", title:"查看目录"}]});
   });
 
   test("emits stream output for a final unterminated runner line", async () => {

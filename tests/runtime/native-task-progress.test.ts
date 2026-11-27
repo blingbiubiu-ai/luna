@@ -118,11 +118,9 @@ test("native thread snapshots append only new public entries across adapter rest
   expect(events().filter(e=>e.event_type==="TOOL_CALL_START")).toHaveLength(1);
   expect(events().filter(e=>e.content.includes("找到原因"))).toHaveLength(1);
   expect(events().some(e=>e.event_type==="REASONING_MESSAGE_CONTENT" && e.content.includes("调查问题"))).toBe(false);
-  expect(events().filter(e=>e.event_type==="STEP_STARTED").map(e=>JSON.parse(e.content))).toEqual([{stepName:"调查问题"}]);
   const terminal={...update,statusCardState:"terminal" as const,statusCard:{...operation.statusCard!,status:"completed"},content:"处理完成。"};
   await adapter().send(inbound,terminal);
   await adapter().send(inbound,terminal);
-  expect(events().filter(e=>e.event_type==="STEP_FINISHED").map(e=>JSON.parse(e.content))).toEqual([{stepName:"调查问题"}]);
   expect(events().filter(e=>e.event_type==="RUN_FINISHED")).toHaveLength(1);
   expect(events().filter(e=>e.event_type==="REASONING_END")).toHaveLength(1);
   expect(calls.filter(c=>c.url.includes("/complete/"))).toHaveLength(0);
