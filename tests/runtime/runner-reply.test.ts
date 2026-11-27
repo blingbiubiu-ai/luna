@@ -40,6 +40,10 @@ test("only reply documents opt into presentation and downgrade preserves ordered
   const bareFencedCard = parseReply('```\n{"type":"luna.reply","version":1,"presentation":"card","title":"处理结果","content":[{"type":"text","text":"已完成。"}]}\n```');
   expect(bareFencedCard.presentation).toBe("card");
   expect(bareFencedCard.title).toBe("处理结果");
+  const rawNewlineReply = parseReply('{"type":"luna.reply","version":1,"presentation":"message","replyTo":"msg-2","content":[{"type":"mention","userId":"u1"},{"type":"text","text":"第一段。\n\n第二段。"}],}');
+  expect(rawNewlineReply.presentation).toBe("message");
+  expect(rawNewlineReply.replyTo).toBe("msg-2");
+  expect(rawNewlineReply.content[1]).toEqual({ type: "text", text: "第一段。\n\n第二段。" });
   const reply = parseReply(JSON.stringify({ type: "luna.reply", version: 1, presentation: "card", template: "unsupported",
     content: [{ type: "text", text: "before" }, { type: "image", artifactRef: "artifact:img", alt: "preview" }, { type: "text", text: "after" }] }));
   expect(reply.presentation).toBe("message");

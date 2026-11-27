@@ -6,6 +6,7 @@
   "exports": {
     ".": "./src/index.ts",
     "./events": "./src/events.ts",
+    "./llm-json": "./src/llm-json.ts",
     "./reply": "./src/reply.ts",
     "./runner-assets": "./src/runner-assets.ts",
     "./tool-display": "./src/tool-display.ts",

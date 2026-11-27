@@ -1,4 +1,7 @@
 import { z } from "zod";
+import { tryParseLlmJson, unwrapSingleCodeFence } from "./llm-json";
+
+export { unwrapSingleCodeFence };
 
 const artifactRef = z.string().regex(/^artifact:[A-Za-z0-9._:-]+$/);
 export const replyBlockSchema = z.discriminatedUnion("type", [
@@ -23,22 +26,15 @@ export const replySchema = z.object({
 }).strict();
 export type ReplyDocument = z.infer<typeof replySchema>;
 
-export function unwrapSingleCodeFence(text: string): string | undefined {
-  const trimmed = text.trim();
-  const match = /^(`{3,}|~{3,})(?:json|jsonc)?[ \t]*\r?\n([\s\S]*?)\r?\n\1$/i.exec(trimmed)
-    ?? /^(`{3,}|~{3,})(?:json|jsonc)?[ \t]*(\{[\s\S]*\}|\[[\s\S]*\])[ \t]*\1$/i.exec(trimmed);
-  return match?.[2]?.trim();
-}
-
 export function extractReplyEnvelope(text: string): Record<string, unknown> | undefined {
-  for (const candidate of [text, unwrapSingleCodeFence(text)]) {
-    if (!candidate) continue;
-    try {
-      const value: unknown = JSON.parse(candidate);
-      if (value && typeof value === "object" && !Array.isArray(value) && (value as Record<string, unknown>).type === "luna.reply") {
-        return value as Record<string, unknown>;
-      }
-    } catch { /* Plain text or non-JSON fenced code is a supported reply. */ }
+  const value = tryParseLlmJson(text);
+  if (
+    value &&
+    typeof value === "object" &&
+    !Array.isArray(value) &&
+    (value as Record<string, unknown>).type === "luna.reply"
+  ) {
+    return value as Record<string, unknown>;
   }
   return undefined;
 }

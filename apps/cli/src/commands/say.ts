@@ -1,4 +1,5 @@
-import { parseReply, unwrapSingleCodeFence } from "@luna/runner-protocol/reply";
+import { parseLlmJson } from "@luna/runner-protocol/llm-json";
+import { parseReply } from "@luna/runner-protocol/reply";
 import type { CliResult, Env } from "@luna/cli-support/types";
 import { hasFlag, readOption } from "@luna/cli-support/options";
 import {
@@ -35,9 +36,8 @@ const SAY_USAGE = [
 ].join("\n");
 
 function parseMessageJson(text: string) {
-  const normalized = unwrapSingleCodeFence(text) ?? text;
-  const input: unknown = JSON.parse(normalized);
-  if (!Array.isArray(input)) return parseReply(normalized);
+  const input: unknown = parseLlmJson(text);
+  if (!Array.isArray(input)) return parseReply(JSON.stringify(input));
   return parseReply(
     JSON.stringify({
       type: "luna.reply",
