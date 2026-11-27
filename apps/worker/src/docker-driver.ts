@@ -6,7 +6,7 @@ import { promisify } from "node:util";
 import { basename, dirname, join } from "node:path";
 import { mkdirSync, rmSync } from "node:fs";
 import { randomBytes } from "node:crypto";
-import { availableParallelism } from "node:os";
+import { availableParallelism, totalmem } from "node:os";
 import { ExecutionError, contentHash, writePrivateJson, type SqlDatabase } from "@luna/execution-store";
 import type { WorkerConfig } from "./config";
 import type { EnvironmentRecord } from "./environment-store";
@@ -24,6 +24,7 @@ export class DockerEnvironmentDriver {
   readonly contexts: WorkerContextStore;
   private readonly layouts: WorkerShadowLayouts;
   private hostCpus?: number;
+  private hostMemoryBytes?: number;
   imageRepoDigest?: string | undefined;
   /**
    * The Executor and `luna` CLI shipped with this Worker. Without it (a Worker run from source,
@@ -77,6 +78,27 @@ export class DockerEnvironmentDriver {
     this.imageRepoDigest = extractImageRepoDigestFromInspect(inspected);
     try { await this.docker(["network", "inspect", this.config.network]); }
     catch { await this.docker(["network", "create", this.config.network]); }
+    await this.applyHostResourceGuardrails();
+  }
+  /** Prevent small hosts (e.g. 2C/4G devboxes) from overcommitting capacity or holding idle containers too long. */
+  private async applyHostResourceGuardrails(): Promise<void> {
+    if (process.env.LUNA_WORKER_ALLOW_OVERCOMMIT === "1") return;
+    const [cpus, memBytes] = await Promise.all([this.dockerHostCpus(), this.dockerHostMemoryBytes()]);
+    const recommended = recommendedWorkerCapacity(cpus, memBytes);
+    if ((cpus <= 2 || memBytes < 6 * GIB) && this.config.capacity > recommended) {
+      console.error(JSON.stringify({
+        level: "warn",
+        msg: "Capping Worker capacity to fit host resources",
+        configuredCapacity: this.config.capacity,
+        effectiveCapacity: recommended,
+        hostCpus: cpus,
+        hostMemoryMiB: Math.round(memBytes / MIB),
+      }));
+      this.config.capacity = recommended;
+    }
+    if (memBytes > 0 && memBytes <= 4.5 * GIB && this.config.idleTimeoutMs > 120_000) {
+      this.config.idleTimeoutMs = 120_000;
+    }
   }
   deployment(environmentId: string): Deployment {
     this.db.prepare("DELETE FROM worker_deployments WHERE environment_id<>? AND environment_id IN (SELECT id FROM worker_environments WHERE json_extract(record_json,'$.state')='stopped' AND json_extract(record_json,'$.containerId') IS NULL)").run(environmentId);
@@ -120,7 +142,7 @@ export class DockerEnvironmentDriver {
     const volume = this.volume(environment);
     const args = ["run", "--detach", "--init", "--name", this.name(environment), "--label", `luna.worker=${this.config.workerId}`, "--label", `luna.instance=${environment.instanceId}`,
       "--label", `luna.agent=${environment.spec.scope.agentId}`, "--label", `luna.shadow=${environment.spec.scope.shadowId}`, "--label", `luna.placement=${environment.spec.scope.placementGeneration}`,
-      "--user", "0:0", "--cap-drop", "ALL", ...["CHOWN", "DAC_OVERRIDE", "KILL", "SETUID", "SETGID", "SETPCAP"].flatMap((cap) => ["--cap-add", cap]),
+      "--user", "0:0", "--oom-score-adj", "500", "--cap-drop", "ALL", ...["CHOWN", "DAC_OVERRIDE", "KILL", "SETUID", "SETGID", "SETPCAP"].flatMap((cap) => ["--cap-add", cap]),
       ...(this.rootAllowed(environment) ? [] : ["--security-opt", "no-new-privileges"]), "--tmpfs", "/tmp:rw,exec,nosuid,nodev,mode=1777", "--network", this.config.network,
       "--add-host", "host.docker.internal:host-gateway", "--publish", `${this.config.publishHost}:${deployment.port}:8080`,
       "--mount", `type=volume,src=${volume},dst=/data`, "--mount", `type=bind,src=${configFile},dst=/run/luna/executor.json,readonly`,
@@ -176,12 +198,17 @@ export class DockerEnvironmentDriver {
   async updateLimits(environment: EnvironmentRecord, resources: EnvironmentRecord["spec"]["resources"]): Promise<void> {
     const prior = await this.inspect(environment);
     if (!prior) return;
+    const hostMem = await this.dockerHostMemoryBytes();
+    const effectiveMem = effectiveMemoryBytes(memoryBytes(resources.memory), hostMem);
     // Docker run defaults swap to twice the memory limit; keep that when updating.
-    const swap = 2 * memoryBytes(resources.memory);
+    const swap = 2 * effectiveMem;
     await this.docker(["container", "update", ...await this.limitArgs(resources), "--memory-swap", String(swap), prior.Id]);
   }
   private async limitArgs(resources: EnvironmentRecord["spec"]["resources"]): Promise<string[]> {
-    return ["--memory", resources.memory, "--cpus", String(effectiveCpus(resources.cpus, await this.dockerHostCpus())), "--pids-limit", String(resources.pidsLimit)];
+    const [hostCpus, hostMem] = await Promise.all([this.dockerHostCpus(), this.dockerHostMemoryBytes()]);
+    const effectiveMem = effectiveMemoryBytes(memoryBytes(resources.memory), hostMem);
+    const effectiveCpu = effectiveContainerCpus(resources.cpus, hostCpus);
+    return ["--memory", String(effectiveMem), "--cpus", String(effectiveCpu), "--pids-limit", String(resources.pidsLimit)];
   }
   /** Record which runtime version the container's Executor started from. */
   private startedExecutor(environment: EnvironmentRecord): void {
@@ -293,6 +320,13 @@ export class DockerEnvironmentDriver {
     }
     return this.hostCpus;
   }
+  private async dockerHostMemoryBytes(): Promise<number> {
+    if (this.hostMemoryBytes === undefined) {
+      const reported = Number((await this.docker(["info", "--format", "{{.MemTotal}}"]).catch(() => "")).trim());
+      this.hostMemoryBytes = Number.isFinite(reported) && reported > 0 ? reported : totalmem();
+    }
+    return this.hostMemoryBytes;
+  }
   private async docker(args: string[]): Promise<string> {
     try { const result = await execute("docker", args, { timeout: 60000, maxBuffer: 4 * 1024 * 1024 }); return result.stdout; }
     catch (error) {
@@ -305,9 +339,47 @@ export class DockerEnvironmentDriver {
   }
 }
 
+const MIB = 1024 ** 2;
+const GIB = 1024 ** 3;
+const MIN_CONTAINER_MEMORY_BYTES = 512 * MIB;
+
 /** Cap the requested CPU quota at what the Docker host can grant. */
 export function effectiveCpus(requested: number, hostCpus: number): number {
   return hostCpus > 0 ? Math.min(requested, hostCpus) : requested;
+}
+
+/**
+ * Cap container CPUs with OS/relay headroom on small hosts (2-4 vCPUs reserve 0.5 vCPU)
+ * so a busy container cannot starve SSH, Docker daemon, or platform health checks.
+ */
+export function effectiveContainerCpus(requested: number, hostCpus: number): number {
+  if (!(hostCpus > 0)) return requested;
+  const maxCpus = hostCpus >= 2 && hostCpus <= 4 ? hostCpus - 0.5 : hostCpus;
+  return Math.min(requested, maxCpus);
+}
+
+/**
+ * Cap container memory below host RAM so a container cannot exhaust host memory and
+ * trigger host-wide lockups or platform reboots. Reserves max(1 GiB, 25% host RAM)
+ * (capped at 4 GiB reserve on large hosts) with a 512 MiB floor.
+ */
+export function effectiveMemoryBytes(requestedBytes: number, hostMemBytes: number): number {
+  if (!(hostMemBytes > 0)) return requestedBytes;
+  const reserve = Math.min(4 * GIB, Math.max(GIB, Math.round(hostMemBytes * 0.25)));
+  const maxContainer = Math.max(MIN_CONTAINER_MEMORY_BYTES, hostMemBytes - reserve);
+  return Math.min(requestedBytes, maxContainer);
+}
+
+/**
+ * Safe default concurrent job capacity for a Worker host:
+ * - 2C / 3.5-4G -> 1
+ * - 4C / 8G     -> 2
+ * - 16C / 32G   -> 8
+ */
+export function recommendedWorkerCapacity(hostCpus: number, hostMemBytes: number): number {
+  const cpuCap = hostCpus > 0 ? Math.max(1, Math.floor(hostCpus / 1.5)) : 8;
+  const memCap = hostMemBytes > 0 ? Math.max(1, Math.floor((hostMemBytes - GIB) / (2 * GIB))) : 8;
+  return Math.min(8, cpuCap, memCap);
 }
 
 /** Bytes for a Docker memory value such as "512m" or "32g". */

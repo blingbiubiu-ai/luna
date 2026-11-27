@@ -1,11 +1,13 @@
 import { resolveSharedWorkspacePath } from "@luna/host-runtime/shared-workspace";
 import { createInterface } from "node:readline/promises";
 import { existsSync } from "node:fs";
+import { availableParallelism, totalmem } from "node:os";
 import { join, resolve, dirname } from "node:path";
 import { randomBytes } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import { defaultLunaHome, loadLunaEnvAt } from "@luna/host-runtime/env";
 import { defaultWorkerHome, WorkerConfig, WorkerLocalConfig, WorkerBindingConfig } from "./config";
+import { recommendedWorkerCapacity } from "./docker-driver";
 import { readPrivateJson, writePrivateJson } from "@luna/execution-store";
 import { ExecutionClient } from "@luna/execution-transport";
 import type { PrunePlan } from "./environment-manager";
@@ -90,8 +92,13 @@ export async function runWorkerCli(argv: string[], env: Env = process.env): Prom
       const imageRef = readOption(argv, "--image") ?? "luna-runner:latest";
       const imageVariant = readOption(argv, "--variant");
       const imageDigest = execFileSync("docker", ["image", "inspect", imageRef, "--format", "{{.Id}}"], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, ...env } }).trim();
+      const explicitCapacity = readOption(argv, "--capacity");
+      const capacity = explicitCapacity !== undefined
+        ? Number(explicitCapacity)
+        : recommendedWorkerCapacity(availableParallelism(), totalmem());
       const config = WorkerLocalConfig.parse({ dataRoot: dirname(file), imageDigest, imageRef,
         ...(imageVariant ? { imageVariant } : {}),
+        capacity,
         projects: [{ projectId: "shared", hostPath: resolveSharedWorkspacePath({ home, configured: env.LUNA_WORKER_PROJECTS_DIR ?? join(home, "projects") }) }],
         port: Number(readOption(argv, "--port") ?? 8092) });
       writePrivateJson(file, config);
