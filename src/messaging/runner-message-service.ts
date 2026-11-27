@@ -3,11 +3,12 @@ import { and, eq, inArray } from "drizzle-orm";
 import { extractReplyEnvelope, parseReply, replyMarkdown, type ReplyDocument } from "@luna/runner-protocol/reply";
 import type { ReplyChannel } from "@/channels/outbound";
 import type { DrizzleDB } from "@/data";
-import { channelSurfaces, sessions, tasks, taskSubscriptions } from "@/data/schema";
+import { channelSurfaces, sessions, taskRuns, tasks, taskSubscriptions } from "@/data/schema";
 import { InvocationService } from "@/runners/invocation-service";
 import type { LunaAccessTokenClaims } from "@/server/auth/access-token-service";
 import { GatewayError } from "@/server/gateway-error";
 import { TaskInboxStore, type TaskInboxEventRow } from "@/tasks/task-inbox-store";
+import { resumeWaitingTaskIfIdle } from "@/tasks/task-resume-registry";
 import { TimelineStore } from "@/timeline/timeline-store";
 import type { RequestActor } from "./correlated-request-service";
 import { sessionCommandsFor } from "./session-command-service";
@@ -418,6 +419,20 @@ export class RunnerMessageService {
         sourceSessionId: actor.currentSessionId,
       },
     });
+    if (taskRow.status === "waiting") {
+      const activeRun = this.db
+        .select({ id: taskRuns.id })
+        .from(taskRuns)
+        .where(and(eq(taskRuns.task_id, taskId), eq(taskRuns.status, "running")))
+        .get();
+      if (!activeRun) {
+        resumeWaitingTaskIfIdle(this.db, {
+          taskId,
+          operationId: `task-say:${event.id}`,
+          summary: `Supplemental note from session ${actor.currentSessionId}: ${content.slice(0, 200)}`,
+        });
+      }
+    }
     return event;
   }
 }

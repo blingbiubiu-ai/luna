@@ -422,3 +422,79 @@ test("unread soft task inbox events block premature report/exit and inject via t
     server.stop(true);
   }
 });
+
+test("say --to task:<id> (sendToTask) wakes a waiting Task immediately so it consumes the new note", async () => {
+  const f = fixture();
+  f.finishJob();
+  new InvocationStore(f.db).finish("invocation");
+  f.store.markWaiting(f.run.id, { pauseReason: "Waiting for build artifact" });
+  f.db
+    .update(schema.tasks)
+    .set({ status: "waiting", wake_at: Date.now() + 30 * 60_000, wake_reason: "Check build" })
+    .where(eq(schema.tasks.id, "task"))
+    .run();
+
+  const receivedNotes: string[] = [];
+  const supervisor = new TaskRunSupervisor({
+    db: f.db,
+    runnerType: "mock",
+    executeRun: async input => {
+      const id = "note-wake-invocation";
+      f.db
+        .update(schema.accessTokens)
+        .set({ metadataJson: { invocationId: id } })
+        .where(eq(schema.accessTokens.id, f.claims.tokenId))
+        .run();
+      const active = { ...f.claims, taskRunId: input.taskRunId, runnerJobId: input.runnerContext!.id };
+      const finish = registerTestRunnerJob(
+        f.db,
+        id,
+        active,
+        {
+          version: 1,
+          kind: "task",
+          input: { taskId: input.taskId, taskRunId: input.taskRunId, runnerContextId: input.runnerContext!.id },
+        },
+        input.taskRunId,
+      );
+      try {
+        const events = new TaskInboxStore(f.db).consumePending({
+          taskId: input.taskId,
+          runnerContextId: input.runnerContext!.id,
+          runId: input.taskRunId,
+        });
+        receivedNotes.push(...events.map(e => e.content));
+        const receipt = f.service.submit(active, "final", "Handled supplemental doc");
+        return { kind: "completed", finalReportArtifactId: receipt.reportArtifactId };
+      } finally {
+        finish();
+      }
+    },
+  });
+
+  const taskRow = f.db.select().from(schema.tasks).where(eq(schema.tasks.id, "task")).get()!;
+  const activeSession = f.db.select().from(schema.sessions).get()!;
+  const { RunnerMessageService } = await import("@/messaging/runner-message-service");
+  const msgSvc = new RunnerMessageService(f.db, () => undefined);
+  const event = msgSvc.sendToTask(
+    {
+      userId: taskRow.creator_user_id ?? "owner",
+      agentId: taskRow.agent_id!,
+      shadowId: taskRow.shadow_id!,
+      runnerKind: "main",
+      invocationId: "main-inv",
+      sourceSessionId: activeSession.id,
+      currentSessionId: activeSession.id,
+      originId: "turn-say-wake",
+    },
+    "k-wake-1",
+    "task",
+    "补充实验文档链接，请立即按新实验复现",
+  );
+  expect(event.kind).toBe("peer_message");
+  await supervisor.waitForIdle();
+
+  expect(receivedNotes).toEqual(["补充实验文档链接，请立即按新实验复现"]);
+  const updatedTask = f.db.select().from(schema.tasks).where(eq(schema.tasks.id, "task")).get()!;
+  expect(updatedTask.status).toBe("completed");
+});
