@@ -31,7 +31,7 @@ Use the actual requested date, time and timezone (see `<now>` in your input), ne
 
 ### Action modes
 - Default (neither `--invoke` nor `--task-id`): `message.send` — delivers `--text` directly without waking a Runner.
-- `--invoke`: `session.invoke` — wakes the target session's Main Runner with `schedule_fired`.
+- `--invoke`: `session.invoke` — wakes the target session's Main Runner with `schedule_fired` (`terminalOutputMode: "ignored"`; to post to the chat, Main must call `luna say`).
 - `--task-id <id>`: `task.run` — starts a quiet run on the existing Task directly without waking Main first; Main wakes when `task_result` arrives. Prefer this for recurring inspections and standing duties (`luna-duties`).
 
 ### Timing modes

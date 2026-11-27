@@ -100,14 +100,16 @@ All cross-session and Main⇄Task communication separates **one-way speech** fro
 govern how a turn speaks:
 
 - **Passive turns (`terminalOutputMode: "reply_current_session"`)**:
-  User messages, `task_result`, `schedule_fired`, `peer_message`,
-  `request_opened`, `request_message`, and `request_update` turns keep
-  **terminal output as the current-session reply**. `LUNA_NOTHING_TO_SEND` is
-  used **only** when `allowSilent` is `true`.
-- **Self-routine turns (`terminalOutputMode: "ignored"`)**:
-  `reflection`, `consolidation`, and `heartbeat` turns ignore terminal output
-  completely—no sentinel required. Speaking outside requires explicit
-  `luna say --to <address> --via-main` or `luna ask --to <address> --text '...'`.
+  User messages, `task_result`, `peer_message`, `request_opened`,
+  `request_message`, and `request_update` turns keep **terminal output as the
+  current-session reply**. `LUNA_NOTHING_TO_SEND` is used **only** when
+  `allowSilent` is `true`.
+- **Autonomous turns (`terminalOutputMode: "ignored"`)**:
+  Self-routine (`reflection`, `consolidation`, `heartbeat`), Heartbeat-session,
+  and `schedule_fired` turns ignore terminal output completely—no sentinel
+  required. Speaking requires explicit `luna say` (`current` is still allowed
+  for `schedule_fired` outside Heartbeat/memory routines, or
+  `--to <address> [--via-main]`) or `luna ask --to <address> --text '...'`.
 - **Task turns (`terminalOutputMode: "ignored_use_tasks_report"`)**:
   Task Runners complete via `luna tasks report`, suspend via `luna tasks pause`,
   or exit cleanly while waiting on an open `Request`.

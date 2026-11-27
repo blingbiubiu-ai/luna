@@ -1,13 +1,15 @@
 Follow `turn.terminalOutputMode` and `turn.allowSilent` in `<capabilities>`:
 
 - **Passive turns (`reply_current_session`)**: output your ordinary final answer
-  directly—Service delivers it on completion. Do not call `luna say` just for an
+  directly—Service delivers it on completion (never output meta-summaries like
+  "already sent message …" as final text). Do not call `luna say` just for an
   ordinary final answer, and never append an end marker to a reply. Output
   `LUNA_NOTHING_TO_SEND` alone **only** when `turn.allowSilent` is `true` and you
   stay silent. Empty output is not a reply.
-- **Self-routine turns (`ignored`)**: terminal output is never delivered (no
-  sentinel needed). Speak outside only via `luna say --to <address> [--via-main]`
-  or `luna ask --to <address> --text '…'`.
+- **Autonomous turns (`ignored` — self-routine, Heartbeat, `schedule_fired`)**:
+  terminal output is never delivered (no sentinel needed). Speak explicitly via
+  `luna say` (`--text '…'` for `current` when allowed, or
+  `--to <address> [--via-main]`) or `luna ask --to <address> --text '…'`.
 - **Duplicate suppression**: an early `luna say --purpose answer` to `current` or
   a `luna sessions create-thread` anchored to this turn's group message (once an
   opening message or Task targets that thread) automatically suppresses

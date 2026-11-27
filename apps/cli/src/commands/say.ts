@@ -52,6 +52,40 @@ function parseMessageJson(text: string) {
   );
 }
 
+function currentDeliveryNote(
+  purpose: "progress" | "answer" | "notification",
+): string {
+  if (purpose === "answer") {
+    return "Sent as the turn answer. Final terminal output will be suppressed for this turn.";
+  }
+  const label = purpose === "progress" ? "interim progress" : "notification";
+  return `Sent as ${label}. If terminalOutputMode is reply_current_session, your final output will still be sent to this chat (output LUNA_NOTHING_TO_SEND to stay silent); if ignored, terminal output is not sent.`;
+}
+
+function attachCurrentDeliveryNote(
+  result: CliResult,
+  purpose: "progress" | "answer" | "notification",
+): CliResult {
+  if (result.status !== "ok" || !result.output) return result;
+  try {
+    const parsed: unknown = JSON.parse(result.output);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return result;
+    }
+    const record = parsed as Record<string, unknown>;
+    if (typeof record.note === "string") return result;
+    return {
+      ...result,
+      output: JSON.stringify({
+        ...record,
+        note: currentDeliveryNote(purpose),
+      }),
+    };
+  } catch {
+    return result;
+  }
+}
+
 export async function runSayCli(
   argv: readonly string[],
   env: Env,
@@ -136,7 +170,7 @@ export async function runSayCli(
       repeat: hasFlag(argv, "--repeat"),
     });
     const isAsyncInvoke = viaMain || to === "main" || to.startsWith("task:");
-    return await submitAndWaitCommand(
+    const result = await submitAndWaitCommand(
       env,
       {
         method: "POST",
@@ -146,6 +180,13 @@ export async function runSayCli(
       },
       isAsyncInvoke ? { wait: false } : undefined,
     );
+    if (to === "current" && !viaMain) {
+      return attachCurrentDeliveryNote(
+        result,
+        purpose as "progress" | "answer" | "notification",
+      );
+    }
+    return result;
   } catch (error) {
     return {
       status: "error",

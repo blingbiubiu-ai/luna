@@ -15,13 +15,13 @@ import { mainInvocations, mainMessageOrigin } from "@/runners/main-invocation-re
 import type { AgentExecutionSnapshot } from "@/agent-config";
 import type { DrizzleDB } from "@/data";
 import { channelSurfaces, correlatedRequests, runnerOperations, sessions, tasks } from "@/data/schema";
-import { CorrelatedRequestService, isHeartbeatSession, type CorrelatedRequestRow } from "@/messaging/correlated-request-service";
+import { CorrelatedRequestService, type CorrelatedRequestRow } from "@/messaging/correlated-request-service";
 import {
   buildMainCapabilities,
   compactTurnCapabilities,
-  isMainSelfRoutineInput,
   resolveMainAllowSilent,
   resolveMainTriggerClassification,
+  shouldIgnoreMainTerminalOutput,
   type RunnerCapabilitiesManifest,
 } from "@/runners/capabilities";
 import {
@@ -229,9 +229,7 @@ export class MainRunner {
     memory?.commit();
     const db = this._options.serviceAuthDb;
     if (input.signal?.aborted) throw new Error("Runner was cancelled before final reply");
-    const ignoreTerminalOutput =
-      isMainSelfRoutineInput(db, input.input) ||
-      (db ? isHeartbeatSession(db, input.input.context.sessionId) : false);
+    const ignoreTerminalOutput = shouldIgnoreMainTerminalOutput(db, input.input);
     try {
       if (db && !ignoreTerminalOutput) finalizeRunnerReply(db, {
         sessionId: input.input.context.sessionId, originId: mainMessageOrigin(input),

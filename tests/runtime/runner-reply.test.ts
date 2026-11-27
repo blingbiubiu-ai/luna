@@ -181,9 +181,24 @@ test("CLI JSON and text use the same purpose-independent message endpoint", asyn
       const result = await runSayCli(["--purpose", purpose, "--json", "--text", JSON.stringify(reply)], env);
       expect(result.status).toBe("ok");
       expect(requests.at(-1)).toMatchObject({ to: "current", purpose, reply });
+      const parsed = JSON.parse(result.output ?? "{}") as { note?: string };
+      if (purpose === "answer") {
+        expect(parsed.note).toContain("turn answer");
+        expect(parsed.note).toContain("suppressed");
+      } else {
+        expect(parsed.note).toContain("LUNA_NOTHING_TO_SEND");
+        expect(parsed.note).toContain("reply_current_session");
+      }
     }
-    expect((await runSayCli(["--text", "hello"], env)).status).toBe("ok");
+    const defaultProgress = await runSayCli(["--text", "hello"], env);
+    expect(defaultProgress.status).toBe("ok");
+    expect(JSON.parse(defaultProgress.output ?? "{}")).toMatchObject({
+      note: expect.stringContaining("interim progress"),
+    });
     expect(requests.at(-1)).toMatchObject({ to: "current", content: [{ type: "text", text: "hello" }] });
+    const crossSession = await runSayCli(["--to", "owner", "--text", "ping"], env);
+    expect(crossSession.status).toBe("ok");
+    expect((JSON.parse(crossSession.output ?? "{}") as { note?: string }).note).toBeUndefined();
     expect((await runSayCli(["--json", "--text", '[{"text":"请 "},{"mention":"peer"},{"text":" 看一下"}]'], env)).status).toBe("ok");
     expect(requests.at(-1)).toMatchObject({ to: "current", purpose: "progress", reply: {
       type: "luna.reply", version: 1, presentation: "message",

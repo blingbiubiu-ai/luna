@@ -14,13 +14,15 @@ import { sessionCommandsFor } from "@/messaging/session-command-service";
 import { MessageStore } from "@/sessions/message-store";
 import { SessionResolver } from "@/sessions/session-resolver";
 import { SessionStore } from "@/sessions/session-store";
-import { renderMainRunnerPrompt } from "@/main-runner/main-runner";
+import { MainRunner, renderMainRunnerPrompt } from "@/main-runner/main-runner";
 import {
   buildMainCapabilities,
   compactTurnCapabilities,
   isMainSelfRoutineInput,
   RUNNER_PROTOCOL_VERSION,
+  shouldIgnoreMainTerminalOutput,
 } from "@/runners/capabilities";
+import { SessionRunnerAttemptStore } from "@/sessions/session-runner-attempt-store";
 import { encodeInvocation } from "@/runners/invocation-codec";
 import { InvocationStore } from "@/runners/invocation-store";
 import { mainInvocations } from "@/runners/main-invocation-registry";
@@ -321,6 +323,144 @@ test("Protocol v2 renders <capabilities> and <events> envelopes and suppresses l
   });
   expect(renderedHbCap.commands).toContain("say --via-main");
   expect(renderedHbCap.outboundGovernance).toBeDefined();
+
+  // schedule_fired turns also ignore terminal output, keep allowCurrent=true, and are not classified as heartbeat.
+  const scheduleTriggerId = "sched-cmd-1";
+  f.db
+    .insert(schema.sessionCommands)
+    .values({
+      id: scheduleTriggerId,
+      kind: "session.invoke",
+      sessionId: f.session.id,
+      sourceSessionId: f.session.id,
+      actorUserId: "colleague",
+      originId: `schedule:${f.session.id}:occ-1`,
+      dedupeKey: "sched-1",
+      payload: { content: "09:30 QA review check" },
+      status: "running",
+      correlationId: scheduleTriggerId,
+      hops: 2,
+      availableAt: 1,
+      createdAt: 1,
+      updatedAt: 1,
+    })
+    .run();
+  const scheduleInput = {
+    type: "session_trigger" as const,
+    triggerId: scheduleTriggerId,
+    instruction: "09:30 QA review check",
+    correlationId: scheduleTriggerId,
+    hops: 2,
+    sourceSessionId: f.session.id,
+    requesterUserId: "colleague",
+    artifactRefs: [],
+    context: { sessionId: f.session.id, candidateOpenTasks: [] },
+  };
+  expect(isMainSelfRoutineInput(f.db, scheduleInput)).toBe(false);
+  expect(shouldIgnoreMainTerminalOutput(f.db, scheduleInput)).toBe(true);
+  const schedCaps = buildMainCapabilities(f.db, scheduleInput, {
+    agentId: f.session.agent_id,
+    shadowId: f.session.shadow_id,
+  });
+  expect(schedCaps.turn.originKind).toBe("schedule_fired");
+  expect(schedCaps.turn.terminalOutputMode).toBe("ignored");
+  expect(schedCaps.turn.allowSilent).toBe(true);
+  expect(schedCaps.addressScope.allowCurrent).toBe(true);
+  const schedCompact = compactTurnCapabilities(schedCaps);
+  expect(schedCompact.turn).toEqual({
+    originKind: "schedule_fired",
+    allowSilent: true,
+    terminalOutputMode: "ignored",
+  });
+  expect(schedCompact.commands).toBeUndefined();
+});
+
+test("MainRunner skips service-final-answer on schedule_fired turns so terminal wrap-up prose never leaks to the chat", async () => {
+  const f = setupGroupInvocation();
+  const scheduleTriggerId = "sched-cmd-leak-guard";
+  f.db
+    .insert(schema.sessionCommands)
+    .values({
+      id: scheduleTriggerId,
+      kind: "session.invoke",
+      sessionId: f.session.id,
+      sourceSessionId: f.session.id,
+      actorUserId: "colleague",
+      originId: `schedule:${f.session.id}:occ-2`,
+      dedupeKey: "sched-leak-guard",
+      payload: { content: "检查 QA Review 并在群里提醒" },
+      status: "running",
+      correlationId: scheduleTriggerId,
+      hops: 2,
+      availableAt: 1,
+      createdAt: 1,
+      updatedAt: 1,
+    })
+    .run();
+
+  const runnerContextStore = new RunnerContextStore(f.db);
+  const runnerContext = runnerContextStore.resolveForSession(
+    f.session.id,
+    "mock",
+  );
+  const mainRunner = new MainRunner({
+    runner: {
+      type: "mock",
+      async *stream(_userMessage, options) {
+        const sid = options?.runnerSessionId ?? "prov_sched_1";
+        yield {
+          id: sid,
+          session_id: sid,
+          role: "system",
+          subtype: "init",
+          content: [],
+        } as never;
+        yield {
+          id: "asst_sched_1",
+          session_id: sid,
+          role: "assistant",
+          final: true,
+          content: [
+            {
+              type: "text",
+              text: "09:30 复核完成：已在群里发消息 om_xxx，12:00 继续复核。",
+            },
+          ],
+        } as never;
+      },
+    },
+    runnerContextStore,
+    attemptStore: new SessionRunnerAttemptStore(f.db),
+    serviceAuthDb: f.db,
+    accessTokenSigningSecret: "test-signing-secret-32-bytes-minimum",
+  });
+
+  const completion = await mainRunner.run({
+    runnerContext,
+    input: {
+      type: "session_trigger",
+      triggerId: scheduleTriggerId,
+      instruction: "检查 QA Review 并在群里提醒",
+      correlationId: scheduleTriggerId,
+      hops: 2,
+      sourceSessionId: f.session.id,
+      requesterUserId: "colleague",
+      artifactRefs: [],
+      context: { sessionId: f.session.id, candidateOpenTasks: [] },
+    },
+  });
+  expect(completion.status).toBe("completed");
+  const leaked = f.db
+    .select()
+    .from(schema.sessionCommands)
+    .all()
+    .filter(
+      cmd =>
+        cmd.kind === "message.send" &&
+        cmd.originId === scheduleTriggerId &&
+        cmd.dedupeKey.endsWith(":service-final-answer"),
+    );
+  expect(leaked).toHaveLength(0);
 });
 
 test("Protocol v2 rejects x-luna-protocol-version < 2 with HTTP 426 and serves /api/runner/whoami", async () => {

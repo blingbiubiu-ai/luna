@@ -229,6 +229,24 @@ export function isMainSelfRoutineInput(
   return classified.originKind === "self_routine";
 }
 
+export function shouldIgnoreMainTerminalOutput(
+  db: DrizzleDB | undefined,
+  input: MainRunnerInput,
+): boolean {
+  if (db && isHeartbeatSession(db, input.context.sessionId)) return true;
+  if (input.type !== "session_trigger") return false;
+  const classified = resolveMainTriggerClassification(
+    db,
+    input.triggerId,
+    input.sourceSessionId,
+    input.context.sessionId,
+  );
+  return (
+    classified.originKind === "self_routine" ||
+    classified.originKind === "schedule_fired"
+  );
+}
+
 export function resolveMainAllowSilent(
   db: DrizzleDB | undefined,
   input: MainRunnerInput,
@@ -278,8 +296,9 @@ export function buildMainCapabilities(
   }
 
   const isRoutine = originKind === "self_routine";
+  const isScheduleFired = originKind === "schedule_fired";
   const inHeartbeatSession = db ? isHeartbeatSession(db, sessionId) : false;
-  const ignoreTerminal = isRoutine || inHeartbeatSession;
+  const ignoreTerminal = isRoutine || isScheduleFired || inHeartbeatSession;
   const allowSilent = ignoreTerminal ? true : resolveMainAllowSilent(db, input);
   const terminalOutputMode: TerminalOutputMode = ignoreTerminal
     ? "ignored"
@@ -312,7 +331,7 @@ export function buildMainCapabilities(
     },
     commands,
     addressScope: {
-      allowCurrent: !ignoreTerminal && !isMemoryOnly,
+      allowCurrent: !isRoutine && !inHeartbeatSession && !isMemoryOnly,
       allowSelf: !isMemoryOnly,
       allowOwner: !isMemoryOnly,
       allowMain: false,
@@ -439,6 +458,7 @@ export function compactTurnCapabilities(
     routineKind === "heartbeat" ||
     (manifest.identity.runnerKind === "main" &&
       manifest.turn.terminalOutputMode === "ignored" &&
+      manifest.turn.originKind !== "schedule_fired" &&
       !isMemoryRoutine);
   const gov = manifest.outboundGovernance;
   const includeOutboundGovernance =
