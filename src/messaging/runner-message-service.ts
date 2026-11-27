@@ -1,9 +1,9 @@
 import { createHash } from "node:crypto";
-import { eq } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 import { extractReplyEnvelope, parseReply, replyMarkdown, type ReplyDocument } from "@luna/runner-protocol/reply";
 import type { ReplyChannel } from "@/channels/outbound";
 import type { DrizzleDB } from "@/data";
-import { tasks, taskSubscriptions } from "@/data/schema";
+import { channelSurfaces, sessions, tasks, taskSubscriptions } from "@/data/schema";
 import { InvocationService } from "@/runners/invocation-service";
 import type { LunaAccessTokenClaims } from "@/server/auth/access-token-service";
 import { GatewayError } from "@/server/gateway-error";
@@ -174,6 +174,132 @@ export class RunnerMessageService {
   }
 
   /**
+   * Resolves lightweight structured origin context (`sourceSession` and optional
+   * `relatedTask`) for cross-session `say --via-main` delegations so the target
+   * Main understands whether the originating session holds a primary Task.
+   */
+  private resolvePeerOriginContext(
+    actor: RequestActor,
+    relatedTaskId?: string,
+  ): {
+    sourceSession?: { id: string; kind: string; title?: string } | undefined;
+    relatedTask?:
+      | { id: string; title: string; status: string; primarySessionId: string }
+      | undefined;
+  } {
+    const sourceRow = this.db
+      .select({
+        id: sessions.id,
+        kind: sessions.kind,
+        title: sessions.title,
+        channelType: sessions.channel_type,
+        channelId: sessions.channel_id,
+        groupId: sessions.group_id,
+      })
+      .from(sessions)
+      .where(eq(sessions.id, actor.currentSessionId))
+      .get();
+
+    let sourceTitle = sourceRow?.title?.trim() || undefined;
+    if (!sourceTitle && sourceRow?.groupId) {
+      const surface = this.db
+        .select({ displayName: channelSurfaces.displayName })
+        .from(channelSurfaces)
+        .where(
+          and(
+            eq(channelSurfaces.channelType, sourceRow.channelType),
+            eq(channelSurfaces.channelId, sourceRow.channelId),
+            eq(channelSurfaces.externalId, sourceRow.groupId),
+          ),
+        )
+        .get();
+      sourceTitle = surface?.displayName?.trim() || undefined;
+    }
+
+    const sourceSession = sourceRow
+      ? {
+          id: sourceRow.id,
+          kind: sourceRow.kind,
+          ...(sourceTitle ? { title: sourceTitle } : {}),
+        }
+      : undefined;
+
+    if (relatedTaskId) {
+      const taskRow = this.db
+        .select({
+          id: tasks.id,
+          title: tasks.title,
+          status: tasks.status,
+          agentId: tasks.agent_id,
+          shadowId: tasks.shadow_id,
+          primarySessionId: tasks.primary_session_id,
+        })
+        .from(tasks)
+        .where(eq(tasks.id, relatedTaskId))
+        .get();
+      if (!taskRow) {
+        throw new GatewayError("task_not_found", "Task not found", 404);
+      }
+      if (
+        taskRow.agentId !== actor.agentId ||
+        taskRow.shadowId !== actor.shadowId ||
+        taskRow.primarySessionId !== actor.currentSessionId
+      ) {
+        throw new GatewayError(
+          "runner_resource_access_denied",
+          "relatedTaskId must belong to the current session",
+          403,
+        );
+      }
+      return {
+        sourceSession,
+        relatedTask: {
+          id: taskRow.id,
+          title: taskRow.title,
+          status: taskRow.status,
+          primarySessionId: taskRow.primarySessionId,
+        },
+      };
+    }
+
+    // Auto-attach only when the non-heartbeat source session has a single unambiguous active Task.
+    if (sourceRow && sourceRow.kind !== "heartbeat") {
+      const activeTasks = this.db
+        .select({
+          id: tasks.id,
+          title: tasks.title,
+          status: tasks.status,
+          primarySessionId: tasks.primary_session_id,
+        })
+        .from(tasks)
+        .where(
+          and(
+            eq(tasks.agent_id, actor.agentId),
+            eq(tasks.shadow_id, actor.shadowId),
+            eq(tasks.primary_session_id, actor.currentSessionId),
+            inArray(tasks.status, ["queued", "running", "waiting"]),
+          ),
+        )
+        .limit(2)
+        .all();
+      if (activeTasks.length === 1) {
+        const sole = activeTasks[0]!;
+        return {
+          sourceSession,
+          relatedTask: {
+            id: sole.id,
+            title: sole.title,
+            status: sole.status,
+            primarySessionId: sole.primarySessionId!,
+          },
+        };
+      }
+    }
+
+    return { sourceSession };
+  }
+
+  /**
    * One-way message delivery to a target session's Main Runner (`say --via-main` or
    * Task Runner `say --to main` milestone update) without creating a `Request` ticket.
    */
@@ -183,6 +309,7 @@ export class RunnerMessageService {
     targetSessionId: string,
     content: string,
     contextRefs: string[] = [],
+    relatedTaskId?: string,
   ) {
     if (!actor.taskId && targetSessionId === actor.currentSessionId) {
       throw new GatewayError(
@@ -194,6 +321,9 @@ export class RunnerMessageService {
     const source = actor.taskId
       ? `task:${actor.taskId}`
       : `session:${actor.currentSessionId}`;
+    const originContext = actor.taskId
+      ? {}
+      : this.resolvePeerOriginContext(actor, relatedTaskId);
     if (actor.taskId) {
       new TimelineStore(this.db).append({
         taskId: actor.taskId,
@@ -220,6 +350,8 @@ export class RunnerMessageService {
           source,
           content,
           ...(actor.taskId ? { taskId: actor.taskId, taskRunId: actor.taskRunId ?? null } : {}),
+          ...(originContext.sourceSession ? { sourceSession: originContext.sourceSession } : {}),
+          ...(originContext.relatedTask ? { relatedTask: originContext.relatedTask } : {}),
         },
       } as never,
     );

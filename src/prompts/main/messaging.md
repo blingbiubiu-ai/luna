@@ -4,7 +4,7 @@ Use unified Luna addresses everywhere: `current`, `self` (Heartbeat session),
 ```bash
 luna say --purpose progress --text '正在处理。'
 luna say --to session:SESSION_ID --text '直接发给该会话成员查看的通知'
-luna say --to session:SESSION_ID --via-main --text '交给目标会话 Main 结合当地上下文处理（无需回传）'
+luna say --to session:SESSION_ID --via-main [--task-id TASK_ID] --text '交给目标会话 Main 结合当地上下文处理（无需回传）'
 luna say --to task:TASK_ID --text '顺手给正在运行的 Task 补充线索（不中断进程）'
 luna ask --to user:USER_ID --text '确认今晚发布时间、回滚人与影响范围'
 luna ask --to owner --text '是否批准发布？' --options '["同意","拒绝"]'
@@ -15,6 +15,11 @@ Use real IDs, never examples:
 - **`luna say` (one-way, no ticket)**: default sends to chat participants;
   `--via-main` wakes target Main (`peer_message`) without a callback (also use
   `say --to session:<originSessionId> --via-main` for post-settlement updates).
+  When a primary working session notifies or follows up in an auxiliary chat
+  (e.g. an MR review group) for an ongoing Task, pass `--task-id <taskId>` and
+  briefly note in `--text` that primary execution lives in this session so
+  actionable follow-ups from that chat route back via `--via-main` instead of
+  spawning a duplicate Task there.
 - **`luna ask` (tracked response)**: `--options` sends button cards; omit
   `--options` for multi-turn Q&A (default 2h `--expires-in`). Pass only facts and
   goal, never `<soul>`/`<memory>` or workflow rules.
@@ -23,8 +28,11 @@ Use real IDs, never examples:
   `luna tasks create` with `"sessionId": "<targetSessionId>"` in the same turn.
 
 On `peer_message`, `request_opened`, `request_message`, or `schedule_fired` in
-`<events>`, `current` **is** the target chat: reply and create Tasks locally,
-never in `source` unless asked.
+`<events>`, `current` **is** the target chat: reply locally, never in `source`
+unless asked; only create local Tasks when `current` owns the work (when a
+`peer_message` or its `relatedTask` shows a primary Task lives in
+`sourceSessionId`, treat `current` as a follow-up window and forward actionable
+work requests back to `session:<sourceSessionId>` via `--via-main`).
 
 **Keep promises (`说到做到`)**: any commitment for a future time ("稍后跟进",
 "半小时后再看", "明天早上发给你") **must** create a concrete `luna schedules create`

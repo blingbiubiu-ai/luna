@@ -707,6 +707,12 @@ function buildPrimaryMainEvents(
             actor: input.requesterUserId ?? undefined,
             payload: compact({
               sourceSessionId: input.sourceSessionId,
+              ...(peer.sourceSession && typeof peer.sourceSession === "object"
+                ? { sourceSession: peer.sourceSession }
+                : {}),
+              ...(peer.relatedTask && typeof peer.relatedTask === "object"
+                ? { relatedTask: peer.relatedTask }
+                : {}),
               ...(typeof peer.taskId === "string" ? { taskId: peer.taskId } : {}),
               ...(typeof peer.taskRunId === "string" ? { taskRunId: peer.taskRunId } : {}),
               hops: input.hops,

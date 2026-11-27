@@ -131,7 +131,7 @@ function clientHelpText(): string {
     "  luna worker <command>",
     "  luna auth <command>",
     "  luna whoami",
-    "  luna say [--to <address>] [--via-main] (--text <text> | --stdin) [--json] [--purpose progress|answer|notification] [--repeat]",
+    "  luna say [--to <address>] [--via-main [--task-id <id>]] (--text <text> | --stdin) [--json] [--purpose progress|answer|notification] [--repeat]",
     "  luna ask --to <address|main> (--text <text> | --stdin) [--context <text>] [--options '<json-array>'] [--expires-in <duration>] [--wait [<duration>]]",
     "  luna ask reply|message|wait|cancel|get|list ...",
     "  luna commands status|wait <command-id> [--timeout-ms <ms>]",

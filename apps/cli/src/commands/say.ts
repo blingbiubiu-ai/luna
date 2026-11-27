@@ -30,7 +30,7 @@ const LEGACY_TARGET_FLAGS = [
 const SAY_USAGE = [
   "Usage:",
   "  luna say [--to <address>] (--text <text> | --stdin) [--json] [--purpose progress|answer|notification] [--repeat]",
-  "  luna say --to <address> --via-main (--text <text> | --stdin) [--context-ref <artifact-id>...] [--repeat]",
+  "  luna say --to <address> --via-main (--text <text> | --stdin) [--task-id <id>] [--context-ref <artifact-id>...] [--repeat]",
   "Addresses: current (default), owner, main (Task Runner), task:<id>, user:<id>, session:<id>, group:<id>",
 ].join("\n");
 
@@ -137,6 +137,19 @@ export async function runSayCli(
         message: "--via-main requires a non-current target address via --to",
       };
     }
+    const rawTaskId = readOption(argv, "--task-id")?.trim();
+    if (rawTaskId && !viaMain) {
+      return {
+        status: "error",
+        code: "invalid_say_command",
+        message: "--task-id is only supported with --via-main",
+      };
+    }
+    const relatedTaskId = rawTaskId
+      ? rawTaskId.startsWith("task:")
+        ? rawTaskId.slice("task:".length)
+        : rawTaskId
+      : undefined;
     const contextRefs = argv.flatMap((arg, idx) =>
       arg === "--context-ref" &&
       argv[idx + 1] &&
@@ -162,6 +175,7 @@ export async function runSayCli(
     const body = {
       to,
       ...(viaMain ? { viaMain: true } : {}),
+      ...(relatedTaskId ? { relatedTaskId } : {}),
       ...(contextRefs.length > 0 ? { contextRefs } : {}),
       ...(reply ? { reply } : { content: [{ type: "text", text }] }),
       purpose,

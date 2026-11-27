@@ -56,6 +56,7 @@ const bodySchema = z
     target: messageTargetSchema.optional(),
     to: z.string().min(1).max(512).optional(),
     viaMain: z.boolean().default(false),
+    relatedTaskId: z.string().trim().min(1).max(128).optional(),
     contextRefs: z.array(z.string().min(1)).max(20).default([]),
     content: z
       .array(
@@ -233,6 +234,14 @@ export function createRunnerMessageRoutes(
         : resolveMessageTarget(db, parsed.data.target!, actor.currentSessionId, true);
       assertHeartbeatOutboundApproved(db, actor);
 
+      if (parsed.data.relatedTaskId && !parsed.data.viaMain) {
+        throw new GatewayError(
+          "invalid_request",
+          "relatedTaskId is only supported with viaMain",
+          400,
+        );
+      }
+
       // 4) `--via-main` delegates one-way to target session's Main (`session.invoke` `peer_message`) without a Request ticket.
       if (parsed.data.viaMain) {
         const cmd = svc.invokePeer(
@@ -241,6 +250,7 @@ export function createRunnerMessageRoutes(
           target,
           text,
           parsed.data.contextRefs,
+          parsed.data.relatedTaskId,
         );
         return c.json(
           {

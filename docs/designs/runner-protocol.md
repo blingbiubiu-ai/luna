@@ -67,11 +67,17 @@ All cross-session and Main⇄Task communication separates **one-way speech** fro
   - `--to user:<id>|group:<id>|session:<id>`: delivers a message directly to chat
     participants (`message.send`), surfaced on the target session's next Main
     turn via `<history>.deltaContext`.
-  - `--to <address> --via-main`: invokes the target session's Main (`session.invoke`
-    with `peer_message`) so it acts with local context without creating a ticket
-    or return callback. Heartbeat `self` sessions must pass `--via-main` when
-    calling `say`. Also used for post-settlement follow-ups or amendments after
-    a `Request` is already `done`.
+  - `--to <address> --via-main [--task-id <id>]`: invokes the target session's
+    Main (`session.invoke` with `peer_message`) so it acts with local context
+    without creating a ticket or return callback. Service automatically attaches
+    lightweight origin metadata (`sourceSession: { id, kind, title? }`, plus
+    `relatedTask: { id, title, status, primarySessionId }` when `--task-id` is
+    passed or when the non-heartbeat source session has a single unambiguous
+    active Task) so auxiliary chats (such as an MR review group) can route
+    actionable follow-ups back to the primary session via `--via-main` instead
+    of spawning duplicate local Tasks. Heartbeat `self` sessions must pass
+    `--via-main` when calling `say`. Also used for post-settlement follow-ups or
+    amendments after a `Request` is already `done`.
   - `--to main` (Task Runner only): sends a non-terminal milestone update to the
     subscribed Main session (`peer_message`) while keeping the Task container running.
   - `--to task:<id>` (Main/Work Runner): appends a non-disruptive note to
