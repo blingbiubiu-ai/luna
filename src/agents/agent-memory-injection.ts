@@ -8,6 +8,7 @@ const logger = createLogger("agent-memory-injection");
 import {AgentError} from "./agent-store";
 import {memoryAccess, type MemoryInvocation} from "./agent-memory-access";
 import {AgentMemoryStore, type MemoryRecord} from "./agent-memory-store";
+import {LineageMemoryStore, type LineageRecallEntry} from "./lineage-memory-store";
 
 export interface MemoryInjection {
   /** Text appended to the model input, or undefined when there is nothing to tell. */
@@ -72,13 +73,20 @@ export function memoryInjection(db: DrizzleDB, invocation: MemoryInvocation, mes
     shown.push(...rules);
   }
   const recallLimit = new PlatformSettingsStore(db).get().memory.recallLimit;
-  const recalled = message ? store.recall(viewer, message, {limit: recallLimit, exclude: [...seen, ...shown.map(row => row.id)]}) : [];
-  if (recalled.length) sections.push([
+  const excludeIds = [...seen, ...shown.map(row => row.id)];
+  const recalled = message ? store.recall(viewer, message, {limit: recallLimit, exclude: excludeIds}) : [];
+  const remainingSlots = Math.max(0, recallLimit - recalled.length);
+  const lineageRecalled: LineageRecallEntry[] = message && remainingSlots > 0
+    ? new LineageMemoryStore(db).recallDirect(invocation.agentId, message, {limit: remainingSlots, exclude: [...excludeIds, ...recalled.map(r => r.id)]})
+    : [];
+  if (recalled.length || lineageRecalled.length) sections.push([
     "## Agent memory: possibly relevant",
-    "Entries this message brings to mind. They may not apply; read a body with `luna memory get <id>` before relying on one. Other entries exist: `luna memory search <keywords>`.",
+    "Entries this message brings to mind. They may not apply; read a body with `luna memory get <id>` before relying on one. Personal memory takes precedence over inherited lineage memory. Other entries exist: `luna memory search <keywords>` (add `--ancestors` to search older lineage generations).",
     ...lines(db, recalled),
+    ...lineageLines(lineageRecalled),
   ].join("\n"));
   shown.push(...recalled);
+  const shownIds = [...shown.map(row => row.id), ...lineageRecalled.map(entry => entry.memory.id)];
   return {
     text: sections.length ? sections.join("\n\n") : undefined,
     commit: () => {
@@ -88,11 +96,18 @@ export function memoryInjection(db: DrizzleDB, invocation: MemoryInvocation, mes
       if (current === null || !resumed) db.delete(memoryInjectedEntries).where(mine).run();
       if (current === null) { db.delete(memoryInjectionCursors).where(eq(memoryInjectionCursors.runnerContextId, runnerContextId)).run(); return; }
       store.markUsed(recalled.map(row => row.id));
-      if (shown.length) db.insert(memoryInjectedEntries).values(shown.map(row => ({runnerContextId, memoryId: row.id}))).onConflictDoNothing().run();
+      if (shownIds.length) db.insert(memoryInjectedEntries).values(shownIds.map(memoryId => ({runnerContextId, memoryId}))).onConflictDoNothing().run();
       db.insert(memoryInjectionCursors).values({runnerContextId, runnerSessionId: current, injectedThrough: through})
         .onConflictDoUpdate({target: memoryInjectionCursors.runnerContextId, set: {runnerSessionId: current, injectedThrough: through}}).run();
     },
   };
+}
+
+function lineageLines(entries: readonly LineageRecallEntry[]): string[] {
+  return entries.map(entry => {
+    const label = entry.depth === 0 ? `我的传承: ${entry.lineageName}` : `传承: ${entry.lineageName}`;
+    return `- [${entry.memory.id}] (${entry.memory.type} · ${label}) ${entry.memory.title}: ${entry.memory.description} (updated ${new Date(entry.memory.updatedAt).toISOString().slice(0, 10)})`;
+  });
 }
 
 /** `- [id] (type) title: description (from NAME, DATE)`, attribution lets the reader weigh the source. */

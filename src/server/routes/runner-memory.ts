@@ -2,12 +2,13 @@ import {Hono} from "hono";
 import {inArray} from "drizzle-orm";
 import {z} from "zod";
 import type {DrizzleDB} from "@/data";
-import {MEMORY_TYPES, users} from "@/data/schema";
-import {AgentError} from "@/agents/agent-store";
+import {LINEAGE_CONTRIBUTION_KINDS, LINEAGE_MEMORY_TYPES, MEMORY_TYPES, users} from "@/data/schema";
+import {AgentError, AgentStore} from "@/agents/agent-store";
 import {memoryAccess} from "@/agents/agent-memory-access";
 import {memoryOriginOfTrigger} from "@/agents/agent-memory-maintenance";
 import {selfRoutineKindOfTrigger} from "@/agents/self-routines";
 import {AgentMemoryStore, MemoryConflictError, MemoryDuplicateError, MemoryTypeFactsError, memorySummary, type MemoryRecord, MEMORY_BODY_LIMIT, MEMORY_REASON_LIMIT, memorySources} from "@/agents/agent-memory-store";
+import {LineageMemoryStore, MAX_ANCESTOR_LOOKUP_DEPTH} from "@/agents/lineage-memory-store";
 import {InvocationService} from "@/runners/invocation-service";
 import type {LunaAccessTokenClaims} from "../auth/access-token-service";
 import {GatewayError} from "../gateway-error";
@@ -29,6 +30,17 @@ const addBody = z.object({...fields, force: z.boolean().optional()}).strict();
 const updateBody = z.object(fields).partial().extend({expectedRevision: z.number().int().positive(), reason: reasonField, replace: replaceField}).strict()
   .refine(value => value.body === undefined || value.replace === undefined, {message: "Use either body or replace, not both."});
 const revision = z.coerce.number().int().positive();
+const contributeBody = z.object({
+  kind: z.enum(LINEAGE_CONTRIBUTION_KINDS).default("add"),
+  targetLineageMemoryId: z.string().min(1).max(128).nullable().optional(),
+  sourceLocalMemoryId: z.string().min(1).max(128).nullable().optional(),
+  type: z.enum(LINEAGE_MEMORY_TYPES),
+  title: z.string(),
+  description: z.string(),
+  body: z.string(),
+  rationale: z.string().max(500).optional(),
+  batchId: z.string().min(1).max(128).optional(),
+}).strict();
 /** A Runner says why it changes an entry, so the owner can follow its history; adding needs none, the entry is its own reason. */
 const requireReason = (reason: string | undefined) => {
   if (!reason?.trim()) throw new GatewayError("memory_reason_required",
@@ -90,15 +102,103 @@ export function createRunnerMemoryRoutes(options: {db?: DrizzleDB} = {}) {
         {since: query.since, until: query.until, shadowId: query.shadow, withUserId: query.with, limit: query.limit, archived: query.archived === "true"});
       return c.json({episodes: summaries(rows)});
     })
+    .get("/memory/lineage", c => {
+      const {viewer} = access(c.get("lunaAccessTokenClaims"));
+      const chain = new LineageMemoryStore(db()).resolveLineageChain(viewer.agentId);
+      return c.json({
+        ownLineage: chain.ownLineage ? {id: chain.ownLineage.id, name: chain.ownLineage.name, allowAncestorLookup: chain.ownLineage.allowAncestorLookup} : null,
+        ancestors: chain.ancestors.map(a => ({
+          lineageId: a.lineage.id,
+          name: a.lineage.name,
+          sourceAgentName: a.sourceAgentName,
+          depth: a.depth,
+          intakeGuidelines: a.depth === 1 ? a.lineage.intakeGuidelines : undefined,
+        })),
+      });
+    })
+    .post("/memory/contribute", async c => {
+      const {viewer, writer} = access(c.get("lunaAccessTokenClaims"));
+      const author = writer();
+      if (!author.trusted) throw new AgentError("memory_write_forbidden", 403);
+      const input = contributeBody.parse(await c.req.json().catch(() => null));
+      const agent = new AgentStore(db()).get(viewer.agentId);
+      const contribution = new LineageMemoryStore(db()).createContribution({
+        sourceAgentId: viewer.agentId,
+        sourceOwnerAccountId: agent.ownerAccountId,
+        sourceLocalMemoryId: input.sourceLocalMemoryId ?? null,
+        originKind: author.kind === "consolidation" ? "consolidation" : "manual_chat",
+        batchId: input.batchId ?? null,
+        kind: input.kind,
+        targetLineageMemoryId: input.targetLineageMemoryId ?? null,
+        proposedType: input.type,
+        proposedTitle: input.title,
+        proposedDescription: input.description,
+        proposedBody: input.body,
+        rationale: input.rationale ?? "",
+      });
+      return c.json({contribution}, 201);
+    })
     .get("/memory/search", c => {
-      const query = z.object({q: z.string().max(200), type: type.optional(), subject: z.string().optional(), archived: z.enum(["true", "false"]).optional(),
-        limit: z.coerce.number().int().min(1).max(50).default(10)}).parse(c.req.query());
-      const rows = new AgentMemoryStore(db()).search(access(c.get("lunaAccessTokenClaims")).viewer, query.q,
+      const query = z.object({
+        q: z.string().max(200),
+        type: type.optional(),
+        subject: z.string().optional(),
+        archived: z.enum(["true", "false"]).optional(),
+        ancestors: z.enum(["true", "false"]).optional(),
+        maxDepth: z.coerce.number().int().min(1).max(MAX_ANCESTOR_LOOKUP_DEPTH).optional(),
+        limit: z.coerce.number().int().min(1).max(50).default(10),
+      }).parse(c.req.query());
+      const {viewer} = access(c.get("lunaAccessTokenClaims"));
+      const rows = new AgentMemoryStore(db()).search(viewer, query.q,
         {limit: query.limit, archived: query.archived === "true", ...(query.type ? {type: query.type} : {}), ...(query.subject ? {subjectId: query.subject} : {})});
-      return c.json({memories: summaries(rows)});
+      const includeLineage = query.archived !== "true" && !query.subject
+        && (!query.type || (LINEAGE_MEMORY_TYPES as readonly string[]).includes(query.type));
+      const lineageRows = includeLineage
+        ? new LineageMemoryStore(db()).searchForAgent(viewer.agentId, query.q, {
+            ...(query.type ? {type: query.type as typeof LINEAGE_MEMORY_TYPES[number]} : {}),
+            includeAncestors: query.ancestors === "true",
+            ...(query.maxDepth !== undefined ? {maxDepth: query.maxDepth} : {}),
+            limit: query.limit,
+          })
+        : [];
+      return c.json({
+        memories: summaries(rows),
+        lineageMemories: lineageRows.map(entry => ({
+          id: entry.memory.id,
+          type: entry.memory.type,
+          title: entry.memory.title,
+          description: entry.memory.description,
+          revision: entry.memory.revision,
+          updatedAt: entry.memory.updatedAt,
+          lineageId: entry.memory.lineageId,
+          lineageName: entry.lineageName,
+          depth: entry.depth,
+          readOnly: true,
+        })),
+      });
     })
     .get("/memory/:id", c => {
-      const row = new AgentMemoryStore(db()).use(access(c.get("lunaAccessTokenClaims")).viewer, c.req.param("id"));
+      const {viewer} = access(c.get("lunaAccessTokenClaims"));
+      const memoryId = c.req.param("id");
+      if (memoryId.startsWith("lmem_")) {
+        const entry = new LineageMemoryStore(db()).requireReadableMemory(viewer.agentId, memoryId, true);
+        return c.json({
+          memory: {
+            id: entry.memory.id,
+            type: entry.memory.type,
+            title: entry.memory.title,
+            description: entry.memory.description,
+            body: entry.memory.body,
+            revision: entry.memory.revision,
+            updatedAt: entry.memory.updatedAt,
+            lineageId: entry.memory.lineageId,
+            lineageName: entry.lineageName,
+            depth: entry.depth,
+            readOnly: true,
+          },
+        });
+      }
+      const row = new AgentMemoryStore(db()).use(viewer, memoryId);
       // Where each change was made, so the Runner can read the conversation around it.
       const sources = memorySources(db(), row.id).map(({nextEntryId, ...source}) => ({...source, at: new Date(source.at).toISOString(),
         read: `luna sessions timeline --session session:${source.sessionId}${nextEntryId ? ` --before-entry-id ${nextEntryId}` : ""} --limit 20`}));

@@ -1,6 +1,7 @@
 import { createAccountRoutes } from "./routes/accounts";
 import { createPlatformSettingsRoutes } from "./routes/platform-settings";
 import {createPlatformAgentRoutes} from "./routes/platform-agents";
+import {createLineageInvitePublicRoutes} from "./routes/agent-lineages";
 import type {AgentLifecycleJob} from "@/agents/agent-lifecycle-store";
 import { getKernel } from "@/server/routes/kernel";
 import {ModelProviderService} from "@/model-providers/service";
@@ -216,6 +217,7 @@ function createApp(
       .route("/api/accounts", db === undefined ? new Hono() : createAccountRoutes(db))
       .route("/api/platform-settings", db === undefined ? new Hono() : createPlatformSettingsRoutes(db))
       .route("/api/agents",db === undefined ? new Hono() : createPlatformAgentRoutes(db,pluginRegistry,resumeChannels,modelProviders))
+      .route("/api/lineages", db === undefined ? new Hono() : createLineageInvitePublicRoutes(db))
       .route("/",modelProviders ? createModelProviderCallbackRoutes(modelProviders) : new Hono())
       .route("/api/model-providers",modelProviders ? createModelProviderRoutes(modelProviders) : new Hono())
       .route(
@@ -403,6 +405,7 @@ export class HonoServer {
       this._app.get("/", serveAgentShell);
       // Platform pages (outside any Agent) share the Dashboard shell.
       this._app.get("/platform/*", serveAgentShell);
+      this._app.get("/invite/*", serveAgentShell);
       this._app.get("/artifacts/:id/preview", serveArtifactPreviewShell);
       const resolvedWebRoot = resolve(webRoot);
       const gzipAssetCache = new Map<

@@ -8,8 +8,9 @@ import { Input } from "@/components/ui/input";
 import { SelectField } from "@/components/ui/select-field";
 import { Textarea } from "@/components/ui/textarea";
 import { useAgentBasePath, useRouteAgent } from "@/lib/agent-route";
-import { useAgentMemories, useAgentMemoryHistory } from "@/lib/api";
+import { useAgentMemories, useAgentMemoryHistory, useDashboardMe } from "@/lib/api";
 import { MemorySourceLine } from "@/components/memory-source-line";
+import { InheritedMemoryPanel, MyLineagePanel } from "./lineage-panels";
 import { ApiFetchError } from "@/lib/api/client";
 import type {
   DashboardMemory,
@@ -28,7 +29,7 @@ function MemoryPage() {
   return <MemoryWorkspace key={agent.id} agentId={agent.id} agentName={agent.name} defaultShadowId={agent.defaultShadowId} />;
 }
 
-type Surface = "memories" | "persona";
+type Surface = "memories" | "persona" | "inherited" | "lineage";
 type MemoryScope = "active" | "core" | "untrusted" | "archived" | "deleted";
 type PersonaScope = "active" | "deleted";
 
@@ -125,8 +126,15 @@ function TypePill({ type }: { type: DashboardMemoryType }) {
 /** Unified owner workspace for shared Agent memories and per-Shadow persona modules. */
 function MemoryWorkspace({ agentId, agentName, defaultShadowId }: { agentId: string; agentName: string; defaultShadowId: string }) {
   const base = useAgentBasePath();
+  const canPublishLineage = useDashboardMe().data?.canPublishLineage === true;
   const shadows = (useAgentShadows(agentId).data?.shadows ?? []).filter(shadow => shadow.status !== "deleted");
   const [surface, setSurface] = useState<Surface>("memories");
+
+  useEffect(() => {
+    if (surface === "lineage" && !canPublishLineage) {
+      setSurface("memories");
+    }
+  }, [surface, canPublishLineage]);
 
   // Long-term memory filters
   const [memScope, setMemScope] = useState<MemoryScope>("active");
@@ -151,6 +159,8 @@ function MemoryWorkspace({ agentId, agentName, defaultShadowId }: { agentId: str
   const [newPersonaShadow, setNewPersonaShadow] = useState("");
 
   const isMem = surface === "memories";
+  const isPersona = surface === "persona";
+  const isLineageSurface = surface === "inherited" || surface === "lineage";
   const filter: DashboardMemoryFilter = isMem
     ? {
         query,
@@ -288,7 +298,7 @@ function MemoryWorkspace({ agentId, agentName, defaultShadowId }: { agentId: str
                   />
                 </div>
               </div>
-            ) : (
+            ) : isPersona ? (
               <div className={`${sageCardClass} px-3.5 py-2 text-xs`} title="每个分身独立拥有最多 5 条有效人格，每次新会话开始时全文注入">
                 <div className="flex items-center justify-between gap-5">
                   <span className="text-muted-foreground">{activePersonaShadow ? `${activePersonaShadow.name} · 人格配额` : "分身人格配额"}</span>
@@ -301,12 +311,14 @@ function MemoryWorkspace({ agentId, agentName, defaultShadowId }: { agentId: str
                   />
                 </div>
               </div>
-            )}
+            ) : null}
 
-            <Button type="button" size="sm" className="h-9 px-3.5 text-xs" onClick={openCreate}>
-              <Plus className="size-3.5" />
-              {isMem ? "新建记忆" : "新建人格"}
-            </Button>
+            {!isLineageSurface && (
+              <Button type="button" size="sm" className="h-9 px-3.5 text-xs" onClick={openCreate}>
+                <Plus className="size-3.5" />
+                {isMem ? "新建记忆" : "新建人格"}
+              </Button>
+            )}
           </div>
         </div>
 
@@ -330,10 +342,10 @@ function MemoryWorkspace({ agentId, agentName, defaultShadowId }: { agentId: str
             <button
               type="button"
               role="tab"
-              aria-selected={!isMem}
+              aria-selected={isPersona}
               onClick={() => switchSurface("persona")}
               className={`inline-flex cursor-pointer items-center gap-2 rounded-md px-3 py-1 text-xs font-medium transition-all ${
-                !isMem ? "bg-card text-foreground shadow-xs" : "text-muted-foreground hover:text-foreground"
+                isPersona ? "bg-card text-foreground shadow-xs" : "text-muted-foreground hover:text-foreground"
               }`}
             >
               <span>分身人格</span>
@@ -341,6 +353,30 @@ function MemoryWorkspace({ agentId, agentName, defaultShadowId }: { agentId: str
                 <span className="rounded-full bg-secondary px-1.5 font-mono text-xs text-muted-foreground">{stats.activePersonas}</span>
               )}
             </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={surface === "inherited"}
+              onClick={() => switchSurface("inherited")}
+              className={`inline-flex cursor-pointer items-center gap-2 rounded-md px-3 py-1 text-xs font-medium transition-all ${
+                surface === "inherited" ? "bg-card text-foreground shadow-xs" : "text-muted-foreground hover:text-foreground"
+              }`}
+            >
+              <span>已接收传承</span>
+            </button>
+            {canPublishLineage && (
+              <button
+                type="button"
+                role="tab"
+                aria-selected={surface === "lineage"}
+                onClick={() => switchSurface("lineage")}
+                className={`inline-flex cursor-pointer items-center gap-2 rounded-md px-3 py-1 text-xs font-medium transition-all ${
+                  surface === "lineage" ? "bg-card text-foreground shadow-xs" : "text-muted-foreground hover:text-foreground"
+                }`}
+              >
+                <span>我的传承</span>
+              </button>
+            )}
           </div>
 
           {isMem && stats ? (
@@ -367,15 +403,24 @@ function MemoryWorkspace({ agentId, agentName, defaultShadowId }: { agentId: str
                 待确认 <strong className="font-mono font-medium text-foreground">{stats.untrustedMemories}</strong>
               </button>
             </div>
-          ) : (
+          ) : isPersona ? (
             <div className="hidden text-xs text-muted-foreground sm:block">
               仅 Agent 所有者可编辑 · 每次会话启动全文注入 · 不随常规记忆遗忘
+            </div>
+          ) : (
+            <div className="hidden text-xs text-muted-foreground sm:block">
+              独立隔离传承池 · 按需 FTS5 召回 · 支持本地覆写、向上查找记忆与双审反哺
             </div>
           )}
         </div>
       </header>
 
-      {/* Unified Master-Detail Workspace */}
+      {/* Unified Master-Detail Workspace or Lineage Panels */}
+      {surface === "inherited" ? (
+        <InheritedMemoryPanel agentId={agentId} />
+      ) : surface === "lineage" ? (
+        <MyLineagePanel agentId={agentId} agentName={agentName} />
+      ) : (
       <section className="grid min-h-0 flex-1 grid-cols-1 lg:grid-cols-[23.5rem_1fr]">
         {/* Left List Rail */}
         <aside className="flex min-h-0 flex-col border-b border-border bg-sidebar lg:border-r lg:border-b-0">
@@ -1181,6 +1226,7 @@ function MemoryWorkspace({ agentId, agentName, defaultShadowId }: { agentId: str
           </div>
         </article>
       </section>
+      )}
     </main>
   );
 }

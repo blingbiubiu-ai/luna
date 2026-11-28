@@ -15,6 +15,7 @@ export interface PlatformAccountItem {
   readonly updatedAt: number;
   readonly isSuperAdmin: boolean;
   readonly isPlatformAdmin: boolean;
+  readonly canPublishLineage?: boolean;
   readonly agentCount: number;
 }
 
@@ -70,7 +71,18 @@ export function PlatformAccountsPage({ currentAccountId }: { readonly currentAcc
     onError: (err: Error) => setActionError(err.message),
   });
 
-  const busy = toggleAdmin.isPending || toggleStatus.isPending || removeAccount.isPending;
+  const toggleLineagePublish = useMutation({
+    mutationFn: ({ id, canPublishLineage }: { id: string; canPublishLineage: boolean }) =>
+      apiFetch<{ account: PlatformAccountItem }>(`/accounts/${encodeURIComponent(id)}/lineage-publish`, {
+        method: "PUT",
+        body: JSON.stringify({ canPublishLineage }),
+      }),
+    onMutate: () => setActionError(null),
+    onSuccess: invalidateAll,
+    onError: (err: Error) => setActionError(err.message),
+  });
+
+  const busy = toggleAdmin.isPending || toggleStatus.isPending || toggleLineagePublish.isPending || removeAccount.isPending;
 
   return (
     <main className="mx-auto w-full min-w-0 max-w-4xl space-y-6 p-6" data-testid="platform-accounts-page">
@@ -112,6 +124,7 @@ export function PlatformAccountsPage({ currentAccountId }: { readonly currentAcc
           confirmDeleteId={confirmDeleteId}
           onConfirmDeleteChange={setConfirmDeleteId}
           onToggleAdmin={(id, next) => toggleAdmin.mutate({ id, isPlatformAdmin: next })}
+          onToggleLineagePublish={(id, next) => toggleLineagePublish.mutate({ id, canPublishLineage: next })}
           onToggleStatus={(id, next) => toggleStatus.mutate({ id, status: next })}
           onDelete={(id) => removeAccount.mutate(id)}
         />
@@ -127,6 +140,7 @@ export function PlatformAccountsList({
   confirmDeleteId,
   onConfirmDeleteChange,
   onToggleAdmin,
+  onToggleLineagePublish,
   onToggleStatus,
   onDelete,
 }: {
@@ -136,6 +150,7 @@ export function PlatformAccountsList({
   readonly confirmDeleteId: string | null;
   readonly onConfirmDeleteChange: (id: string | null) => void;
   readonly onToggleAdmin: (id: string, isPlatformAdmin: boolean) => void;
+  readonly onToggleLineagePublish?: (id: string, canPublishLineage: boolean) => void;
   readonly onToggleStatus: (id: string, status: "active" | "disabled") => void;
   readonly onDelete: (id: string) => void;
 }) {
@@ -205,6 +220,11 @@ export function PlatformAccountsList({
                       已停用
                     </span>
                   )}
+                  {account.canPublishLineage && (
+                    <span className="inline-flex items-center rounded-full bg-secondary px-2 py-0.5 text-xs font-medium text-secondary-foreground">
+                      可开启传承
+                    </span>
+                  )}
                   {isSelf && (
                     <span className="inline-flex items-center rounded-full border px-2 py-0.5 text-xs text-muted-foreground">
                       当前登录
@@ -220,8 +240,20 @@ export function PlatformAccountsList({
             </div>
 
             <div className="flex shrink-0 flex-wrap items-center gap-2">
+              {onToggleLineagePublish && !confirmingDelete && (
+                <Button
+                  size="sm"
+                  variant={account.canPublishLineage ? "outline" : "secondary"}
+                  disabled={busy || (!account.canPublishLineage && account.status !== "active")}
+                  title={!account.canPublishLineage && account.status !== "active" ? "请先启用该账号" : undefined}
+                  data-testid={`toggle-lineage-publish-${account.id}`}
+                  onClick={() => onToggleLineagePublish(account.id, !account.canPublishLineage)}
+                >
+                  {account.canPublishLineage ? "关闭传承权限" : "允许开启传承"}
+                </Button>
+              )}
               {account.isSuperAdmin ? (
-                <span className="text-xs text-muted-foreground">内置超级管理员（不可变更）</span>
+                <span className="text-xs text-muted-foreground">内置超级管理员</span>
               ) : confirmingDelete ? (
                 <>
                   <Button

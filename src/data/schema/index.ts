@@ -53,6 +53,7 @@ export * from "./shadow-worker-routing";
 export * from "./shadow-model-selection";
 
 export * from "./agent-memories";
+export * from "./lineage-memories";
 export * from "./shadow-root-access";
 export * from "./agent-settings";
 export * from "./chat-listening";

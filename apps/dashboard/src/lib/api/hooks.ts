@@ -524,6 +524,7 @@ export function useDashboardMe() {
         account?: { id: string; displayName: string; provider?: string };
         isPlatformAdmin: boolean;
         isSuperAdmin?: boolean;
+        canPublishLineage?: boolean;
       }>("/auth/me"),
   });
 }

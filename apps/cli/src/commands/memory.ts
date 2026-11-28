@@ -4,7 +4,9 @@ import { callUnifiedService, servicePathWithQuery } from "@luna/cli-support/serv
 
 const usage = [
   "luna memory list [--type persona|person|chat|feedback|project|procedure|reference|episode] [--limit N]",
-  "luna memory search <keywords> [--type T] [--subject USER_ID] [--archived]   # --archived searches forgotten entries",
+  "luna memory search <keywords> [--type T] [--subject USER_ID] [--archived] [--ancestors] [--max-depth N]   # --ancestors searches older lineage generations",
+  "luna memory lineage   # show current inherited lineage chain",
+  "luna memory contribute --kind add|update [--target LMEM_ID] --type procedure|feedback|reference|project --title TITLE --description DESC [--source-memory MEM_ID] [--rationale WHY] (--body TEXT | --stdin)",
   "luna memory timeline [--since 7d|YYYY-MM-DD] [--until YYYY-MM-DD] [--shadow SHADOW_ID] [--with USER_ID] [--limit N] [--archived]   # what happened, newest first",
   "luna memory get <id>",
   "luna memory add --type T --title TITLE --description DESC [--subject USER_ID] [--visibility agent|shadow] [--expires YYYY-MM-DD] [--core true] [--force] (--body TEXT | --stdin)",
@@ -22,12 +24,13 @@ const usage = [
   "  reference  where something is found: a link, path or 《document name》; must contain one",
   "  persona    who this Shadow is (Agent owner only); episode is written by memory reflection",
 ].join("\n");
-const SEARCH_VALUE_OPTIONS = new Set(["--type", "--subject", "--limit"]);
+const SEARCH_VALUE_OPTIONS = new Set(["--type", "--subject", "--limit", "--max-depth"]);
 const KNOWN_FLAGS = new Set([
   "--type", "--title", "--description", "--subject", "--visibility", "--expires", "--core",
   "--body", "--stdin", "--force", "--expected-revision", "--reason", "--superseded-by",
   "--replace-old", "--replace-new", "--since", "--until", "--shadow", "--with", "--limit",
-  "--archived", "--help", "-h",
+  "--archived", "--ancestors", "--max-depth", "--kind", "--target", "--source-memory", "--rationale", "--batch-id",
+  "--help", "-h",
 ]);
 
 /** Agent memory for the current invocation; Service derives scope and write authority from the token. */
@@ -100,6 +103,25 @@ export async function runMemoryCli(argv: readonly string[], env: Env, readStdin:
       });
     };
     if (command === "list") return callUnifiedService(env, {method: "GET", path: servicePathWithQuery("/api/runner/memory", {type: option("--type"), limit: option("--limit")})});
+    if (command === "lineage") return callUnifiedService(env, {method: "GET", path: "/api/runner/memory/lineage"});
+    if (command === "contribute") {
+      if (hasFlag(argv, "--stdin") && option("--body") !== undefined) throw new Error("use either --body or --stdin, not both");
+      return callUnifiedService(env, {
+        method: "POST",
+        path: "/api/runner/memory/contribute",
+        body: bodyWithDefinedValues({
+          kind: option("--kind") ?? "add",
+          targetLineageMemoryId: option("--target"),
+          sourceLocalMemoryId: option("--source-memory"),
+          type: option("--type"),
+          title: option("--title"),
+          description: option("--description"),
+          body: hasFlag(argv, "--stdin") ? await readStdin() : option("--body"),
+          rationale: option("--rationale"),
+          batchId: option("--batch-id"),
+        }),
+      });
+    }
     if (command === "search") {
       // Keywords are the words that are neither flags nor flag values, wherever they appear.
       const words: string[] = [];
@@ -110,7 +132,14 @@ export async function runMemoryCli(argv: readonly string[], env: Env, readStdin:
       }
       const q = words.join(" ").trim();
       if (!q) throw new Error("missing search keywords");
-      return callUnifiedService(env, {method: "GET", path: servicePathWithQuery("/api/runner/memory/search", {q, type: option("--type"), subject: option("--subject"), archived: hasFlag(argv, "--archived") ? "true" : undefined})});
+      return callUnifiedService(env, {method: "GET", path: servicePathWithQuery("/api/runner/memory/search", {
+        q,
+        type: option("--type"),
+        subject: option("--subject"),
+        archived: hasFlag(argv, "--archived") ? "true" : undefined,
+        ancestors: hasFlag(argv, "--ancestors") ? "true" : undefined,
+        maxDepth: option("--max-depth"),
+      })});
     }
     if (command === "timeline") {
       /** A duration such as 7d or 12h counts back from now; a date is read as given. */

@@ -397,7 +397,33 @@ the Executor (shipped with the Worker) must be upgraded together.
 - A Work session whose provider context was reset (changed instructions or
   model) before its reflection ran is skipped, so that stretch of work leaves
   no episode.
-- Old episodes are archived one by one; they are not condensed into digests. A
+- Old episodes are archived one by one; they are not condensed into digests.
+
+## Inherited Memory (Lineage)
+
+An Agent may optionally enable an outbound **Lineage** (`agent_lineages`) and/or
+subscribe to at most one direct master Lineage (`lineage_subscriptions`).
+
+- **Physical isolation:** Inherited entries live in `lineage_memories` (indexed
+  by FTS5 `lineage_memory_terms`, with full revision history in
+  `lineage_memory_revisions`), completely separate from private `agent_memories`.
+  Only `procedure`, `feedback`, `reference`, and `project` entries are allowed.
+  Private `reflection` and `consolidation` never mutate `lineage_memories`.
+- **Single-hop recall & explicit ancestor lookup:** Per-turn recall searches
+  private memory first and fills remaining `memory.recallLimit` slots from own
+  and direct master lineage memory (no lineage core entries). Local
+  `lineage_memory_overrides` allow muting or forking/overriding individual
+  entries. Runners can explicitly traverse older lineage generations via
+  `luna memory search <keywords> --ancestors` and `luna memory lineage`, bounded
+  by cycle checks, active links, `allow_ancestor_lookup`, and a max depth of 5.
+- **Invites & onboarding:** Shareable invite links (`lineage_invites`, token
+  stored hashed) allow new users to create an Agent pre-seeded with the
+  lineage's `personaTemplates` or attach an existing Agent.
+- **Two-stage contributions:** Disciple Agents propose `add` or `update`
+  contributions (`lineage_contributions`) during `consolidation` or manually via
+  `luna memory contribute` / Dashboard. Proposals require disciple owner review
+  (`pending_owner`) before reaching the direct lineage's owner/maintainers
+  (`pending_lineage`), who merge approved changes into `lineage_memories`. A
   digest would be visible to everyone who took part in any of its episodes and
   so leak the others.
 - Recall and duplicate detection match terms, not meaning.

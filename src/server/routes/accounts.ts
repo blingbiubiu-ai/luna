@@ -7,6 +7,7 @@ import type { DrizzleDB } from "@/data";
 import { accessTokens, accounts, authorizationRules, lunaAgents } from "@/data/schema";
 import { deleteAccount } from "@/dashboard-api/deletion";
 import { isSuperAdminAccountId } from "@/identity/account-store";
+import { canAccountPublishLineage, setAccountPublishLineage } from "@/agents/lineage-memory-store";
 import { isGuardResponse, requireAdmin } from "../auth/guards";
 import { AuthorizationRuleStore } from "../policy/authorization-rule-store";
 import { isPlatformAdministrator, isSuperAdministrator } from "../policy/platform-administrator";
@@ -17,6 +18,10 @@ const adminBodySchema = z.object({
 
 const statusBodySchema = z.object({
   status: z.enum(["active", "disabled"]),
+}).strict();
+
+const lineagePublishBodySchema = z.object({
+  canPublishLineage: z.boolean(),
 }).strict();
 
 /** Platform accounts and administrator grants: managed by platform administrators and the built-in super administrator. */
@@ -127,6 +132,24 @@ export function createAccountRoutes(db: DrizzleDB) {
       const updated = db.select().from(accounts).where(eq(accounts.id, targetId)).get()!;
       return c.json({ account: serializeAccount(db, updated, agentCountForOwner(db, targetId)) });
     })
+    .put("/:id/lineage-publish", async (c) => {
+      const admin = requireAdmin(c);
+      if (isGuardResponse(admin)) return admin;
+      const targetId = c.req.param("id");
+      const parsed = lineagePublishBodySchema.safeParse(await c.req.json().catch(() => null));
+      if (!parsed.success) {
+        return c.json({ status: "error", code: "invalid_request", message: "请求参数无效。" }, 400);
+      }
+      const target = db.select().from(accounts).where(eq(accounts.id, targetId)).get();
+      if (!target || target.status === "deleted") {
+        return c.json({ status: "error", code: "account_not_found", message: "账号不存在。" }, 404);
+      }
+      if (parsed.data.canPublishLineage && target.status !== "active") {
+        return c.json({ status: "error", code: "account_inactive", message: "请先启用该账号，再授予开启传承权限。" }, 409);
+      }
+      setAccountPublishLineage(db, targetId, parsed.data.canPublishLineage);
+      return c.json({ account: serializeAccount(db, target, agentCountForOwner(db, targetId)) });
+    })
     .delete("/:id", (c) => {
       const admin = requireAdmin(c);
       if (isGuardResponse(admin)) return admin;
@@ -144,6 +167,7 @@ function serializeAccount(
     ...account,
     isSuperAdmin: isSuperAdministrator(db, account.id),
     isPlatformAdmin: isPlatformAdministrator(db, account.id),
+    canPublishLineage: canAccountPublishLineage(db, account.id),
     agentCount,
   };
 }

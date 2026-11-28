@@ -30,6 +30,7 @@ import {
   requireDashboardOnly,
 } from "../auth/guards";
 import { isPlatformAdministrator, isSuperAdministrator } from "../policy/platform-administrator";
+import { canAccountPublishLineage } from "@/agents/lineage-memory-store";
 import { getKernel } from "./kernel";
 
 export interface AuthRouteOptions {
@@ -96,6 +97,10 @@ export function createAuthRoutes(
         isSuperAdmin: (() => {
           const db = authDb(options);
           return db !== undefined && account !== undefined && isSuperAdministrator(db, account.id);
+        })(),
+        canPublishLineage: (() => {
+          const db = authDb(options);
+          return db !== undefined && account !== undefined && canAccountPublishLineage(db, account.id);
         })(),
         ...(current.authKind === "luna-access-token"
           ? {

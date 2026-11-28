@@ -11,6 +11,7 @@ import { Toaster } from "@/components/ui/sonner";
 import { PluginDetailDashboard, PluginsDashboard } from "@/app/plugins/plugins-dashboard";
 import { PlatformAccountsPage } from "@/app/platform-accounts";
 import { PlatformSettingsPage } from "@/app/platform-settings";
+import { LineageInvitePage } from "@/app/lineage-invite";
 import {
   useDashboardAgents, useDashboardMe, useDisablePlugin, useEnablePlugin, usePlugin, usePlugins,
   useRefreshPlugins, useRollbackPlugin, useUpgradePlugin,
@@ -25,9 +26,13 @@ export function PlatformShell({ pathname }: { readonly pathname: string }) {
   const me = useDashboardMe();
   const isAdmin = me.data?.isPlatformAdmin === true;
   const detail = /^\/platform\/plugins\/([^/]+)$/.exec(path);
+  const inviteMatch = /^\/invite\/([^/]+)$/.exec(path);
   let title = "Agents";
   let page: ReactNode = <AgentsLanding />;
-  if (path === "/platform/settings") {
+  if (inviteMatch) {
+    title = "接收传承记忆";
+    page = <LineageInvitePage token={decodeURIComponent(inviteMatch[1]!)} />;
+  } else if (path === "/platform/settings") {
     title = "设置";
     page = me.isPending
       ? <p role="status" className="p-6">正在加载…</p>
