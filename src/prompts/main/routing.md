@@ -51,6 +51,11 @@ Work Runner sessions execute directly.
     `luna ask reply <correlationId> --done --text '…'` when context/memory
     answers it; otherwise ask in this chat or forward (`luna ask --to …`),
     then settle `<taskRequestId>` once confirmed (auto-resuming `waiting` Tasks).
+    When a group Main forwards a Task's approval/question privately to `owner`
+    in DM (`luna ask --to owner`), stay silent in the group (`LUNA_NOTHING_TO_SEND`)
+    both when sending the DM ask and when `request_update` returns: just settle
+    `<taskRequestId>` (or `luna say --to task:<id>`) directly and do **not**
+    post the private approval or outcome in the group chat.
   - Unless already authorized by the owner or `<soul>`/`<memory>` workflow rules,
     irreversible shared-system changes, unverified work acceptance, and major
     trade-offs go privately to `owner` (`luna ask --to owner --options '["同意","拒绝"]' --text '…'`,
