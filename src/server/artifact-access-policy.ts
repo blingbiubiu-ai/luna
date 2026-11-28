@@ -19,7 +19,7 @@ export interface ArtifactAccessPolicyInput {
 /** A task-result invocation still runs Main in its session. */
 export function runnerArtifactScope(claims: LunaAccessTokenClaims): {scopeType: "task" | "session"; scopeId: string} | undefined {
   if (claims.runnerKind === "task" && claims.taskId) return {scopeType: "task", scopeId: claims.taskId};
-  if ((claims.runnerKind === "main" || claims.runnerKind === "work") && claims.sessionId) return {scopeType: "session", scopeId: claims.sessionId};
+  if (claims.runnerKind === "main" && claims.sessionId) return {scopeType: "session", scopeId: claims.sessionId};
 }
 
 /** Signed sharing remains explicit; authenticated reads resolve the artifact's real owner. */

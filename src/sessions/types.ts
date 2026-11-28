@@ -198,7 +198,7 @@ export interface ResolveSessionSurfaceInput {
   readonly rootMessageId?: string;
   readonly parentMessageId?: string;
   readonly createThreadLaunchContext?: boolean;
-  readonly kind?: "main" | "work";
+  readonly kind?: "main";
 }
 
 /**

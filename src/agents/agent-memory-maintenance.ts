@@ -2,6 +2,7 @@ import {and, asc, desc, eq, or, sql} from "drizzle-orm";
 import type {DrizzleDB} from "@/data";
 import {agentMemories, lunaAgents, memoryConsolidations, memoryReflectionCheckpoints, sessionCommands, sessions} from "@/data/schema";
 import {AgentMemoryStore, type MemoryRecord} from "./agent-memory-store";
+import {LineageMemoryStore} from "./lineage-memory-store";
 import {AgentStore} from "./agent-store";
 import type {SessionCommand, SessionCommandService} from "@/messaging/session-command-service";
 import type {MemoryOriginKind} from "@/data/schema";
@@ -126,7 +127,7 @@ export function createMemoryReflectionRoutine(idleMs: number): SelfRoutine<Refle
         JOIN users ou ON ou.agent_id = a.id AND ou.account_id = a.owner_account_id
         JOIN users u ON u.id = m.sender_user_id
         LEFT JOIN memory_reflection_checkpoints c ON c.session_id = s.id
-        WHERE s.status = 'active' AND s.kind IN ('main', 'work') AND a.status = 'active'
+        WHERE s.status = 'active' AND s.kind = 'main' AND a.status = 'active'
           AND m.role = 'user' AND m.deleted_at IS NULL AND u.kind = 'human' AND u.status = 'active'
           AND m.created_at > ${now - REFLECTION_LOOKBACK_MS} AND m.created_at > coalesce(c.reflected_through, 0)
           AND (
@@ -160,7 +161,7 @@ export function createMemoryReflectionRoutine(idleMs: number): SelfRoutine<Refle
         LEFT JOIN users cu ON cu.id = tk.creator_user_id AND cu.kind = 'human' AND cu.status = 'active'
         LEFT JOIN memory_reflection_checkpoints c ON c.session_id = s.id
         WHERE tr.kind = 'task_result' AND tr.status = 'completed'
-          AND s.status = 'active' AND s.kind IN ('main', 'work') AND a.status = 'active'
+          AND s.status = 'active' AND s.kind = 'main' AND a.status = 'active'
           AND tr.updated_at > ${now - REFLECTION_LOOKBACK_MS} AND tr.updated_at > coalesce(c.reflected_through, 0)`);
       const bySession = new Map<string, typeof rows>();
       for (const row of [...rows, ...results].sort((x, y) => x.createdAt - y.createdAt)) {
@@ -220,7 +221,11 @@ const describe = (row: MemoryRecord) => `[${row.id}] (${[row.type, row.trusted ?
   `updated ${day(row.updatedAt)}`, ...(row.core ? ["core"] : []), ...(row.visibility === "shadow" ? ["Shadow-private"] : []),
   ...(row.expiresAt ? [`expires ${day(row.expiresAt)}`] : [])].join(", ")}) ${inert(row.title)}: ${inert(row.description)}`;
 
-const consolidationInstruction = (today: string, groups: readonly {entry: MemoryRecord; related: readonly MemoryRecord[]}[]) => `Memory consolidation. This is an internal Luna maintenance turn, not a message from a user. Today is ${today}.
+const consolidationInstruction = (
+  today: string,
+  groups: readonly {entry: MemoryRecord; related: readonly MemoryRecord[]}[],
+  lineage?: {name: string; intakeGuidelines: string} | null,
+) => `Memory consolidation. This is an internal Luna maintenance turn, not a message from a user. Today is ${today}.
 
 The numbered entries below were added or changed since the last consolidation. Under each are existing entries, of any type, whose wording resembles it. The numbered entries may also duplicate each other. In this turn \`luna memory\` reaches every active entry of this Agent, including entries private to one Shadow and entries about people. Read bodies with \`luna memory get <id>\` before deciding.
 
@@ -235,7 +240,15 @@ For each numbered entry:
 - An entry of origin \`migration\` that holds several facts: add one correctly typed entry per fact, then delete the original with \`--reason "split into <new ids>"\`.
 - Otherwise leave it alone.
 
-Every update and delete takes \`--reason\`: one line on why, which the Agent owner reads in the entry's history. Do not invent facts or change what an entry means. Keep each entry's subject and visibility, never turn a Shadow-private entry into a shared one, and do not change which entries are core. Changing nothing is a correct result.
+Every update and delete takes \`--reason\`: one line on why, which the Agent owner reads in the entry's history. Do not invent facts or change what an entry means. Keep each entry's subject and visibility, never turn a Shadow-private entry into a shared one, and do not change which entries are core. Changing nothing is a correct result.${lineage ? `
+
+Inherited lineage contribution check:
+This Agent subscribes to the inherited lineage "${inert(lineage.name)}".${lineage.intakeGuidelines ? `\nIntake guidelines: ${inert(lineage.intakeGuidelines)}` : ""}
+After finishing private memory consolidation above, inspect the numbered **trusted** entries of type \`procedure\`, \`feedback\`, \`reference\`, or \`project\`. If an entry captures broadly reusable team knowledge that fits the intake guidelines:
+1. Search existing lineage memory with \`luna memory search <keywords>\` to check whether a matching lineage entry (\`lmem_...\`) already exists.
+2. Remove personal preferences, private names, and confidential details so the wording is clean and team-ready.
+3. Propose at most 3 high-value contributions using \`luna memory contribute --kind add|update [--target <lmem_id>] --type TYPE --title TITLE --description DESC --source-memory <mem_id> --rationale WHY --body BODY\`.
+These proposals go to the Agent owner for approval first and never write directly to the lineage.` : ""}
 
 Do not send any message and do not create or change tasks.`;
 
@@ -304,7 +317,13 @@ export function createMemoryConsolidationRoutine(intervalMs: number): SelfRoutin
     },
     actorUserId: ({db}, candidate) => new AgentStore(db).ownerUserId(candidate.agent.id),
     originId: ({now}, candidate) => `${CONSOLIDATION_ORIGIN}${candidate.agent.id}:${now}`,
-    instruction: ({now}, candidate) => consolidationInstruction(day(now), candidate.groups),
+    instruction: ({db, now}, candidate) => {
+      const sub = new LineageMemoryStore(db).getActiveSubscription(candidate.agent.id);
+      const lineage = sub && sub.subscription.status === "active"
+        ? {name: sub.lineage.name, intakeGuidelines: sub.lineage.intakeGuidelines}
+        : null;
+      return consolidationInstruction(day(now), candidate.groups, lineage);
+    },
     onQueued({db, now}, candidate, command) {
       // With a backlog left, the next batch does not wait a whole interval.
       const ranAt = candidate.hasBacklog ? now - intervalMs + CONSOLIDATION_BACKLOG_RETRY_MS : now;

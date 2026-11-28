@@ -114,7 +114,7 @@ becomes the Job's `timeoutMs` when the run's Job is created
 (`jobTimeoutMs` in `src/runners/runtime-agent-transport.ts`). Executor stops a
 run that passes it with `execution_timeout`; the run fails, Main is told, and
 the Task can be restarted. A changed setting applies to runs started afterwards.
-Main and Work turns keep the platform-wide `execution.containerTimeoutMs` setting (`platform_settings`, managed on Dashboard `/platform/settings`).
+Main turns keep the platform-wide `execution.containerTimeoutMs` setting (`platform_settings`, managed on Dashboard `/platform/settings`).
 
 Task Jobs use the scope `task:<task-id>:<runner-type>` and carry the task and Task Run IDs in their Job credentials. In isolated mode, Worker provides a container for the scope. In shared mode, Task uses the common Executor. Both modes use the public HOME and a task-specific working directory. Runtime and Executor serialize executions for the same context: `executeTaskRun` waits for any superseded (`revoked`) invocation of the Task to settle before resolving `runnerContext` and materializing the next run's prompt, and `ContextPreparationManager` returns retryable `503 context_busy` while a prior invocation's job on the same Worker is still draining. Worker retains context data after container reaping.
 
@@ -255,7 +255,7 @@ is also supported; CLI derives `Idempotency-Key` automatically), or suspends via
 `luna tasks pause [--wake-in <duration>] --reason "..."`. `luna commands status COMMAND_ID`
 reads receipts (`POST /api/runner/task-reports`, `POST /api/runner/task-reports/pause`,
 and `GET /api/runner/commands/:id`). Only the current active Task invocation may
-submit a report or pause; Main and Work cannot use this capability.
+submit a report or pause; Main cannot use this capability.
 
 Before accepting `submit` or `pause`, `TaskReportService` checks `task_inbox_events`
 for unread updates (`409 unread_updates_pending`), ensuring the model sees any

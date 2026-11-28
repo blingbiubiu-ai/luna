@@ -64,34 +64,6 @@ for (const checkpoint of [false, true]) {
   });
 }
 
-test("Work session reset commits with the event cursor and replay cannot erase a newer session", () => {
-  const root = mkdtempSync(join(tmpdir(), "luna-work-resume-"));
-  const sqlite = new Database(":memory:"); const db = drizzle(sqlite);
-  migrate(db, { migrationsFolder: "src/data/drizzle" });
-  fixtureNamedSession(db, "session");
-  const store = new InvocationStore(db);
-  try {
-    db.insert(runnerContexts).values(fixtureRunnerContext(db, { id: "work-context", owner_type: "session", owner_id: "session", runner_type: "codex", runner_root_path: root, runner_session_id: "stale", created_at: 0, updated_at: 0 })).run();
-    store.register({ agentConfig:fixtureExecutionReference(db,"work-context"), id: "work-inv", runnerKind: "work", actorUserId: "user:user", runnerContextId: "work-context", sessionId: "session", taskId: null, taskRunId: null, originId: "turn", inputSnapshot: decodeInvocation({version: 1, kind: "work", input: {sessionId: "session", runnerContextId: "work-context", turnId: "turn"}}), contextPackIds: [] });
-    store.createJob("runtime", { version: 2, ...fixtureInvocationJobScope(db, store, "work-inv", root), jobId: "work-job", invocationId: "work-inv", environmentId: "luna", runnerContextId: "work-context", scopeKey: "session:work-context", runnerKind: "work", sessionId: "session", input: { runnerType: "codex", prompt: "original", sessionId: "stale" }, credentialsRevision: 1, timeoutMs: 10000 });
-    store.consume({ jobId: "work-job", seq: 1, kind: "execution", data: { event: { seq: 1, at: 1, kind: "provider", data: { status: "init", sessionId: "stale" } } } }, () => {});
-    const event = { jobId: "work-job", seq: 2, kind: "execution" as const, data: { event: { seq: 2, at: 2, kind: "state", data: { jobId: "work-job", assignmentId: "assignment", instanceId: "instance", bootId: "boot", streamId: "stream", requestHash: "hash", state: "retry_wait", lastSeq: 2, createdAt: 1,
-      retry: { attempt: 1, totalRetries: 1, consecutiveRetries: 1, deadlineAt: 10000, nextRetryAt: 100, reason: "session_unusable" } } } } };
-    const session = () => db.select().from(runnerContexts).where(eq(runnerContexts.id, "work-context")).get()!.runner_session_id;
-    expect(() => store.consume(event, () => { throw new Error("rollback"); })).toThrow("rollback");
-    expect(session()).toBe("stale"); expect(store.job("work-job")!.cursor).toBe(1);
-    expect(store.consume(event, () => {})).toBe(true);
-    expect(session()).toBeNull(); expect(store.job("work-job")!.providerState).not.toHaveProperty("sessionId");
-    db.update(runnerContexts).set({ runner_session_id: "fresh" }).where(eq(runnerContexts.id, "work-context")).run();
-    expect(store.consume(event, () => { throw new Error("must not project twice"); })).toBe(false);
-    expect(session()).toBe("fresh");
-    expect(store.require("work-inv").activeJobId).toBe("work-job");
-  } finally {
-    sqlite.close();
-    rmSync(root, { recursive: true, force: true });
-  }
-});
-
 for (const delivery of ["live", "reattach", "reattach-live", "snapshot", "partial", "partial-success", "empty", "missing-final"] as const) {
   test(`Main completion survives a missing success event with ${delivery} output`, async () => {
     const root = mkdtempSync(join(tmpdir(), "luna-terminal-output-"));

@@ -211,7 +211,7 @@ This preserves the old "recent local context" meaning while giving first activat
 
 ### Out-of-Band Assistant Messages in `deltaContext`
 
-Assistant messages written into a session outside its own Main/Work Runner turns—cross-session `luna ask --options` cards, cross-session `say`, scheduled `message.send` occurrences, self-routine notifications, and Service diagnostics—never enter `session_inbox` or the provider session's native transcript. `TurnDeltaSelector` (`src/context/turn-delta-selector.ts`) surfaces unseen delivered (`status = "sent"`) out-of-band assistant messages once into `<history>.deltaContext` across all Main turn flavors (`user_messages`, `session_trigger`, and `task_result`):
+Assistant messages written into a session outside its own Main Runner turns—cross-session `luna ask --options` cards, cross-session `say`, scheduled `message.send` occurrences, self-routine notifications, and Service diagnostics—never enter `session_inbox` or the provider session's native transcript. `TurnDeltaSelector` (`src/context/turn-delta-selector.ts`) surfaces unseen delivered (`status = "sent"`) out-of-band assistant messages once into `<history>.deltaContext` across all Main turn flavors (`user_messages`, `session_trigger`, and `task_result`):
 
 - **Authorship tagging**: `SessionCommandService.accept()` records `payload.authoredBy: "runner" | "cross_session" | "service"` on every `message.send` command (falling back to session/invocation lineage for pre-existing rows). Runner-authored replies in the current session and Task status/result cards are excluded; deferred quiet-hours sends are withheld until released and delivered.
 - **Once-per-provider-context deduplication**: entries attached to completed `session_turns`, recorded in the context's `launchSeed`, or belonging to a `turn_delta` / `group_activation` pack whose invocation already delivered input to the provider session are skipped. Failed turns that never reached provider session init retry on the next turn.
@@ -240,9 +240,8 @@ Known Worker admission, availability and model configuration failures have
 actionable messages; other failures use a generic diagnostic without exposing
 raw exception details. This does not retry execution or change Worker admission.
 An already accepted answer (including pending or ambiguous delivery) suppresses
-the diagnostic. Cancellation, Runtime detachment and Work Runner's separate
-failure/status-card path do not create this reply. The turn ID and fixed command
-key deduplicate diagnostics across replay; raw errors remain in the failed turn.
+the diagnostic. Cancellation and Runtime detachment do not create this reply.
+The turn ID and fixed command key deduplicate diagnostics across replay; raw errors remain in the failed turn.
 
 Provider-call recovery is below this module's interface. Main Runner submits one
 logical invocation to `ContainerAgentRunner`; it does not parse Claude or Codex
@@ -250,17 +249,10 @@ error strings and does not resubmit prompts itself. The runner sandbox
 normalizes provider failures and owns bounded transient retry before returning
 either a completed execution stream or a terminal failure.
 
-Main Runner and Work Runner share `invokeSessionAgent` for the mechanics of a
+Main Runner uses `invokeSessionAgent` for the mechanics of a
 session-scoped provider call: message construction, stream collection,
-provider resume-id persistence, and invalidation. They intentionally differ
-above that seam. Both accept successful final replies through the same message
-command service. Work also updates its operational status card; reply validation
-failures mark its attempt failed and the status card blocked.
-
-Work public progress uses the shared [Progress notifications](progress-notifications.md)
-module: each tool observation and public text event enters the sender immediately,
-and ongoing delivery does not block provider event consumption. Card display
-keeps the existing configurable step limit; Native has a cumulative budget.
+provider resume-id persistence, and invalidation, and accepts successful final
+replies through the message command service.
 
 ```mermaid
 sequenceDiagram
@@ -341,7 +333,7 @@ When Runtime creates a thread work session:
 
 Thread sessions are not limited to Luna-created threads. Any incoming or imported thread message can resolve or create a thread session for that thread id.
 
-Each `kind='main'` topic session (`thread_key` non-null inside a group surface) records `sessions.parent_session_id` pointing to the root Main session (`thread_key IS NULL`) of the same `binding_id`, `channel_id`, and `group_id`. If the root Main session does not exist yet when a topic arrives first, `SessionStore` provisions an empty root Main session and links the topic to it. `kind='work'` sessions keep `parent_session_id` null, and session canonicalization reparents any child topic rows when merging duplicate sessions. Runner directories remain flat (`runners/<session-id>`) so concurrent group and topic turns never collide on disk.
+Each `kind='main'` topic session (`thread_key` non-null inside a group surface) records `sessions.parent_session_id` pointing to the root Main session (`thread_key IS NULL`) of the same `binding_id`, `channel_id`, and `group_id`. If the root Main session does not exist yet when a topic arrives first, `SessionStore` provisions an empty root Main session and links the topic to it, and session canonicalization reparents any child topic rows when merging duplicate sessions. Runner directories remain flat (`runners/<session-id>`) so concurrent group and topic turns never collide on disk.
 
 `thread_launch` remains a selection record, not a copied thread cache:
 
@@ -461,10 +453,10 @@ removed through the same explicit endpoint; startup does not purge them in bulk.
 
 ## Command reply lifecycle
 
-Main and Work receive invocation-scoped message capabilities. The Service checks
+Main receives invocation-scoped message capabilities. The Service checks
 runner kind, session, runner context and a live invocation registry on every
 request; cancelled or completed invocations cannot send. Task tokens cannot use
-this API. Main/Work also share the session directory, scheduling and handoff
+this API. Main also has the session directory, scheduling and handoff
 capabilities guarded by that actor check.
 
 Main executes task and clarification commands before sending acknowledgments or

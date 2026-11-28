@@ -10,7 +10,6 @@ describe("AgentSettingsForm", () => {
       createElement(AgentSettingsForm, {
         settings: {
           inbound: { processingReaction: true },
-          work: { progressCard: { show: true, style: "card" } },
           main: { taskProgressCard: { send: true, style: "native" } },
           pty: { idleTimeoutMinutes: 30 },
         },
@@ -32,7 +31,6 @@ describe("AgentSettingsForm", () => {
       createElement(AgentSettingsForm, {
         settings: {
           inbound: { processingReaction: true },
-          work: { progressCard: { show: true, style: "card" } },
           main: { taskProgressCard: { send: true, style: "native" } },
           messages: { maxBatchSize: 3, groupBotAliases: ["小助手", "Luna"] },
         },
@@ -61,7 +59,6 @@ describe("AgentSettingsForm", () => {
       createElement(AgentSettingsForm, {
         settings: {
           inbound: { processingReaction: true },
-          work: { progressCard: { show: true, style: "card" } },
           main: { taskProgressCard: { send: true, style: "native" } },
           listening: { defaultEnabled: false, quietMs: 45000, batchSize: 10, maxWaitMs: 180000, backoffMaxMs: 600000, maxTurnsPerHour: 12 },
         },

@@ -69,5 +69,5 @@ test("unified console helpers format Shadow console titles, PTY titles, and sess
   expect(ownerPath("agent_1", "session", "sess_9")).toBe("/agent/agent_1/sessions/sess_9");
   expect(ownerPath("agent_1", "task", "task_42")).toBe("/agent/agent_1/tasks/task_42");
   expect(ownerPath("agent_1", "unknown", null)).toBeNull();
-  expect([runnerKindBadge("main"), runnerKindBadge("work"), runnerKindBadge("task")]).toEqual(["Main", "Work", "Task"]);
+  expect([runnerKindBadge("main"), runnerKindBadge("task")]).toEqual(["Main", "Task"]);
 });

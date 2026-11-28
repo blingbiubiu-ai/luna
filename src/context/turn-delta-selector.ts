@@ -166,7 +166,7 @@ function resolveAuthoredBy(
       and(
         eq(runnerInvocations.originId, command.originId),
         eq(runnerInvocations.sessionId, sessionId),
-        inArray(runnerInvocations.runnerKind, ["main", "work"]),
+        eq(runnerInvocations.runnerKind, "main"),
       ),
     )
     .limit(1)

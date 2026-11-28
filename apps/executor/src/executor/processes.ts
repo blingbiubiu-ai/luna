@@ -121,10 +121,6 @@ export class ExecutorProcesses {
     for (const key of ["JAVA_HOME", "ANDROID_HOME", "ANDROID_SDK_ROOT", "ANDROID_NDK_HOME", "CHROME_BIN", "PUPPETEER_EXECUTABLE_PATH"]) {
       if (process.env[key]) environment[key] = process.env[key];
     }
-    if (job.runnerKind === "work") {
-      environment.GRADLE_OPTS = "-Dorg.gradle.workers.max=6";
-      environment.CMAKE_BUILD_PARALLEL_LEVEL = "6";
-    }
     const effectivePrivileged = this.runnerSudo && job.privileged === true;
     if (job.input.executionDriver === "pty") {
       this.launchPty(job, context, retry, environment, suppliedEnv, effectivePrivileged);
@@ -172,16 +168,13 @@ export class ExecutorProcesses {
           this.store.retries.recordExit(job.jobId, retry.attempt, { code, signal });
           const failure = providerError?.failure;
           const snapshot = this.store.snapshot(job.jobId);
-          // Only Work can replay its unchanged input after a definitively rejected resume.
           // Main must rebuild business context; Task must not replay completed execution.
-          const resetSession = job.runnerKind === "work" && retry.attempt === 1 && !!job.input.sessionId
-            && !snapshot.providerCheckpoint && (providerError?.code === "runner_session_not_found" || failure?.kind === "session_unusable");
           const transient = failure && isTransientProviderFailure(failure.kind)
             && (job.runnerKind !== "task" || (snapshot.providerCheckpoint && snapshot.providerSessionId));
-          const mayRetry = state !== "cancelling" && !unsafeFailure && (resetSession || transient);
+          const mayRetry = state !== "cancelling" && !unsafeFailure && Boolean(transient);
           if (mayRetry && this.store.retries.schedule(job.jobId, retry.attempt, { now: Date.now(),
             delayMs: executionRetryDelay(retry.policy, checkpoint ? 1 : retry.consecutiveRetries + 1, failure?.retryAfterMs),
-            checkpoint, reason: resetSession ? "session_unusable" : failure!.kind, resetSession })) {
+            checkpoint, reason: failure!.kind, resetSession: false })) {
             this.store.retryState(job.jobId, this.store.retries.require(job.jobId), "retry_wait"); return;
           }
           this.store.retries.finish(job.jobId, Date.now(), state === "cancelling" ? "cancelled" : timedOut ? "deadline_exceeded" : !failed && code === 0 && succeeded ? "completed" : "runner_failed");
@@ -268,17 +261,15 @@ export class ExecutorProcesses {
           this.store.retries.recordExit(job.jobId, retry.attempt, { code, signal });
           const failure = providerError?.failure;
           const snapshot = this.store.snapshot(job.jobId);
-          const resetSession = job.runnerKind === "work" && retry.attempt === 1 && !!job.input.sessionId
-            && !snapshot.providerCheckpoint && (providerError?.code === "runner_session_not_found" || failure?.kind === "session_unusable");
           const transient = failure && isTransientProviderFailure(failure.kind)
             && (job.runnerKind !== "task" || (snapshot.providerCheckpoint && snapshot.providerSessionId));
-          const mayRetry = state !== "cancelling" && !unsafeFailure && (resetSession || transient);
+          const mayRetry = state !== "cancelling" && !unsafeFailure && Boolean(transient);
           if (mayRetry && this.store.retries.schedule(job.jobId, retry.attempt, {
             now: Date.now(),
             delayMs: executionRetryDelay(retry.policy, checkpoint ? 1 : retry.consecutiveRetries + 1, failure?.retryAfterMs),
             checkpoint,
-            reason: resetSession ? "session_unusable" : failure!.kind,
-            resetSession,
+            reason: failure!.kind,
+            resetSession: false,
           })) {
             this.store.retryState(job.jobId, this.store.retries.require(job.jobId), "retry_wait");
             return;

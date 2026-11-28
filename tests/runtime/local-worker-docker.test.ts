@@ -88,7 +88,7 @@ test.skipIf(process.env.LUNA_DOCKER_INTEGRATION !== "1")("Local Docker Worker pr
   const submit = (id: string, context: string, projectId?: string) => {
     const job: JobRequest = {
       version: 2, ...fixtureJobScope(), jobId: id, invocationId: "inv-" + id, environmentId: "luna",
-      runnerContextId: context, ...(projectId ? { projectId } : {}), scopeKey: "session:" + context, runnerKind: "work",
+      runnerContextId: context, ...(projectId ? { projectId } : {}), scopeKey: "session:" + context, runnerKind: "main",
       sessionId: context, input: { runnerType: "codex", prompt: "Placement test" },
       credentialsRevision: 1, timeoutMs: 60000,
     };

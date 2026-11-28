@@ -38,7 +38,7 @@ afterEach(async () => {
   if (home) rmSync(home, { recursive: true, force: true });
 });
 
-function fixture(withActiveJob = true, runnerKind: "main" | "work" = "main", botLookup?: ReplyChannel["listGroupBots"]) {
+function fixture(withActiveJob = true, runnerKind: "main" = "main", botLookup?: ReplyChannel["listGroupBots"]) {
   home = mkdtempSync(join(tmpdir(), "luna-message-api-")); setLunaHome(home);
   connection = new DataConnection(schema); const db = connection.db;
   const scope = fixtureSessionOwnership(db, "feishu", "test");
@@ -56,8 +56,7 @@ function fixture(withActiveJob = true, runnerKind: "main" | "work" = "main", bot
   const claims: LunaAccessTokenClaims = { tokenId: "token", actorUserId: "user", source: "runner", role: "runner", runnerKind, agentId: session.agent_id, shadowId: session.shadow_id, sessionId: session.id, runnerJobId: context.id, issuedAt: 1, expiresAt: Date.now() + 10000 };
   db.insert(schema.accessTokens).values({ id: "token", agentId: claims.agentId, tokenHash: "hash", userId: "user", source: "runner", name: "test", role: "runner", issuedAt: 1, expiresAt: Date.now() + 10000, createdAt: 1, metadataJson: { invocationId: "invocation" } }).run();
   if (withActiveJob) {
-    const snapshot = runnerKind === "main" ? encodeInvocation("main", mainInvocations(db).get("invocation")!)
-      : encodeInvocation("work", {sessionId: session.id, runnerContextId: context.id, turnId: "logical-turn"});
+    const snapshot = encodeInvocation("main", mainInvocations(db).get("invocation")!);
     registerTestRunnerJob(db, "invocation", claims, snapshot, "logical-turn");
   }
   let sends = 0;
@@ -447,22 +446,23 @@ test("CLI calendar creation reaches Runner API and matches dashboard recurrence 
   const context = new RunnerContextStore(db).resolveForSession(session.id, "codex");
   const invocationId = "schedule-invocation";
   const invocations = new InvocationStore(db);
-  invocations.register({ id: invocationId, actorUserId: userId, runnerKind: "work",
+  invocations.register({ id: invocationId, actorUserId: userId, runnerKind: "main",
     runnerContextId: context.id, sessionId: session.id, taskId: null, taskRunId: null,
     originId: "schedule-turn", contextPackIds: [],
-    inputSnapshot: decodeInvocation({ version: 1, kind: "work", input: {
-      sessionId: session.id, runnerContextId: context.id, turnId: "schedule-turn",
+    inputSnapshot: decodeInvocation({ version: 1, kind: "main", input: {
+      input: { type: "session_trigger", triggerId: "schedule-turn", instruction: "Schedule test", requesterUserId: userId, context: { sessionId: session.id, candidateOpenTasks: [] }, artifactRefs: [], sourceSessionId: session.id, correlationId: "corr", hops: 0 },
+      runnerContext: context, turnId: "schedule-turn",
     } }),
   });
   const { selection } = new InvocationResources(db, home).pin(invocationId, new AgentResourceBuilder(db, home, new PluginRegistry()));
   invocations.createJob("test-runtime", {
     version: 2, jobId: "schedule-job", invocationId, environmentId: "luna",
-    runnerContextId: context.id, scopeKey: `session:${context.id}`, runnerKind: "work", sessionId: session.id,
+    runnerContextId: context.id, scopeKey: `session:${context.id}`, runnerKind: "main", sessionId: session.id,
     scope: { agentId: scope.agentId, shadowId: scope.shadowId, placementGeneration: 1 }, resources: selection, resourceRevision: selection.digest,
     input: { runnerType: "codex", prompt: "Schedule test" }, credentialsRevision: 1, timeoutMs: 60_000,
   });
   const { claims } = new AccessTokenService({ db, signingSecret: "schedule-test" }).issueToken({
-    userId, name: "Schedule fixture", source: "runner", role: "runner", runnerKind: "work",
+    userId, name: "Schedule fixture", source: "runner", role: "runner", runnerKind: "main",
     sourceSessionId: session.id, sourceRunnerJobId: context.id, ttlMs: 60_000, now: Date.now(),
     metadata: { invocationId },
   });
@@ -487,11 +487,8 @@ test("CLI calendar creation reaches Runner API and matches dashboard recurrence 
 });
 
 
-test("Work commands deliver during invocation, deduplicate, and expire with the invocation", async () => {
-  const f = fixture(true, "work");
-  (f.claims as { runnerKind: string }).runnerKind = "main";
-  expect((await f.send()).status).toBe(409);
-  (f.claims as { runnerKind: string }).runnerKind = "work";
+test("Main commands deliver during invocation, deduplicate, and expire with the invocation", async () => {
+  const f = fixture(true, "main");
   const { runSayCli } = await import("@luna/cli/commands/say");
   const service = sessionCommandsFor(connection.db, () => undefined);
   const server = Bun.serve({ port: 0, fetch: req => f.app.fetch(req) });
@@ -644,8 +641,6 @@ test("task command creates and dispatches before Main exits, returns receipt and
     expect(new TaskRunStore(connection.db).listRunsForTask(receipt.taskIds[0])).toHaveLength(3);
 
     (f.claims as {runnerKind: string}).runnerKind = "task";
-    expect((await call()).status).toBe("error");
-    (f.claims as {runnerKind: string}).runnerKind = "work";
     expect((await call()).status).toBe("error");
     (f.claims as {runnerKind: string}).runnerKind = "main";
     f.controller.abort();

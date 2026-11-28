@@ -14,22 +14,25 @@ import {InvocationResources} from "@/runners/invocation-resources";
 import {AgentResourceBuilder} from "@/runners/agent-resource-builder";
 import {PluginRegistry} from "@/plugins/registry";
 import {buildLunaServiceRunnerEnv} from "@/runners/luna-service-env";
-import {workInvocations} from "@/runners/main-invocation-registry";
+import {mainInvocations} from "@/runners/main-invocation-registry";
 import {ActiveAgentConfigService} from "@/agent-config";
 let home:string,connection:DataConnection<typeof schema>,store:InvocationStore,resources:InvocationResources,builder:AgentResourceBuilder;
 let scope:ReturnType<typeof fixtureNamedSession>;
+let ctxRow: typeof schema.runnerContexts.$inferSelect;
+const mainInput=(sessionId:string,rc:typeof schema.runnerContexts.$inferSelect,turnId:string)=>({input:{type:"session_trigger" as const,triggerId:turnId,instruction:"test",requesterUserId:scope.ownerUserId,context:{sessionId,candidateOpenTasks:[]},artifactRefs:[],sourceSessionId:sessionId,correlationId:"corr",hops:0},runnerContext:{...rc,workspacePath:join(home,"context","workspace"),ipcPath:join(home,"context","ipc")},turnId});
 beforeEach(()=>{
  home=mkdtempSync(join(tmpdir(),"luna-invocation-resources-"));setLunaHome(home);connection=new DataConnection(schema);
  scope=fixtureNamedSession(connection.db,"session","alice");
  connection.db.insert(schema.runnerContexts).values(fixtureRunnerContext(connection.db,{id:"context",owner_type:"session",owner_id:"session",runner_type:"claude",runner_root_path:join(home,"context"),created_at:0,updated_at:0})).run();
+ ctxRow=connection.db.select().from(schema.runnerContexts).where(eq(schema.runnerContexts.id,"context")).get()!;
  mkdirSync(join(home,"skills"));mkdirSync(join(home,"prompts"));writeFileSync(join(home,"prompts","MAIN.md"),"platform");
  store=new InvocationStore(connection.db);resources=new InvocationResources(connection.db,home);
  builder=new AgentResourceBuilder(connection.db,home,new PluginRegistry(),{bundledSkillsDirectory:join(home,"skills"),promptAssetsDirectory:join(home,"prompts"),repoRoot:home});
 });
 afterEach(()=>{connection.close();rmSync(home,{recursive:true,force:true});});
-function register(id:string){return store.register({id,runnerKind:"work",actorUserId:scope.ownerUserId,runnerContextId:"context",sessionId:"session",taskId:null,taskRunId:null,originId:id,
- inputSnapshot:{version:1,kind:"work",input:{sessionId:"session",runnerContextId:"context",turnId:id}} as never,contextPackIds:[]});}
-function job(id:string){const selection=resources.read(id).selection;return {version: 2,scope:{agentId:scope.agentId,shadowId:scope.shadowId,placementGeneration:1},resources:selection,resourceRevision:selection.digest, jobId:`job-${id}`,invocationId:id,environmentId:"luna",runnerContextId:"context",scopeKey:"session:context",runnerKind:"work",sessionId:"session",input:{runnerType:"claude",prompt:"test"},credentialsRevision:1,timeoutMs:10000} as const;}
+function register(id:string){return store.register({id,runnerKind:"main",actorUserId:scope.ownerUserId,runnerContextId:"context",sessionId:"session",taskId:null,taskRunId:null,originId:id,
+ inputSnapshot:{version:1,kind:"main",input:mainInput("session",ctxRow,id)} as never,contextPackIds:[]});}
+function job(id:string){const selection=resources.read(id).selection;return {version: 2,scope:{agentId:scope.agentId,shadowId:scope.shadowId,placementGeneration:1},resources:selection,resourceRevision:selection.digest, jobId:`job-${id}`,invocationId:id,environmentId:"luna",runnerContextId:"context",scopeKey:"session:context",runnerKind:"main",sessionId:"session",input:{runnerType:"claude",prompt:"test"},credentialsRevision:1,timeoutMs:10000} as const;}
 
 test("pins once, survives DB reopen, and ignores subsequent resource changes",()=>{
  register("first");const first=resources.pin("first",builder);
@@ -54,7 +57,7 @@ test("revocation keeps references until verified settlement; repeated pin never 
 });
 test("refuses to invent a resource snapshot for an existing attempt",()=>{
  register("first");
- const unpinned={version:2,...fixtureJobScope(scope.agentId,scope.shadowId),jobId:"job-first",invocationId:"first",environmentId:"luna",runnerContextId:"context",scopeKey:"session:context",runnerKind:"work",sessionId:"session",input:{runnerType:"claude",prompt:"test"},credentialsRevision:1,timeoutMs:10000};
+ const unpinned={version:2,...fixtureJobScope(scope.agentId,scope.shadowId),jobId:"job-first",invocationId:"first",environmentId:"luna",runnerContextId:"context",scopeKey:"session:context",runnerKind:"main",sessionId:"session",input:{runnerType:"claude",prompt:"test"},credentialsRevision:1,timeoutMs:10000};
  expect(()=>store.createJob("runtime",unpinned)).toThrow("invocation_resources_missing");
  // Simulate a damaged persisted attempt, which recovery must not silently repin.
  connection.db.insert(schema.runnerJobs).values({id:"job-first",runtimeId:"runtime",invocationId:"first",request:unpinned as never,requestHash:"broken",state:"pending",createdAt:0,updatedAt:0}).run();
@@ -66,16 +69,17 @@ test("SQL refuses cross-scope references and immutable snapshot changes",()=>{
  register("first");const first=resources.pin("first",builder);
  const other=fixtureNamedSession(connection.db,"other","bob");
  connection.db.insert(schema.runnerContexts).values(fixtureRunnerContext(connection.db,{id:"other-context",owner_type:"session",owner_id:"other",runner_type:"claude",runner_root_path:join(home,"other-context"),created_at:0,updated_at:0})).run();
- store.register({id:"other",runnerKind:"work",actorUserId:other.ownerUserId,runnerContextId:"other-context",sessionId:"other",taskId:null,taskRunId:null,originId:"other",
- inputSnapshot:{version:1,kind:"work",input:{sessionId:"other",runnerContextId:"other-context",turnId:"other"}} as never,contextPackIds:[]});
+ const otherCtx=connection.db.select().from(schema.runnerContexts).where(eq(schema.runnerContexts.id,"other-context")).get()!;
+ store.register({id:"other",runnerKind:"main",actorUserId:other.ownerUserId,runnerContextId:"other-context",sessionId:"other",taskId:null,taskRunId:null,originId:"other",
+ inputSnapshot:{version:1,kind:"main",input:mainInput("other",otherCtx,"other")} as never,contextPackIds:[]});
  expect(()=>connection.db.insert(schema.invocationResourceSnapshots).values({invocationId:"other",digest:first.selection.digest,createdAt:0}).run()).toThrow("scope_mismatch");
  expect(()=>connection.db.update(schema.runnerResourceSnapshots).set({shadowId:"other"}).run()).toThrow("immutable");
  expect(()=>connection.db.update(schema.invocationResourceSnapshots).set({digest:"invalid"}).run()).toThrow("immutable");
 });
 test("production service env pins resources before issuing model-configured token",()=>{
  const ref=fixtureExecutionReference(connection.db),snapshot=new ActiveAgentConfigService(connection.db,undefined).resolveRevisionSnapshot(scope.agentId,ref.revisionId);
- workInvocations(connection.db).set("first",{sessionId:"session",runnerContextId:"context",turnId:"first"});
- const input={runnerKind:"work" as const,invocationId:"first",runnerContextId:"context",sessionId:"session",requestedByUserId:scope.ownerUserId,db:connection.db,agentConfig:snapshot,resourceBuilder:builder,accessTokenSigningSecret:"test-secret"};
+ mainInvocations(connection.db).set("first",mainInput("session",ctxRow,"first"));
+ const input={runnerKind:"main" as const,invocationId:"first",runnerContextId:"context",sessionId:"session",requestedByUserId:scope.ownerUserId,db:connection.db,agentConfig:snapshot,resourceBuilder:builder,accessTokenSigningSecret:"test-secret"};
  const env=buildLunaServiceRunnerEnv(input),first=resources.read("first");
  expect(env.LUNA_ACCESS_TOKEN).toBeTruthy();expect(resources.retainedReferences(first.selection.digest)).toBe(1);
  writeFileSync(join(home,"prompts","MAIN.md"),"updated");
@@ -102,15 +106,15 @@ test("Worker preparation rejects missing snapshot before dispatch and rechecks i
  const context={id:"context",runner_root_path:join(home,"context"),runner_type:"claude",instruction_fingerprint:null};
  try{
   register("first");
-  await expect(prepareRunnerFiles(context,{runnerKind:"work"} as never,undefined,"first")).rejects.toThrow("invocation_resources_missing");
+  await expect(prepareRunnerFiles(context,{runnerKind:"main"} as never,undefined,"first")).rejects.toThrow("invocation_resources_missing");
   expect(calls).toBe(0);
   pinned=resources.pin("first",builder);
-  await prepareRunnerFiles(context,{runnerKind:"work"} as never,undefined,"first");
+  await prepareRunnerFiles(context,{runnerKind:"main"} as never,undefined,"first");
   expect(calls).toBe(1);
   revokeDuringPrepare=true;
-  await expect(prepareRunnerFiles(context,{runnerKind:"work"} as never,undefined,"first")).rejects.toThrow("invocation_preparation_mismatch");
+  await expect(prepareRunnerFiles(context,{runnerKind:"main"} as never,undefined,"first")).rejects.toThrow("invocation_preparation_mismatch");
   expect(calls).toBe(2);
-  await expect(prepareRunnerFiles(context,{runnerKind:"work"} as never,undefined,"first")).rejects.toThrow("invocation_preparation_mismatch");
+  await expect(prepareRunnerFiles(context,{runnerKind:"main"} as never,undefined,"first")).rejects.toThrow("invocation_preparation_mismatch");
   expect(calls).toBe(2);
  }finally{
   if(oldRuntime)Object.defineProperty(kernel,"executionRuntime",oldRuntime);else delete (kernel as any).executionRuntime;

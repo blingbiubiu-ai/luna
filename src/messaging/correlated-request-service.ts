@@ -86,7 +86,7 @@ export interface RequestActor extends CommandActor {
   readonly agentId: string;
   readonly shadowId: string;
   readonly currentSessionId: string;
-  readonly runnerKind?: "main" | "work" | "task" | undefined;
+  readonly runnerKind?: "main" | "task" | undefined;
   readonly taskId?: string | undefined;
   readonly taskRunId?: string | undefined;
   readonly invocationId?: string | undefined;

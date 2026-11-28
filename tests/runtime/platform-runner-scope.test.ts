@@ -35,12 +35,18 @@ beforeEach(() => {
 });
 afterEach(() => {connection.close(); rmSync(home, {recursive: true, force: true});});
 function invocation() {
-  return {id: "invocation", runnerKind: "work" as const, actorUserId: ownerUser, runnerContextId: "context", sessionId: first, taskId: null, taskRunId: null, originId: "turn", contextPackIds: [], inputSnapshot: {version: 1 as const, kind: "work", input: {sessionId: first, runnerContextId: "context", turnId: "turn"}}};
+  const ctxRow = connection.db.select().from(schema.runnerContexts).where(eq(schema.runnerContexts.id, "context")).get()!;
+  return {id: "invocation", runnerKind: "main" as const, actorUserId: ownerUser, runnerContextId: "context", sessionId: first, taskId: null, taskRunId: null, originId: "turn", contextPackIds: [],
+    inputSnapshot: {version: 1 as const, kind: "main", input: {
+      input: {type: "session_trigger", triggerId: "turn", instruction: "test", requesterUserId: ownerUser, context: {sessionId: first, candidateOpenTasks: []}, artifactRefs: [], sourceSessionId: first, correlationId: "corr", hops: 0},
+      runnerContext: {...ctxRow, workspacePath: "/unused/workspace", ipcPath: "/unused/ipc"},
+      turnId: "turn",
+    }}};
 }
 test("invocation scope is derived from its real owner and rejects foreign context or snapshot", () => {
   const store = new InvocationStore(connection.db);
   expect(() => store.register({...invocation(), runnerContextId: "foreign"})).toThrow("invocation_context_scope_mismatch");
-  const forged = invocation(); forged.inputSnapshot.input.sessionId = second;
+  const forged = invocation(); forged.inputSnapshot.input.input.context.sessionId = second;
   expect(() => store.register(forged)).toThrow("invocation_snapshot_scope_mismatch");
   expect(connection.db.select().from(schema.runnerInvocations).all()).toHaveLength(0);
   expect(store.register(invocation())).toMatchObject({agentId: scope.agentId, shadowId: scope.shadowId});
@@ -52,7 +58,7 @@ test("invocation cannot import another Shadow's context pack", () => {
 test("runner token carries authoritative scope and disabled actor prevents issuing it again", () => {
   fixtureUser(connection.db, scope.agentId, "member");
   const service = new AccessTokenService({db: connection.db, signingSecret: "test-secret"});
-  const input = {userId: "member", name: "runner", source: "runner" as const, role: "runner" as const, runnerKind: "work" as const, sourceRunnerJobId: "context", sourceSessionId: first, ttlMs: 60_000, now: Date.now()};
+  const input = {userId: "member", name: "runner", source: "runner" as const, role: "runner" as const, runnerKind: "main" as const, sourceRunnerJobId: "context", sourceSessionId: first, ttlMs: 60_000, now: Date.now()};
   const issued = service.issueToken(input);
   expect(issued.claims).toMatchObject({agentId: scope.agentId, shadowId: scope.shadowId});
   expect(issued.record).toMatchObject({agentId: scope.agentId, shadowId: scope.shadowId});

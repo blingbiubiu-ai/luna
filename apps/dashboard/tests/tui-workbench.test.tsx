@@ -62,7 +62,7 @@ test("TuiWorkbench renders group/user PTY titles and omits Shadow environment se
           lastActiveAt: Date.now() - 3000,
           ownerType: "session",
           ownerId: "sess-user",
-          runnerKind: "work",
+          runnerKind: "main",
           title: "王华杰",
           channelType: "feishu",
         },

@@ -52,7 +52,7 @@ test.skipIf(process.env.LUNA_DOCKER_INTEGRATION !== "1")("Runner CLI artifacts c
   const service = Bun.serve({ hostname: "0.0.0.0", port: 0, fetch: app.fetch });
   const names: string[] = [];
   try {
-    for (const kind of ["main", "work", "task"] as const) {
+    for (const kind of ["main", "task"] as const) {
       const user = `user-${kind}`, session = `session-${kind}`, invocation = `inv-${kind}`;
       const scope = fixtureNamedSession(db, session, user);
       const contexts = new RunnerContextStore(db);
@@ -66,8 +66,7 @@ test.skipIf(process.env.LUNA_DOCKER_INTEGRATION !== "1")("Runner CLI artifacts c
       const run = kind === "task" ? new TaskRunStore(db).createRun({
         taskId: "task", reason: "initial", inputSnapshot: {}, runnerType: "codex", runnerContextId: runnerContext.id,
       }) : undefined;
-      const snapshot = decodeInvocation({ version: 1, kind, input: kind === "work" ? { sessionId: session, runnerContextId: runnerContext.id, turnId: "turn" }
-        : kind === "task" ? { taskId: "task", taskRunId: run!.id, runnerContextId: runnerContext.id }
+      const snapshot = decodeInvocation({ version: 1, kind, input: kind === "task" ? { taskId: "task", taskRunId: run!.id, runnerContextId: runnerContext.id }
         : { input: { type: "session_trigger", triggerId: "trigger", instruction: "Artifact test", requesterUserId: user, context: { sessionId: session, candidateOpenTasks: [] }, artifactRefs: [], sourceSessionId: session, correlationId: "correlation", hops: 0 },
           runnerContext } });
       const issued = tokens.issueToken({ userId: user, name: "artifact test", source: "runner", role: "runner", runnerKind: kind, sourceRunnerJobId: runnerContext.id,
@@ -77,7 +76,7 @@ test.skipIf(process.env.LUNA_DOCKER_INTEGRATION !== "1")("Runner CLI artifacts c
       registerTestRunnerJob(db, invocation, issued.claims, snapshot, invocation);
       new InvocationService(db).requireActive(issued.claims, kind);
       const nonce = crypto.randomUUID(); const name = `luna-artifact-${nonce}`; names.push(name);
-      const size = kind === "work" ? 6 * 1024 * 1024 : 4096;
+      const size = kind === "main" ? 6 * 1024 * 1024 : 4096;
       expect(existsSync(`/tmp/remote-artifact-${nonce}`)).toBe(false);
       const child = Bun.spawn(["docker", "run", "--rm", "-i", "--name", name, "--read-only", "--tmpfs", "/tmp:rw,nosuid,nodev,mode=1777", "--add-host", "host.docker.internal:host-gateway", "--entrypoint", "bun", process.env.LUNA_RUNNER_TEST_IMAGE ?? "luna-runner:latest", "-e", script], { stdin: new TextEncoder().encode(JSON.stringify({ nonce, size, scopeType: kind === "task" ? "task" : "session", env: { LUNA_SERVICE_URL: `http://host.docker.internal:${service.port}`, LUNA_ACCESS_TOKEN: issued.token, ...(kind === "task" ? { LUNA_TASK_ID: "task" } : { LUNA_SESSION_ID: session }) } })), stdout: "pipe", stderr: "pipe" });
       const timer = setTimeout(() => child.kill(), 60000);

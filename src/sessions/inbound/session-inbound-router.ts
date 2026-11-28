@@ -68,7 +68,6 @@ import { getKernel } from "@/server/routes/kernel";
 import { createLogger, DEFAULT_SESSION_CONFIG, type SessionConfig } from "@/shared";
 
 import { decideGroupActivationFollowup } from "./group-activation-followup";
-import { WorkRunner } from "@/work/work-runner";
 import { decideInboundAddressing } from "./group-addressing";
 import {
   appendInputFromNormalizedInbound,
@@ -109,7 +108,6 @@ export interface SessionTurnProcessorOptions {
   readonly mainRunner?: MainRunner;
   readonly taskRunSupervisor?: Pick<TaskRunSupervisor, "waitForIdle">;
   readonly sessionConfig?: SessionConfig;
-  readonly workRunner?: WorkRunner;
 }
 
 /**
@@ -161,11 +159,6 @@ export class SessionInboundRouter {
               : {}),
             taskRunSupervisor: this._taskRunSupervisor,
             sessionConfig: this._sessionConfig,
-            workRunner: new WorkRunner({
-              db: options.db,
-              runnerType: options.runnerType,
-              channelForMessage: () => this._channel,
-            }),
           }).execute(input, signal),
       });
   }
@@ -498,8 +491,6 @@ export class SessionTurnProcessor {
   private readonly _turnStore: SessionTurnStore;
   private readonly _mainRunner: MainRunner;
   private readonly _sessionConfig: SessionConfig;
-  private readonly _sessionStore: SessionStore;
-  private readonly _workRunner: WorkRunner | undefined;
 
   constructor(private readonly _options: SessionTurnProcessorOptions) {
     this._db = _options.db;
@@ -524,12 +515,9 @@ export class SessionTurnProcessor {
         attemptStore: new SessionRunnerAttemptStore(_options.db),
         serviceAuthDb: _options.db,
       });
-    this._sessionStore = new SessionStore(_options.db);
-    this._workRunner = _options.workRunner;
   }
 
   async execute(input: SessionTurnExecutionInput, signal?: AbortSignal): Promise<void> {
-    const session = this._sessionStore.getById(input.turn.sessionId);
     const inbounds = input.messageRows.map((row) => normalizedInboundFromMessageRow(row));
     const latestMessageRow = input.messageRows.at(-1);
     const latestInbound = inbounds.at(-1);
@@ -545,10 +533,6 @@ export class SessionTurnProcessor {
     }
 
     try {
-      if (session?.kind === "work" && this._workRunner !== undefined) {
-        await this._workRunner.executeWorkTurn(input, session, signal);
-        return;
-      }
       // What was overheard and not yet delivered comes first-hand from the inbox; the selection may miss it.
       const activationContextMessages = mergeActivationContext(this._selectActivationContextMessages({
         sessionId: input.turn.sessionId,
@@ -583,7 +567,7 @@ export class SessionTurnProcessor {
       });
     } catch (error) {
       // Nobody asked for a listening turn, so its failure is not reported to the chat.
-      if (!signal?.aborted && !input.ambient && !(error instanceof RuntimeDetachedError) && session?.kind !== "work" && latestMessageRow.senderUserId) {
+      if (!signal?.aborted && !input.ambient && !(error instanceof RuntimeDetachedError) && latestMessageRow.senderUserId) {
         try {
           reportSessionExecutionError(this._db, {
             sessionId: input.turn.sessionId, turnId: input.turn.id,

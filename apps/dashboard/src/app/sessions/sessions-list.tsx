@@ -359,11 +359,6 @@ export function SessionsList({
                           私聊
                         </span>
                       ) : null}
-                      {root.kind === "work" ? (
-                        <span className="shrink-0 rounded-[4px] bg-[#7d6b91]/16 px-[5px] text-[10.5px] leading-[17px] font-medium text-[#7d6b91] dark:text-[#b2a1c7]">
-                          工作
-                        </span>
-                      ) : null}
                       {isSelfRoutineSession(root) ? (
                         <span className="shrink-0 rounded-[4px] bg-amber-500/18 px-[5px] text-[10.5px] leading-[17px] font-medium text-amber-700 dark:text-amber-300">
                           自驱
@@ -547,7 +542,7 @@ function buildGroupedConversations(
 
   for (const session of sessions) {
     const parentId = session.parentSessionId ?? session.parent_session_id ?? null;
-    if (parentId && parentId !== session.id && byId.has(parentId) && session.kind !== "work") {
+    if (parentId && parentId !== session.id && byId.has(parentId)) {
       const list = childrenByParent.get(parentId) ?? [];
       list.push(session);
       childrenByParent.set(parentId, list);

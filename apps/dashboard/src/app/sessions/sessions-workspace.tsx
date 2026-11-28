@@ -99,7 +99,7 @@ export function SessionsWorkspace({
       !s.group_id &&
       (s.title === "心跳" || s.title === "记忆整理");
     const roots = active.filter(
-      (s) => !(s.parentSessionId ?? s.parent_session_id) || s.kind === "work",
+      (s) => !(s.parentSessionId ?? s.parent_session_id),
     );
     const nonRoutineRoots = roots.filter((s) => !isRoutine(s));
     const pool =
@@ -277,7 +277,6 @@ function SessionDetailPane({
 
   const isTopic = Boolean(
     mergedSession &&
-      mergedSession.kind !== "work" &&
       (mergedSession.parentSession ||
         parentId ||
         (Boolean(mergedSession.thread_id || mergedSession.root_message_id) &&

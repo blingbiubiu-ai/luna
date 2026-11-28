@@ -5,7 +5,7 @@ import { ModelProviderReference } from "./model-provider.js";
 import { Id } from "./id.js";
 export { Id } from "./id.js";
 export const Sequence = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
-export const RunnerKind = z.enum(["main", "work", "task"]);
+export const RunnerKind = z.enum(["main", "task"]);
 export const ExecutionDriverKind = z.enum(["stdio", "pty"]);
 export type ExecutionDriverKind = z.infer<typeof ExecutionDriverKind>;
 export const JobState = z.enum(["queued", "starting", "running", "retry_wait", "cancelling", "succeeded", "failed", "cancelled", "interrupted"]);
@@ -44,7 +44,7 @@ export const JobRequest = z.object({
   if (job.privileged && !job.rootAccess) context.addIssue({ code: "custom", message: "A privileged Job requires root access" });
   if(job.resourceRevision!==job.resources.digest)context.addIssue({code:"custom",message:"Resource revision mismatch"});
   if (job.runnerKind === "task" ? !job.taskId || !job.taskRunId : !job.sessionId) {
-    context.addIssue({ code: "custom", message: "Task requires taskId/taskRunId; Main and Work require sessionId" });
+    context.addIssue({ code: "custom", message: "Task requires taskId/taskRunId; Main requires sessionId" });
   }
 });
 export type JobRequest = z.infer<typeof JobRequest>;

@@ -95,13 +95,6 @@ export const AgentSettings = z.object({
   inbound: z.object({
     processingReaction: z.boolean().default(true),
   }).strict().default({ processingReaction: true }),
-  /** Work sessions: the progress card Runtime keeps while a turn runs. */
-  work: z.object({
-    progressCard: z.object({
-      show: z.boolean().default(true),
-      style: ProgressCardStyle.default("card"),
-    }).strict().default({ show: true, style: "card" }),
-  }).strict().default({ progressCard: { show: true, style: "card" } }),
   /** Main: the progress card of a Task it starts, unless the Runner chooses otherwise. */
   main: z.object({
     taskProgressCard: z.object({
@@ -187,7 +180,7 @@ export class AgentSettingsStore {
     const row = this.db.select().from(agentSettings).where(eq(agentSettings.agentId, agentId)).get();
     if (!row) return DEFAULT_AGENT_SETTINGS;
     const raw = row.settings && typeof row.settings === "object" && !Array.isArray(row.settings)
-      ? (({ task: _retiredTask, ...rest }) => rest)(row.settings as Record<string, unknown>)
+      ? (({ task: _retiredTask, work: _retiredWork, ...rest }) => rest)(row.settings as Record<string, unknown>)
       : row.settings;
     const parsed = AgentSettings.safeParse(raw);
     return parsed.success ? parsed.data : DEFAULT_AGENT_SETTINGS;

@@ -4,7 +4,7 @@ export type ActorKind =
   | "runner"
   | "service";
 
-export type RunnerKind = "main" | "work" | "task";
+export type RunnerKind = "main" | "task";
 export type IdentityProvider = string;
 
 export interface RequestActor {

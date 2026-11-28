@@ -2394,7 +2394,7 @@ describe("agent runtime lifecycle boundaries", () => {
           channel: { type: "feishu", id: "feishu-main" },
           surface: { externalId: "oc_group_inject", kind: "group" },
           sender: fixtureFeishuSender("feishu-main", "ou_user_inject"),
-          text: "#work 注入测试",
+          text: "注入测试",
           mentions: [],
           addressing: { addressedToBot: true, reason: "mention" },
           rawPayload: {},
@@ -2405,7 +2405,7 @@ describe("agent runtime lifecycle boundaries", () => {
         env.database.db
           .select()
           .from(sessionRowsTable)
-          .where(eq(sessionRowsTable.kind, "work"))
+          .where(eq(sessionRowsTable.kind, "main"))
           .all(),
       ).toHaveLength(1);
       expect(registeredChannel.outbound).toHaveLength(0);

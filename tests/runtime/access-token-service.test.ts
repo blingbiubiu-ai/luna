@@ -72,7 +72,7 @@ describe("AccessTokenService", () => {
     const context = new RunnerContextStore(connection.db).resolveForSession("runner-session", "codex");
     // A runner token acts as a user of its Agent and names no account.
     const { accountId: _personal, ...base } = baseTokenInput(account);
-    return {...base, userId: scope.ownerUserId, source: "runner", role: "runner", runnerKind: "work",
+    return {...base, userId: scope.ownerUserId, source: "runner", role: "runner", runnerKind: "main",
       sourceSessionId: "runner-session", sourceRunnerJobId: context.id, ...overrides} satisfies IssueLunaAccessTokenInput;
   }
 

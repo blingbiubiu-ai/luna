@@ -2712,29 +2712,6 @@ describe("session inbound router", () => {
     ).toBe("session_merge_canonical");
   });
 
-  test("work thread sessions keep parent_session_id null even on subsequent resolves", () => {
-    const store = new SessionStore(database.db);
-    const work = store.createWorkSession({
-      channelType: "feishu",
-      channelId: "feishu-main",
-      groupId: "group-alpha",
-      threadId: "work-thread-1",
-      rootMessageId: "work-root-1",
-    });
-    expect(work.kind).toBe("work");
-    expect(work.parent_session_id).toBeNull();
-    const resolvedAgain = store.resolveByChannelSurface({
-      channelType: "feishu",
-      channelId: "feishu-main",
-      groupId: "group-alpha",
-      threadId: "work-thread-1",
-      rootMessageId: "work-root-1",
-    });
-    expect(resolvedAgain.id).toBe(work.id);
-    expect(resolvedAgain.kind).toBe("work");
-    expect(resolvedAgain.parent_session_id).toBeNull();
-  });
-
   test("current runtime rejects task1 database without compatibility migration", async () => {
     database.close();
     rmSync(join(testHome, "data"), { recursive: true, force: true });

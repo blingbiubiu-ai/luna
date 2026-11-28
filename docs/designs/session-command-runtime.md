@@ -416,7 +416,7 @@ The schedule detail panel exposes permanent deletion through `DELETE /api/sessio
 
 ## Runner-controlled replies and outbound governance
 
-Main and Work invoke `luna say --purpose answer --stdin` (or `--text`) while they
+Main invokes `luna say --purpose answer --stdin` (or `--text`) while it
 are running; `progress` and `notification` are also supported. Protocol v2 derives
 deterministic idempotency keys from `(LUNA_INVOCATION_ID, command, canonicalPayload)`
 without caller-supplied `--request-id` flags (`--repeat` opts into an intentional
@@ -463,7 +463,7 @@ not executable recovery instructions. Only command ledgers resume pending work.
 ## Structured replies
 
 Message commands may carry a normalized `reply` document next to their Markdown
-`content` projection. Both CLI `--json` and successful Main/Work final outputs
+`content` projection. Both CLI `--json` and successful Main final outputs
 use the same version-1 schema (text/message/card; ordered text/image/file-link
 blocks). Provider-specific payloads and paths are not accepted as media blocks.
 Artifacts pass the existing command authorization path; unavailable/non-image

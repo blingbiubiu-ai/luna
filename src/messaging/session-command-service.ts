@@ -397,8 +397,8 @@ export class SessionCommandService {
                     finish("cancelled");
                     return;
                 }
-                const recovering = command.kind === "session.invoke" && (["main", "work"] as const).some(runnerKind =>
-                    new InvocationStore(db).findActive({ runnerKind, originId: command.id, sessionId: command.sessionId }));
+                const recovering = command.kind === "session.invoke" &&
+                    Boolean(new InvocationStore(db).findActive({ runnerKind: "main", originId: command.id, sessionId: command.sessionId }));
                 if (!recovering && command.expiresAt !== null && command.expiresAt <= now) {
                     finish("skipped", "Expired");
                     return;

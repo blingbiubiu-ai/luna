@@ -64,10 +64,11 @@ for (const waitCode of ["runtime_draining", "environment_mount_pending", "no_wor
 
 for (const action of ["cancel", "detach"] as const) test(`pre-Job drain wait distinguishes ${action} and creates no execution`, async () => {
   const f = await fixture(); f.control.blockProvision = true;
-  f.db.insert(runnerContexts).values(fixtureRunnerContext(f.db, { id: "context", owner_type: "session", owner_id: "session", runner_type: "codex", runner_root_path: f.root, created_at: 0, updated_at: 0 })).run();
+  const ctxRow = fixtureRunnerContext(f.db, { id: "context", owner_type: "session", owner_id: "session", runner_type: "codex", runner_root_path: f.root, created_at: 0, updated_at: 0 });
+  f.db.insert(runnerContexts).values(ctxRow).run();
   f.db.insert(runnerContextOrigins).values({ contextId: "context", runtimeId: "runtime" }).run();
   const store = new InvocationStore(f.db);
-  store.register({ agentConfig:fixtureExecutionReference(f.db), id: "inv", runnerKind: "work", actorUserId: fixtureOwnerUserId("user"), runnerContextId: "context", sessionId: "session", taskId: null, taskRunId: null, originId: "turn", inputSnapshot: decodeInvocation({ version: 1, kind: "work", input: {sessionId: "session", runnerContextId: "context", turnId: "turn"} }), contextPackIds: [] });
+  store.register({ agentConfig:fixtureExecutionReference(f.db), id: "inv", runnerKind: "main", actorUserId: fixtureOwnerUserId("user"), runnerContextId: "context", sessionId: "session", taskId: null, taskRunId: null, originId: "turn", inputSnapshot: decodeInvocation({ version: 1, kind: "main", input: { input: { type: "session_trigger", triggerId: "turn", instruction: "test", requesterUserId: fixtureOwnerUserId("user"), context: { sessionId: "session", candidateOpenTasks: [] }, artifactRefs: [], sourceSessionId: "session", correlationId: "corr", hops: 0 }, runnerContext: { ...ctxRow, runner_session_id: null, instruction_fingerprint: null, last_run_id: null, workspacePath: join(f.root, "workspace"), ipcPath: join(f.root, "ipc") }, turnId: "turn" } }), contextPackIds: [] });
   const transport = new RuntimeAgentTransport(f.db, f.client); const cancellation = new AbortController();
   try {
     const iterator = transport.stream({ id: "message", role: "user", session_id: "session", content: [{ type: "text", text: "work" }] }, { cwd: f.root, runnerContextId: "context", isNewSession: true, signal: cancellation.signal, env: { LUNA_INVOCATION_ID: "inv" } }, "codex", undefined, {});
@@ -86,10 +87,11 @@ for (const action of ["cancel", "detach"] as const) test(`pre-Job drain wait dis
 
 test("Service transport binds a configured project without a legacy verification round trip", async () => {
   const f = await fixture("runtime_draining", true); f.control.paused = false;
-  f.db.insert(runnerContexts).values(fixtureRunnerContext(f.db, { id: "context", owner_type: "session", owner_id: "session", runner_type: "codex", runner_root_path: f.root, created_at: 0, updated_at: 0 })).run();
+  const ctxRow = fixtureRunnerContext(f.db, { id: "context", owner_type: "session", owner_id: "session", runner_type: "codex", runner_root_path: f.root, created_at: 0, updated_at: 0 });
+  f.db.insert(runnerContexts).values(ctxRow).run();
   f.db.insert(runnerContextOrigins).values({ contextId: "context", runtimeId: "runtime" }).run();
   const store = new InvocationStore(f.db);
-  store.register({ agentConfig:fixtureExecutionReference(f.db), id: "inv", runnerKind: "work", actorUserId: fixtureOwnerUserId("user"), runnerContextId: "context", sessionId: "session", taskId: null, taskRunId: null, originId: "turn", inputSnapshot: decodeInvocation({ version: 1, kind: "work", input: { sessionId: "session", runnerContextId: "context", turnId: "turn" } }), contextPackIds: [] });
+  store.register({ agentConfig:fixtureExecutionReference(f.db), id: "inv", runnerKind: "main", actorUserId: fixtureOwnerUserId("user"), runnerContextId: "context", sessionId: "session", taskId: null, taskRunId: null, originId: "turn", inputSnapshot: decodeInvocation({ version: 1, kind: "main", input: { input: { type: "session_trigger", triggerId: "turn", instruction: "test", requesterUserId: fixtureOwnerUserId("user"), context: { sessionId: "session", candidateOpenTasks: [] }, artifactRefs: [], sourceSessionId: "session", correlationId: "corr", hops: 0 }, runnerContext: { ...ctxRow, runner_session_id: null, instruction_fingerprint: null, last_run_id: null, workspacePath: join(f.root, "workspace"), ipcPath: join(f.root, "ipc") }, turnId: "turn" } }), contextPackIds: [] });
   const invocation = store.require("inv");
   const builder = new AgentResourceBuilder(f.db, f.root, new PluginRegistry());
   const { selection } = new InvocationResources(f.db, f.root).pin(invocation.id, builder);
@@ -115,10 +117,11 @@ test("Service transport binds a configured project without a legacy verification
 for (const action of ["cancel", "detach"] as const) test(`pre-Job health failure distinguishes ${action} and creates no execution`, async () => {
   const f = await fixture();
   let release!: () => void; f.control.healthGate = new Promise<void>(resolve => { release = resolve; });
-  f.db.insert(runnerContexts).values(fixtureRunnerContext(f.db, { id: "context", owner_type: "session", owner_id: "session", runner_type: "codex", runner_root_path: f.root, created_at: 0, updated_at: 0 })).run();
+  const ctxRow = fixtureRunnerContext(f.db, { id: "context", owner_type: "session", owner_id: "session", runner_type: "codex", runner_root_path: f.root, created_at: 0, updated_at: 0 });
+  f.db.insert(runnerContexts).values(ctxRow).run();
   f.db.insert(runnerContextOrigins).values({ contextId: "context", runtimeId: "runtime" }).run();
   const store = new InvocationStore(f.db);
-  store.register({ agentConfig:fixtureExecutionReference(f.db), id: "inv", runnerKind: "work", actorUserId: fixtureOwnerUserId("user"), runnerContextId: "context", sessionId: "session", taskId: null, taskRunId: null, originId: "turn", inputSnapshot: decodeInvocation({ version: 1, kind: "work", input: {sessionId: "session", runnerContextId: "context", turnId: "turn"} }), contextPackIds: [] });
+  store.register({ agentConfig:fixtureExecutionReference(f.db), id: "inv", runnerKind: "main", actorUserId: fixtureOwnerUserId("user"), runnerContextId: "context", sessionId: "session", taskId: null, taskRunId: null, originId: "turn", inputSnapshot: decodeInvocation({ version: 1, kind: "main", input: { input: { type: "session_trigger", triggerId: "turn", instruction: "test", requesterUserId: fixtureOwnerUserId("user"), context: { sessionId: "session", candidateOpenTasks: [] }, artifactRefs: [], sourceSessionId: "session", correlationId: "corr", hops: 0 }, runnerContext: { ...ctxRow, runner_session_id: null, instruction_fingerprint: null, last_run_id: null, workspacePath: join(f.root, "workspace"), ipcPath: join(f.root, "ipc") }, turnId: "turn" } }), contextPackIds: [] });
   const transport = new RuntimeAgentTransport(f.db, f.client); const cancellation = new AbortController();
   try {
     const iterator = transport.stream({ id: "message", role: "user", session_id: "session", content: [{ type: "text", text: "work" }] }, { cwd: f.root, runnerContextId: "context", isNewSession: true, signal: cancellation.signal, env: { LUNA_INVOCATION_ID: "inv" } }, "codex", undefined, {});

@@ -15,7 +15,6 @@ export type OperationInvocationSource =
   | "cli"
   | "dashboard"
   | "main_runner"
-  | "work_runner"
   | "task_runner"
   | "service_api";
 

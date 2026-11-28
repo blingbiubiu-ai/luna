@@ -166,7 +166,6 @@ export function SessionDetailView({
 
   const isTopic = Boolean(
     session &&
-      session.kind !== "work" &&
       (parentSummary !== null ||
         Boolean(session.parentSessionId ?? session.parent_session_id) ||
         (Boolean(session.thread_id || session.root_message_id) &&

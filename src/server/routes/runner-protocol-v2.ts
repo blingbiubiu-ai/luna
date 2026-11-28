@@ -1,6 +1,5 @@
 import { eq } from "drizzle-orm";
 import { Hono } from "hono";
-import { selfRoutineKindOfTrigger } from "@/agents/self-routines";
 import type { ReplyChannel } from "@/channels/outbound";
 import type { DrizzleDB } from "@/data";
 import {
@@ -14,7 +13,6 @@ import {
 import {
   buildMainCapabilities,
   buildTaskCapabilities,
-  buildWorkCapabilities,
   RUNNER_PROTOCOL_VERSION,
 } from "@/runners/capabilities";
 import { InvocationService } from "@/runners/invocation-service";
@@ -81,22 +79,6 @@ export function createRunnerProtocolV2Routes(
           agentId: invocation.agentId,
           shadowId: invocation.shadowId,
           actorUserId: invocation.actorUserId,
-        });
-        return c.json({ capabilities });
-      }
-
-      if (snapshot.kind === "work") {
-        const routineKind = selfRoutineKindOfTrigger(
-          db(),
-          snapshot.input.turnId,
-        );
-        const capabilities = buildWorkCapabilities(db(), {
-          agentId: invocation.agentId,
-          shadowId: invocation.shadowId,
-          sessionId: invocation.sessionId!,
-          actorUserId: invocation.actorUserId,
-          routineKind,
-          allowSilent: Boolean(routineKind),
         });
         return c.json({ capabilities });
       }

@@ -32,7 +32,7 @@ function seedQueue(sessionId: string) {
   db.insert(schema.sessionCommands).values({id: sessionId, kind: "message.send", sessionId, sourceSessionId: sessionId, actorUserId: ownerUser,
     originId: "test", dedupeKey: sessionId, payload: {}, status: "pending", correlationId: sessionId, availableAt: 1, createdAt: 1, updatedAt: 1}).run();
   db.insert(schema.runnerContexts).values(fixtureRunnerContext(db, {id: sessionId, owner_type: "session", owner_id: sessionId, runner_type: "test", runner_root_path: "/unused", created_at: 1, updated_at: 1})).run();
-  return new AccessTokenService({db, signingSecret: "test"}).issueToken({userId: ownerUser, name: "test", source: "runner", role: "runner", runnerKind: "work", sourceSessionId: sessionId, sourceRunnerJobId: sessionId, now: Date.now(), ttlMs: 60000});
+  return new AccessTokenService({db, signingSecret: "test"}).issueToken({userId: ownerUser, name: "test", source: "runner", role: "runner", runnerKind: "main", sourceSessionId: sessionId, sourceRunnerJobId: sessionId, now: Date.now(), ttlMs: 60000});
 }
 test("Shadow disable atomically revokes authority and cancels queued work without touching siblings", () => {
   const firstToken = seedQueue(first), otherToken = seedQueue(other);

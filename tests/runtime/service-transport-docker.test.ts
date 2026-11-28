@@ -51,7 +51,6 @@ import { taskReportForRun } from "../../src/tasks/task-report-store";
 import { TaskRunSupervisor } from "../../src/tasks/task-run-supervisor";
 import { TaskSubscriptionStore } from "../../src/tasks/task-subscription-store";
 import { SessionTurnProcessor } from "../../src/sessions/inbound/session-inbound-router";
-import { WorkRunner } from "../../src/work/work-runner";
 import { WorkerConfig } from "@luna/worker/config";
 import { DockerEnvironmentDriver } from "@luna/worker/docker-driver";
 import { EnvironmentManager } from "@luna/worker/environment-manager";
@@ -108,8 +107,9 @@ test.skipIf(process.env.LUNA_PROVIDER_INTEGRATION !== "1")("Real Service transpo
       const localRoot = join(root, contextId); mkdirSync(localRoot, { recursive: true }); writeFileSync(join(localRoot, "AGENTS.md"), "Transport integration. Follow the user request.\n");
       db.insert(runnerContexts).values(fixtureRunnerContext(db, { id: contextId, owner_type: "session", owner_id: "session", runner_type: profile.agentType, runner_root_path: localRoot, created_at: 0, updated_at: 0 })).onConflictDoNothing().run();
       db.insert(runnerContextOrigins).values({ contextId, runtimeId: "runtime" }).onConflictDoNothing().run();
-      transport.store.register({ id: invocationId, runnerKind: "work", actorUserId: "user:user", runnerContextId: contextId, sessionId: "session", taskId: null, taskRunId: null, originId: invocationId, inputSnapshot: { version: 1, input: {} }, contextPackIds: [] });
-      const issued = new AccessTokenService({ db, signingSecret: "transport-test-only" }).issueToken({ userId: "user:user", name: "transport", source: "runner", role: "runner", runnerKind: "work", sourceRunnerJobId: contextId, sourceSessionId: "session", metadata: { invocationId }, ttlMs: 86400000, now: Date.now() });
+      const ctxRow = db.select().from(runnerContexts).where(eq(runnerContexts.id, contextId)).get()!;
+      transport.store.register({ id: invocationId, runnerKind: "main", actorUserId: "user:user", runnerContextId: contextId, sessionId: "session", taskId: null, taskRunId: null, originId: invocationId, inputSnapshot: { version: 1, kind: "main", input: { input: { type: "session_trigger", triggerId: invocationId, instruction: "transport", requesterUserId: "user:user", context: { sessionId: "session", candidateOpenTasks: [] }, artifactRefs: [], sourceSessionId: "session", correlationId: "corr", hops: 0 }, runnerContext: { ...ctxRow, workspacePath: join(localRoot, "workspace"), ipcPath: join(localRoot, "ipc") }, turnId: invocationId } } as never, contextPackIds: [] });
+      const issued = new AccessTokenService({ db, signingSecret: "transport-test-only" }).issueToken({ userId: "user:user", name: "transport", source: "runner", role: "runner", runnerKind: "main", sourceRunnerJobId: contextId, sourceSessionId: "session", metadata: { invocationId }, ttlMs: 86400000, now: Date.now() });
       transport.store.bindToken(invocationId, issued.record.id);
       const marker = `TRANSPORT_${crypto.randomUUID().replaceAll("-", "")}`;
       let text = "", providerSession: string | undefined;
@@ -200,36 +200,29 @@ test.skipIf(process.env.LUNA_PROVIDER_INTEGRATION !== "1")("Real Service transpo
       commands.start();
       try {
         const sessionStore = new SessionStore(db);
-        const created = sessionStore.createLocalSession("user:user",fixtureScope(db,"user"));
-        db.update(sessions).set({ kind: "work" }).where(eq(sessions.id, created.id)).run();
-        const workSession = sessionStore.getById(created.id)!;
-        const answer = `WORK_${crypto.randomUUID().replaceAll("-", "")}`;
+        const workSession = sessionStore.createLocalSession("user:user",fixtureScope(db,"user"));
+        const answer = `MAIN_${crypto.randomUUID().replaceAll("-", "")}`;
         const message = new MessageStore(db).append({ sessionId: workSession.id, senderUserId: "user:user", role: "user",
           content: [{ type: "text", text: `Send exactly ${answer} to this session using luna say --text ${answer} --purpose answer. Use the shell command bun /app/luna-cli/cli.js say if luna is not on PATH. Do not read files or do any other work.` }] });
         const entry = new SessionTimelineStore(db).appendMessage({ sessionId: workSession.id, messageId: message.id });
         const inbox = new SessionInboxStore(db).enqueueOnce({ sessionId: workSession.id, entryId: entry.id, message });
-        const work = new WorkRunner({ db, runnerType: profile.agentType, channelForMessage: channelFor, createRunner: () => {
-          const runner = createAgentRunnerForConfig(profile, transport);
-          return { type: runner.type, stream: (message, options) => runner.stream(message, { ...options, env: { ...profile.env, ...options.env } }) };
-        } });
-        const processor = new SessionTurnProcessor({ db, runnerType: profile.agentType, channelForMessage: channelFor, workRunner: work, mainRunner: main });
+        const processor = new SessionTurnProcessor({ db, runnerType: profile.agentType, channelForMessage: channelFor, mainRunner: main });
         const queue = new SessionQueue({ db, config: { ...DEFAULT_SESSION_CONFIG, coalesce_idle_ms: 1, coalesce_max_wait_ms: 25 }, executeTurn: (input, signal) => processor.execute(input, signal) });
         const workWatchdog = setTimeout(() => queue.abort(workSession.id), 120000);
         try { queue.schedule(workSession.id); await queue.waitForIdle(); } finally { clearTimeout(workWatchdog); await queue.stop(); }
         const turns = db.select().from(sessionTurns).where(eq(sessionTurns.session_id, workSession.id)).all();
         expect(turns).toHaveLength(1);
         const turn = turns[0]!;
-        expect(turn.status, turn.error ?? "Work turn completes").toBe("completed");
+        expect(turn.status, turn.error ?? "Main turn completes").toBe("completed");
         expect(db.select().from(sessionInbox).where(eq(sessionInbox.id, inbox.row.id)).get()?.status).toBe("completed");
         const answers = runnerAnswers(db, workSession.id, turn.id);
         expect(answers, JSON.stringify(answers.map(row => ({ id: row.id, dedupeKey: row.dedupeKey, status: row.status, contentHash: contentHash(row.payload.content) })))).toHaveLength(1);
         expect(answers[0]!.payload.content).toBe(answer);
         expect(answers[0]!.status).toBe("sent");
-        expect(channel.outbound.at(-1)?.statusCard?.status).toBe("completed");
         const workInvocation = db.select().from(runnerInvocations).where(eq(runnerInvocations.originId, turn.id)).get()!;
         expect(workInvocation).toBeDefined(); expect(workInvocation.state).toBe("settled"); expect(workInvocation.settledAt).not.toBeNull();
         const workJob = transport.store.job(workInvocation.activeJobId!)!;
-        expect(workJob.request.runnerKind).toBe("work"); expect(workJob.state).toBe("settled");
+        expect(workJob.request.runnerKind).toBe("main"); expect(workJob.state).toBe("settled");
 
         const workDeadline = Date.now() + 15000;
         while (!runtimeDb.query("SELECT 1 FROM runtime_released_jobs WHERE job_id=?").get(workJob.id) && Date.now() < workDeadline) await new Promise(resolve => setTimeout(resolve, 100));

@@ -304,30 +304,6 @@ test("reflection asks for one episode, and maintenance fades old episodes", () =
   expect(store.page(scope.agentId, {limit: 200}).entries.find(row => row.id === old.id)!.status).toBe("archived");
 });
 
-test("a Work session is reflected on too, and its reflection runs with the Work Runner, not Main", async () => {
-  const {createSessionTriggerExecutor} = await import("@/sessions/trigger-executor");
-  db.db.update(schema.sessions).set({kind: "work"}).where(eq(schema.sessions.id, "session")).run();
-  ask("user:alice", 40 * MIN);
-  const [id] = schedule();
-  expect(memoryOriginOfTrigger(db.db, id!)).toBe("reflection");
-  const calls: {sessionId: string; actorUserId: string; instruction: string}[] = [];
-  const execute = createSessionTriggerExecutor(db.db, () => { throw new Error("Main must not run a Work session's reflection"); }, () => "codex",
-    async (session, turn) => { calls.push({sessionId: session.id, actorUserId: turn.actorUserId, instruction: turn.instruction}); });
-  await execute(command(id!), new AbortController().signal);
-  expect(calls).toMatchObject([{sessionId: "session", actorUserId: "user:alice"}]);
-  expect(calls[0]!.instruction).toContain("luna memory add --type episode");
-  expect(db.db.select().from(schema.sessionTurns).where(eq(schema.sessionTurns.id, id!)).get()).toMatchObject({status: "completed", reason: "session_trigger"});
-  // A failing maintenance turn is recorded as failed and reported to the command worker.
-  db.db.update(schema.sessionCommands).set({status: "completed"}).where(eq(schema.sessionCommands.id, id!)).run();
-  ask("user:alice", -5 * MIN);
-  const [next] = schedule(NOW + 60 * MIN);
-  const failing = createSessionTriggerExecutor(db.db, () => { throw new Error("unused"); }, () => "codex", async () => { throw new Error("model unavailable"); });
-  await expect(failing(command(next!), new AbortController().signal)).rejects.toThrow("model unavailable");
-  expect(db.db.select().from(schema.sessionTurns).where(eq(schema.sessionTurns.id, next!)).get()).toMatchObject({status: "failed"});
-});
-
-
-
 const fixtureTaskResult = (id: string, agoMs: number, creator = "user:alice") => {
   db.db.insert(schema.tasks).values({id: `task-${id}`, agent_id: scope.agentId, shadow_id: scope.shadowId, type: "task", title: "统计质数", summary: "1 到 100",
     status: "completed", creator_user_id: creator, primary_session_id: "session", created_at: 1, updated_at: 1, last_activity_at: 1}).onConflictDoNothing().run();

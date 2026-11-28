@@ -92,24 +92,10 @@ if(input.prompt==='long') { setInterval(()=>{},1000); } else { output({status:'s
   try {
     await executor.start();
     await client.call("PUT", "/v1/ingest-credentials", { credentialId: "instance-upload", token: upload, runtimeId: "runtime1" });
-    await submit("resume-work", "resume-work-context", "resume-success", false, false, { kind: "work", resume: "stale" });
-    await until(() => executor.store.snapshot("resume-work").state === "succeeded", "Work clears invalid resume within the same Job")
-      .catch(error => { console.error(executor.store.snapshot("resume-work"), updates("resume-work")); throw error; });
-    expect(executor.store.retries.require("resume-work")).toMatchObject({ attempt: 2, totalRetries: 1 });
-    const resumeInputs = readFileSync(join(executor.contexts.get("resume-work-context").cwd, "resume-inputs"), "utf8").trim().split("\n").map(line => JSON.parse(line));
-    expect(resumeInputs).toHaveLength(2);
-    expect(resumeInputs[0].sessionId).toBe("stale");
-    expect(resumeInputs[1]).not.toHaveProperty("sessionId");
-    expect(executor.store.snapshot("resume-work").providerSessionId).toBe("fresh-session");
     for (const kind of ["main", "task"] as const) {
       await submit(`resume-${kind}`, `resume-${kind}-context`, "resume-success", false, false, { kind, resume: "stale" });
-      await until(() => executor.store.snapshot(`resume-${kind}`).state === "failed", "Only Work can reset execution input here");
+      await until(() => executor.store.snapshot(`resume-${kind}`).state === "failed", "Main and Task do not reset execution input here");
       expect(executor.store.retries.require(`resume-${kind}`).attempt).toBe(1);
-    }
-    for (const prompt of ["resume-checkpoint", "resume-repeat"]) {
-      await submit(prompt, `${prompt}-context`, prompt, false, false, { kind: "work", resume: "stale" });
-      await until(() => executor.store.snapshot(prompt).state === "failed", "Invalid resume cannot replay checkpoints or loop indefinitely");
-      expect(executor.store.retries.require(prompt).attempt).toBe(prompt === "resume-checkpoint" ? 1 : 2);
     }
     await submit("retry1", "retryctx", "retry-success");
     await until(() => executor.store.snapshot("retry1").state === "succeeded", "same Job retries and succeeds");
@@ -168,7 +154,7 @@ if(input.prompt==='long') { setInterval(()=>{},1000); } else { output({status:'s
     await submit("task-no-checkpoint", "task-no-checkpoint-context", "failure:rate_limited", false, false, { kind: "task" });
     await until(() => executor.store.snapshot("task-no-checkpoint").state === "failed", "Task cannot retry without recoverable session and checkpoint");
     expect(executor.store.retries.require("task-no-checkpoint").attempt).toBe(1);
-    for (const kind of ["work", "task"] as const) {
+    for (const kind of ["main", "task"] as const) {
       await submit(`${kind}-checkpoint`, `${kind}-checkpoint-context`, "retry-success", false, false, { kind });
       await until(() => executor.store.snapshot(`${kind}-checkpoint`).state === "succeeded", "all Runner kinds share same-Job checkpoint continuation");
       expect(executor.store.retries.require(`${kind}-checkpoint`)).toMatchObject({ attempt: 2, totalRetries: 1 });

@@ -172,27 +172,6 @@ export class SessionStore {
     return this._resolveById(this._db, sessionId);
   }
 
-  /**
-   * Creates a Work Session (kind='work') bound to a Feishu thread.
-   * Reuses resolveByChannelSurface with kind='work'.
-   */
-  createWorkSession(input: {
-    readonly channelType: ResolveSessionSurfaceInput["channelType"];
-    readonly channelId: string;
-    readonly groupId?: string;
-    readonly threadId?: string;
-    readonly rootMessageId?: string;
-  }): SessionRow {
-    return this.resolveByChannelSurface({
-      channelType: input.channelType,
-      channelId: input.channelId,
-      ...(input.groupId !== undefined ? { groupId: input.groupId } : {}),
-      ...(input.threadId !== undefined ? { threadId: input.threadId } : {}),
-      ...(input.rootMessageId !== undefined ? { rootMessageId: input.rootMessageId } : {}),
-      kind: "work",
-    });
-  }
-
   private _resolveByChannelSurface(
     db: DrizzleDB,
     input: ResolveSessionSurfaceInput,

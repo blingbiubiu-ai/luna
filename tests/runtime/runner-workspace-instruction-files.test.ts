@@ -104,7 +104,7 @@ test("Codex reads every generated AGENTS.md to its end, root rules included", ()
   const limit = Number(resolveContainerRunnerProvider("codex")
     .buildCliArgs({ prompt: "hi", runnerType: "codex" })
     .find((arg) => arg.startsWith("project_doc_max_bytes="))?.split("=")[1]);
-  for (const runnerKind of ["main", "task", "work"] as const) {
+  for (const runnerKind of ["main", "task"] as const) {
     ensureRunnerInstructionFiles({
       home: "/home/luna", promptsRoot: join(import.meta.dir, "../../src/prompts"), runnerKind,
       runnerRootPath, runnerSudo: true,
@@ -122,7 +122,7 @@ test("Codex reads every generated AGENTS.md to its end, root rules included", ()
 
 test("the Shadow's soul comes first, with its persona in full or the default persona", () => {
   const soul = { name: "影小黑", agent: "悟空", owner: { id: "user-owner", name: "王华杰" }, persona: ["说话干脆，结论先行。", "称呼 owner 为老板。"] };
-  for (const runnerKind of ["main", "task", "work"] as const) {
+  for (const runnerKind of ["main", "task"] as const) {
     const doc = renderRunnerInstructions({ home: "/home/luna", promptsRoot: join(import.meta.dir, "../../src/prompts"), runnerKind, runnerRootPath, soul });
     expect(doc.startsWith('<soul>\n{"name":"影小黑","agent":"悟空","owner":{"id":"user-owner","name":"王华杰"}}\n\n说话干脆，结论先行。\n\n称呼 owner 为老板。\n</soul>\n')).toBe(true);
     expect(doc).not.toContain("not your user-facing identity");
@@ -149,7 +149,7 @@ test("identity and hard rules come before command manuals", () => {
 });
 
 test("every runner and provider receives the shared confidentiality policy", () => {
-  for (const runnerKind of ["main", "task", "work"] as const) {
+  for (const runnerKind of ["main", "task"] as const) {
     runEnsure({ runnerKind });
     for (const entry of ["AGENTS.md", "CLAUDE.md"]) {
       const content = readFileSync(join(runnerRootPath, entry), "utf-8");
@@ -185,7 +185,7 @@ test("missing shared policy fails closed instead of generating unprotected instr
 
 
 test("all generated Runner entrypoints use the current command/report protocol", () => {
-  for (const runnerKind of ["main", "work", "task"] as const) {
+  for (const runnerKind of ["main", "task"] as const) {
     runEnsure({runnerKind});
     for (const name of ["AGENTS.md", "CLAUDE.md"]) {
       const content = readFileSync(join(runnerRootPath, name), "utf8");

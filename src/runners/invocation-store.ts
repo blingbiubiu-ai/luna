@@ -57,7 +57,7 @@ export class InvocationStore {
   }
   active(): InvocationRecord[] { return this.db.select().from(runnerInvocations).where(eq(runnerInvocations.state, "active")).all(); }
   pending(): InvocationRecord[] { return this.db.select().from(runnerInvocations).where(isNull(runnerInvocations.settledAt)).all(); }
-  findActive(input: { runnerKind: "main" | "work" | "task"; originId?: string; sessionId?: string; taskRunId?: string }): InvocationRecord | undefined {
+  findActive(input: { runnerKind: "main" | "task"; originId?: string; sessionId?: string; taskRunId?: string }): InvocationRecord | undefined {
     return this.db.select().from(runnerInvocations).where(and(eq(runnerInvocations.state, "active"), eq(runnerInvocations.runnerKind, input.runnerKind),
       ...(input.originId ? [eq(runnerInvocations.originId, input.originId)] : []), ...(input.sessionId ? [eq(runnerInvocations.sessionId, input.sessionId)] : []),
       ...(input.taskRunId ? [eq(runnerInvocations.taskRunId, input.taskRunId)] : []))).get();
@@ -77,7 +77,7 @@ export class InvocationStore {
     });
   }
   /** Business state and every provider attempt settle together in Service. */
-  finishOrigin(input: { originId: string; sessionId?: string; runnerKind?: "main" | "work" | "task" }, complete: () => void): void {
+  finishOrigin(input: { originId: string; sessionId?: string; runnerKind?: "main" | "task" }, complete: () => void): void {
     this.db.transaction(() => {
       const invocations = this.db.select().from(runnerInvocations).where(and(eq(runnerInvocations.originId, input.originId),
         ...(input.sessionId ? [eq(runnerInvocations.sessionId, input.sessionId)] : []),
@@ -162,11 +162,6 @@ export class InvocationStore {
           delete providerState.text; delete providerState.error;
           if(job.request.runnerKind === "task" && job.request.taskRunId) new TaskProgressStore(this.db).interrupt(job.request.taskRunId);
           providerState.progressAttempt=execution.data.retry?.attempt ?? 1;
-        }
-        if (execution.kind === "state" && execution.data.state === "retry_wait"
-          && execution.data.retry?.reason === "session_unusable" && job.request.runnerKind === "work") {
-          delete providerState.sessionId; delete providerState.checkpoint;
-          new RunnerContextStore(this.db).clearRunnerSessionId(job.request.runnerContextId);
         }
         if (execution.kind === "provider") {
           const output = execution.data;

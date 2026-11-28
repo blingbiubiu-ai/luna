@@ -93,7 +93,7 @@ sequenceDiagram
 
 The key invariant is that runners see Luna-selected context, not provider raw payload.
 
-The `#work` command resolves the sender's canonical user and checks the sender and the bot’s Agent are active before creating a Work Session or queueing a turn. The `#steer` command checks the persisted sender and Agent are active before interrupting an active turn.
+The `#steer` command checks the persisted sender and Agent are active before interrupting an active turn.
 
 The same invariant applies to history backfill: provider history is normalized first, persisted as Luna facts, and only later selected into runner input through normal context-pack logic. Group-join backfill rechecks the original bot binding after provider reads and enrichment before it resolves a thread or writes a message. A binding retired during the fetch cannot supply history to a replacement Shadow.
 
@@ -103,8 +103,7 @@ Processing markers follow the shared Session turn lifecycle:
 - Session batching may assign one message as the trigger and additional messages as
   coalesced inputs, but all remain independently marked in the provider.
 - `SessionTurnProcessor` completes processing for every inbound in the batch from a
-  shared `finally` path, regardless of whether the turn uses Main Runner or
-  WorkRunner and regardless of success, failure, or cancellation.
+  shared `finally` path, regardless of success, failure, or cancellation.
 - Provider sends may clear the current message marker as an idempotent fast path,
   but they do not replace the turn-level batch cleanup.
 
@@ -206,7 +205,7 @@ consumers; it is no longer the complete set of reply destinations. Migration
 backfills original bindings and previously attached channel aliases.
 
 `SessionReplyDispatcher` sends a logical reply to every bound adapter, regardless
-of which channel supplied the input. Main/Work message commands, work status cards,
+of which channel supplied the input. Main message commands,
 task notifications, and session message commands use this shared boundary.
 Dashboard does not receive an outbound delivery: clients read the shared timeline.
 A session with zero external bindings still completes its logical reply and

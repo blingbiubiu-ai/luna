@@ -29,8 +29,7 @@ export type TurnOriginKind =
   | "request_message"
   | "request_update"
   | "self_routine"
-  | "task_run"
-  | "work_turn";
+  | "task_run";
 
 export type TerminalOutputMode =
   | "reply_current_session"
@@ -42,7 +41,7 @@ export interface RunnerCapabilitiesManifest {
   readonly identity: {
     readonly agentId?: string | undefined;
     readonly shadowId?: string | undefined;
-    readonly runnerKind: "main" | "work" | "task";
+    readonly runnerKind: "main" | "task";
     readonly routineKind?: SelfRoutineKind | undefined;
   };
   readonly turn: {
@@ -101,22 +100,6 @@ const HEARTBEAT_COMMANDS = [
 const MEMORY_ROUTINE_COMMANDS = [
   "memory list|search|timeline|get|add|update|delete|restore",
   "sessions timeline",
-  "whoami",
-] as const;
-
-const WORK_COMMANDS = [
-  "say",
-  "ask | ask reply|message|wait|cancel|get|list",
-  "schedules create|list|get|update|pause|resume|cancel",
-  "sessions list|timeline|messages",
-  "activity",
-  "memory list|search|timeline|get|add|update|delete|restore",
-  "users search|get|lookup",
-  "groups search|get|lookup|create|invite",
-  "artifacts",
-  "knowledge",
-  "workspace",
-  "commands status|wait",
   "whoami",
 ] as const;
 
@@ -343,54 +326,6 @@ export function buildMainCapabilities(
     outboundGovernance:
       db && scope?.agentId && !isMemoryOnly
         ? inspectOutboundQuota(db, scope.agentId, sessionId)
-        : null,
-  };
-}
-
-export function buildWorkCapabilities(
-  db: DrizzleDB | undefined,
-  options: {
-    readonly agentId?: string | undefined;
-    readonly shadowId?: string | undefined;
-    readonly sessionId: string;
-    readonly actorUserId?: string | undefined;
-    readonly routineKind?: SelfRoutineKind | undefined;
-    readonly allowSilent: boolean;
-  },
-): RunnerCapabilitiesManifest {
-  const isRoutine =
-    options.routineKind === "reflection" ||
-    options.routineKind === "consolidation";
-
-  return {
-    protocolVersion: RUNNER_PROTOCOL_VERSION,
-    identity: {
-      agentId: options.agentId,
-      shadowId: options.shadowId,
-      runnerKind: "work",
-      ...(options.routineKind ? { routineKind: options.routineKind } : {}),
-    },
-    turn: {
-      sessionId: options.sessionId,
-      actorUserId: options.actorUserId,
-      originKind: isRoutine ? "self_routine" : "work_turn",
-      allowSilent: isRoutine ? true : options.allowSilent,
-      terminalOutputMode: isRoutine ? "ignored" : "reply_current_session",
-    },
-    commands: isRoutine ? MEMORY_ROUTINE_COMMANDS : WORK_COMMANDS,
-    addressScope: {
-      allowCurrent: !isRoutine,
-      allowSelf: !isRoutine,
-      allowOwner: !isRoutine,
-      allowMain: false,
-      allowTask: !isRoutine,
-      allowSession: !isRoutine,
-      allowGroup: !isRoutine,
-      allowUser: !isRoutine,
-    },
-    outboundGovernance:
-      db && options.agentId
-        ? inspectOutboundQuota(db, options.agentId, options.sessionId)
         : null,
   };
 }

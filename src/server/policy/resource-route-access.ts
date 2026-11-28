@@ -15,29 +15,25 @@ import {actorFor} from "../auth/agent-actor";
 type ResourceType="session"|"task";
 type RunnerClaims={tokenId?:string;runnerKind?:string;sessionId?:string;taskId?:string};
 
-/** Main and Work act for a session, so they may read the Tasks bound to it; a Task Runner reads only its own Task. */
+/** Main acts for a session, so it may read the Tasks bound to it; a Task Runner reads only its own Task. */
 function sessionRunner(token:RunnerClaims):string|undefined{
-  return (token.runnerKind==="main"||token.runnerKind==="work") ? token.sessionId : undefined;
+  return token.runnerKind==="main" ? token.sessionId : undefined;
 }
 
 export function activeShadowRoutineScope(
   db: DrizzleDB,
   token: RunnerClaims,
 ): { agentId: string; shadowId: string; kind: "heartbeat" | "consolidation" } | undefined {
-  if (!token.tokenId || (token.runnerKind !== "main" && token.runnerKind !== "work")) return undefined;
+  if (!token.tokenId || token.runnerKind !== "main") return undefined;
   try {
     const { invocation, snapshot } = new InvocationService(db).requireActive(
       token as LunaAccessTokenClaims,
-      token.runnerKind,
+      "main",
     );
     const triggerId =
-      snapshot.kind === "main"
-        ? snapshot.input.input.type === "session_trigger"
-          ? snapshot.input.input.triggerId
-          : undefined
-        : snapshot.kind === "work"
-          ? snapshot.input.turnId
-          : undefined;
+      snapshot.kind === "main" && snapshot.input.input.type === "session_trigger"
+        ? snapshot.input.input.triggerId
+        : undefined;
     const routine = triggerId ? selfRoutineKindOfTrigger(db, triggerId) : undefined;
     if (routine === "heartbeat" || routine === "consolidation") {
       return { agentId: invocation.agentId, shadowId: invocation.shadowId, kind: routine };

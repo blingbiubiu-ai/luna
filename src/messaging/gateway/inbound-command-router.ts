@@ -12,10 +12,6 @@ import {
 import {
   AccessTokenService,
 } from "@/server/auth/access-token-service";
-import { WorkSessionLauncher } from "@/work/work-session-launcher";
-import { SessionStore } from "@/sessions/session-store";
-import { MessageStore } from "@/sessions/message-store";
-import { SessionInboxStore } from "@/sessions/session-inbox-store";
 import { resolveLunaAccessTokenSigningSecret } from "@/server/auth";
 import { extractSystemCommand } from "./system-command-parser";
 
@@ -56,17 +52,6 @@ export class InboundCommandRouter {
     if (command === "#link") {
       await this._handleLink(message);
       return true;
-    }
-    if (command === "#work") {
-      const launcher = new WorkSessionLauncher({
-        db: this._options.db,
-        channel: this._options.channel,
-        sessionStore: new SessionStore(this._options.db),
-        messageStore: new MessageStore(this._options.db),
-        inboxStore: new SessionInboxStore(this._options.db),
-        schedule: (id) => this._options.schedule?.(id),
-      });
-      return launcher.handleWorkCommand(message);
     }
     await this._options.channel.send(message, {
       replyMode: message.surface.kind === "p2p" ? "direct_message" : "channel_message",

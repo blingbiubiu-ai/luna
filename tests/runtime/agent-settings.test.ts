@@ -26,7 +26,6 @@ test("an Agent without settings gets today's behaviour as defaults", () => {
   expect(new AgentSettingsStore(connection.db).get(agentId)).toEqual(DEFAULT_AGENT_SETTINGS);
   expect(DEFAULT_AGENT_SETTINGS).toEqual({
     inbound: { processingReaction: true },
-    work: { progressCard: { show: true, style: "card" } },
     main: { taskProgressCard: { send: true, sendOnQuietRuns: true, style: "native" } },
     pty: { idleTimeoutMinutes: 10 },
     messages: {},
@@ -37,10 +36,9 @@ test("an Agent without settings gets today's behaviour as defaults", () => {
 
 test("the owner saves settings; omitted groups keep their defaults and bad values are refused", () => {
   const store = new AgentSettingsStore(connection.db);
-  expect(store.save("owner", agentId, { work: { progressCard: { show: false } } })).toEqual({
+  expect(store.save("owner", agentId, { main: { taskProgressCard: { send: false } } })).toEqual({
     inbound: { processingReaction: true },
-    work: { progressCard: { show: false, style: "card" } },
-    main: { taskProgressCard: { send: true, sendOnQuietRuns: true, style: "native" } },
+    main: { taskProgressCard: { send: false, sendOnQuietRuns: true, style: "native" } },
     pty: { idleTimeoutMinutes: 10 },
     messages: {},
     listening: { defaultEnabled: false, quietMs: 30000, batchSize: 10, maxWaitMs: 180000, backoffMaxMs: 600000, maxTurnsPerHour: 12 },
@@ -49,11 +47,22 @@ test("the owner saves settings; omitted groups keep their defaults and bad value
   expect(store.save("owner", agentId, { pty: { idleTimeoutMinutes: 60 } }).pty.idleTimeoutMinutes).toBe(60);
   expect(store.save("owner", agentId, { pty: { idleTimeoutMinutes: 0 } }).pty.idleTimeoutMinutes).toBe(0);
   expect(() => store.save("owner", agentId, { pty: { idleTimeoutMinutes: -1 } })).toThrow();
-  expect(store.save("owner", agentId, { work: { progressCard: { show: false } } }).work.progressCard.show).toBe(false);
-  expect(() => store.save("owner", agentId, { work: { progressCard: { style: "fancy" } } })).toThrow();
+  expect(store.save("owner", agentId, { main: { taskProgressCard: { send: false } } }).main.taskProgressCard.send).toBe(false);
+  expect(() => store.save("owner", agentId, { main: { taskProgressCard: { style: "fancy" } } })).toThrow();
   expect(() => store.save("owner", agentId, { unknown: true })).toThrow();
   expect(() => store.save("other", agentId, {})).toThrow();
   expect(() => store.read("other", agentId)).toThrow();
+  // Legacy rows containing retired `work` settings still parse cleanly with their other saved fields intact.
+  connection.db.insert(schema.agentSettings).values({
+    agentId,
+    settings: { inbound: { processingReaction: false }, work: { progressCard: { show: false, style: "card" } } } as never,
+    updatedByAccountId: "owner",
+    updatedAt: Date.now(),
+  }).onConflictDoUpdate({
+    target: schema.agentSettings.agentId,
+    set: { settings: { inbound: { processingReaction: false }, work: { progressCard: { show: false, style: "card" } } } as never },
+  }).run();
+  expect(store.get(agentId).inbound.processingReaction).toBe(false);
 });
 
 test("the settings API is the owner's: read, save, reject others and invalid input", async () => {

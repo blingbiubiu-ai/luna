@@ -135,7 +135,7 @@ describe("SessionQueue abort (#steer)", () => {
       },
     });
 
-    const session = new SessionStore(database.db).createWorkSession({
+    const session = new SessionStore(database.db).resolveByChannelSurface({
       channelType: "feishu",
       channelId: "f",
       groupId: "g",
@@ -211,7 +211,7 @@ describe("SessionQueue abort (#steer)", () => {
       },
     });
 
-    const session = new SessionStore(database.db).createWorkSession({
+    const session = new SessionStore(database.db).resolveByChannelSurface({
       channelType: "feishu",
       channelId: "f",
       groupId: "g",

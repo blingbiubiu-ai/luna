@@ -14,67 +14,13 @@ import { RunnerContextStore } from "@/runners/runner-context-store";
 import { RuntimeDetachedError } from "@/runners/runtime-detach";
 import { SessionTurnStore } from "@/sessions/session-turn-store";
 
-/** Runs a Service-queued memory turn in a Work session with that session's own Runner. */
-export type WorkMaintenanceTurn = (
-  session: typeof sessions.$inferSelect,
-  command: { id: string; actorUserId: string; instruction: string },
-  signal: AbortSignal,
-) => Promise<void>;
-
 export function createSessionTriggerExecutor(
   db: DrizzleDB,
   main: () => MainRunner,
   runnerType: (sessionId: string) => string,
-  workMaintenance?: WorkMaintenanceTurn,
 ) {
   return async (command: SessionCommand, signal: AbortSignal) => {
-    const session = db.select().from(sessions).where(eq(sessions.id, command.sessionId)).get();
     const origin = memoryOriginOfTrigger(db, command.id);
-    if (session?.kind === "work" && workMaintenance && origin !== "inline") {
-      // A Work session's conversation lives in the Work Runner's provider context; Main would start from nothing.
-      const now = Date.now();
-      db.insert(sessionTurns)
-        .values({
-          id: command.id,
-          session_id: command.sessionId,
-          turn_kind: "execution",
-          status: "running",
-          runner_invoked: true,
-          reason: "session_trigger",
-          started_at: now,
-          created_at: now,
-          updated_at: now,
-        })
-        .onConflictDoUpdate({
-          target: sessionTurns.id,
-          set: { status: "running", error: null, completed_at: null, updated_at: now },
-        })
-        .run();
-      let outcome: "completed" | "failed" | undefined = "failed",
-        failure: string | null = null;
-      try {
-        await workMaintenance(
-          session,
-          { id: command.id, actorUserId: command.actorUserId, instruction: String(command.payload.content) },
-          signal,
-        );
-        if (signal.aborted) throw new Error("Trigger cancelled");
-        outcome = "completed";
-      } catch (error) {
-        if (error instanceof RuntimeDetachedError) outcome = undefined;
-        else failure = String(error);
-        throw error;
-      } finally {
-        if (outcome) {
-          db.update(sessionTurns)
-            .set({ status: outcome, error: failure, completed_at: Date.now(), updated_at: Date.now() })
-            .where(eq(sessionTurns.id, command.id))
-            .run();
-        }
-      }
-      return;
-    }
-
     const now = Date.now();
     db.insert(sessionTurns)
       .values({

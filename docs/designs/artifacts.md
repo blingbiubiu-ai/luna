@@ -44,12 +44,10 @@ Artifacts enter the system through the same registry path:
 - inbound channel attachments are downloaded and registered before or during message persistence.
 - diagnosis outputs are registered as artifacts rather than served through custom routes.
 - Main Runner outputs that reference user-visible generated files should use `luna artifacts register`.
-- Work Runner outputs that reference user-visible generated files should use `luna artifacts register`.
 - Task Runner outputs that reference user-visible generated files must use `luna artifacts register`.
 
 Service also applies one shared output-finalization seam to Main action
-payloads and Task results. Work terminal output is diagnostic only; Work must
-register files before sending artifact references through message commands. `artifactizeRunnerOutputValue`
+payloads and Task results. `artifactizeRunnerOutputValue`
 recursively replaces eligible runner-workspace paths with registered
 `artifact:<id>` references, infers the content kind and MIME type, and records
 the correct session or task scope. This is a safety net for provider output;
@@ -60,7 +58,6 @@ not originate in a runner workspace.
 Runner registration uses content upload to Service. Service validates runner scope:
 
 - Main Runner registers only to its session scope.
-- Work Runner registers only to its session scope.
 - Task Runner registers only to its task scope.
 - runner tokens cannot spoof arbitrary session/task ownership.
 

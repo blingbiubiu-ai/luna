@@ -38,7 +38,6 @@ export interface ProactivityDefaults {
 }
 export interface AgentSettings {
   inbound: { processingReaction: boolean };
-  work: { progressCard: { show: boolean; style: ProgressCardStyle } };
   main: { taskProgressCard: { send: boolean; sendOnQuietRuns?: boolean; style: ProgressCardStyle } };
   pty?: { idleTimeoutMinutes: number };
   messages?: MessageSettings;
@@ -207,7 +206,6 @@ const PTY_TIMEOUT_PRESETS: ReadonlyArray<{ readonly minutes: number; readonly la
 function normalizeSettings(settings: AgentSettings): Required<AgentSettings> {
   return {
     inbound: settings.inbound,
-    work: settings.work,
     main: settings.main,
     pty: { idleTimeoutMinutes: settings.pty?.idleTimeoutMinutes ?? 10 },
     messages: settings.messages ?? {},
@@ -327,7 +325,6 @@ export function AgentSettingsForm({
     }
   };
 
-  const work = value.work.progressCard;
   const main = value.main.taskProgressCard;
   const ptyMinutes = value.pty.idleTimeoutMinutes;
   const hasPreset = PTY_TIMEOUT_PRESETS.some(p => p.minutes === ptyMinutes);
@@ -490,28 +487,6 @@ export function AgentSettingsForm({
                 label: item.label,
               })),
             ]}
-          />
-        </Row>
-      </section>
-
-      <section className="space-y-4 rounded-lg border p-4" aria-labelledby="work-progress-title">
-        <div>
-          <h2 id="work-progress-title" className="font-medium">Work 会话进度卡</h2>
-          <p className="text-sm text-muted-foreground">`#work` 会话执行时，在话题里展示并实时更新的进度。</p>
-        </div>
-        <Row label="展示进度卡" hint="关闭后执行中和完成时都不发进度卡；执行出错或被取消仍会提示。">
-          <Switch
-            aria-label="展示 Work 进度卡"
-            checked={work.show}
-            onCheckedChange={show => update({ ...value, work: { progressCard: { ...work, show } } })}
-          />
-        </Row>
-        <Row label="进度卡样式">
-          <StyleChoice
-            name="work-style"
-            value={work.style}
-            disabled={!work.show}
-            onChange={style => update({ ...value, work: { progressCard: { ...work, style } } })}
           />
         </Row>
       </section>

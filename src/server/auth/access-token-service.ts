@@ -33,7 +33,7 @@ export interface LunaAccessTokenClaims {
   readonly role: LunaAccessTokenRole;
   readonly issuedAt: number;
   readonly expiresAt: number;
-  readonly runnerKind?: "main" | "work" | "task";
+  readonly runnerKind?: "main" | "task";
   readonly sessionId?: string;
   readonly turnId?: string;
   readonly taskId?: string;
@@ -51,7 +51,7 @@ export interface IssueLunaAccessTokenInput {
   readonly role: LunaAccessTokenRole;
   readonly ttlMs: number;
   readonly now: number;
-  readonly runnerKind?: "main" | "work" | "task";
+  readonly runnerKind?: "main" | "task";
   readonly sourceRunnerJobId?: string;
   readonly sourceSessionId?: string;
   readonly sourceTurnId?: string;
@@ -777,7 +777,7 @@ function optionalRunnerKind(
   if (value === undefined) {
     return {};
   }
-  if (value !== "main" && value !== "work" && value !== "task") {
+  if (value !== "main" && value !== "task") {
     throw new Error("invalid_access_token");
   }
   return { runnerKind: value };

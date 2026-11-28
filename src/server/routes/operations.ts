@@ -169,9 +169,6 @@ function invocationSource(c: Parameters<typeof dashboardAuthSessionFromContext>[
   if (claims?.source === "runner" && claims.runnerKind === "main") {
     return "main_runner";
   }
-  if (claims?.source === "runner" && claims.runnerKind === "work") {
-    return "work_runner";
-  }
   if (claims?.source === "runner" && claims.runnerKind === "task") {
     return "task_runner";
   }

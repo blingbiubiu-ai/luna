@@ -252,7 +252,7 @@ test("an artifact referenced by another owner survives with its new owner", asyn
 
 for (const state of ["active", "revoked"] as const) test(`session deletion waits for ${state} Runtime invocation settlement`, async () => {
   const session = store.resolveByChannelSurface(surface);
-  connection.db.insert(schema.runnerInvocations).values({ agentId: session.agent_id, shadowId: session.shadow_id, id: "runtime-inv", runnerKind: "work", actorUserId: "user:admin", runnerContextId: "runtime-context", sessionId: session.id, originId: "runtime-origin", state, inputSnapshot: { version: 1, input: {} }, contextPackIds: [], createdAt: 1 }).run();
+  connection.db.insert(schema.runnerInvocations).values({ agentId: session.agent_id, shadowId: session.shadow_id, id: "runtime-inv", runnerKind: "main", actorUserId: "user:admin", runnerContextId: "runtime-context", sessionId: session.id, originId: "runtime-origin", state, inputSnapshot: { version: 1, input: {} }, contextPackIds: [], createdAt: 1 }).run();
   expect((await app().request(`/sessions/${session.id}`, { method: "DELETE" })).status).toBe(409);
   expect(store.getById(session.id)?.status).toBe("active");
   expect(store.resolveByChannelSurface(surface).id).toBe(session.id);

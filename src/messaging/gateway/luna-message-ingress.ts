@@ -15,7 +15,6 @@ import type { DrizzleDB } from "@/data";
 import { MainRunner } from "@/main-runner/main-runner";
 import { DEFAULT_SESSION_CONFIG, type SessionConfig } from "@/shared";
 import { SessionTurnProcessor, SessionInboundRouter } from "@/sessions/inbound/session-inbound-router";
-import { WorkRunner } from "@/work/work-runner";
 import { CorrelatedRequestService } from "@/messaging/correlated-request-service";
 import { InboundCommandRouter } from "./inbound-command-router";
 
@@ -78,11 +77,6 @@ export class LunaMessageIngress {
             channelForMessage: (message) => this._replies.channel(message.channel.id),
             ...(options.mainRunner !== undefined ? { mainRunner: options.mainRunner } : {}),
             taskRunSupervisor: this._taskRunSupervisor,
-            workRunner: new WorkRunner({
-              db: options.db,
-              runnerType: options.runnerType,
-              channelForMessage: (channelId: string) => this._replies.channel(channelId),
-            }),
           }).execute(input, signal),
       });
   }

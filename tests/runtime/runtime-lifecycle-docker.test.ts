@@ -61,7 +61,7 @@ emit({status:'success',result:'embedded completed'});
     // Reload starts immediate Worker polling and reuses its persisted registration.
     await runtime.close(); runtime = await Runtime.start(file);
     await runtime.files({operationId:"prepare",contextId:"context",scopeKey:"session:context",operation:{kind:"provision"}});
-    await runtime.submit({version: 2, ...fixtureJobScope(), jobId:"job",invocationId:"inv",environmentId:"luna",runnerContextId:"context",scopeKey:"session:context",runnerKind:"work",sessionId:"session",input:{runnerType:"codex",prompt:"fixture"},credentialsRevision:1,timeoutMs:60000});
+    await runtime.submit({version: 2, ...fixtureJobScope(), jobId:"job",invocationId:"inv",environmentId:"luna",runnerContextId:"context",scopeKey:"session:context",runnerKind:"main",sessionId:"session",input:{runnerType:"codex",prompt:"fixture"},credentialsRevision:1,timeoutMs:60000});
     await runtime.credentials("job",{revision:1,expiresAt:Date.now()+120000,env:{}});
     const deadline=Date.now()+30000;
     let running = await runtime.query("job");

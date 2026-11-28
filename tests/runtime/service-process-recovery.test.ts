@@ -104,16 +104,17 @@ test("Service process restart settles a cancelled intent and reattaches an activ
       return {scope: {agentId: scope.agentId, shadowId: scope.shadowId, placementGeneration: 1}, resources: selection, resourceRevision: selection.digest};
     };
     db.insert(sessionTurns).values({ id: "turn", session_id: "session", turn_kind: "execution", status: "running", runner_invoked: true, reason: "addressed", started_at: 0, created_at: 0, updated_at: 0 }).run();
+    const ctxRow = db.select().from(runnerContexts).where(eq(runnerContexts.id, "context")).get()!;
     const invocations = new InvocationService(db);
-    invocations.store.register({ id: "inv", runnerKind: "work", actorUserId: scope.ownerUserId, runnerContextId: "context",
+    invocations.store.register({ id: "inv", runnerKind: "main", actorUserId: scope.ownerUserId, runnerContextId: "context",
       sessionId: "session", taskId: null, taskRunId: null, originId: "turn", contextPackIds: [],
-      inputSnapshot: encodeInvocation("work", { sessionId: "session", runnerContextId: "context", turnId: "turn" }) });
+      inputSnapshot: encodeInvocation("main", { input: { type: "session_trigger", triggerId: "turn", instruction: "Unsubmitted intent", requesterUserId: scope.ownerUserId, context: { sessionId: "session", candidateOpenTasks: [] }, artifactRefs: [], sourceSessionId: "session", correlationId: "corr", hops: 0 }, runnerContext: { ...ctxRow, workspacePath: join(root, "workspace"), ipcPath: join(root, "ipc") }, turnId: "turn" }) });
     invocations.store.createJob("runtime", { version: 2, ...jobScope("inv"), jobId: "job", invocationId: "inv",
-      environmentId: "luna", runnerContextId: "context", scopeKey: "session:context", runnerKind: "work",
+      environmentId: "luna", runnerContextId: "context", scopeKey: "session:context", runnerKind: "main",
       sessionId: "session", input: { runnerType: "codex", prompt: "Unsubmitted intent" }, credentialsRevision: 1, timeoutMs: 30000 });
     const tokens = new AccessTokenService({ db, signingSecret });
-    const issued = tokens.issueToken({ userId: scope.ownerUserId, name: "Work test", source: "runner", role: "runner",
-      runnerKind: "work", sourceRunnerJobId: "context", sourceSessionId: "session", metadata: { invocationId: "inv" }, ttlMs: 60000, now: Date.now() });
+    const issued = tokens.issueToken({ userId: scope.ownerUserId, name: "Main test", source: "runner", role: "runner",
+      runnerKind: "main", sourceRunnerJobId: "context", sourceSessionId: "session", metadata: { invocationId: "inv" }, ttlMs: 60000, now: Date.now() });
     invocations.store.bindToken("inv", issued.record.id);
     const commandRequest = () => fetch(url + "/api/runner/commands/absent", {
       headers: { Authorization: "Bearer " + issued.token },

@@ -97,9 +97,9 @@ export function createTasksRoutes(options: TasksRouteOptions = {}) {
     .get("/", (c) => {
       const db = routeDb();
       const claims = lunaAccessTokenClaimsFromContext(c);
-      // Main and Work act for one session: they get its short Task list, never the Dashboard's full
-      // projections (tens of thousands of tokens), whatever CLI version is baked into their image.
-      const runnerSession = claims?.source === "runner" && (claims.runnerKind === "main" || claims.runnerKind === "work") ? claims.sessionId : undefined;
+      // Main acts for one session: it gets its short Task list, never the Dashboard's full
+      // projections (tens of thousands of tokens), whatever CLI version is baked into its image.
+      const runnerSession = claims?.source === "runner" && claims.runnerKind === "main" ? claims.sessionId : undefined;
       const sessionId = c.req.query("sessionId") ?? runnerSession;
       if (sessionId) {
         // A Runner may read only its own session; the Task list follows the same rule.

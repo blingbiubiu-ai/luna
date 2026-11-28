@@ -125,25 +125,6 @@ test("Runner env accepts an injected issuer and issues one access token per invo
   expect(issued[0]?.ttlMs).toBe(24 * 60 * 60 * 1000);
 });
 
-test("Work Runner receives a distinct service identity", () => {
-  const issued: Array<{ runnerKind: string }> = [];
-  const env = buildLunaServiceRunnerEnv({
-    runnerKind: "work",
-    runnerContextId: "runner_context_work",
-    sessionId: "session_work",
-    requestedByUserId: "user_work",
-    tokenIssuer: {
-      issueRunnerToken(input) {
-        issued.push({ runnerKind: input.runnerKind });
-        return "work-runner-token";
-      },
-    },
-  });
-
-  expect(env.LUNA_RUNNER_KIND).toBe("work");
-  expect(issued).toEqual([{ runnerKind: "work" }]);
-});
-
 test("Task Runner service env does not expose channel identity override env vars", () => {
   setEnv("LUNA_SERVICE_URL", "http://luna.test:9000/");
   setEnv("LUNA_ACCESS_TOKEN_SECRET", "runner-access-secret");

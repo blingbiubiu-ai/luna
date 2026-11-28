@@ -44,7 +44,7 @@ export interface LivePtySessionItem {
   readonly lastActiveAt: number;
   readonly ownerType: "session" | "task" | "unknown";
   readonly ownerId: string | null;
-  readonly runnerKind: "main" | "work" | "task";
+  readonly runnerKind: "main" | "task";
   readonly title: string | null;
   readonly channelType: string | null;
 }
@@ -58,7 +58,7 @@ export interface DormantPtyContextItem {
   readonly updatedAt: number;
   readonly ownerType: "session" | "task" | "unknown";
   readonly ownerId: string | null;
-  readonly runnerKind: "main" | "work" | "task";
+  readonly runnerKind: "main" | "task";
   readonly title: string | null;
   readonly channelType: string | null;
 }
@@ -96,9 +96,8 @@ export function consoleTitle(item: OpenConsole): string {
   return `${item.row.shadowName ?? item.row.shadowId} · ${consoleLabels[item.kind]}`;
 }
 
-export function runnerKindBadge(kind: "main" | "work" | "task"): string {
+export function runnerKindBadge(kind: "main" | "task"): string {
   if (kind === "task") return "Task";
-  if (kind === "work") return "Work";
   return "Main";
 }
 

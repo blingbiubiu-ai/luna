@@ -331,10 +331,7 @@ last reflectable message is older than 24 hours are
 skipped, so enabling memory does not replay history.
 `memory_reflection_checkpoints` records how far each session has been
 reflected on; it advances when the turn is queued, so reflection is best
-effort. A Work session is reflected on the same way, but by its own Runner: its
-conversation lives in the Work Runner's provider context, so Service routes the
-turn to a silent Work maintenance turn that sends no status card and needs no
-answer. A session with no provider context, or one whose context was just
+effort. A session with no provider context, or one whose context was just
 reset, is skipped. A Task Run ending makes the session that started it due
 for reflection once its result has been handled there.
 

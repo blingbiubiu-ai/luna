@@ -31,10 +31,10 @@ afterEach(() => {
 function sampleContext(): RunnerContextFile {
   return {
     schemaVersion: 1,
-    runnerKind: "work",
+    runnerKind: "main",
     owner: { type: "session", id: "session-1" },
     stableContext: {
-      workSession: {
+      session: {
         id: "session-1",
         channel: { type: "feishu", id: "feishu-main" },
         surface: { kind: "group", externalId: "group-1" },
@@ -91,7 +91,7 @@ test("rewrites when content changes", async () => {
   const changed = {
     ...sampleContext(),
     stableContext: {
-      workSession: {
+      session: {
         id: "session-1",
         channel: { type: "feishu", id: "feishu-main" },
         surface: { kind: "group", externalId: "group-2" },
@@ -106,7 +106,7 @@ test("rewrites when content changes", async () => {
   expect(after).toBeGreaterThan(before);
   expect(JSON.parse(readFileSync(second.path, "utf-8"))).toMatchObject({
     stableContext: {
-      workSession: {
+      session: {
         surface: { externalId: "group-2" },
       },
     },

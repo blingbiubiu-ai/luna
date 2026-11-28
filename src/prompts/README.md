@@ -9,8 +9,8 @@ is in `docs/designs/runner-prompt-context.md`.
   data), `identity.md` (speak as the Shadow in `<soul>`), `confidentiality.md`,
   `root-access.md` (only when the Shadow's root switch is on and the Worker host allows it),
   `memory.md`, `artifacts.md`, `runner-context.md` and `directories.md` (paths, written with
-  `{{home}}` and `{{runnerRoot}}`). `reply-protocol.md` is used by Main and Work.
-- `main/`, `task/`, `work/` hold what only that runner kind needs.
+  `{{home}}` and `{{runnerRoot}}`). `reply-protocol.md` is used by Main.
+- `main/` and `task/` hold what only that runner kind needs.
 
 The `<soul>` block at the top is not a file here: Service reads the Shadow's names and
 persona entries (`src/agents/shadow-soul.ts`) and sends them with each context preparation.

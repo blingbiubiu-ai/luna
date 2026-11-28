@@ -42,9 +42,8 @@ export function createRunnerMemoryRoutes(options: {db?: DrizzleDB} = {}) {
   const access = (claims: LunaAccessTokenClaims | undefined) => {
     if (claims?.source !== "runner" || !claims.runnerKind) throw new GatewayError("runner_required", "A Runner token is required", 403);
     const {invocation, snapshot} = new InvocationService(db()).requireActive(claims, claims.runnerKind);
-    // A Service-queued turn carries its command id: as the trigger of a Main turn, or as the turn id of a Work maintenance turn.
-    const trigger = snapshot.kind === "main" ? (snapshot.input.input.type === "session_trigger" ? snapshot.input.input.triggerId : undefined)
-      : snapshot.kind === "work" ? snapshot.input.turnId : undefined;
+    // A Service-queued turn carries its command id as the trigger of a Main turn.
+    const trigger = snapshot.kind === "main" && snapshot.input.input.type === "session_trigger" ? snapshot.input.input.triggerId : undefined;
     return memoryAccess(
       db(),
       invocation,

@@ -1,4 +1,3 @@
-import { WorkRunner } from "@/work/work-runner";
 import { AgentMemoryStore } from "@/agents/agent-memory-store";
 import {InvocationResources} from "@/runners/invocation-resources";
 import {AgentWorkerAccessStore} from "@/agents/agent-worker-access-store";
@@ -272,8 +271,7 @@ class Kernel {
     this._agentRunnerKey = undefined;
     this._database = new DataConnection(lunaSchema);
     this._sessionCommands = new SessionCommandService({ db: this._database.db, channelFor: id => this.replyChannel(id),
-      executeTrigger: createSessionTriggerExecutor(this._database.db, () => this._createMainRunner(), (sessionId) => this._runnerTypeForSession(sessionId),
-        (session, command, signal) => new WorkRunner({ db: this._database.db, runnerType: "unconfigured", channelForMessage: id => this.replyChannel(id) }).executeMaintenanceTurn(session, command, signal)),
+      executeTrigger: createSessionTriggerExecutor(this._database.db, () => this._createMainRunner(), (sessionId) => this._runnerTypeForSession(sessionId)),
       executeTaskRun: createScheduledTaskRunExecutor(this._database.db, () => this._taskRunSupervisor),
       memory: () => new PlatformSettingsStore(this._database.db).get().memory });
     // Entries imported by a migration have no search terms until they are indexed here.

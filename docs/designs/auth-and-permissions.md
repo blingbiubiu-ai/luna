@@ -113,7 +113,7 @@ Artifact access combines general identity with resource-specific checks:
 
 - Authenticated human reads require ownership of the Agent. MCP callers use the same user policy.
 - Runner reads additionally require the artifact to remain in the calling Shadow and match the claimed resource or invocation artifact allowlist; an owner or related-user identity does not widen Runner access.
-- Main and Work register artifacts in their session. Task registers artifacts in its task. Main processing a task result reads task artifacts through the invocation allowlist.
+- Main registers artifacts in its session. Task registers artifacts in its task. Main processing a task result reads task artifacts through the invocation allowlist.
 - A valid signed URL permits content/preview sharing until expiry. Authenticated non-Runner readers may create signed URLs.
 - Deletion requires readable access and either the Agent owner or the explicit related user. Runners cannot delete or create sharing URLs.
 

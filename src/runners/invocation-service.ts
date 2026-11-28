@@ -11,7 +11,7 @@ import { decodeInvocation } from "./invocation-codec";
 export class InvocationService {
   readonly store: InvocationStore;
   constructor(private readonly db: DrizzleDB) { this.store = new InvocationStore(db); }
-  requireActive(claims: LunaAccessTokenClaims, expectedKind: "main" | "work" | "task") {
+  requireActive(claims: LunaAccessTokenClaims, expectedKind: "main" | "task") {
     const token = this.db.select().from(accessTokens).where(eq(accessTokens.id, claims.tokenId)).get();
     if (claims.source !== "runner" || claims.role !== "runner" || claims.runnerKind !== expectedKind || !token ||
       token.userId !== claims.actorUserId || token.revokedAt !== null || token.expiresAt <= Date.now()) throw new GatewayError("token_inactive", "Runner token is inactive", 403);

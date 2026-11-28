@@ -13,12 +13,6 @@ import { PluginRegistry } from "../../src/plugins/registry";
 import { InvocationStore } from "../../src/runners/invocation-store";
 import type { JobRequest } from "@luna/runner-protocol";
 
-const invocation = {
-  id: "inv1", runnerKind: "work" as const, actorUserId: fixtureOwnerUserId("user1"), runnerContextId: "ctx1", sessionId: "session1",
-  taskId: null, taskRunId: null, originId: "turn1", contextPackIds: [],
-  inputSnapshot: {version: 1 as const, kind: "work", input: {sessionId: "session1", runnerContextId: "ctx1", turnId: "turn1"}},
-};
-
 test("invocation ledger survives restart, rolls back failed projection/settlement and never revives revoked authority", () => {
   const root = mkdtempSync(join(tmpdir(), "luna-invocations-"));
   let sqlite = new Database(join(root, "service.sqlite"));
@@ -28,10 +22,21 @@ test("invocation ledger survives restart, rolls back failed projection/settlemen
     migrate(db, {migrationsFolder: "src/data/drizzle"});
     sqlite.exec("CREATE TABLE test_business (id TEXT PRIMARY KEY)");
     const scope = fixtureNamedSession(db, "session1", "user1");
-    db.insert(runnerContexts).values(fixtureRunnerContext(db, {
+    const ctxRow = fixtureRunnerContext(db, {
       id: "ctx1", owner_type: "session", owner_id: "session1", runner_type: "claude",
       runner_root_path: root, created_at: 0, updated_at: 0,
-    })).run();
+    });
+    db.insert(runnerContexts).values(ctxRow).run();
+    const makeInvocation = (id: string, turnId: string) => ({
+      id, runnerKind: "main" as const, actorUserId: fixtureOwnerUserId("user1"), runnerContextId: "ctx1", sessionId: "session1",
+      taskId: null, taskRunId: null, originId: turnId, contextPackIds: [],
+      inputSnapshot: {version: 1 as const, kind: "main", input: {
+        input: {type: "session_trigger", triggerId: turnId, instruction: "test", requesterUserId: fixtureOwnerUserId("user1"), context: {sessionId: "session1", candidateOpenTasks: []}, artifactRefs: [], sourceSessionId: "session1", correlationId: "corr", hops: 0},
+        runnerContext: {...ctxRow, runner_session_id: null, instruction_fingerprint: null, last_run_id: null, workspacePath: join(root, "workspace"), ipcPath: join(root, "ipc")},
+        turnId,
+      }},
+    });
+    const invocation = makeInvocation("inv1", "turn1");
     let store = new InvocationStore(db);
     const pin = (id: string) => {
       const {selection} = new InvocationResources(db, root).pin(id, new AgentResourceBuilder(db, root, new PluginRegistry()));
@@ -41,7 +46,7 @@ test("invocation ledger survives restart, rolls back failed projection/settlemen
     const job: JobRequest = {
       version: 2, scope: {agentId: scope.agentId, shadowId: scope.shadowId, placementGeneration: 1}, ...pin(invocation.id),
       jobId: "job1", invocationId: "inv1", environmentId: "luna", runnerContextId: "ctx1",
-      scopeKey: "session:ctx1", runnerKind: "work", sessionId: "session1",
+      scopeKey: "session:ctx1", runnerKind: "main", sessionId: "session1",
       input: {runnerType: "claude", prompt: "test"}, credentialsRevision: 1, timeoutMs: 10000,
     };
     store.createJob("runtime1", job);
@@ -54,8 +59,7 @@ test("invocation ledger survives restart, rolls back failed projection/settlemen
     expect(store.require("inv1").activeJobId).toBe("job1");
     expect(store.createJob("runtime1", job).request).toEqual(job);
     expect(() => store.createJob("runtime1", { ...job, jobId: "job2" })).toThrow("invocation_job_active");
-    store.register({...invocation, id: "inv-retry", originId: "turn-retry",
-      inputSnapshot: {...invocation.inputSnapshot, input: {...invocation.inputSnapshot.input, turnId: "turn-retry"}}});
+    store.register(makeInvocation("inv-retry", "turn-retry"));
     store.createJob("runtime1", { ...job, ...pin("inv-retry"), jobId: "job-retry", invocationId: "inv-retry" });
     const consume = (seq: number, kind: string, data: unknown) => store.consume({ jobId: "job-retry", seq, kind: "execution", data: { event: { seq, at: 1, kind, data } } }, () => {});
     consume(1, "provider", { status: "init", sessionId: "provider-session" });

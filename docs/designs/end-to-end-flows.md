@@ -115,7 +115,7 @@ sequenceDiagram
 
 ```mermaid
 sequenceDiagram
-  participant Runner as Main or Work Runner
+  participant Runner as Main Runner
   participant CLI as luna artifacts register
   participant Artifacts as Artifact Registry
   participant Renderer as Channel Renderer

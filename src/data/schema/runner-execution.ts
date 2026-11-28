@@ -8,7 +8,7 @@ export const runnerInvocations = sqliteTable("runner_invocations", {
   id: text("invocation_id").primaryKey(),
   agentId:text("agent_id").notNull().references(()=>lunaAgents.id),
   shadowId:text("shadow_id").notNull().references(()=>agentShadows.id),
-  runnerKind: text("runner_kind").$type<"main" | "work" | "task">().notNull(),
+  runnerKind: text("runner_kind").$type<"main" | "task">().notNull(),
   actorUserId: text("actor_user_id").notNull(),
   runnerContextId: text("runner_context_id").notNull(),
   sessionId: text("session_id"), taskId: text("task_id"), taskRunId: text("task_run_id"),

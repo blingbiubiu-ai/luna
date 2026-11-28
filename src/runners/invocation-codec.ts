@@ -1,6 +1,5 @@
 import { z } from "zod";
 import type { MainRunnerRunInput } from "@/main-runner/main-runner";
-import type { WorkRunnerInvocation } from "./main-invocation-registry";
 import type { TaskInvocation } from "@/tasks/task-report-store";
 
 const text = z.string();
@@ -20,16 +19,13 @@ const mainInput = z.discriminatedUnion("type", [
 const runnerContext = z.object({ id: text, agent_id: text, shadow_id: text, owner_type: text, owner_id: text, runner_type: text, runner_session_id: nullableText, instruction_fingerprint: nullableText,
   runner_root_path: text, workspacePath: text, ipcPath: text, last_run_id: nullableText, created_at: z.number(), updated_at: z.number() }).passthrough();
 const main = z.object({ input: mainInput, runnerContext, turnId: text.optional(), invocationId: text.optional() }).strict();
-const work = z.object({ sessionId: text, runnerContextId: text, turnId: text }).strict();
 const task = z.object({ taskId: text, taskRunId: text, runnerContextId: text }).strict();
 
 export type PersistedInvocationInput =
   | { version: 1; kind: "main"; input: Omit<MainRunnerRunInput, "signal"> }
-  | { version: 1; kind: "work"; input: Omit<WorkRunnerInvocation, "signal"> }
   | { version: 1; kind: "task"; input: Omit<TaskInvocation, "signal"> };
 const snapshot = z.discriminatedUnion("kind", [
   z.object({ version: z.literal(1), kind: z.literal("main"), input: main }).strict(),
-  z.object({ version: z.literal(1), kind: z.literal("work"), input: work }).strict(),
   z.object({ version: z.literal(1), kind: z.literal("task"), input: task }).strict(),
 ]);
 
@@ -40,7 +36,7 @@ export function decodeInvocation(value: unknown): PersistedInvocationInput {
 }
 
 /** AbortSignal is a local handle, never a durable authority or serialized execution input. */
-export function encodeInvocation(kind: "main" | "work" | "task", value: MainRunnerRunInput | WorkRunnerInvocation | TaskInvocation): PersistedInvocationInput {
+export function encodeInvocation(kind: "main" | "task", value: MainRunnerRunInput | TaskInvocation): PersistedInvocationInput {
   const { signal: _, ...input } = value;
   return decodeInvocation(JSON.parse(JSON.stringify({ version: 1, kind, input })));
 }

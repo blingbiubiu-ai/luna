@@ -5,7 +5,7 @@ import {executionReference} from "@/agent-config/execution-reference";
 import type {AgentExecutionSnapshot} from "@/agent-config";
 import { InvocationStore } from "./invocation-store";
 import { encodeInvocation } from "./invocation-codec";
-import { mainInvocations, workInvocations, mainMessageOrigin } from "./main-invocation-registry";
+import { mainInvocations, mainMessageOrigin } from "./main-invocation-registry";
 import { taskInvocations } from "@/tasks/task-report-store";
 import type { DrizzleDB } from "@/data";
 import {
@@ -16,7 +16,7 @@ import { AccessTokenService } from "@/server/auth/access-token-service";
 import { getKernel } from "@/server/routes/kernel";
 import { DEFAULT_LUNA_SERVICE_HOST, DEFAULT_LUNA_SERVICE_PORT } from "@luna/host-runtime/defaults";
 
-export type LunaRunnerKind = "main" | "work" | "task";
+export type LunaRunnerKind = "main" | "task";
 
 const RUNNER_ACCESS_TOKEN_TTL_MS = 24 * 60 * 60 * 1000;
 
@@ -130,10 +130,10 @@ function issueLunaRunnerAccessToken(
   const store = new InvocationStore(db);
   if (!input.invocationId) throw new Error("Runtime Runner requires invocation identity");
   const active = input.runnerKind === "main" ? mainInvocations(db).get(input.invocationId)
-    : input.runnerKind === "work" ? workInvocations(db).get(input.invocationId) : taskInvocations(db).get(input.invocationId);
+    : taskInvocations(db).get(input.invocationId);
   if (!active) throw new Error("Runtime Runner requires a registered business invocation");
   const snapshot = encodeInvocation(input.runnerKind, active);
-  const originId = snapshot.kind === "main" ? mainMessageOrigin(snapshot.input) : snapshot.kind === "work" ? snapshot.input.turnId : snapshot.input.taskRunId;
+  const originId = snapshot.kind === "main" ? mainMessageOrigin(snapshot.input) : snapshot.input.taskRunId;
   store.register({ id: input.invocationId, runnerKind: input.runnerKind, actorUserId: requestedByUserId, runnerContextId: input.runnerContextId,
     sessionId: input.sessionId ?? null, taskId: input.taskId ?? null, taskRunId: input.taskRunId ?? null, originId,
     inputSnapshot: snapshot, contextPackIds: [], agentConfig:input.agentConfig ? executionReference(input.agentConfig) : null });

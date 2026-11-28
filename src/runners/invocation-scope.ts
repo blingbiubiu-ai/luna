@@ -8,7 +8,7 @@ import {ContextPackScope} from "@/context/context-pack-scope";
 import {decodeInvocation} from "./invocation-codec";
 
 export interface InvocationScopeInput {
-  runnerKind: "main" | "work" | "task";
+  runnerKind: "main" | "task";
   actorUserId: string;
   runnerContextId: string;
   sessionId: string | null;
@@ -51,9 +51,7 @@ export function resolveInvocationScope(db: DrizzleDB, input: InvocationScopeInpu
 export function validateInvocationSnapshot(input: InvocationScopeInput & {inputSnapshot: unknown}, scope: AgentScope) {
   const snapshot = decodeInvocation(input.inputSnapshot);
   let matches = snapshot.kind === input.runnerKind;
-  if (snapshot.kind === "work") {
-    matches &&= snapshot.input.sessionId === input.sessionId && snapshot.input.runnerContextId === input.runnerContextId;
-  } else if (snapshot.kind === "task") {
+  if (snapshot.kind === "task") {
     matches &&= snapshot.input.taskId === input.taskId && snapshot.input.taskRunId === input.taskRunId && snapshot.input.runnerContextId === input.runnerContextId;
   } else {
     const context = snapshot.input.runnerContext;

@@ -13,7 +13,7 @@ removed without compatibility aliases; `/api/runner/*` rejects requests carrying
 
 ## Turn Input Blocks
 
-Every Main and Work turn presents structured JSON/text blocks in deterministic
+Every Main turn presents structured JSON/text blocks in deterministic
 order:
 
 1. **`<capabilities>`**: compact per-turn `TurnCapabilitiesSummary`
@@ -80,7 +80,7 @@ All cross-session and Main⇄Task communication separates **one-way speech** fro
     amendments after a `Request` is already `done`.
   - `--to main` (Task Runner only): sends a non-terminal milestone update to the
     subscribed Main session (`peer_message`) while keeping the Task container running.
-  - `--to task:<id>` (Main/Work Runner): appends a non-disruptive note to
+  - `--to task:<id>` (Main Runner): appends a non-disruptive note to
     `task_inbox_events` without aborting an active Task Run.
 - **`luna ask` (tracked response in `correlated_requests` + `correlated_request_events`)**:
   - **Card mode (`luna ask --to <addr> [--actor owner|user:<id>] --text '...' --options '[...]'`)**:

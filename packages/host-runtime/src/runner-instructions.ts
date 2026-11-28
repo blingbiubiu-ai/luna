@@ -10,7 +10,7 @@ import { join } from "node:path";
 import { dataBlock, joinBlocks, promptBlock } from "./prompt-blocks";
 
 
-export type RunnerInstructionKind = "main" | "task" | "work";
+export type RunnerInstructionKind = "main" | "task";
 export type RunnerInstructionAdapter = "claude" | "codex";
 
 /** Who this Shadow is, rendered first in every instruction file. Read from Service, never from files. */
@@ -81,17 +81,6 @@ const LAYOUT: Record<RunnerInstructionKind, readonly Section[]> = {
     ["role", ["task/role.md"]],
     ["hard_rules", ["shared/confidentiality.md", { file: "shared/root-access.md", when: "sudo" }]],
     ["evidence", ["task/evidence.md"]],
-    ["memory_rules", ["shared/memory.md"]],
-    ["artifacts", ["shared/artifacts.md"]],
-    ["environment", ["shared/runner-context.md", "shared/directories.md"]],
-  ],
-  work: [
-    "soul",
-    ["luna_runtime", ["shared/runtime.md"]],
-    ["identity", ["shared/identity.md"]],
-    ["role", ["work/role.md"]],
-    ["hard_rules", ["shared/confidentiality.md", { file: "shared/root-access.md", when: "sudo" }]],
-    ["reply_protocol", ["shared/reply-protocol.md", "work/reply.md"]],
     ["memory_rules", ["shared/memory.md"]],
     ["artifacts", ["shared/artifacts.md"]],
     ["environment", ["shared/runner-context.md", "shared/directories.md"]],

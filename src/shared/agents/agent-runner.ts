@@ -53,10 +53,9 @@ export const AgentRunOptions = z.object({
   taskId: z.string().optional(),
 
   /**
-   * Explicit role for session-scoped containers. Task runs remain identified
-   * by taskId, while work sessions opt into their own resource profile.
+   * Explicit role for session-scoped containers.
    */
-  runnerKind: z.enum(["main", "task", "work"]).optional(),
+  runnerKind: z.enum(["main", "task"]).optional(),
 });
 /**
  * Configuration options for runtime agent run behavior in agent.

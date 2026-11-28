@@ -102,6 +102,5 @@ artifact-linked events remain permanently.
 - `src/messaging/notifications/live-progress.ts`
 - `src/kernel/task-run-handler.ts`
 - `src/tasks/task-run-notification-service.ts`
-- `src/work/work-runner.ts`
 - `extensions/channels/feishu/messaging/ordinary-progress.ts`
 - `extensions/channels/feishu/messaging/native-task-progress.ts`

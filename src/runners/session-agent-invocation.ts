@@ -15,7 +15,7 @@ export interface SessionAgentInvocationInput {
     RunnerContextStore,
     "clearRunnerSessionId" | "persistRunnerSessionId"
   >;
-  readonly runnerKind: "main" | "work";
+  readonly runnerKind: "main";
   readonly messageId: string;
   readonly prompt: string;
   readonly env?: Readonly<Record<string, string>>;

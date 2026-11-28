@@ -89,7 +89,7 @@ test("remote Worker binds once, downloads its scoped snapshot and renders its ow
 
     const client = scheduler.workers.client(bound.workerId);
     const prepared = await scheduler.preparation.prepare({protocolVersion:2,invocationId:"invocation",scope,resources:bundle.selection,
-      contextId:"context",runnerId:"context",scopeKey:"session:context",runnerKind:"work",context:{schemaVersion:1,owner:{type:"session",id:"session"}}});
+      contextId:"context",runnerId:"context",scopeKey:"session:context",runnerKind:"main",context:{schemaVersion:1,owner:{type:"session",id:"session"}}});
     expect(prepared.cwd).toBe("/home/luna/runners/context");
     expect(prepared.hostCwd).toBe(join(workerHome,"agents/agent/shadows/shadow/runners/context"));
     const instructions = readFileSync(join(prepared.hostCwd!, "AGENTS.md"), "utf8");
@@ -97,7 +97,7 @@ test("remote Worker binds once, downloads its scoped snapshot and renders its ow
     expect(prepared.instructionFingerprint).toMatch(/^[a-f0-9]{64}$/);
     expect(JSON.parse(readFileSync(join(prepared.hostCwd!, ".luna/runner-context.json"), "utf8")).owner.id).toBe("session");
     if (dockerEnabled) {
-      scheduler.submit({ version: 2, scope:prepared.scope,resources:bundle.selection, jobId: "remote-job", invocationId: "invocation", environmentId: "environment", runnerContextId: "context", scopeKey: "session:context", runnerKind: "work", sessionId: "session", resourceRevision: bundle.selection.digest, input: { runnerType: "codex", prompt: "test" }, credentialsRevision: 1, timeoutMs: 30000 });
+      scheduler.submit({ version: 2, scope:prepared.scope,resources:bundle.selection, jobId: "remote-job", invocationId: "invocation", environmentId: "environment", runnerContextId: "context", scopeKey: "session:context", runnerKind: "main", sessionId: "session", resourceRevision: bundle.selection.digest, input: { runnerType: "codex", prompt: "test" }, credentialsRevision: 1, timeoutMs: 30000 });
       await scheduler.tick();
       const job = scheduler.jobs.require("remote-job");
       expect(job.assignment?.workerId).toBe(bound.workerId);
@@ -110,8 +110,8 @@ test("remote Worker binds once, downloads its scoped snapshot and renders its ow
       expect(manager.store.list().every(e => manager!.store.active(e.id).length === 0)).toBe(true);
       for(const [index,resources] of bundles.slice(1).concat(bundle).entries()){
         const contextId=`context-${index}`,invocationId=`invocation-${index}`,jobId=`job-${index}`;
-        const context=await scheduler.preparation.prepare({protocolVersion:2,invocationId,scope:{agentId:resources.agentId,shadowId:resources.shadowId},resources:resources.selection,contextId,runnerId:contextId,scopeKey:`session:${contextId}`,runnerKind:"work"});
-        scheduler.submit({version:2,scope:context.scope,resources:resources.selection,resourceRevision:resources.selection.digest,jobId,invocationId,environmentId:"environment",runnerContextId:contextId,scopeKey:`session:${contextId}`,runnerKind:"work",sessionId:contextId,input:{runnerType:"codex",prompt:"test"},credentialsRevision:1,timeoutMs:30000});
+        const context=await scheduler.preparation.prepare({protocolVersion:2,invocationId,scope:{agentId:resources.agentId,shadowId:resources.shadowId},resources:resources.selection,contextId,runnerId:contextId,scopeKey:`session:${contextId}`,runnerKind:"main"});
+        scheduler.submit({version:2,scope:context.scope,resources:resources.selection,resourceRevision:resources.selection.digest,jobId,invocationId,environmentId:"environment",runnerContextId:contextId,scopeKey:`session:${contextId}`,runnerKind:"main",sessionId:contextId,input:{runnerType:"codex",prompt:"test"},credentialsRevision:1,timeoutMs:30000});
         await scheduler.tick();expect(scheduler.jobs.require(jobId).assignment?.workerId).toBe(bound.workerId);
         scheduler.cancel(jobId);
         const end=Date.now()+10000;
@@ -147,7 +147,7 @@ test("remote Worker binds once, downloads its scoped snapshot and renders its ow
       bundles.push(updated);
       const next = {
         protocolVersion: 2 as const, invocationId: "updated-invocation", scope, resources: updated.selection,
-        contextId: "updated-context", runnerId: "updated-context", scopeKey: "session:updated-context", runnerKind: "work" as const,
+        contextId: "updated-context", runnerId: "updated-context", scopeKey: "session:updated-context", runnerKind: "main" as const,
       };
       // The new version does not wait for the earlier invocations to settle.
       const context = await scheduler.preparation.prepare(next);
@@ -157,7 +157,7 @@ test("remote Worker binds once, downloads its scoped snapshot and renders its ow
       scheduler.submit({
         version: 2, scope: context.scope, resources: updated.selection, resourceRevision: updated.selection.digest,
         jobId: "updated-job", invocationId: next.invocationId, environmentId: "environment",
-        runnerContextId: next.contextId, scopeKey: next.scopeKey, runnerKind: "work", sessionId: next.contextId,
+        runnerContextId: next.contextId, scopeKey: next.scopeKey, runnerKind: "main", sessionId: next.contextId,
         input: { runnerType: "codex", prompt: "test" }, credentialsRevision: 1, timeoutMs: 30000,
       });
       await scheduler.tick();

@@ -34,10 +34,19 @@ function fixture() {
   fixtureUser(db, ownership.agent_id, "user1");
   db.insert(sessions).values({ id: "session1", created_by_user_id: "user1", channel_type: "test", channel_id: "test", created_at: 0, updated_at: 0 , ...ownership}).run();
   const session = db.select().from(sessions).where(eq(sessions.id, "session1")).get()!;
-  db.insert(runnerContexts).values(fixtureRunnerContext(db, {id: "ctx1", owner_type: "session", owner_id: "session1", runner_type: "claude", runner_root_path: "/unused", created_at: 0, updated_at: 0})).run();
+  const ctx1 = fixtureRunnerContext(db, {id: "ctx1", owner_type: "session", owner_id: "session1", runner_type: "claude", runner_root_path: "/unused", created_at: 0, updated_at: 0});
+  db.insert(runnerContexts).values(ctx1).run();
+  const makeMainSnap = (ctx: typeof ctx1, turnId: string) => ({
+    version: 1 as const, kind: "main" as const,
+    input: {
+      input: { type: "session_trigger" as const, triggerId: turnId, instruction: "test", requesterUserId: "user1", context: { sessionId: "session1", candidateOpenTasks: [] }, artifactRefs: [], sourceSessionId: "session1", correlationId: "corr", hops: 0 },
+      runnerContext: { ...ctx, runner_session_id: null, instruction_fingerprint: null, last_run_id: null, workspacePath: "/unused/workspace", ipcPath: "/unused/ipc" },
+      turnId,
+    },
+  });
   const store = new InvocationStore(db);
-  store.register({ agentConfig:fixtureExecutionReference(db,"ctx1"), id: "inv1", runnerKind: "work", actorUserId: "user1", runnerContextId: "ctx1", sessionId: "session1", taskId: null, taskRunId: null, originId: "turn1",
-    inputSnapshot: { version: 1, kind: "work", input: { sessionId: "session1", runnerContextId: "ctx1", turnId: "turn1" } } as never, contextPackIds: [] });
+  store.register({ agentConfig:fixtureExecutionReference(db,"ctx1"), id: "inv1", runnerKind: "main", actorUserId: "user1", runnerContextId: "ctx1", sessionId: "session1", taskId: null, taskRunId: null, originId: "turn1",
+    inputSnapshot: makeMainSnap(ctx1, "turn1") as never, contextPackIds: [] });
   const resources = new InvocationResources(db, home);
   const builder = new AgentResourceBuilder(db, home, new PluginRegistry());
   const pin = (id: string) => {
@@ -45,11 +54,11 @@ function fixture() {
     return {resources: selection, resourceRevision: selection.digest};
   };
   store.createJob("runtime1", { version: 2,
-    scope: {agentId: session.agent_id, shadowId: session.shadow_id, placementGeneration: 1}, ...pin("inv1"), jobId: "job1", invocationId: "inv1", environmentId: "luna", runnerContextId: "ctx1", scopeKey: "session:ctx1", runnerKind: "work", sessionId: "session1", input: { runnerType: "claude", prompt: "test" }, credentialsRevision: 1, timeoutMs: 10000 });
+    scope: {agentId: session.agent_id, shadowId: session.shadow_id, placementGeneration: 1}, ...pin("inv1"), jobId: "job1", invocationId: "inv1", environmentId: "luna", runnerContextId: "ctx1", scopeKey: "session:ctx1", runnerKind: "main", sessionId: "session1", input: { runnerType: "claude", prompt: "test" }, credentialsRevision: 1, timeoutMs: 10000 });
   const tokens = new AccessTokenService({ db, signingSecret: "test-secret" });
-  const issued = tokens.issueToken({ userId: "user1", name: "test runner", source: "runner", role: "runner", runnerKind: "work", sourceRunnerJobId: "ctx1", sourceSessionId: "session1", ttlMs: 100000, now: Date.now(), metadata: { invocationId: "inv1", artifactIds: ["artifact1"] } });
+  const issued = tokens.issueToken({ userId: "user1", name: "test runner", source: "runner", role: "runner", runnerKind: "main", sourceRunnerJobId: "ctx1", sourceSessionId: "session1", ttlMs: 100000, now: Date.now(), metadata: { invocationId: "inv1", artifactIds: ["artifact1"] } });
   store.bindToken("inv1", issued.record.id);
-  return { db, store, tokens, issued, pin, authority: new InvocationService(db),
+  return { db, store, tokens, issued, pin, makeMainSnap, authority: new InvocationService(db),
     close() { sqlite.close(); rmSync(home, {recursive: true, force: true}); } };
 }
 
@@ -60,9 +69,9 @@ test("renewal preserves scope, allows in-flight old token, and cancellation revo
     const updated = renewInvocationCredentials(f.db, "inv1", env, "test-secret");
     expect(updated.env.LUNA_ACCESS_TOKEN).not.toBe(env.LUNA_ACCESS_TOKEN);
     const fresh = f.tokens.verifyBearer(updated.env.LUNA_ACCESS_TOKEN!, { now: Date.now() });
-    expect(fresh.claims).toMatchObject({ runnerKind: "work", runnerJobId: "ctx1", sessionId: "session1" });
+    expect(fresh.claims).toMatchObject({ runnerKind: "main", runnerJobId: "ctx1", sessionId: "session1" });
     expect(f.db.select().from(accessTokens).where(eq(accessTokens.id, fresh.claims.tokenId)).get()?.metadataJson).toEqual({ invocationId: "inv1", artifactIds: ["artifact1"] });
-    expect(f.authority.requireActive(f.issued.claims, "work").invocation.id).toBe("inv1");
+    expect(f.authority.requireActive(f.issued.claims, "main").invocation.id).toBe("inv1");
     expect(renewInvocationCredentials(f.db, "inv1", updated.env, "test-secret").env).toEqual(updated.env);
     f.authority.revoke("inv1", "user_cancelled");
     for (const token of [env.LUNA_ACCESS_TOKEN, updated.env.LUNA_ACCESS_TOKEN!]) expect(() => f.tokens.verifyBearer(token, { now: Date.now() })).toThrow("revoked_access_token");
@@ -157,9 +166,10 @@ test("revoked submit intent is cancelled under its original ID and settles only 
     scheduler.mode.resume();
 
     // Case 2: a dispatched Job stays bound while its Worker cannot confirm cancellation.
-    f.db.insert(runnerContexts).values(fixtureRunnerContext(f.db, {id: "ctx2", owner_type: "session", owner_id: "session1", runner_type: "codex", runner_root_path: "/unused", created_at: 0, updated_at: 0})).run();
-    const snapshot = { version: 1 as const, kind: "work", input: { sessionId: "session1", runnerContextId: "ctx2", turnId: "turn2" } };
-    f.store.register({ id: "inv2", runnerKind: "work", actorUserId: "user1", runnerContextId: "ctx2", sessionId: "session1", taskId: null, taskRunId: null, originId: "turn2", inputSnapshot: snapshot, contextPackIds: [] });
+    const ctx2 = fixtureRunnerContext(f.db, {id: "ctx2", owner_type: "session", owner_id: "session1", runner_type: "codex", runner_root_path: "/unused", created_at: 0, updated_at: 0});
+    f.db.insert(runnerContexts).values(ctx2).run();
+    const snapshot = f.makeMainSnap(ctx2, "turn2");
+    f.store.register({ id: "inv2", runnerKind: "main", actorUserId: "user1", runnerContextId: "ctx2", sessionId: "session1", taskId: null, taskRunId: null, originId: "turn2", inputSnapshot: snapshot, contextPackIds: [] });
     const job = f.store.createJob("runtime1", { ...f.store.job("job1")!.request, ...f.pin("inv2"), jobId: "job2", invocationId: "inv2", runnerContextId: "ctx2", scopeKey: "session:ctx2" });
     await client.submit(job.request); scheduler.jobs.reserve("job2", "original_worker");
     f.authority.revoke("inv2", "user_cancelled");
@@ -235,7 +245,7 @@ for (const remainingMs of [-1, 30000]) test(`reattach refreshes a token with ${r
     expect(uploads[0]!.expiresAt).toBeGreaterThan(Date.now());
     expect(uploads[0]!.env.LUNA_ACCESS_TOKEN).not.toBe(f.issued.token);
     const claims = f.tokens.verifyBearer(uploads[0]!.env.LUNA_ACCESS_TOKEN!, { now: Date.now() }).claims;
-    expect(f.authority.requireActive(claims, "work").invocation.id).toBe("inv1");
+    expect(f.authority.requireActive(claims, "main").invocation.id).toBe("inv1");
     expect(f.store.jobsFor("inv1").map(job => job.id)).toEqual(["job1"]);
   } finally {
     await transport.detach();  f.close(); rmSync(root, { recursive: true, force: true });
@@ -317,7 +327,7 @@ test("scope revoked during health check prevents preparation and Job creation", 
   const {RuntimeAgentTransport} = await import("../../src/runners/runtime-agent-transport");
   const f = fixture();
   const original = f.store.require("inv1");
-  f.store.register({agentConfig:fixtureExecutionReference(f.db,"ctx1"), id: "preparing", originId: "prepare-turn", runnerKind: "work", actorUserId: "user1", runnerContextId: "ctx1", sessionId: "session1", taskId: null, taskRunId: null, inputSnapshot: original.inputSnapshot, contextPackIds: []});
+  f.store.register({agentConfig:fixtureExecutionReference(f.db,"ctx1"), id: "preparing", originId: "prepare-turn", runnerKind: "main", actorUserId: "user1", runnerContextId: "ctx1", sessionId: "session1", taskId: null, taskRunId: null, inputSnapshot: original.inputSnapshot, contextPackIds: []});
   const calls: string[] = [];
   const runtime = runtimeStub({
     async verify() { f.db.update(users).set({status:"blocked"}).where(eq(users.id,"user1")).run(); },

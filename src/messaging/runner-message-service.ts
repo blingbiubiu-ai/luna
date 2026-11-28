@@ -19,27 +19,26 @@ export class RunnerMessageService {
     private readonly channelFor: (id: string) => ReplyChannel | undefined,
   ) {}
 
-  /** Resolves an active Main or Work Runner actor. */
+  /** Resolves an active Main Runner actor. */
   actor(claims: LunaAccessTokenClaims | undefined): RequestActor {
     if (
       claims?.source !== "runner" ||
       claims.role !== "runner" ||
-      !["main", "work"].includes(claims.runnerKind ?? "")
+      claims.runnerKind !== "main"
     ) {
       throw new GatewayError(
         "runner_required",
-        "A Main or Work Runner token is required",
+        "A Main Runner token is required",
         403,
       );
     }
     const { invocation, snapshot } = new InvocationService(
       this.db,
-    ).requireActive(claims, claims.runnerKind as "main" | "work");
-    if (snapshot.kind === "task") {
-      throw new GatewayError("runner_required", "Main or Work required", 403);
+    ).requireActive(claims, "main");
+    if (snapshot.kind !== "main") {
+      throw new GatewayError("runner_required", "Main required", 403);
     }
     const source =
-      snapshot.kind === "main" &&
       snapshot.input.input.type === "session_trigger"
         ? snapshot.input.input
         : undefined;
@@ -47,13 +46,12 @@ export class RunnerMessageService {
       userId: invocation.actorUserId,
       agentId: invocation.agentId,
       shadowId: invocation.shadowId,
-      runnerKind: claims.runnerKind as "main" | "work",
+      runnerKind: "main",
       invocationId: invocation.id,
       sourceSessionId: invocation.sessionId!,
       currentSessionId: invocation.sessionId!,
       originId: invocation.originId,
-      ...(snapshot.kind === "main" &&
-      snapshot.input.input.type === "user_messages"
+      ...(snapshot.input.input.type === "user_messages"
         ? { triggerMessageId: snapshot.input.input.messages.at(-1)?.messageId }
         : {}),
       contextBefore: invocation.createdAt,
@@ -61,12 +59,12 @@ export class RunnerMessageService {
     };
   }
 
-  /** Resolves an active Main, Work, or Task Runner actor. */
+  /** Resolves an active Main or Task Runner actor. */
   anyActor(claims: LunaAccessTokenClaims | undefined): RequestActor {
     if (
       claims?.source !== "runner" ||
       claims.role !== "runner" ||
-      !["main", "work", "task"].includes(claims.runnerKind ?? "")
+      !["main", "task"].includes(claims.runnerKind ?? "")
     ) {
       throw new GatewayError(
         "runner_required",

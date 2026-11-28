@@ -509,11 +509,10 @@ export function createAgentContainerRoutes(
         };
       }
       const sess = sessionById.get(ctx.owner_id);
-      const runnerKind = sess?.kind === "work" ? "work" as const : "main" as const;
       return {
         ownerType: "session" as const,
         ownerId: ctx.owner_id,
-        runnerKind,
+        runnerKind: "main" as const,
         title: sess ? resolvePtySessionTitle(sess) : `会话 ${ctx.owner_id.slice(0, 8)}`,
         channelType: sess?.channel_type ?? null,
       };

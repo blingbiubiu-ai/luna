@@ -8,7 +8,7 @@ import { join } from "node:path";
 
 export const RUNNER_CONTEXT_FILE_RELATIVE_PATH = ".luna/runner-context.json";
 
-export type RunnerKind = "main" | "task" | "work";
+export type RunnerKind = "main" | "task";
 export type RunnerOwnerType = "session" | "task";
 
 export interface RunnerContextFile {
