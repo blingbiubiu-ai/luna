@@ -1,4 +1,5 @@
 import {toolDisplay} from "@luna/runner-protocol/tool-display";
+import {summarizeCommand} from "./command-summary";
 import { and, eq } from "drizzle-orm";
 import type { DrizzleDB } from "@/data";
 import { nativeProgressDeliveries } from "@/data/schema";
@@ -137,8 +138,9 @@ export class NativeTaskProgress {
               next = {...next, toolGroupEllipsisSent: true};
             } else {
               if (entry.toolPhase !== "result" || !tools[callId]) {
-                events.push(event("TOOL_CALL_START", {toolCallId:toolNodeId, toolCallName:entry.toolName ?? "tool",
-                  title:entry.toolTitle ?? toolLabel(entry.toolName ?? "tool"), icon:toolIcon(entry.toolName ?? "tool"), parentMessageId:parent}),
+                const name = entry.toolName ?? "tool";
+                events.push(event("TOOL_CALL_START", {toolCallId:toolNodeId, toolCallName:name,
+                  title:nativeToolTitle(name, entry.toolTitle), icon:toolIcon(name), parentMessageId:parent}),
                   event("TOOL_CALL_END", {toolCallId:toolNodeId}));
                 tools[callId] = toolNodeId;
                 next = {...next, toolGroupCount: groupCount + 1};
@@ -198,6 +200,13 @@ export class NativeTaskProgress {
   }
 }
 
+function nativeToolTitle(name: string, rawTitle?: string): string {
+  const title = rawTitle ?? toolLabel(name);
+  if (toolIcon(name) === "bash" && title.startsWith("执行 ") && title !== "执行命令") {
+    return summarizeCommand(title.slice(3));
+  }
+  return title;
+}
 function toolIcon(name: string): string { return toolDisplay(name).icon; }
 function toolLabel(name: string): string { return toolDisplay(name).label; }
 function toolResult(id: string, text: string) {

@@ -1,5 +1,4 @@
 import {toolDisplay} from "@luna/runner-protocol/tool-display";
-import {sanitizeSubject, shortPath, summarizeCommand} from "./command-summary";
 
 const DESCRIPTION_KEYS = ["description", "toolSummary", "toolAction", "subject"] as const;
 const PATH_KEYS = ["file_path", "path", "TargetFile", "AbsolutePath"] as const;
@@ -17,6 +16,28 @@ function pickField(input: Record<string, unknown>, keys: readonly string[]): str
   return "";
 }
 
+function sanitizeSubject(text: string): string {
+  let subject = text.replace(/\s+/g, " ").trim();
+  subject = subject
+    .replace(/\b(Bearer|Basic)\s+[^\s"']+/gi, "$1 [redacted]")
+    .replace(/((?:[\w-]*(?:token|secret|password|api[_-]?key)[\w-]*)["']?\s*(?:=|:|\s)\s*)(?:"[^"]*"|'[^']*'|[^\s&;"']+)/gi, "$1[redacted]")
+    .replace(/(https?:\/\/)[^\s/@]+:[^\s/@]+@/gi, "$1[redacted]@");
+  return subject.length > 80 ? `${subject.slice(0, 80)}…` : subject;
+}
+
+function shortPath(raw: string): string {
+  const trimmed = raw.trim().replace(/[\\/]+$/, "");
+  if (!trimmed) return raw.trim();
+  const base = trimmed.split(/[\\/]/).pop();
+  return base || trimmed;
+}
+
+function cleanCommand(raw: string): string {
+  const trimmed = raw.trim();
+  const wrapped = /^(?:\/(?:usr\/)?bin\/)?(?:ba|z)?sh\s+-[a-z]*c\s+(['"])([\s\S]+)\1$/.exec(trimmed);
+  return wrapped ? wrapped[2]! : trimmed;
+}
+
 /** Derive a bounded public subject from existing structured tool input. */
 export function toolSubject(input: Record<string, unknown>): string {
   const raw = pickField(input, FALLBACK_KEYS);
@@ -31,7 +52,7 @@ export function toolTitle(name: string, input: Record<string, unknown> = {}): st
     const desc = pickField(input, DESCRIPTION_KEYS);
     if (desc) return sanitizeSubject(desc);
     const cmd = pickField(input, COMMAND_KEYS);
-    return cmd ? summarizeCommand(cmd) : label;
+    return cmd ? `执行 ${sanitizeSubject(cleanCommand(cmd))}` : label;
   }
 
   if (icon === "read") {

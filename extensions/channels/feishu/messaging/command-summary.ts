@@ -1,8 +1,8 @@
-/** Semantic Chinese summaries for shell commands that lack a structured description. */
+/** Semantic Chinese summaries for shell commands rendered in Feishu Native progress cards. */
 
 const SKIP_PREFIX_BINS = new Set(["cd", "set", "export", "umask", "true", "mkdir"]);
 
-export function redactText(text: string): string {
+function redactText(text: string): string {
   return text
     .replace(/\s+/g, " ")
     .trim()
@@ -11,12 +11,12 @@ export function redactText(text: string): string {
     .replace(/(https?:\/\/)[^\s/@]+:[^\s/@]+@/gi, "$1[redacted]@");
 }
 
-export function sanitizeSubject(text: string, maxLen = 80): string {
+function sanitizeSubject(text: string, maxLen = 80): string {
   const subject = redactText(text);
   return subject.length > maxLen ? `${subject.slice(0, maxLen)}…` : subject;
 }
 
-export function shortPath(raw: string): string {
+function shortPath(raw: string): string {
   const trimmed = raw.trim().replace(/^['"]|['"]$/g, "").replace(/[\\/]+$/, "");
   if (!trimmed) return raw.trim();
   const base = trimmed.split(/[\\/]/).pop();

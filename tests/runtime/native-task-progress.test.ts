@@ -185,3 +185,24 @@ test("waiting status finishes cleanly with RUN_FINISHED and keeps the pause reas
   expect(calls.filter(c=>c.url.includes("/complete/"))).toHaveLength(0);
   expect(events().some(e=>e.content.includes("暂停等待中：等待人工确认"))).toBe(true);
 });
+
+test("summarizes raw shell command titles at Feishu Native render time while preserving descriptive titles", async () => {
+  await adapter().send(inbound, {
+    ...operation,
+    nativeProgress: [
+      {id: "c1:start", toolCallId: "c1", toolName: "Bash", toolPhase: "start", toolTitle: "执行 cd /home/luna/nimbus-workspace && bytedcli bits client workflow job get --job-id 123", text: "执行 ..."},
+      {id: "c2:start", toolCallId: "c2", toolName: "Bash", toolPhase: "start", toolTitle: "执行 sed -n 1,120p /home/luna/repo/detector.cpp", text: "执行 ..."},
+      {id: "c3:start", toolCallId: "c3", toolName: "Bash", toolPhase: "start", toolTitle: "检查 bytedcli 登录状态与脚本", text: "检查 bytedcli 登录状态与脚本"},
+      {id: "c4:start", toolCallId: "c4", toolName: "Bash", toolPhase: "start", toolTitle: "执行 mytool --token abc --password 'secret' run", text: "执行 ..."},
+    ],
+  });
+  const titles = events()
+    .filter(e => e.event_type === "TOOL_CALL_START")
+    .map(e => (JSON.parse(e.content) as {title: string}).title);
+  expect(titles).toEqual([
+    "查询 Bits 任务",
+    "查看 detector.cpp",
+    "检查 bytedcli 登录状态与脚本",
+    "执行 mytool run",
+  ]);
+});

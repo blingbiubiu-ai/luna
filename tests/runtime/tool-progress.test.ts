@@ -4,26 +4,14 @@ import {resolveContainerRunnerProvider} from "@luna/executor/providers";
 
 test("tool titles extract and bound concrete subjects without copying unrelated arguments", () => {
   expect(toolTitle("web_search", {query:"广州\n明天天气",secret:"hidden"})).toBe("搜索 广州 明天天气");
-  expect(toolTitle("Bash", {command:["bash","-lc","git status --short"]})).toBe("查看 git 状态");
+  expect(toolTitle("Bash", {command:["bash","-lc","git status --short"]})).toBe("执行 git status --short");
   expect(toolTitle("Bash", {command:"bytedcli auth status",description:"检查 bytedcli 登录状态与脚本"})).toBe("检查 bytedcli 登录状态与脚本");
   expect(toolTitle("Read", {file_path:"/Users/alice/skills/aipace/SKILL.md"})).toBe("读取 SKILL.md");
   expect(toolTitle("Write", {content:"x".repeat(10000),file_path:"/work/src/index.ts"})).toBe("写入 index.ts");
   expect(toolTitle("Edit", {file_path:"/work/src/index.ts"})).toBe("编辑 index.ts");
-  expect(toolTitle("Bash", {command:"curl --token abc --password 'secret value' https://u:p@host.example.com/api"})).toBe("请求接口 host.example.com");
-  expect(toolTitle("Bash", {command:"mytool --token abc --password 'secret value' run"})).toBe("执行 mytool run");
+  expect(toolTitle("Bash", {command:"curl --token abc --password 'secret value' https://u:p@host"})).toBe("执行 curl --token [redacted] --password [redacted] https://[redacted]@host");
   expect(toolTitle("Search", {query:"a".repeat(100)})).toBe("搜索 "+"a".repeat(80)+"…");
   expect(toolTitle("Search", {query:{unexpected:"value"}})).toBe("搜索");
-});
-
-test("summarizes shell commands without descriptions into concise Chinese actions", () => {
-  expect(toolTitle("Bash", {command:"cd /home/luna/nimbus-workspace && bytedcli bits client workflow job get --job-id 123"})).toBe("查询 Bits 任务");
-  expect(toolTitle("Bash", {command:"bytedcli codebase mr reviewer list -R tt_android/xbrowser 1551 --json 2>&1 | head -c 500"})).toBe("查询 MR 评审");
-  expect(toolTitle("Bash", {command:"bytedcli codebase checks list -R tt_android/xbrowser 1551 --json 2>&1 | head -c 500"})).toBe("查询 MR 检查");
-  expect(toolTitle("Bash", {command:"sed -n 1,120p /home/luna/nimbus-workspace/.worktree/feat/detector.cpp"})).toBe("查看 detector.cpp");
-  expect(toolTitle("Bash", {command:"/opt/android-sdk/platform-tools/adb -s aic-nlfdl.bytedance.net:50481 shell pm list"})).toBe("执行 adb 调试");
-  expect(toolTitle("Bash", {command:"luna tasks pause --wake-in 30m --reason '等待验收'"})).toBe("暂停等待任务");
-  expect(toolTitle("Bash", {command:"lark-cli im +chat-messages-list --chat-id oc_123"})).toBe("读取飞书消息");
-  expect(toolTitle("Bash", {command:"for x in a b; do bytedcli codebase mr get $x; done"})).toBe("批量查询 bytedcli");
 });
 
 test("Codex keeps raw event types while extracting web and MCP subjects", () => {
